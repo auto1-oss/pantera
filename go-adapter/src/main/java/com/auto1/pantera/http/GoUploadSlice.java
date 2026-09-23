@@ -268,8 +268,10 @@ final class GoUploadSlice implements Slice {
     }
 
     /**
-     * Post-publish steps: record the event (first publish of a zip only),
-     * update {@code @v/list} for a zip, invalidate negative caches.
+     * Post-publish steps for a zip: upsert the index row (every accepted
+     * PUT, so a retry repairs a missing row), enqueue the publish event
+     * (first store only) and update {@code @v/list}; then invalidate
+     * negative caches.
      * @param outcome Store outcome
      * @param headers Request headers
      * @param module Module path
@@ -284,10 +286,11 @@ final class GoUploadSlice implements Slice {
     ) {
         CompletableFuture<Void> extra = CompletableFuture.completedFuture(null);
         if (zip) {
-            if (outcome == Outcome.STORED) {
-                extra = this.recordEvent(headers, module, version, key);
-            }
-            extra = extra.thenCompose(nothing -> this.updateList(module));
+            // The index UPSERT is idempotent and runs on every accepted zip
+            // PUT, so an identical retry heals an index row the first publish
+            // never made durable. Only a first-time store is a publish event.
+            extra = this.recordEvent(headers, module, version, key, outcome == Outcome.STORED)
+                .thenCompose(nothing -> this.updateList(module));
         }
         // Invalidate any negative-cache 404s recorded for this module
         // (or its parent paths, e.g. Go's parent-path probing) BEFORE
@@ -353,10 +356,15 @@ final class GoUploadSlice implements Slice {
      * and any other async consumers still fire). The two writers target the
      * same DB row via idempotent UPSERT so they cannot diverge.
      *
+     * <p>An identical re-upload only repeats the idempotent index UPSERT and
+     * does not enqueue the event, so {@code artifact_publish} stays a
+     * first-publish record.</p>
+     *
      * @param headers Request headers
      * @param module Module path
      * @param version Module version (without leading `v`)
      * @param key Storage key for uploaded artifact
+     * @param first Whether this upload stored the file for the first time
      * @return Completion stage that completes when the synchronous index
      *         write has landed
      */
@@ -364,7 +372,8 @@ final class GoUploadSlice implements Slice {
         final Headers headers,
         final String module,
         final String version,
-        final Key key
+        final Key key,
+        final boolean first
     ) {
         return this.storage.metadata(key)
             .thenApply(meta -> meta.read(Meta.OP_SIZE).orElseThrow())
@@ -376,11 +385,13 @@ final class GoUploadSlice implements Slice {
                     new com.auto1.pantera.goproxy.ModulePath(module).decoded(), version, size,
                     System.currentTimeMillis(), null, key.string()
                 ).withRequestContext(headers);
-                this.events.ifPresent(
-                    queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque
-                        event
-                    )
-                );
+                if (first) {
+                    this.events.ifPresent(
+                        queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque
+                            event
+                        )
+                    );
+                }
                 return this.syncIndex.recordSync(event);
             });
     }
@@ -430,7 +441,8 @@ final class GoUploadSlice implements Slice {
     }
 
     /**
-     * Save {@code @v/list} if stored zips add versions to it.
+     * Save {@code @v/list} if stored zips add versions to it or it holds
+     * duplicate lines (the rewrite de-duplicates them).
      * @param list List key
      * @param existing Current entries
      * @param keys Keys under the module's {@code @v} directory
@@ -448,8 +460,9 @@ final class GoUploadSlice implements Slice {
             .sorted(new GoVersionOrder())
             .collect(Collectors.toList());
         final LinkedHashSet<String> versions = new LinkedHashSet<>(existing);
+        final int unique = versions.size();
         versions.addAll(stored);
-        if (versions.size() == existing.size()) {
+        if (versions.size() == unique && unique == existing.size()) {
             return CompletableFuture.completedFuture(null);
         }
         final String updated = String.join("\n", versions) + '\n';

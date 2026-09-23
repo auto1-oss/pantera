@@ -168,6 +168,60 @@ final class GoUploadSliceTest {
     }
 
     @Test
+    void identicalZipRepublishReindexesWithoutNewEvent() {
+        final Storage storage = new InMemoryStorage();
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final Queue<ArtifactEvent> indexed = new ConcurrentLinkedQueue<>();
+        final GoUploadSlice slice = new GoUploadSlice(
+            storage, "go-local", Optional.of(events),
+            event -> {
+                indexed.add(event);
+                return CompletableFuture.completedFuture(null);
+            }
+        );
+        final String path = MODULE + "/@v/v1.0.0.zip";
+        GoUploadSliceTest.put(slice, path, "same");
+        MatcherAssert.assertThat(
+            "identical re-publish is idempotent",
+            GoUploadSliceTest.put(slice, path, "same"),
+            new RsHasStatus(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "a retried publish re-runs the idempotent index upsert",
+            indexed.stream().map(ArtifactEvent::artifactVersion)
+                .collect(Collectors.toList()),
+            new IsEqual<>(List.of("1.0.0", "1.0.0"))
+        );
+        MatcherAssert.assertThat(
+            "a retried publish is not a new publish event",
+            events.size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void listWithDuplicateLinesGainsNewVersion() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(
+            new Key.From(MODULE + "/@v/v1.0.0.zip"),
+            new Content.From("old".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        storage.save(
+            new Key.From(MODULE + "/@v/list"),
+            new Content.From("v1.0.0\nv1.0.0\n".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.empty());
+        GoUploadSliceTest.put(slice, MODULE + "/@v/v1.1.0.zip", "new");
+        MatcherAssert.assertThat(
+            new String(
+                storage.value(new Key.From(MODULE + "/@v/list")).join().asBytes(),
+                StandardCharsets.UTF_8
+            ),
+            new IsEqual<>("v1.0.0\nv1.1.0\n")
+        );
+    }
+
+    @Test
     @Timeout(60)
     void concurrentPublishesKeepEveryVersionInList() {
         final Storage storage = new AsyncStorage(new InMemoryStorage(), this.pool);
