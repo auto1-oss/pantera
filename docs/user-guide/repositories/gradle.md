@@ -73,6 +73,7 @@ Configure the `maven-publish` plugin to push to a `gradle` or `maven` local:
 
 ```kotlin
 plugins {
+    `java-library`
     `maven-publish`
 }
 
@@ -95,7 +96,7 @@ publishing {
 }
 ```
 
-Publish with:
+Without the `publications` block, `./gradlew publish` succeeds but uploads nothing. Publish with:
 
 ```bash
 ./gradlew publish

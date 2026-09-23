@@ -833,6 +833,10 @@ directly -- note that this bypasses `client_base_url` and
 `client_base_host_allowlist`, unlike every adapter that goes through
 `ClientBaseUrl`.)
 
+The UI's Set Me Up snippets also use a repository's `url` (or `settings.url`)
+verbatim when set; otherwise they use the UI Registry URL plus the first
+global prefix (see [UI Deployment](admin-guide/ui-deployment.md#registry-url-for-set-me-up)).
+
 Since 2.2.6 hosted **`npm`** is no longer one of them. All three of its
 base-URL consumers -- the full packument, the single-version manifest, and the
 `.npmrc` the `/.auth` endpoint emits -- resolve the base per request: the

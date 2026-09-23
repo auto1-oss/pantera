@@ -4,32 +4,58 @@
 
 This page provides concise setup instructions for less commonly used package formats supported by Pantera: RubyGems, NuGet, Debian, RPM, Conda, Conan, and Hex.
 
-For all formats, you need a Pantera account and JWT token. See [Getting Started](../getting-started.md).
+For all formats, you need a Pantera account and an API token. See [Getting Started](../getting-started.md). The UI's **Set Me Up** page (`/setup/<format>`) generates these commands with your registry URL, repository and token filled in.
 
 ---
 
 ## RubyGems
 
-### Client Configuration (~/.gemrc)
+### Add the Source
 
-```yaml
----
-:sources:
-  - http://pantera-host:8080/my-gem
+RubyGems only authenticates a source through its URL, so the credentials go into `~/.gemrc` (percent-encode a username containing `@`, e.g. `me%40example.com`):
+
+```bash
+gem sources --add http://your-username:your-api-token@pantera-host:8080/my-gem/
 ```
 
 ### Install a Gem
 
 ```bash
-gem install rails --source http://pantera-host:8080/my-gem
+gem install my-gem
 ```
 
 ### With Bundler (Gemfile)
 
-```ruby
-source "http://pantera-host:8080/my-gem"
+Store the credentials in `~/.bundle/config` so they stay out of the Gemfile:
 
-gem "rails", "~> 7.1"
+```bash
+bundle config set --global http://pantera-host:8080/my-gem/ 'your-username:your-api-token'
+```
+
+```ruby
+source "https://rubygems.org"
+
+source "http://pantera-host:8080/my-gem/" do
+  gem "my-gem"
+end
+```
+
+### Push a Gem
+
+`gem push` sends the stored key verbatim as the `Authorization` header, so store a Basic credential for the push host:
+
+```bash
+mkdir -p ~/.gem
+echo "http://pantera-host:8080/my-gem: Basic $(printf %s 'your-username:your-api-token' | base64 | tr -d '\n')" >> ~/.gem/credentials
+chmod 0600 ~/.gem/credentials
+gem build my-gem.gemspec
+gem push my-gem-0.1.0.gem --host http://pantera-host:8080/my-gem
+```
+
+Or upload with curl (answers `201`):
+
+```bash
+curl -f -u 'your-username:your-api-token' --data-binary @my-gem-0.1.0.gem http://pantera-host:8080/my-gem/api/v1/gems
 ```
 
 <details>
@@ -50,20 +76,36 @@ repo:
 
 ## NuGet
 
+Always use the `/index.json` service index URL: without it dotnet treats the source as a v2 feed and gets `404`.
+
 ### Add Package Source
 
 ```bash
-dotnet nuget add source http://pantera-host:8080/my-nuget \
-  -n pantera \
-  -u your-username \
-  -p your-jwt-token \
-  --store-password-in-clear-text
+dotnet nuget add source http://pantera-host:8080/my-nuget/index.json \
+  --name pantera \
+  --username your-username \
+  --password your-api-token \
+  --store-password-in-clear-text \
+  --allow-insecure-connections
 ```
+
+`--allow-insecure-connections` is needed for a plain-HTTP registry on .NET SDK 9 and later; omit it for HTTPS or on the .NET 8 SDK.
 
 ### Install a Package
 
+`dotnet add package --source` takes a URL, not a source name:
+
 ```bash
-dotnet add package Newtonsoft.Json --source pantera
+dotnet add package Newtonsoft.Json --source http://pantera-host:8080/my-nuget/index.json
+```
+
+### Push a Package
+
+Pantera authenticates the push with the credentials stored for the source; it does not accept an `--api-key` on its own:
+
+```bash
+dotnet pack -c Release -o nupkg
+dotnet nuget push "nupkg/*.nupkg" --source pantera --skip-duplicate
 ```
 
 ### nuget.config
@@ -72,16 +114,18 @@ dotnet add package Newtonsoft.Json --source pantera
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
-    <add key="pantera" value="http://pantera-host:8080/my-nuget" />
+    <add key="pantera" value="http://pantera-host:8080/my-nuget/index.json" protocolVersion="3" allowInsecureConnections="true" />
   </packageSources>
   <packageSourceCredentials>
     <pantera>
       <add key="Username" value="your-username" />
-      <add key="ClearTextPassword" value="your-jwt-token" />
+      <add key="ClearTextPassword" value="your-api-token" />
     </pantera>
   </packageSourceCredentials>
 </configuration>
 ```
+
+Keep this file out of version control: it holds your token.
 
 <details>
 <summary>Server-Side Repository Configuration</summary>
@@ -102,36 +146,49 @@ repo:
 
 ## Debian
 
-### Configure APT Source
+### Store Credentials
 
-Add the Pantera repository to your APT sources. The `[trusted=yes]` parameter can be omitted if GPG signing is enabled on the server:
+Keep credentials out of the source list (which any user can read) and put them in `/etc/apt/auth.conf.d/`:
 
 ```bash
-echo "deb [trusted=yes] http://your-username:your-jwt-token@pantera-host:8080/my-debian my-debian main" | \
+sudo tee /etc/apt/auth.conf.d/pantera.conf > /dev/null <<'EOF'
+machine http://pantera-host:8080/my-debian
+login your-username
+password your-api-token
+EOF
+sudo chmod 600 /etc/apt/auth.conf.d/pantera.conf
+```
+
+On a plain-HTTP registry the `machine` entry **must** include the `http://` scheme, otherwise apt does not send the credentials. For HTTPS, use `machine pantera-host/my-debian`.
+
+### Configure APT Source
+
+The distribution is the repository name and the component is `main`. `[trusted=yes]` is needed unless GPG signing is configured on the repository; for a signed repository use `[signed-by=/etc/apt/keyrings/pantera.gpg]` instead:
+
+```bash
+echo "deb [trusted=yes] http://pantera-host:8080/my-debian my-debian main" | \
   sudo tee /etc/apt/sources.list.d/pantera.list
-```
-
-If authentication is required, configure it in `/etc/apt/auth.conf`:
-
-```
-machine pantera-host
-  login your-username
-  password your-jwt-token
 ```
 
 ### Install a Package
 
 ```bash
-sudo apt update
-sudo apt install my-package
+sudo apt-get update
+apt-cache policy my-package
+sudo apt-get install my-package
 ```
 
 ### Upload a .deb Package
 
+Upload into `pool/main/`. The trailing `/` makes curl append the file name, so each package is stored under its own name:
+
 ```bash
-curl http://your-username:your-jwt-token@pantera-host:8080/my-debian/main \
-  --upload-file /path/to/my-package_1.0.0_amd64.deb
+curl -f -u 'your-username:your-api-token' \
+  -T my-package_1.0.0_amd64.deb \
+  http://pantera-host:8080/my-debian/pool/main/
 ```
+
+The package's `Architecture` must be one of the repository's `Architectures`, otherwise the server answers `400`.
 
 <details>
 <summary>Server-Side Repository Configuration</summary>
@@ -167,34 +224,43 @@ When GPG signing is enabled, clients can verify package signatures and do not ne
 
 ### Configure Yum/DNF Repository
 
-Create `/etc/yum.repos.d/pantera.repo`:
+Create `/etc/yum.repos.d/pantera.repo`; dnf and yum send `username`/`password` as HTTP Basic auth. The file holds your token, so make it readable by root only:
 
-```ini
+```bash
+sudo tee /etc/yum.repos.d/pantera.repo > /dev/null <<'EOF'
 [pantera]
-name=Pantera RPM Repository
+name=Pantera my-rpm
 baseurl=http://pantera-host:8080/my-rpm
+username=your-username
+password=your-api-token
 enabled=1
 gpgcheck=0
+repo_gpgcheck=0
+skip_if_unavailable=0
+EOF
+sudo chmod 600 /etc/yum.repos.d/pantera.repo
 ```
+
+`skip_if_unavailable=0` makes dnf fail loudly instead of silently skipping the repository when the credentials are wrong. Set `gpgcheck=1` with `gpgkey=` if your packages are signed.
 
 ### Install a Package
 
 ```bash
-sudo yum install my-package
-# or with dnf
+sudo dnf --repo pantera --refresh makecache   # verify: prints "Metadata cache created."
 sudo dnf install my-package
 ```
 
 ### Upload an .rpm Package
 
+`-T` sends an HTTP PUT; the trailing `/` makes curl append the file name. The repository metadata is regenerated after the upload:
+
 ```bash
-curl -X PUT \
-  -H "Authorization: Basic $(echo -n your-username:your-jwt-token | base64)" \
-  --data-binary @my-package-1.0.0-1.x86_64.rpm \
-  http://pantera-host:8080/my-rpm/my-package-1.0.0-1.x86_64.rpm
+curl -f -u 'your-username:your-api-token' \
+  -T my-package-1.0.0-1.x86_64.rpm \
+  http://pantera-host:8080/my-rpm/
 ```
 
-Upload supports optional query parameters:
+An existing file name answers `409`. Upload supports optional query parameters:
 
 | Parameter | Description |
 |-----------|-------------|
@@ -204,9 +270,8 @@ Upload supports optional query parameters:
 Example with query parameters:
 
 ```bash
-curl -X PUT \
-  -H "Authorization: Basic $(echo -n your-username:your-jwt-token | base64)" \
-  --data-binary @my-package-1.0.0-1.x86_64.rpm \
+curl -f -u 'your-username:your-api-token' \
+  -T my-package-1.0.0-1.x86_64.rpm \
   "http://pantera-host:8080/my-rpm/my-package-1.0.0-1.x86_64.rpm?override=true&skip_update=true"
 ```
 
@@ -248,24 +313,39 @@ The `update.on` field controls when RPM repository metadata is regenerated:
 
 ## Conda
 
+### Store Credentials
+
+conda reads `~/.netrc` for any channel URL without credentials (`%USERPROFILE%\_netrc` on Windows), so the channel URL carries none:
+
+```bash
+cat >> ~/.netrc <<'EOF'
+machine pantera-host login your-username password your-api-token
+EOF
+chmod 600 ~/.netrc
+```
+
 ### Configure Conda Channel
 
 ```bash
-conda config --add channels http://pantera-host:8080/my-conda
-```
-
-Or in `~/.condarc`:
-
-```yaml
-channels:
-  - http://pantera-host:8080/my-conda
-  - defaults
+conda config --prepend channels http://pantera-host:8080/my-conda
 ```
 
 ### Install a Package
 
 ```bash
 conda install my-package
+```
+
+### Upload a Package
+
+Upload the built package (`.tar.bz2` or `.conda`) to its subdir (`noarch`, `linux-64`, ...) with the `token` authorization scheme. The server answers `201`:
+
+```bash
+PKG=conda-bld/noarch/my-package-1.0.0-0.tar.bz2
+SUBDIR=$(basename "$(dirname "$PKG")")
+curl -fsS -H 'Authorization: token your-api-token' \
+  -F "file=@$PKG" \
+  "http://pantera-host:8080/my-conda/$SUBDIR/$(basename "$PKG")"
 ```
 
 <details>
@@ -287,20 +367,29 @@ repo:
 
 ## Conan
 
+Pantera speaks the Conan 1.x protocol; these commands are for Conan 1.60. Conan repositories are served on a **dedicated port** (typically 9300), at the root of that port — use the repository's own `url`, not the main registry address.
+
 ### Add Remote
 
 ```bash
-conan remote add pantera http://pantera-host:9300/my-conan
-conan remote login pantera your-username -p your-jwt-token
+conan remote add pantera http://pantera-host:9300
+conan user 'your-username' -r pantera -p 'your-api-token'
 ```
+
+In CI, set `CONAN_LOGIN_USERNAME_PANTERA` and `CONAN_PASSWORD_PANTERA` instead of running `conan user`.
 
 ### Install a Package
 
 ```bash
-conan install . --remote pantera
+conan install my_package/1.0@ -r pantera
 ```
 
-Note: Conan repositories in Pantera use a dedicated port (typically 9300), not the standard 8080 port.
+### Upload a Package
+
+```bash
+conan create .
+conan upload my_package/1.0@ -r pantera --all --confirm
+```
 
 <details>
 <summary>Server-Side Repository Configuration</summary>
@@ -309,7 +398,7 @@ Note: Conan repositories in Pantera use a dedicated port (typically 9300), not t
 # my-conan.yaml
 repo:
   type: conan
-  url: http://pantera-host:9300/my-conan
+  url: http://pantera-host:9300
   port: 9300
   storage:
     type: fs
@@ -322,9 +411,18 @@ repo:
 
 ## Hex (Elixir/Erlang)
 
+### Register the Repository
+
+Mix sends `--auth-key` verbatim as the `Authorization` header, so the key is a Basic credential built from your username and token. The repository name **must** be `pantera`: Hex checks that registry records come from a repository of that name.
+
+```bash
+mix hex.repo add pantera http://pantera-host:8080/my-hex \
+  --auth-key "Basic $(printf %s 'your-username:your-api-token' | base64 | tr -d '\n')"
+```
+
 ### Configure Mix
 
-In your `mix.exs`, configure the Hex repository:
+In your `mix.exs`:
 
 ```elixir
 defp deps do
@@ -334,17 +432,24 @@ defp deps do
 end
 ```
 
-Register the repository:
-
-```bash
-mix hex.repo add pantera http://pantera-host:8080/my-hex \
-  --auth-key your-jwt-token
-```
-
 ### Fetch Dependencies
 
+Pantera does not sign its Hex registry, so switch off the registry signature check for this command (package checksums are still verified). Prefer the variable over `mix hex.config unsafe_registry true`, which also turns the check off for hex.pm:
+
 ```bash
-mix deps.get
+HEX_UNSAFE_REGISTRY=1 mix deps.get
+```
+
+### Publish a Package
+
+`mix hex.publish` does not work against Pantera; build the tarball and upload it with curl (answers `201`; use `replace=true` to overwrite an existing version):
+
+```bash
+mix hex.build
+curl -fsS -u 'your-username:your-api-token' \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary @my_package-0.1.0.tar \
+  'http://pantera-host:8080/my-hex/publish?replace=false'
 ```
 
 <details>
@@ -365,6 +470,6 @@ repo:
 
 ## Related Pages
 
-- [Getting Started](../getting-started.md) -- Obtaining JWT tokens
+- [Getting Started](../getting-started.md) -- Obtaining API tokens
 - [Troubleshooting](../troubleshooting.md) -- Common error resolution
 - [REST API Reference](../../rest-api-reference.md) -- Repository management endpoints

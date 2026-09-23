@@ -32,6 +32,8 @@ Replace:
 - `your-jwt-token` with the JWT token from the API
 - `pypi-proxy` with the name of your PyPI proxy repository
 
+pip sends the credentials in the index URL. Percent-encode a username containing `@` (e.g. `me%40example.com`). `trusted-host` is only needed for a plain-HTTP registry.
+
 ### Environment Variable Alternative
 
 ```bash
@@ -97,6 +99,44 @@ twine upload \
   --repository-url http://pantera-host:8080/pypi-local \
   -u your-username -p your-jwt-token \
   dist/*
+```
+
+---
+
+## uv
+
+Add the index to `pyproject.toml` (`default = true` replaces PyPI; `publish-url` is the local repository for uploads):
+
+```toml
+[[tool.uv.index]]
+name = "pantera"
+url = "http://pantera-host:8080/pypi-group/simple/"
+publish-url = "http://pantera-host:8080/pypi-local"
+default = true
+```
+
+uv reads the credentials from environment variables named after the index:
+
+```bash
+export UV_INDEX_PANTERA_USERNAME='your-username'
+export UV_INDEX_PANTERA_PASSWORD='your-api-token'
+uv add requests
+uv build
+uv publish --index pantera --trusted-publishing never
+```
+
+---
+
+## Poetry
+
+```bash
+poetry source add --priority=primary pantera http://pantera-host:8080/pypi-group/simple/
+poetry config http-basic.pantera 'your-username' 'your-api-token'
+
+# Uploads go to a local repository, configured separately
+poetry config repositories.pantera-publish http://pantera-host:8080/pypi-local
+poetry config http-basic.pantera-publish 'your-username' 'your-api-token'
+poetry publish --build -r pantera-publish
 ```
 
 ---

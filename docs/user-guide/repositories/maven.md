@@ -36,15 +36,39 @@ Add the following to your Maven `settings.xml` (typically `~/.m2/settings.xml`):
       <url>http://pantera-host:8080/maven-group</url>
     </mirror>
   </mirrors>
+  <profiles>
+    <profile>
+      <id>pantera</id>
+      <repositories>
+        <repository>
+          <id>central</id>
+          <url>http://pantera-host:8080/maven-group</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+      </repositories>
+      <pluginRepositories>
+        <pluginRepository>
+          <id>central</id>
+          <url>http://pantera-host:8080/maven-group</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </pluginRepository>
+      </pluginRepositories>
+    </profile>
+  </profiles>
+  <activeProfiles>
+    <activeProfile>pantera</activeProfile>
+  </activeProfiles>
 </settings>
 ```
 
 Replace:
 - `your-username` with your Pantera username
-- `your-jwt-token-here` with the JWT token obtained from the API
+- `your-jwt-token-here` with an API token (Profile page, or generate one in the UI's **Set Me Up** page, which also fills in this file for you)
 - `maven-group` with the name of your group repository (ask your administrator)
 
-The `<mirrorOf>*</mirrorOf>` setting redirects all Maven repository requests through Pantera, including Maven Central.
+The `<mirrorOf>*</mirrorOf>` setting redirects all Maven repository requests through Pantera, including Maven Central. The active `pantera` profile overrides `central` with snapshots enabled: the super-POM `central` has snapshots disabled, so without it Maven never requests `-SNAPSHOT` dependencies through the mirror.
 
 ### Gradle (settings.gradle.kts)
 

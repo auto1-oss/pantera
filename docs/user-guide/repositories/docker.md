@@ -36,10 +36,10 @@ If Pantera is behind an Nginx reverse proxy with TLS termination (e.g., on port 
 
 ## Login
 
-Authenticate with your Pantera credentials:
+Authenticate with your Pantera credentials (`--password-stdin` keeps the token out of the process list):
 
 ```bash
-docker login pantera-host:8080 -u your-username -p your-jwt-token
+echo 'your-api-token' | docker login pantera-host:8080 -u 'your-username' --password-stdin
 ```
 
 Or interactively:

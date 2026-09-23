@@ -77,10 +77,23 @@ Pantera resolves packages through the group repository, checking your local repo
 
 ### Upload a Package Archive
 
+Set `"version"` in the package's `composer.json` (without it the upload becomes `dev-master`) and exclude `vendor/` from the archive:
+
+```json
+{
+  "version": "1.0.0",
+  "archive": {
+    "exclude": ["/vendor", "/dist"]
+  }
+}
+```
+
+Build and upload the archive (prints `201` once the package is indexed):
+
 ```bash
-curl -X PUT \
-  -H "Authorization: Basic $(echo -n your-username:your-jwt-token | base64)" \
-  --data-binary @my-package-1.0.0.zip \
+composer archive --format=zip --dir=dist --file=my-package-1.0.0
+curl -sS -w '%{http_code}\n' -u 'your-username:your-api-token' \
+  --upload-file dist/my-package-1.0.0.zip \
   http://pantera-host:8080/php-local/my-package-1.0.0.zip
 ```
 

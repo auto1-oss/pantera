@@ -27,7 +27,9 @@ registry=http://pantera-host:8080/npm-group
 
 Replace:
 - `npm-group` with the name of your group repository
-- `your-jwt-token-here` with the JWT token obtained from the API
+- `your-jwt-token-here` with an API token (Profile page, or generate one in the UI's **Set Me Up** page)
+
+`npm login` and `npm adduser` do not work against Pantera; put an API token in `.npmrc` as shown.
 
 ### Alternative: Basic Auth
 

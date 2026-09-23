@@ -14,14 +14,29 @@ This page covers how to upload, download, and browse arbitrary files stored in P
 
 ---
 
-## Upload via curl
+## Store Credentials
 
-Upload any file to a generic file repository:
+Keep the token off the command line with `~/.netrc` (`machine` is the host name without the port). curl reads it with `--netrc`; wget reads it automatically:
 
 ```bash
-curl -X PUT \
-  -H "Authorization: Basic $(echo -n your-username:your-jwt-token | base64)" \
-  --data-binary @myfile.tar.gz \
+cat >> ~/.netrc <<'EOF'
+machine pantera-host
+login your-username
+password your-api-token
+EOF
+chmod 600 ~/.netrc
+```
+
+Without `~/.netrc`, pass `-u 'your-username:your-api-token'` to curl or `--user='your-username' --password='your-api-token'` to wget on each command.
+
+---
+
+## Upload via curl
+
+Upload any file to a generic file repository. `-T` sends an HTTP PUT; the server answers `201 Created`:
+
+```bash
+curl -f --netrc -T myfile.tar.gz \
   http://pantera-host:8080/bin/path/to/myfile.tar.gz
 ```
 
@@ -29,29 +44,25 @@ The path after the repository name (`bin/`) becomes the storage path. You can or
 
 ```bash
 # Upload with directory structure
-curl -X PUT \
-  -H "Authorization: Basic $(echo -n your-username:your-jwt-token | base64)" \
-  --data-binary @release-1.0.0.zip \
+curl -f --netrc -T release-1.0.0.zip \
   http://pantera-host:8080/bin/releases/v1.0.0/release-1.0.0.zip
+```
+
+With wget 1.15 or later:
+
+```bash
+wget -nv -O /dev/null --method=PUT --body-file=myfile.tar.gz \
+  http://pantera-host:8080/bin/path/to/myfile.tar.gz
 ```
 
 ---
 
 ## Download via curl
 
-Download a file:
+Anonymous reads are denied by default, so downloads authenticate too:
 
 ```bash
-curl -o myfile.tar.gz \
-  http://pantera-host:8080/bin/path/to/myfile.tar.gz
-```
-
-With authentication (if required by your repository):
-
-```bash
-curl -o myfile.tar.gz \
-  -H "Authorization: Basic $(echo -n your-username:your-jwt-token | base64)" \
-  http://pantera-host:8080/bin/path/to/myfile.tar.gz
+curl -fL --netrc -O http://pantera-host:8080/bin/path/to/myfile.tar.gz
 ```
 
 Using wget:
@@ -68,7 +79,7 @@ A file proxy repository caches files from an upstream HTTP server:
 
 ```bash
 # Fetch through the proxy (cached after first request)
-curl -o tool.tar.gz \
+curl -fL --netrc -o tool.tar.gz \
   http://pantera-host:8080/file-proxy/path/to/tool.tar.gz
 ```
 

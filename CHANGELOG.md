@@ -27,6 +27,8 @@ This release contains security hardening fixes. Upgrading is recommended. Specif
 
 - **The 2.2.9 security limits are database-backed admin settings, editable in the UI** — three new Settings cards (*Request & Storage Limits*, *Outbound Egress Policy*, *Login Throttling*) with matching `GET`/`PUT /api/v1/admin/request-limits-settings`, `/egress-settings` and `/login-throttle-settings` endpoints. Changes apply on the next request on every node without a restart; the corresponding `PANTERA_*` variables remain as the fallback while no value has been saved. Login throttling (failures per user and client IP, and the window) is tunable for the first time.
   ([@aydasraf](https://github.com/aydasraf))
+- **Set Me Up replaces Quick Setup** — ready-to-paste client configuration for every supported format, from the sidebar (`/setup`), a repository's detail page or the repository list. Pick the repository to resolve from and a local repository to publish to; generate a short-lived API token inline (or paste your own) and it is filled into every snippet without being stored in the browser. Most formats offer several clients (for example npm, pnpm and Yarn; pip, uv and Poetry; Docker and Podman), each with Configure / Resolve / Publish / Verify steps, copy and download buttons, and shareable deep links.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔧 Bug fixes
 
@@ -46,7 +48,9 @@ This release contains security hardening fixes. Upgrading is recommended. Specif
   ([@aydasraf](https://github.com/aydasraf))
 - **`npm unpublish <pkg>@<version>` no longer fails with `409 Conflict` after removing the version** — the CLI finishes a single-version unpublish by deleting the version’s tarball at `<pkg>/-/<file>.tgz/-rev/<revision>`, and that request was handled by the whole-package unpublish path, which read the tarball path as the package name, computed a revision for a package that does not exist, and rejected the client’s current revision as stale. The preceding PUT had already removed the version from the packument, so the CLI reported failure while the registry had in fact unpublished the version and left the tarball blob orphaned in storage. The tarball step is now recognised, validated against the real package’s revision with the same 409/428/404 semantics as force-unpublish, and removes only that blob.
   ([@aydasraf](https://github.com/aydasraf))
-- **Quick Setup separates resolving from publishing.** Each format page now has a *Resolve from* picker (group, proxy or local) and a *Publish to* picker (local repositories only, defaulting to the group's local member), so publish instructions no longer target groups or proxies, which reject uploads. Repositories no longer appear twice in the picker. Several snippets were corrected (Composer credentials host, `docker login` host, Go checksum variables, Helm and RPM credentials, the APT distribution name), and Gradle, Go local/group, PHP group and RubyGems group repositories are now offered.
+- **Set Me Up instructions use the client-facing registry address.** Snippets are built from the configured Registry URL (server setting, else the UI's `REGISTRY_URL`) with the first global path prefix appended, or from a repository's own `url`, instead of the UI's address; when no registry URL is configured a banner says so. `GET /api/v1/settings/ui` now returns the global prefixes.
+  ([@aydasraf](https://github.com/aydasraf))
+- **The *Binary* repository type is no longer offered when creating or filtering repositories**; the server never supported it.
   ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security

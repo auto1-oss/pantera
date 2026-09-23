@@ -2069,6 +2069,42 @@ curl http://localhost:8086/api/v1/settings \
 
 ---
 
+### GET /api/v1/settings/ui
+
+Get the UI-facing settings. Readable by any authenticated user: it holds only the values the UI needs to render links and client setup instructions (Set Me Up).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** none beyond authentication.
+
+**Response (200):**
+
+```json
+{
+  "ui": {
+    "prefixes": ["test_prefix"],
+    "grafana_url": "https://grafana.example.com",
+    "registry_url": "https://registry.example.com"
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `ui.prefixes` | Global path prefixes (`meta.global_prefixes`), always present; `[]` when none are configured. Set Me Up appends the first one to the registry URL. |
+| `ui.grafana_url` | Grafana link shown on the Dashboard. Present only when set. |
+| `ui.registry_url` | Client-facing registry address used in Set Me Up snippets; overrides the UI container's `REGISTRY_URL`. Present only when set. |
+
+`grafana_url` and `registry_url` are saved with `PUT /api/v1/settings/ui` (see [PUT /api/v1/settings/:section](#put-apiv1settingssection)); prefixes are managed with `PUT /api/v1/settings/prefixes`.
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/settings/ui \
+  -H "Authorization: Bearer eyJhbGciOi..."
+```
+
+---
+
 ### PUT /api/v1/settings/prefixes
 
 Update the global URL prefixes list. Changes are persisted to both the YAML config file and the database (when available).

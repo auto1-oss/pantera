@@ -162,16 +162,39 @@ A paginated, searchable table of all currently blocked artifacts:
 
 ---
 
-## Quick Setup
+## Set Me Up
 
-The Quick Setup page (`/setup`) generates client configuration for one format at a time. Pick the format, then two repositories:
+Set Me Up generates ready-to-paste client configuration for one repository, with your credentials filled in. It replaces the former Quick Setup page.
 
-- **Resolve from** — any repository of that format. A group is the usual choice: it serves your local packages and upstream packages through one URL.
-- **Publish to** — a local repository only. Groups and proxies are read-only and answer `405 Method Not Allowed` to uploads. When you resolve from a group, this defaults to the group's first local member.
+**Entry points:**
 
-The generated steps are split into a *Resolve* section (install/pull) and a *Publish* section (deploy/push/upload) that use the matching URL. If no local repository of the format exists, the *Publish* section is omitted; ask an administrator to create one. Go and Conda pages cover resolution only.
+- **Set Me Up** in the sidebar (`/setup`) shows a searchable grid of formats with the number of repositories you can read for each. Pick a format to open `/setup/<format>`.
+- The **Set Me Up** button on a repository's detail page, and the Set Me Up row action on the repository list, open the same panel in a drawer, preselected for that repository.
 
-Replace `YOUR_USERNAME` and `YOUR_TOKEN` with your username and an API token from your Profile page.
+**Repositories.** The **Repository** picker lists the repositories of that format you can read, grouped into Group, Proxy and Local. A group is the usual choice: it serves your local packages and upstream packages through one URL. When the selected repository is a group or proxy, a **Publish to** picker offers the local repositories of the format, because groups and proxies are read-only and answer `405 Method Not Allowed` to uploads; it defaults to the group's first local member. If no local repository exists, the Publish tab explains that and asks you to contact an administrator.
+
+**Credentials.** The Credentials card shows your username and offers three sources for the token used in the snippets:
+
+- **Generate token** — creates an API token labelled `set-me-up:<format>:<repository>` with an expiry of 1, 7, 30 or 90 days, and fills it into every snippet. The token is masked (with a reveal and a copy button), held in memory only and never written to browser storage; it is gone when the panel closes, so copy it right away. Revoke it on your Profile page.
+- **Use my own token** — paste an existing API token. It only fills in the snippets and is not sent anywhere or saved.
+- **Placeholders** — snippets show `YOUR_USERNAME` / `YOUR_TOKEN` for you to replace.
+
+If your username contains `@`, snippets that put credentials in a URL use its percent-encoded form.
+
+**Clients and tabs.** Most formats offer several clients (for example npm, pnpm, Yarn 1 and Yarn Berry; pip, uv and Poetry; Docker and Podman; Gradle Kotlin and Groovy DSL). Each client's steps are split into four tabs:
+
+| Tab | Contents |
+|-----|----------|
+| Configure | One-time client configuration (config files, credentials) |
+| Resolve | Install / pull / download from the selected repository |
+| Publish | Deploy / push / upload to the publish repository |
+| Verify | Commands that confirm the setup works |
+
+Every step has a copy button; configuration files (for example `settings.xml`, `.npmrc`, `pip.conf`, `nuget.config`, `.netrc`) also have a **Download** button, and **Copy all** copies every snippet in the current tab.
+
+**Deep links.** The format page keeps its state in the URL: `/setup/<format>?repo=<repository>&client=<client>&tab=<configure|resolve|publish|verify>`. Share the link to point a colleague at the exact instructions.
+
+**Registry address.** Snippets use the registry URL configured by the administrator (with the global path prefix, if any), or a repository's own configured `url`. If no registry URL is configured, a banner warns that the instructions fall back to the UI's own address, which may not reach the registry; ask an administrator to set **Registry URL** in System Settings (see [Registry URL for Set Me Up](../admin-guide/ui-deployment.md#registry-url-for-set-me-up)).
 
 ---
 
@@ -203,7 +226,7 @@ If you do not see the Administration section, you have read-only access. Contact
 
 The **Create Repository** page (`/admin/repositories/create`) allows administrators to create new repositories. The **Type** dropdown lists all supported repository formats:
 
-- **Maven**, **Gradle**, **Docker**, **npm**, **PyPI**, **Go**, **Helm**, **NuGet**, **Debian**, **RPM**, **Conda**, **RubyGems**, **Conan**, **Hex**, **PHP**, **File**, **Binary**
+- **Maven**, **Gradle**, **Docker**, **npm**, **PyPI**, **Go**, **Helm**, **NuGet**, **Debian**, **RPM**, **Conda**, **RubyGems**, **Conan**, **Hex**, **PHP**, **File**
 
 Each format supports Local, Proxy, and/or Group variants where applicable. For example, Go supports Local, Proxy, and Group; Gradle supports all three variants.
 
