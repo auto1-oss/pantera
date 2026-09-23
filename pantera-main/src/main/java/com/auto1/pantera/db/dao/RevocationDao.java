@@ -40,21 +40,43 @@ public final class RevocationDao {
     }
 
     /**
-     * Insert a revocation entry with a TTL.
+     * Insert a revocation entry with a TTL, stamped now on this node's clock.
      * @param entryType Entry type: "jti" or "username"
      * @param entryValue The JTI string or username
-     * @param ttlSeconds Time-to-live in seconds; expires_at = NOW() + ttl
+     * @param ttlSeconds Time-to-live in seconds
      */
     public void insert(final String entryType, final String entryValue, final int ttlSeconds) {
+        this.insert(entryType, entryValue, Instant.now(), ttlSeconds);
+    }
+
+    /**
+     * Insert a revocation entry revoked at {@code createdAt}.
+     *
+     * <p>The revocation instant is taken from the revoking node, not the
+     * database's {@code NOW()}: tokens are stamped with the issuing node's
+     * clock and compared at millisecond precision, so a database clock
+     * running ahead would otherwise reject the re-login that follows a
+     * password change.</p>
+     *
+     * @param entryType Entry type: "jti" or "username"
+     * @param entryValue The JTI string or username
+     * @param createdAt Revocation instant
+     * @param ttlSeconds Time-to-live in seconds; expires_at = createdAt + ttl
+     */
+    public void insert(
+        final String entryType, final String entryValue,
+        final Instant createdAt, final int ttlSeconds
+    ) {
         final String sql = String.join(" ",
-            "INSERT INTO revocation_blocklist (entry_type, entry_value, expires_at)",
-            "VALUES (?, ?, NOW() + (? || ' seconds')::INTERVAL)"
+            "INSERT INTO revocation_blocklist (entry_type, entry_value, created_at, expires_at)",
+            "VALUES (?, ?, ?, ?)"
         );
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, entryType);
             ps.setString(2, entryValue);
-            ps.setInt(3, ttlSeconds);
+            ps.setTimestamp(3, Timestamp.from(createdAt));
+            ps.setTimestamp(4, Timestamp.from(createdAt.plusSeconds(ttlSeconds)));
             ps.executeUpdate();
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to insert revocation entry", ex);

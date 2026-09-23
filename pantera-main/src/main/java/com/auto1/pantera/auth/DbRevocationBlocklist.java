@@ -36,6 +36,11 @@ public final class DbRevocationBlocklist implements RevocationBlocklist {
     private static final long POLL_INTERVAL_MS = 5_000L;
 
     /**
+     * How far each poll re-reads before the previous poll (clock skew between nodes).
+     */
+    private static final long POLL_OVERLAP_MS = 30_000L;
+
+    /**
      * Entry type constant for JTI-based revocations.
      */
     private static final String TYPE_JTI = "jti";
@@ -113,8 +118,8 @@ public final class DbRevocationBlocklist implements RevocationBlocklist {
 
     @Override
     public void revokeUser(final String username, final int ttlSeconds) {
-        this.dao.insert(TYPE_USER, username, ttlSeconds);
         final Instant now = Instant.now();
+        this.dao.insert(TYPE_USER, username, now, ttlSeconds);
         this.userCache.merge(
             username, new UserRevocation(now, now.plusSeconds(ttlSeconds)), UserRevocation::merge
         );
@@ -132,7 +137,11 @@ public final class DbRevocationBlocklist implements RevocationBlocklist {
         final Instant pollFrom = this.lastPoll;
         this.lastPoll = now;
         try {
-            final List<RevocationDao.RevocationEntry> entries = this.dao.pollSince(pollFrom);
+            // Overlap the window: entries are stamped on the revoking node's
+            // clock, which may run slightly behind this one. Re-reading an
+            // entry is harmless (merge is idempotent).
+            final List<RevocationDao.RevocationEntry> entries =
+                this.dao.pollSince(pollFrom.minusMillis(POLL_OVERLAP_MS));
             for (final RevocationDao.RevocationEntry entry : entries) {
                 if (TYPE_JTI.equals(entry.entryType())) {
                     this.jtiCache.put(entry.entryValue(), entry.expiresAt());
