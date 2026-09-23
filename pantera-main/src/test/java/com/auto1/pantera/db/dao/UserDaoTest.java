@@ -263,6 +263,53 @@ class UserDaoTest {
         assertEquals(2, page2.items().size());
     }
 
+    @Test
+    void updateWithPasswordAppliesFieldsAndCredentialTogether() {
+        addTestUser("dora");
+        this.dao.updateWithPassword(
+            Json.createObjectBuilder().add("email", "dora@new.example").build(),
+            "dora", "Correct-Horse-Battery-9"
+        );
+        assertEquals(
+            "dora@new.example", this.dao.get("dora").orElseThrow().getString("email"),
+            "the other fields are updated"
+        );
+        assertTrue(
+            this.dao.passwordMatches("dora", "Correct-Horse-Battery-9"),
+            "the new password is set"
+        );
+        assertFalse(this.dao.passwordMatches("dora", "pass123"), "the old password is gone");
+    }
+
+    @Test
+    void updateWithWeakPasswordWritesNothing() {
+        // B48: a weak reset used to write the other fields, then fail.
+        addTestUser("eric");
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> this.dao.updateWithPassword(
+                Json.createObjectBuilder().add("email", "eric@new.example").build(),
+                "eric", "short"
+            ),
+            "a weak password is refused"
+        );
+        assertEquals(
+            "eric@example.com", this.dao.get("eric").orElseThrow().getString("email"),
+            "the other fields are untouched"
+        );
+    }
+
+    @Test
+    void passwordMatchesChecksOnlyTheStoredHash() {
+        // B13: the current-password check must not accept a token.
+        addTestUser("fay");
+        assertFalse(
+            this.dao.passwordMatches("fay", "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJmYXkifQ.c2ln"),
+            "a token is not the password"
+        );
+        assertTrue(this.dao.passwordMatches("fay", "pass123"), "the stored password matches");
+    }
+
     private void addTestUser(final String name) {
         this.dao.addOrUpdate(
             Json.createObjectBuilder()

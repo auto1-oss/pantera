@@ -122,6 +122,11 @@ public final class ManageUsers implements CrudUsers {
         }
     }
 
+    @Override
+    public boolean passwordMatches(final String uname, final String pass) {
+        return new com.auto1.pantera.auth.AuthFromStorage(this.blsto).user(uname, pass).isPresent();
+    }
+
     /**
      * Get name of the file (user or role)from the key.
      * @param key Key to obtain name from

@@ -265,7 +265,7 @@ curl -X PUT http://pantera-host:8086/api/v1/users/newuser \
   }'
 ```
 
-**Change a user's password:**
+**Change a user's password** (your own needs `old_pass`; resetting someone else's needs `change_password`, no `old_pass`, and — unless you hold `all_permission` — a target that holds only roles you hold and no `all_permission`):
 
 ```bash
 curl -X POST http://pantera-host:8086/api/v1/users/newuser/password \

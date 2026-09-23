@@ -756,9 +756,15 @@ Create a new user or update an existing one. If the user exists, the `update` pe
 **Permission:** `api_user_permissions:create` (new) or `api_user_permissions:update` (existing)
 
 **Privilege ceiling (2.2.9).** `create`/`update` is a delegated authoring right, not root; unless the caller holds `all_permission`:
-- Resetting an **existing** user's password (`pass`/`password` on an existing user) additionally requires `api_user_permissions:change_password`, and the new password is validated by the same password policy as self-service changes; it also revokes that user's live tokens.
-- `roles` may only name roles the caller **already holds** — a caller cannot assign (to themselves or anyone) a role above their own, so the built-in `admin` role cannot be self-assigned. Requests exceeding the ceiling are refused with `403`.
-- An initial password on user **creation** must satisfy the password policy (`400` otherwise).
+- An **existing** user can only be modified if they hold no `all_permission` and only roles the caller also holds — a delegated manager cannot edit, strip the roles of, or reset an administrator or a user above their own roles.
+- Resetting an **existing** user's password (`pass`/`password` on an existing user) additionally requires `api_user_permissions:change_password`; it revokes that user's live tokens. Your **own** password is changed with `POST /api/v1/users/:name/password` and your current password, not through this endpoint.
+- `roles` may only name roles the caller **already holds** — a caller cannot assign (to themselves or anyone) a role above their own, so the built-in `admin` role cannot be self-assigned.
+- `type` may only be a password format (`plain`, `sha256`); setting an identity-provider type is reserved to administrators.
+
+Requests exceeding the ceiling are refused with `403`. For every caller:
+- `sso_subject` and `auth_provider` in the body are ignored — the SSO login flow alone binds an identity.
+- Send the password once, as `pass` or `password`; both with different values is refused with `400`.
+- Any password (on creation or reset) must satisfy the password policy; otherwise the request is refused with `400 WEAK_PASSWORD` and nothing is written. A reset updates the other fields and the password in one transaction.
 
 **Request Body:**
 
@@ -821,10 +827,15 @@ curl -X DELETE http://localhost:8086/api/v1/users/olduser \
 
 ### POST /api/v1/users/:name/password
 
-Change a user's password. Requires the old password for verification.
+Change a user's password.
+
+- **Your own password** (`:name` is you): no permission is needed, but `old_pass` must be your current local password (checked against the stored password only — a token is not accepted). A wrong `old_pass` is refused with `403`.
+- **Another user's password** (reset): requires `api_user_permissions:change_password`, no `old_pass`, and the privilege ceiling of `PUT /api/v1/users/:name` — unless you hold `all_permission`, the target must hold no `all_permission` and only roles you also hold (`403` otherwise).
+
+Either way the new password must satisfy the password policy (`400 WEAK_PASSWORD`), and every live token of the user is revoked.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_user_permissions:change_password`
+**Permission:** none for your own password; `api_user_permissions:change_password` to reset another user's
 
 **Request Body:**
 
@@ -837,13 +848,13 @@ Change a user's password. Requires the old password for verification.
 
 **Response (200):** Empty body on success.
 
-**Response (401):**
+**Response (403):**
 
 ```json
 {
-  "error": "UNAUTHORIZED",
-  "message": "Invalid old password",
-  "status": 401
+  "error": "FORBIDDEN",
+  "message": "Current password is incorrect.",
+  "status": 403
 }
 ```
 
