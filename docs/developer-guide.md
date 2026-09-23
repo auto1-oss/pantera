@@ -971,6 +971,7 @@ Related invariants in the same class:
 - The sibling pin (`memberPin`) is keyed by `name@version`, never set for version-less requests, and never renewed by a pin-routed hit. A pinned member with an open group breaker is not used (the pin is dropped before any request). When the pinned member answers 404, the pin is dropped and the full index path runs. When it fails (5xx, or the marked 503 of an open upstream circuit), the pin is dropped and that failure is answered as-is. The member is not asked a second time, so one request records at most one breaker failure.
 - A member `3xx` is skipped without `recordFailure()` and marks the walk unverified (no negative-cache write).
 - `pypi-group` rewrites `/simple/<name>/` to the PEP 503 normalised name before the walk.
+- `go-group` wraps the resolver in `GoGroupSlice`, which merges `<module>/@v/list` over the resolver's own `MemberSlice` list (shared `AutoBlockRegistry` per member). An open-circuit member gets only an `X-Pantera-Cache-Only` probe. A marked 502 is a skip without conviction. Genuine outcomes record success or failure. With no list, a failure answers `AllProxiesFailed`, all-skipped answers 503 + `Retry-After`, and only an all-404 result falls back to the walk.
 
 `proxyMembers` is a `Set<String>` injected at construction time by `RepositorySlices`, which classifies each member by its configured type. To ensure a new adapter type is treated as a proxy in the fanout, register it as a proxy type in `RepositorySlices` when building the `GroupResolver`.
 

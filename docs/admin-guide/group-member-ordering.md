@@ -49,7 +49,10 @@ migration; it is purely noise at this point.
   not relayed. pypi groups rewrite `/simple/<name>/` to the PEP 503
   normalised name before asking members.
 - go groups merge `<module>/@v/list` across all members, so the list
-  holds both the hosted and the upstream versions.
+  holds both the hosted and the upstream versions. The merge follows the
+  group member circuit breaker: a member whose circuit is open only
+  contributes what it has in its cache. If no member can answer, the
+  group returns 503 with `Retry-After`, not 404.
 
 ## Heuristics
 

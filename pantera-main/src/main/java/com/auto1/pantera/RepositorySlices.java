@@ -1171,8 +1171,7 @@ public class RepositorySlices {
                                 this.sharedNegativeCache,
                                 this::getOrCreateMemberRegistry,
                                 getOrCreateBulkhead(cfg.name()).drainExecutor()
-                            ),
-                            this::slice, goFlatMembers, port
+                            )
                         ),
                         authentication(),
                         tokens.auth(),

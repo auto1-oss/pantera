@@ -319,6 +319,25 @@ public final class GroupResolver implements Slice {
         return out;
     }
 
+    /**
+     * Group repository name.
+     *
+     * @return Group name
+     */
+    String groupName() {
+        return this.group;
+    }
+
+    /**
+     * Flattened members in declared order, sharing this resolver's
+     * per-member breaker registries.
+     *
+     * @return Members
+     */
+    List<MemberSlice> members() {
+        return this.members;
+    }
+
     @Override
     public CompletableFuture<Response> response(
         final RequestLine original,
@@ -467,7 +486,7 @@ public final class GroupResolver implements Slice {
      * @param resp Member response
      * @return True when the response carries the cooldown marker header
      */
-    private static boolean isCooldownVerdict(final Response resp) {
+    static boolean isCooldownVerdict(final Response resp) {
         return !resp.headers().values(
             com.auto1.pantera.cooldown.response.CooldownResponseFactory.HEADER
         ).isEmpty();
@@ -1517,7 +1536,7 @@ public final class GroupResolver implements Slice {
      * Parse a delta-seconds {@code Retry-After} from a member response;
      * 0 when absent or unparseable.
      */
-    private static long parseRetryAfterSeconds(final Response resp) {
+    static long parseRetryAfterSeconds(final Response resp) {
         final java.util.List<String> values = resp.headers().values("Retry-After");
         if (values.isEmpty()) {
             return 0L;
