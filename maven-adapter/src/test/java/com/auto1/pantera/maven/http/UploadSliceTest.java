@@ -300,6 +300,13 @@ class UploadSliceTest {
             event.artifactVersion(),
             Matchers.is("1.0.0-TEST")
         );
+        MatcherAssert.assertThat(
+            "path_prefix is the repository-relative version directory without a leading slash",
+            event.pathPrefix(),
+            new org.hamcrest.core.IsEqual<>(
+                "wkda/common/api/retail-financing-application-dtos/1.0.0-TEST"
+            )
+        );
     }
 
     @Test

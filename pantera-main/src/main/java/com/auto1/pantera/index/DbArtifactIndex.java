@@ -1714,7 +1714,14 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
     @Override
     public CompletableFuture<List<String>> locate(final String artifactPath) {
         return CompletableFuture.supplyAsync(() -> {
-            final List<String> prefixes = pathPrefixes(artifactPath);
+            // Maven local uploads stored path_prefix with a leading slash
+            // before 2.2.9; match both forms so those rows stay locatable.
+            final List<String> bare = pathPrefixes(artifactPath);
+            final List<String> prefixes = new ArrayList<>(bare.size() * 2);
+            prefixes.addAll(bare);
+            for (final String prefix : bare) {
+                prefixes.add("/" + prefix);
+            }
             final String sql = buildLocateSql(prefixes.size());
             final List<String> repos = new ArrayList<>();
             try (Connection conn = this.source.getConnection();

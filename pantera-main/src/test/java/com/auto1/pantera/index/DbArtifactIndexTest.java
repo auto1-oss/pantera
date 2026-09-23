@@ -1103,6 +1103,21 @@ class DbArtifactIndexTest {
     }
 
     /**
+     * B25: maven local uploads stored {@code path_prefix} with a leading
+     * slash before 2.2.9; {@code locate} must still find those rows.
+     */
+    @Test
+    void locateFindsLegacySlashPrefixedPathPrefix() throws Exception {
+        this.insertArtifactRow(
+            "maven", "maven-local", "com.qa.locate", "1.0", 1L, "u", "/com/qa/locate/1.0"
+        );
+        MatcherAssert.assertThat(
+            this.index.locate("com/qa/locate/1.0/locate-1.0.jar").join(),
+            new IsEqual<>(List.of("maven-local"))
+        );
+    }
+
+    /**
      * Passing an empty prefix must NOT wipe an entire repo — it signals
      * a coding error and the index should refuse.
      */

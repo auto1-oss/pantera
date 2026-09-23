@@ -820,7 +820,9 @@ public final class UploadSlice implements Slice {
             // The version directory, matching what MavenProxyPackageProcessor
             // records and what the UI browses to verbatim. Deliberately not
             // the file key: for maven the browse target is the directory.
-            pkg
+            // Repository-relative, without the request path's leading slash:
+            // search/locate match path_prefix against slash-less prefixes.
+            pkg.startsWith("/") ? pkg.substring(1) : pkg
         ).withRequestContext(headers);
         final ArtifactEvent event = sha256 == null ? base : base.withChecksum(sha256);
         // Async path: queue for audit/metrics consumers (DbConsumer batches).
