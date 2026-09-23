@@ -430,6 +430,7 @@ public final class DownloadPackageSlice implements Slice {
                             packageName, packageName
                         );
                         return ResponseBuilder.forbidden()
+                            .header("X-Pantera-Cooldown", "all-blocked")
                             .jsonBody(json)
                             .build();
                     }
@@ -493,6 +494,7 @@ public final class DownloadPackageSlice implements Slice {
                                 packageName, packageName
                             );
                             return ResponseBuilder.forbidden()
+                                .header("X-Pantera-Cooldown", "all-blocked")
                                 .jsonBody(json)
                                 .build();
                         }
@@ -593,6 +595,7 @@ public final class DownloadPackageSlice implements Slice {
                                                         packageName, packageName
                                                     );
                                                     return ResponseBuilder.forbidden()
+                                                        .header("X-Pantera-Cooldown", "all-blocked")
                                                         .jsonBody(json)
                                                         .build();
                                                 }
