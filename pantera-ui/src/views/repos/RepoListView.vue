@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch, defineAsyncComponent } from 'vue'
 import { useRouter } from 'vue-router'
 import { listRepos } from '@/api/repos'
 import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
@@ -9,6 +9,9 @@ import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
 import Paginator from 'primevue/paginator'
 import type { RepoListItem } from '@/types'
+import { techForRepoType } from '@/utils/techSetup'
+
+const SetMeUpDrawer = defineAsyncComponent(() => import('@/components/setup/SetMeUpDrawer.vue'))
 
 const router = useRouter()
 const typeFilter = ref<string | null>(null)
@@ -67,6 +70,17 @@ async function fetchRepos() {
 }
 
 onMounted(fetchRepos)
+
+// Set Me Up drawer for one row
+const setupOpen = ref(false)
+const setupRepo = ref<{ name: string; tech: string } | null>(null)
+
+function openSetup(repo: RepoListItem) {
+  const tech = techForRepoType(repo.type)
+  if (!tech) return
+  setupRepo.value = { name: repo.name, tech: tech.key }
+  setupOpen.value = true
+}
 </script>
 
 <template>
@@ -97,7 +111,7 @@ onMounted(fetchRepos)
         <div class="flex items-center px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80">
           <span class="flex-1">Name</span>
           <span class="w-44 text-center">Type</span>
-          <span class="w-20" />
+          <span class="w-28" />
         </div>
 
         <div v-if="loading && items.length === 0" class="text-center py-12 text-gray-400">
@@ -121,7 +135,18 @@ onMounted(fetchRepos)
           <div class="w-44 flex items-center justify-center">
             <RepoTypeBadge :type="repo.type" />
           </div>
-          <div class="w-20 text-right">
+          <div class="w-28 flex items-center justify-end gap-3">
+            <button
+              v-if="techForRepoType(repo.type)"
+              type="button"
+              class="px-1.5 py-0.5 rounded text-xs text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              :aria-label="`Set Me Up for ${repo.name}`"
+              title="Set Me Up"
+              :data-testid="`set-me-up-${repo.name}`"
+              @click.stop="openSetup(repo)"
+            >
+              <i class="pi pi-bolt" />
+            </button>
             <i class="pi pi-chevron-right text-gray-400 text-xs" />
           </div>
         </div>
@@ -136,5 +161,11 @@ onMounted(fetchRepos)
         @page="onPageChange"
       />
     </div>
+    <SetMeUpDrawer
+      v-if="setupRepo"
+      v-model:visible="setupOpen"
+      :tech="setupRepo.tech"
+      :repo="setupRepo.name"
+    />
   </AppLayout>
 </template>

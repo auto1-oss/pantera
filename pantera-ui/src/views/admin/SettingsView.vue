@@ -319,7 +319,9 @@ onMounted(async () => {
     settings.value = s
     prefixes.value = (s.prefixes ?? []).join(', ')
     grafanaUrl.value = s.ui?.grafana_url ?? config.grafanaUrl
-    registryUrl.value = s.ui?.registry_url ?? config.registryUrl
+    // Never pre-fill the UI origin: saving it would mark the registry URL as
+    // configured while pointing clients at the UI container.
+    registryUrl.value = s.ui?.registry_url ?? config.configuredRegistryUrl
     if (s.jwt) {
       jwtExpires.value = s.jwt.expires
       jwtExpirySeconds.value = s.jwt.expiry_seconds
@@ -1994,6 +1996,10 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
             <div>
               <label class="text-sm text-gray-500 block mb-1">Registry URL</label>
               <InputText v-model="registryUrl" class="w-full" placeholder="https://pantera.example.com" />
+              <p class="text-xs text-gray-400 mt-1">
+                Address clients use to reach the registry (not the UI). Set Me Up appends the first global
+                path prefix unless this URL already ends with it.
+              </p>
             </div>
             <div>
               <span class="text-sm text-gray-500">Health Endpoint:</span>

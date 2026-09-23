@@ -146,7 +146,6 @@ export const REPO_TYPE_FILTERS = [
   { label: 'Hex',      value: 'hexpm' },
   { label: 'PHP',      value: 'php' },
   { label: 'File',     value: 'file' },
-  { label: 'Binary',   value: 'binary' },
 ] as const
 
 /** Create form options. */
@@ -183,5 +182,4 @@ export const REPO_TYPE_CREATE_OPTIONS = [
   { label: 'File (Local)',     value: 'file' },
   { label: 'File (Proxy)',     value: 'file-proxy' },
   { label: 'File (Group)',     value: 'file-group' },
-  { label: 'Binary (Local)',   value: 'binary' },
 ] as const

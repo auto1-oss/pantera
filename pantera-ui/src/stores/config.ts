@@ -12,6 +12,8 @@ export const useConfigStore = defineStore('config', () => {
   const apmServiceName = ref('pantera-ui')
   const apmEnvironment = ref('production')
   const registryUrl = ref(window.location.origin)
+  /** `REGISTRY_URL` from config.json as configured; empty when unset (no origin fallback) */
+  const configuredRegistryUrl = ref('')
 
   function loadConfig(cfg: RuntimeConfig) {
     apiBaseUrl.value = cfg.apiBaseUrl
@@ -23,11 +25,12 @@ export const useConfigStore = defineStore('config', () => {
     apmServiceName.value = cfg.apmServiceName
     apmEnvironment.value = cfg.apmEnvironment
     registryUrl.value = cfg.registryUrl || window.location.origin
+    configuredRegistryUrl.value = cfg.registryUrl || ''
   }
 
   return {
     apiBaseUrl, grafanaUrl, appTitle, defaultPageSize,
     apmEnabled, apmServerUrl, apmServiceName, apmEnvironment,
-    registryUrl, loadConfig,
+    registryUrl, configuredRegistryUrl, loadConfig,
   }
 })
