@@ -235,8 +235,17 @@ final class CachedProxySlice implements Slice {
             // Keep ~dev suffix in cache key to avoid collision between stable and dev metadata
             final String name = path
                 .replaceAll("^/p2?/", "")
+                .replaceAll("^/+", "")
                 .replaceAll("\\^.*", "")
-                .replaceAll(".json$", "");
+                .replaceAll("\\.json$", "");
+            if (!CachedProxySlice.isStorableName(name)) {
+                // Not a package metadata name (e.g. the repository root or a
+                // path with empty / parent segments): there is nothing to
+                // cache or look up, and building a storage key would fail.
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build()
+                );
+            }
 
             // Check cache FIRST before any network calls — offline mode
             // serves cached content even when upstream is unreachable.
@@ -652,6 +661,25 @@ final class CachedProxySlice implements Slice {
     }
 
     // ===== WI-07 §9.5: ProxyCacheWriter integration =====
+
+    /**
+     * Whether a metadata name derived from the request path can be used as a
+     * storage key: non-blank, no empty segments, no parent references.
+     *
+     * @param name Name derived from the request path
+     * @return True when the name is a usable relative key
+     */
+    private static boolean isStorableName(final String name) {
+        if (name.isBlank()) {
+            return false;
+        }
+        for (final String part : name.split("/", -1)) {
+            if (part.isEmpty() || ".".equals(part) || "..".equals(part)) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /**
      * Check if path represents a Composer primary artifact (zip / tar /
