@@ -57,9 +57,20 @@ public final class BearerAuthScheme implements AuthScheme {
         return new RqHeaders(headers, Authorization.NAME)
             .stream()
             .findFirst()
+            .map(Authorization::new)
             .map(
-                header -> this.user(header)
-                    .thenApply(user -> AuthScheme.result(user, this.challenge()))
+                header -> {
+                    if (!header.parseable()) {
+                        // Scheme-less value (e.g. a raw token): not a
+                        // credential this scheme understands — answer like a
+                        // missing header (401 + challenge), never a 500.
+                        return CompletableFuture.completedFuture(
+                            AuthScheme.result(AuthUser.ANONYMOUS, this.challenge())
+                        );
+                    }
+                    return this.user(header)
+                        .thenApply(user -> AuthScheme.result(user, this.challenge()));
+                }
             ).orElseGet(
                 () -> CompletableFuture.completedFuture(
                     AuthScheme.result(AuthUser.ANONYMOUS, this.challenge())
@@ -70,11 +81,10 @@ public final class BearerAuthScheme implements AuthScheme {
     /**
      * Obtains user from authorization header.
      *
-     * @param header Authorization header's value
+     * @param atz Parseable authorization header
      * @return User, empty if not authenticated
      */
-    private CompletionStage<Optional<AuthUser>> user(final String header) {
-        final Authorization atz = new Authorization(header);
+    private CompletionStage<Optional<AuthUser>> user(final Authorization atz) {
         if (BearerAuthScheme.NAME.equals(atz.scheme())) {
             return this.auth.user(
                 new Authorization.Bearer(atz.credentials()).token()

@@ -211,6 +211,20 @@ public final class CombinedAuthzSlice implements Slice {
      */
     private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
+        try {
+            basic.username();
+            basic.password();
+        } catch (final IllegalArgumentException ex) {
+            // Undecodable Base64 or no ':' separator: a failed login (401),
+            // not a server error.
+            return CompletableFuture.completedFuture(
+                AuthScheme.result(
+                    Optional.empty(),
+                    String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
+                        BasicAuthScheme.NAME, BearerAuthScheme.NAME)
+                )
+            );
+        }
         final CompletionStage<Optional<AuthUser>> resolved;
         if (AuthWorkerPool.jwtShaped(basic.password())) {
             // Package-manager clients (mvn, npm, pip, …) submit API tokens

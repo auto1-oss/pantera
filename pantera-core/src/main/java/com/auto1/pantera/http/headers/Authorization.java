@@ -82,12 +82,25 @@ public final class Authorization extends Header {
      *
      * @return Matcher for header value.
      */
+    /**
+     * Whether the value has the {@code <scheme> <credentials>} shape. A
+     * scheme-less value (a raw token or key) is not parseable; callers treat
+     * it as "no credentials" instead of letting {@link #scheme()} throw.
+     *
+     * @return True when {@link #scheme()} and {@link #credentials()} are safe
+     */
+    public boolean parseable() {
+        return VALUE.matcher(this.getValue()).matches();
+    }
+
     private Matcher matcher() {
         final String value = this.getValue();
         final Matcher matcher = VALUE.matcher(value);
         if (!matcher.matches()) {
+            // Never echo the value: it is a credential (B17 — the raw JWT
+            // or Basic secret used to land in error.message at ERROR).
             throw new IllegalStateException(
-                String.format("Failed to parse header value: %s", value)
+                "Failed to parse Authorization header: expected '<scheme> <credentials>'"
             );
         }
         return matcher;

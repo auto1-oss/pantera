@@ -57,8 +57,10 @@ public final class BasicAuthScheme implements AuthScheme {
         final Optional<String> authHeader = new RqHeaders(headers, Authorization.NAME)
             .stream()
             .findFirst();
-        if (authHeader.isEmpty()) {
-            // No credentials provided - return immediately without blocking
+        if (authHeader.isEmpty() || !new Authorization(authHeader.get()).parseable()) {
+            // No credentials, or a scheme-less value this scheme cannot read
+            // (answered like a missing header: 401 + challenge, never 500)
+            // - return immediately without blocking
             return CompletableFuture.completedFuture(
                 AuthScheme.result(AuthUser.ANONYMOUS, BasicAuthScheme.CHALLENGE)
             );
@@ -81,7 +83,17 @@ public final class BasicAuthScheme implements AuthScheme {
         final Authorization atz = new Authorization(header);
         if (BasicAuthScheme.NAME.equals(atz.scheme())) {
             final Authorization.Basic basic = new Authorization.Basic(atz.credentials());
-            return this.auth.user(basic.username(), basic.password());
+            final String name;
+            final String pass;
+            try {
+                name = basic.username();
+                pass = basic.password();
+            } catch (final IllegalArgumentException ex) {
+                // Undecodable Base64 or no ':' separator: a failed login
+                // (401), not a server error.
+                return Optional.empty();
+            }
+            return this.auth.user(name, pass);
         }
         return Optional.empty();
     }
