@@ -114,7 +114,7 @@ class PySliceTest {
                 Content.EMPTY
             ).join(),
             RsStatus.MOVED_PERMANENTLY,
-            new Header("Location", "/one/two-three")
+            new Header("Location", "/one/two-three/")
         );
     }
 
