@@ -657,8 +657,11 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         // upstream index links, Bearer token realms, redirect hops — resolves
         // through the egress policy, AFTER DNS, so a destination in a denied
         // range (cloud metadata, link-local, ...) is refused even when it
-        // hides behind a benign hostname. The real async resolver is built
-        // lazily from the started client's executor/scheduler.
+        // hides behind a benign hostname. With an outbound proxy configured
+        // the resolver also checks the request target (and each redirect
+        // hop) taken from the destination, not just the proxy's address.
+        // The real async resolver is built lazily from the started client's
+        // executor/scheduler.
         result.setSocketAddressResolver(
             new com.auto1.pantera.http.client.egress.EgressFilteringResolver(
                 com.auto1.pantera.http.client.egress.EgressSettingsRegistry.policy(),
