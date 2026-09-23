@@ -130,7 +130,7 @@ function resolveSteps(ctx: SnippetCtx, dsl: Dsl): Step[] {
       file: dsl.buildFile,
       download: dsl.buildFile,
     },
-    { title: 'Build', code: './gradlew build --refresh-dependencies' },
+    { title: 'Build', code: './gradlew build' },
   ]
 }
 

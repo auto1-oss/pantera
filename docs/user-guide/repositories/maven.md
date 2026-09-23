@@ -72,7 +72,22 @@ The `<mirrorOf>*</mirrorOf>` setting redirects all Maven repository requests thr
 
 ### Gradle (settings.gradle.kts)
 
+Point both plugin and dependency resolution at Pantera; see the [Gradle guide](gradle.md#configure-your-client) for details:
+
 ```kotlin
+pluginManagement {
+    repositories {
+        maven {
+            url = uri("http://pantera-host:8080/maven-group")
+            credentials {
+                username = "your-username"
+                password = "your-jwt-token-here"
+            }
+            isAllowInsecureProtocol = true // only if not using HTTPS
+        }
+    }
+}
+
 dependencyResolutionManagement {
     repositories {
         maven {

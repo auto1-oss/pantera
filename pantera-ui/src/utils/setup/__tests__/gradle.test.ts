@@ -112,6 +112,12 @@ describe('gradleSnippets (group, https, real token, email user)', () => {
     }
   })
 
+  it('builds without forcing a full dependency re-validation', () => {
+    for (const c of clients) {
+      expect(c.resolve[1].code).toBe('./gradlew build')
+    }
+  })
+
   it('never pipes through base64', () => {
     for (const c of clients) expect(allCode(c)).not.toMatch(/\|\s*base64/)
   })
