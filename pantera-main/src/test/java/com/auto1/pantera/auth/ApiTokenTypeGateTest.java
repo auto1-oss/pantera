@@ -102,6 +102,22 @@ final class ApiTokenTypeGateTest {
     }
 
     @Test
+    void onlySessionTokensMintApiTokens() {
+        // B103: an API token minting a permanent API token turns a
+        // short-lived or revocable credential into an unbounded one.
+        MatcherAssert.assertThat(
+            "an API token must not mint API tokens",
+            ApiTokenTypeGate.allows("/api/v1/auth/token/generate", TokenType.API),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the signed-in session (ACCESS) mints API tokens",
+            ApiTokenTypeGate.allows("/api/v1/auth/token/generate", TokenType.ACCESS),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
     void accessAndApiTokensAuthorizeOrdinaryRoutes() {
         MatcherAssert.assertThat(
             "an ACCESS token authorizes ordinary routes",

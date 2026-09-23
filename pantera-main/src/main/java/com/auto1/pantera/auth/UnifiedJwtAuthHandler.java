@@ -115,8 +115,12 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
 
     @Override
     public CompletionStage<Optional<AuthUser>> user(final String token) {
+        // Repository credential (Bearer, or a JWT as the Basic password): a
+        // REFRESH token is only for minting access tokens on /auth/refresh
+        // and never authenticates a repository request (B46).
         return this.validatedAsync(token)
-            .thenApply(opt -> opt.map(ValidatedToken::user));
+            .thenApply(opt -> opt.filter(valid -> valid.type() != TokenType.REFRESH)
+                .map(ValidatedToken::user));
     }
 
     /**

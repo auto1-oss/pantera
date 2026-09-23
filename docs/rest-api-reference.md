@@ -81,7 +81,7 @@ Authenticate with username and password. Returns an RS256-signed access token an
 | Field           | Type    | Description                                              |
 |-----------------|---------|----------------------------------------------------------|
 | `token`         | string  | RS256-signed access token (type: `access`). Use as Bearer or as JWT password. |
-| `refresh_token` | string  | RS256-signed refresh token (type: `refresh`). Store securely; used to obtain new access tokens. |
+| `refresh_token` | string  | RS256-signed refresh token (type: `refresh`). Store securely; used only to obtain new access tokens via `POST /api/v1/auth/refresh` — it is not accepted as a Bearer credential or password on any other API route or repository endpoint. |
 | `expires_in`    | integer | Access token lifetime in seconds (matches `access-token-expiry-seconds`). |
 
 > **Breaking change from v2.0:** The response previously returned only `{"token": "..."}`. Clients that stored the token for long-lived use must now use API tokens (`POST /api/v1/auth/token/generate`) or refresh the access token via `POST /api/v1/auth/refresh`.
@@ -293,7 +293,7 @@ curl http://localhost:8086/api/v1/auth/me \
 
 Generate a long-lived API token for programmatic access. The authenticated user does not need to provide their password again, since they already hold a valid JWT session.
 
-**Authentication:** JWT Bearer token required.
+**Authentication:** JWT Bearer **session** (access) token required. An API token cannot mint further API tokens, and a refresh token is refused (`401`).
 
 **Request Body:**
 

@@ -277,6 +277,30 @@ class UnifiedJwtAuthHandlerTest {
     }
 
     @Test
+    void refreshTokenIsNotARepositoryCredential() {
+        // B46: user() backs Bearer and Basic-password auth on the repository
+        // port; a refresh token only mints access tokens on /auth/refresh.
+        final String refresh = JWT.create()
+            .withSubject("frank")
+            .withClaim("context", "local")
+            .withClaim("type", "refresh")
+            .withJWTId("00000000-0000-0000-0000-00000000000f")
+            .withExpiresAt(Instant.now().plusSeconds(3600))
+            .sign(this.algorithm);
+        MatcherAssert.assertThat(
+            "a refresh token must not authenticate a repository request",
+            this.handler.user(refresh).toCompletableFuture().join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the refresh route still sees the validated refresh token",
+            this.handler.validated(refresh).map(UnifiedJwtAuthHandler.ValidatedToken::type)
+                .orElse(null),
+            new IsEqual<>(TokenType.REFRESH)
+        );
+    }
+
+    @Test
     void sameSecondTokenIssuedBeforeTheRevocationIsRejected() {
         // B45: iat has one-second resolution; a token issued earlier in the
         // same second as the revocation survived it. The millisecond

@@ -30,6 +30,11 @@ public final class ApiTokenTypeGate {
      */
     private static final String REFRESH_ROUTE = "/auth/refresh";
 
+    /**
+     * API-token issuance route suffix.
+     */
+    private static final String GENERATE_ROUTE = "/auth/token/generate";
+
     private ApiTokenTypeGate() {
     }
 
@@ -44,6 +49,12 @@ public final class ApiTokenTypeGate {
         final boolean refreshRoute = path != null && path.endsWith(REFRESH_ROUTE);
         if (refreshRoute) {
             return type == TokenType.REFRESH;
+        }
+        if (path != null && path.endsWith(GENERATE_ROUTE)) {
+            // Only the signed-in session mints API tokens: an API token
+            // minting another (possibly permanent) one would outlive its
+            // own expiry and revocation (B103).
+            return type == TokenType.ACCESS;
         }
         return type == TokenType.ACCESS || type == TokenType.API;
     }
