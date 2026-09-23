@@ -31,7 +31,10 @@ import java.util.Optional;
  *
  * <p>Checksum sidecars of metadata ({@code .sha1}, {@code .md5},
  * {@code .sha256}, {@code .sha512}) map to the same coordinates as the
- * metadata file they describe.</p>
+ * metadata file they describe. That mapping exists for invalidation only:
+ * a sidecar path must never be used to look up a filtered-metadata envelope
+ * (the envelope holds the metadata XML, not a checksum) — proxies and groups
+ * answer sidecars with the digest of the served metadata bytes.</p>
  *
  * <p>Only the path &rarr; package direction exists: dotted &rarr; slashed is
  * ambiguous (artifactIds may contain dots), so callers holding a package

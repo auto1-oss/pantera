@@ -238,13 +238,37 @@ public final class MavenGroupSlice implements Slice {
             return mergeMetadata(line, headers, body, path);
         }
 
-        // Handle checksum requests for merged metadata
-        if ("GET".equals(method) && (path.endsWith("maven-metadata.xml.sha1") || path.endsWith("maven-metadata.xml.md5"))) {
+        // Handle checksum requests for merged metadata: every sidecar must be
+        // the digest of the bytes this group serves for the metadata, so none
+        // of them may be forwarded to a member (whose answer would describe
+        // different bytes, or be the metadata XML itself).
+        if ("GET".equals(method) && metadataChecksumAlgorithm(path).isPresent()) {
             return handleChecksumRequest(line, headers, body, path);
         }
 
         // All other requests use standard group behavior
         return delegate.response(line, headers, body);
+    }
+
+    /**
+     * JCA digest algorithm of a {@code maven-metadata.xml} checksum sidecar.
+     * @param path Request path
+     * @return Algorithm name, or empty when the path is not a metadata sidecar
+     */
+    private static java.util.Optional<String> metadataChecksumAlgorithm(final String path) {
+        final String algorithm;
+        if (path.endsWith("maven-metadata.xml.sha1")) {
+            algorithm = "SHA-1";
+        } else if (path.endsWith("maven-metadata.xml.md5")) {
+            algorithm = "MD5";
+        } else if (path.endsWith("maven-metadata.xml.sha256")) {
+            algorithm = "SHA-256";
+        } else if (path.endsWith("maven-metadata.xml.sha512")) {
+            algorithm = "SHA-512";
+        } else {
+            algorithm = null;
+        }
+        return java.util.Optional.ofNullable(algorithm);
     }
 
     /**
@@ -258,7 +282,7 @@ public final class MavenGroupSlice implements Slice {
         final String path
     ) {
         // Determine checksum type
-        final boolean isSha1 = path.endsWith(".sha1");
+        final String algorithm = metadataChecksumAlgorithm(path).orElseThrow();
         final String metadataPath = path.substring(0, path.lastIndexOf('.'));
 
         // Get merged metadata from cache or merge it
@@ -282,7 +306,7 @@ public final class MavenGroupSlice implements Slice {
                         try {
                             // Compute checksum
                             final java.security.MessageDigest digest = java.security.MessageDigest.getInstance(
-                                isSha1 ? "SHA-1" : "MD5"
+                                algorithm
                             );
                             final byte[] checksumBytes = digest.digest(metadataBytes);
 

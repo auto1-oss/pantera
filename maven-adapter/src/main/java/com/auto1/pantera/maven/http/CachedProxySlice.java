@@ -89,6 +89,22 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * primary+sidecar write path. The checksum sidecar paths themselves are
      * still served by {@link ChecksumProxySlice} / standard cache flow.
      */
+    /**
+     * Maven metadata file name.
+     */
+    private static final String METADATA = "maven-metadata.xml";
+
+    /**
+     * Checksum sidecar extension of {@code maven-metadata.xml} to JCA
+     * digest algorithm.
+     */
+    private static final Map<String, String> METADATA_CHECKSUMS = Map.of(
+        ".sha1", "SHA-1",
+        ".md5", "MD5",
+        ".sha256", "SHA-256",
+        ".sha512", "SHA-512"
+    );
+
     private static final List<String> PRIMARY_EXTENSIONS = List.of(
         ".pom", ".jar", ".war", ".aar", ".ear", ".zip", ".module"
     );
@@ -273,9 +289,21 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     protected Optional<CompletableFuture<Response>> preProcess(
         final RequestLine line, final Headers headers, final Key key, final String path
     ) {
-        // maven-metadata.xml uses dedicated MetadataCache with stale-while-revalidate
-        if (path.contains("maven-metadata.xml") && this.metadataCache != null) {
-            return Optional.of(this.handleMetadata(line, headers, key));
+        // maven-metadata.xml uses dedicated MetadataCache with stale-while-revalidate.
+        // Only the exact metadata file goes through handleMetadata; its
+        // checksum sidecars are computed from the bytes handleMetadata serves
+        // (the cooldown-filtered view), never answered with the metadata XML
+        // or with upstream's checksum of the unfiltered file.
+        if (this.metadataCache != null) {
+            if (path.endsWith(CachedProxySlice.METADATA)) {
+                return Optional.of(this.handleMetadata(line, headers, key));
+            }
+            final Optional<String> algorithm = metadataChecksumAlgorithm(path);
+            if (algorithm.isPresent()) {
+                return Optional.of(
+                    this.handleMetadataChecksum(line, headers, path, algorithm.get())
+                );
+            }
         }
         // WI-07 §9.5 — integrity-verified atomic primary+sidecar write on
         // cache-miss. cacheWriter is non-null by construction (constructor
@@ -471,6 +499,86 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             }
             return this.applyMetadataCooldown(line, inboundHeaders, opt.get());
         });
+    }
+
+    /**
+     * Serve a {@code maven-metadata.xml.<algo>} checksum sidecar as the
+     * digest of the exact metadata bytes this proxy serves for the parent
+     * file (cooldown-filtered when filtering is wired). The parent metadata
+     * goes through {@link #handleMetadata} (same cache, same filter, same
+     * envelope), so the checksum always describes the served body. A
+     * non-200 parent answer (404, all-versions-blocked 403) is relayed as is.
+     *
+     * @param line Request line of the sidecar
+     * @param headers Inbound headers
+     * @param path Sidecar path
+     * @param algorithm JCA digest algorithm
+     * @return Response future
+     */
+    private CompletableFuture<Response> handleMetadataChecksum(
+        final RequestLine line, final Headers headers, final String path,
+        final String algorithm
+    ) {
+        final String metadataPath = path.substring(0, path.lastIndexOf('.'));
+        final RequestLine metadataLine = new RequestLine(
+            line.method(), java.net.URI.create(metadataPath), line.version()
+        );
+        // The client's validators belong to the sidecar, not to the metadata:
+        // drop them so the parent answer is always a full 200 body to digest.
+        final Headers unconditional = new Headers(
+            headers.stream()
+                .filter(
+                    h -> !"If-None-Match".equalsIgnoreCase(h.getKey())
+                        && !"If-Modified-Since".equalsIgnoreCase(h.getKey())
+                )
+                .toList()
+        );
+        final String keyPath = metadataPath.startsWith("/")
+            ? metadataPath.substring(1) : metadataPath;
+        return this.handleMetadata(metadataLine, unconditional, new Key.From(keyPath))
+            .thenCompose(resp -> {
+                if (resp.status() != com.auto1.pantera.http.RsStatus.OK) {
+                    return CompletableFuture.completedFuture(resp);
+                }
+                return resp.body().asBytesFuture().thenApply(
+                    bytes -> ResponseBuilder.ok()
+                        .header("Content-Type", "text/plain; charset=utf-8")
+                        .body(hexDigest(algorithm, bytes).getBytes(StandardCharsets.UTF_8))
+                        .build()
+                );
+            });
+    }
+
+    /**
+     * Digest algorithm of a {@code maven-metadata.xml} checksum sidecar path.
+     *
+     * @param path Request path
+     * @return JCA algorithm, or empty when the path is not a metadata sidecar
+     */
+    private static Optional<String> metadataChecksumAlgorithm(final String path) {
+        for (final Map.Entry<String, String> entry : METADATA_CHECKSUMS.entrySet()) {
+            if (path.endsWith(CachedProxySlice.METADATA + entry.getKey())) {
+                return Optional.of(entry.getValue());
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Lower-case hex digest.
+     *
+     * @param algorithm JCA algorithm
+     * @param bytes Input
+     * @return Hex string
+     */
+    private static String hexDigest(final String algorithm, final byte[] bytes) {
+        try {
+            return java.util.HexFormat.of().formatHex(
+                MessageDigest.getInstance(algorithm).digest(bytes)
+            );
+        } catch (final NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(algorithm + " unavailable", ex);
+        }
     }
 
     /**
