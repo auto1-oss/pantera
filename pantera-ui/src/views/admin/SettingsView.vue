@@ -27,6 +27,7 @@ import Dropdown from 'primevue/dropdown'
 import AutoComplete from 'primevue/autocomplete'
 import Tag from 'primevue/tag'
 import type { Settings, CooldownConfig } from '@/types'
+import { apiErrorMessage } from '@/utils/apiError'
 
 const config = useConfigStore()
 const notify = useNotificationStore()
@@ -398,8 +399,8 @@ onMounted(async () => {
       }),
       runtime.load(),
     ])
-  } catch {
-    notify.error('Failed to load settings')
+  } catch (err) {
+    notify.error('Failed to load settings', apiErrorMessage(err, 'Request failed'))
   } finally {
     loading.value = false
     // Once every field has its loaded value, snapshot the baseline so
@@ -425,7 +426,7 @@ const repoTypeOverrides = computed(() => {
   }))
 })
 
-async function savePrefixes() {
+async function savePrefixes(): Promise<boolean> {
   saving.value = 'prefixes'
   try {
     const list = prefixes.value
@@ -434,33 +435,37 @@ async function savePrefixes() {
       .filter(Boolean)
     await updatePrefixes(list)
     notify.success('Prefixes updated')
-  } catch {
-    notify.error('Failed to update prefixes')
+    return true
+  } catch (err) {
+    notify.error('Failed to update prefixes', apiErrorMessage(err, 'Request failed'))
+    return false
   } finally {
     saving.value = null
   }
 }
 
-async function saveSection(section: string, data: Record<string, unknown>) {
+async function saveSection(section: string, data: Record<string, unknown>): Promise<boolean> {
   saving.value = section
   try {
     await updateSettingsSection(section, data)
     notify.success(`${section} settings saved`)
-  } catch {
-    notify.error(`Failed to save ${section} settings`)
+    return true
+  } catch (err) {
+    notify.error(`Failed to save ${section} settings`, apiErrorMessage(err, 'Request failed'))
+    return false
   } finally {
     saving.value = null
   }
 }
 
-function saveJwt() {
-  saveSection('jwt', {
+function saveJwt(): Promise<boolean> {
+  return saveSection('jwt', {
     expires: jwtExpires.value,
     expiry_seconds: jwtExpirySeconds.value,
   })
 }
 
-async function saveAuthSettings() {
+async function saveAuthSettings(): Promise<boolean> {
   saving.value = 'auth'
   try {
     await updateAuthSettings({
@@ -470,8 +475,10 @@ async function saveAuthSettings() {
       api_token_allow_permanent: String(authAllowPermanent.value),
     })
     notify.success('Authentication settings saved')
-  } catch {
-    notify.error('Failed to save authentication settings')
+    return true
+  } catch (err) {
+    notify.error('Failed to save authentication settings', apiErrorMessage(err, 'Request failed'))
+    return false
   } finally {
     saving.value = null
   }
@@ -484,24 +491,24 @@ async function saveAuthSettings() {
  * does the same checks again and rejects with 400 if anything slips
  * through, so nothing gets persisted in an invalid state.
  */
-async function saveCircuitBreakerSettings() {
+async function saveCircuitBreakerSettings(): Promise<boolean> {
   const ratePct = cbFailureRatePercent.value
   if (ratePct <= 0 || ratePct > 100) {
     notify.error('Failure rate must be between 1 and 100%')
-    return
+    return false
   }
   if (cbMinCalls.value < 1) {
     notify.error('Minimum number of calls must be at least 1')
-    return
+    return false
   }
   if (cbWindowSeconds.value < 1) {
     notify.error('Sliding window must be at least 1 second')
-    return
+    return false
   }
   if (cbInitialBlockSeconds.value < 1
       || cbMaxBlockSeconds.value < cbInitialBlockSeconds.value) {
     notify.error('Initial block must be >= 1s and <= max block duration')
-    return
+    return false
   }
   saving.value = 'circuit-breaker'
   try {
@@ -513,8 +520,10 @@ async function saveCircuitBreakerSettings() {
       circuit_breaker_max_block_seconds: String(cbMaxBlockSeconds.value),
     })
     notify.success('Circuit breaker settings saved')
-  } catch {
-    notify.error('Failed to save circuit breaker settings')
+    return true
+  } catch (err) {
+    notify.error('Failed to save circuit breaker settings', apiErrorMessage(err, 'Request failed'))
+    return false
   } finally {
     saving.value = null
   }
@@ -527,24 +536,24 @@ async function saveCircuitBreakerSettings() {
  * the server re-validates and rejects with 400 if anything slips
  * through, so nothing gets persisted in an invalid state.
  */
-async function saveUpstreamBreakerSettings() {
+async function saveUpstreamBreakerSettings(): Promise<boolean> {
   const ratePct = ubRatePct.value
   if (ratePct <= 0 || ratePct > 100) {
     notify.error('Failure rate must be between 1 and 100%')
-    return
+    return false
   }
   if (ubMinCalls.value < 1) {
     notify.error('Minimum calls in window must be at least 1')
-    return
+    return false
   }
   if (ubWindowSeconds.value < 1) {
     notify.error('Sliding window must be at least 1 second')
-    return
+    return false
   }
   if (ubSeedBackoffSeconds.value < 1
       || ubMaxBackoffSeconds.value < ubSeedBackoffSeconds.value) {
     notify.error('Initial backoff must be >= 1s and <= max backoff duration')
-    return
+    return false
   }
   saving.value = 'upstream-breaker'
   try {
@@ -556,22 +565,24 @@ async function saveUpstreamBreakerSettings() {
       upstream_breaker_max_backoff_seconds: String(ubMaxBackoffSeconds.value),
     })
     notify.success('Upstream HTTP breaker settings saved')
-  } catch {
-    notify.error('Failed to save upstream HTTP breaker settings')
+    return true
+  } catch (err) {
+    notify.error('Failed to save upstream HTTP breaker settings', apiErrorMessage(err, 'Request failed'))
+    return false
   } finally {
     saving.value = null
   }
 }
 
-async function saveRequestLimitsSettings() {
+async function saveRequestLimitsSettings(): Promise<boolean> {
   if (!Number.isFinite(maxRequestBodyMiB.value) || maxRequestBodyMiB.value < 1) {
     notify.error('Request body cap must be at least 1 MiB')
-    return
+    return false
   }
   const roots = fsStorageRoots.value.split(':').map(r => r.trim()).filter(Boolean)
   if (roots.length === 0 || roots.some(r => !r.startsWith('/'))) {
     notify.error('Filesystem storage roots must be one or more absolute directories')
-    return
+    return false
   }
   saving.value = 'request-limits'
   try {
@@ -580,8 +591,10 @@ async function saveRequestLimitsSettings() {
       fs_storage_roots: roots.join(':'),
     })
     notify.success('Request & storage limits saved')
-  } catch {
-    notify.error('Failed to save request & storage limits')
+    return true
+  } catch (err) {
+    notify.error('Failed to save request & storage limits', apiErrorMessage(err, 'Request failed'))
+    return false
   } finally {
     saving.value = null
   }
@@ -591,7 +604,7 @@ function normaliseHosts(raw: string): string {
   return raw.split(',').map(h => h.trim()).filter(Boolean).join(',')
 }
 
-async function saveEgressSettings() {
+async function saveEgressSettings(): Promise<boolean> {
   saving.value = 'egress'
   try {
     await updateEgressSettings({
@@ -600,17 +613,19 @@ async function saveEgressSettings() {
       upstream_credential_allow_hosts: normaliseHosts(upstreamCredentialAllowHosts.value),
     })
     notify.success('Outbound egress policy saved')
-  } catch {
-    notify.error('Failed to save outbound egress policy')
+    return true
+  } catch (err) {
+    notify.error('Failed to save outbound egress policy', apiErrorMessage(err, 'Request failed'))
+    return false
   } finally {
     saving.value = null
   }
 }
 
-async function saveLoginThrottleSettings() {
+async function saveLoginThrottleSettings(): Promise<boolean> {
   if (loginThrottleMaxFailures.value < 1 || loginThrottleWindowSeconds.value < 1) {
     notify.error('Login throttle failures and window must both be at least 1')
-    return
+    return false
   }
   saving.value = 'login-throttle'
   try {
@@ -619,8 +634,10 @@ async function saveLoginThrottleSettings() {
       login_throttle_window_seconds: String(loginThrottleWindowSeconds.value),
     })
     notify.success('Login throttling settings saved')
-  } catch {
-    notify.error('Failed to save login throttling settings')
+    return true
+  } catch (err) {
+    notify.error('Failed to save login throttling settings', apiErrorMessage(err, 'Request failed'))
+    return false
   } finally {
     saving.value = null
   }
@@ -650,7 +667,7 @@ function isValidHttpUrl(value: string): boolean {
  * an absolute http/https URL) is rejected by the server with 400 before
  * anything is written.
  */
-async function saveClientBaseUrlSettings() {
+async function saveClientBaseUrlSettings(): Promise<boolean> {
   saving.value = 'client-base-url'
   try {
     const allowlist = clientBaseHostAllowlist.value
@@ -668,15 +685,17 @@ async function saveClientBaseUrlSettings() {
     clientBaseHostAllowlist.value = allowlist
     clientBaseUrl.value = canonical
     notify.success('Client-facing base URL settings saved')
-  } catch {
-    notify.error('Failed to save client-facing base URL settings')
+    return true
+  } catch (err) {
+    notify.error('Failed to save client-facing base URL settings', apiErrorMessage(err, 'Request failed'))
+    return false
   } finally {
     saving.value = null
   }
 }
 
-function saveHttpClient() {
-  saveSection('http_client', {
+function saveHttpClient(): Promise<boolean> {
+  return saveSection('http_client', {
     proxy_timeout: httpProxyTimeout.value,
     connection_timeout: httpConnTimeout.value,
     idle_timeout: httpIdleTimeout.value,
@@ -687,13 +706,13 @@ function saveHttpClient() {
   })
 }
 
-function saveHttpServer() {
-  saveSection('http_server', {
+function saveHttpServer(): Promise<boolean> {
+  return saveSection('http_server', {
     request_timeout: httpServerTimeout.value,
   })
 }
 
-async function saveCooldown() {
+async function saveCooldown(): Promise<boolean> {
   saving.value = 'cooldown'
   try {
     const payload: CooldownConfig = {
@@ -722,8 +741,10 @@ async function saveCooldown() {
     await updateCooldownConfig(payload)
     cooldownConfig.value = payload
     notify.success('Cooldown settings saved (hot reloaded)')
-  } catch {
-    notify.error('Failed to save cooldown settings')
+    return true
+  } catch (err) {
+    notify.error('Failed to save cooldown settings', apiErrorMessage(err, 'Request failed'))
+    return false
   } finally {
     saving.value = null
   }
@@ -784,14 +805,16 @@ function addRepoType() {
   newRepoType.value = ''
 }
 
-async function saveExternalLinks() {
+async function saveExternalLinks(): Promise<boolean> {
   try {
     await updateSettingsSection('ui', { grafana_url: grafanaUrl.value, registry_url: registryUrl.value })
     config.grafanaUrl = grafanaUrl.value
     config.registryUrl = registryUrl.value
     notify.success('External links updated')
-  } catch {
-    notify.error('Failed to save external links')
+    return true
+  } catch (err) {
+    notify.error('Failed to save external links', apiErrorMessage(err, 'Request failed'))
+    return false
   }
 }
 
@@ -805,179 +828,138 @@ async function saveExternalLinks() {
 // committing.
 // ─────────────────────────────────────────────────────────────────────
 
-interface Baseline {
-  prefixes: string
-  jwtExpires: boolean
-  jwtExpirySeconds: number
-  authAccessTtl: number
-  authRefreshTtl: number
-  authApiMaxTtl: number
-  authAllowPermanent: boolean
-  cbFailureRatePercent: number
-  cbMinCalls: number
-  cbWindowSeconds: number
-  cbInitialBlockSeconds: number
-  cbMaxBlockSeconds: number
-  ubRatePct: number
-  ubMinCalls: number
-  ubWindowSeconds: number
-  ubSeedBackoffSeconds: number
-  ubMaxBackoffSeconds: number
-  trustForwardedHeaders: boolean
-  clientBaseHostAllowlist: string
-  clientBaseUrl: string
-  clientBaseScheme: string
-  maxRequestBodyMiB: number
-  fsStorageRoots: string
-  egressBlockPrivate: boolean
-  egressAllowHosts: string
-  upstreamCredentialAllowHosts: string
-  loginThrottleMaxFailures: number
-  loginThrottleWindowSeconds: number
-  cooldownEnabled: boolean
-  cooldownAge: string
-  cooldownHistoryRetentionDays: number
-  cooldownCleanupBatchLimit: number
-  cooldownSnapshotEnabled: boolean | null
-  cooldownSnapshotAge: string
-  cooldownRepoTypesJson: string
-  httpProxyTimeout: number
-  httpConnTimeout: number
-  httpIdleTimeout: number
-  httpFollowRedirects: boolean
-  httpAcquireTimeout: number
-  httpMaxConns: number
-  httpMaxQueued: number
-  httpServerTimeout: string
-  grafanaUrl: string
-  registryUrl: string
+/**
+ * Every editable field tracked by the save bar, keyed by its baseline
+ * name. snapshot(), discardAll() and the per-section dirty bits all
+ * iterate this one map, so a field added here is snapshotted, reverted
+ * and dirty-tracked together — a card cannot be left out of Discard.
+ */
+const TRACKED = {
+  prefixes,
+  jwtExpires,
+  jwtExpirySeconds,
+  authAccessTtl,
+  authRefreshTtl,
+  authApiMaxTtl,
+  authAllowPermanent,
+  cbFailureRatePercent,
+  cbMinCalls,
+  cbWindowSeconds,
+  cbInitialBlockSeconds,
+  cbMaxBlockSeconds,
+  ubRatePct,
+  ubMinCalls,
+  ubWindowSeconds,
+  ubSeedBackoffSeconds,
+  ubMaxBackoffSeconds,
+  trustForwardedHeaders,
+  clientBaseHostAllowlist,
+  clientBaseUrl,
+  clientBaseScheme,
+  maxRequestBodyMiB,
+  fsStorageRoots,
+  egressBlockPrivate,
+  egressAllowHosts,
+  upstreamCredentialAllowHosts,
+  loginThrottleMaxFailures,
+  loginThrottleWindowSeconds,
+  cooldownEnabled,
+  cooldownAge,
+  cooldownHistoryRetentionDays,
+  cooldownCleanupBatchLimit,
+  cooldownSnapshotEnabled,
+  cooldownSnapshotAge,
+  httpProxyTimeout,
+  httpConnTimeout,
+  httpIdleTimeout,
+  httpFollowRedirects,
+  httpAcquireTimeout,
+  httpMaxConns,
+  httpMaxQueued,
+  httpServerTimeout,
+  grafanaUrl,
+  registryUrl,
+}
+
+type TrackedKey = keyof typeof TRACKED
+
+/**
+ * The Cooldown repo_types override map is tracked as JSON so any edit
+ * to its rows (add/remove/toggle/age) flips the dirty bit without
+ * per-field watchers.
+ */
+const REPO_TYPES_KEY = 'cooldownRepoTypesJson'
+
+type Baseline = { [K in TrackedKey]: (typeof TRACKED)[K]['value'] } & {
+  [REPO_TYPES_KEY]: string
+}
+type BaselineKey = keyof Baseline
+
+/** Baseline fields owned by each section (bulkhead has its own tracking). */
+const SECTION_FIELDS: Record<Exclude<SectionId, 'bulkhead'>, BaselineKey[]> = {
+  prefixes: ['prefixes'],
+  jwt: ['jwtExpires', 'jwtExpirySeconds'],
+  auth: ['authAccessTtl', 'authRefreshTtl', 'authApiMaxTtl', 'authAllowPermanent'],
+  circuit_breaker: [
+    'cbFailureRatePercent', 'cbMinCalls', 'cbWindowSeconds',
+    'cbInitialBlockSeconds', 'cbMaxBlockSeconds',
+  ],
+  upstream_breaker: [
+    'ubRatePct', 'ubMinCalls', 'ubWindowSeconds',
+    'ubSeedBackoffSeconds', 'ubMaxBackoffSeconds',
+  ],
+  client_base_url: [
+    'trustForwardedHeaders', 'clientBaseHostAllowlist', 'clientBaseUrl', 'clientBaseScheme',
+  ],
+  request_limits: ['maxRequestBodyMiB', 'fsStorageRoots'],
+  egress: ['egressBlockPrivate', 'egressAllowHosts', 'upstreamCredentialAllowHosts'],
+  login_throttle: ['loginThrottleMaxFailures', 'loginThrottleWindowSeconds'],
+  cooldown: [
+    'cooldownEnabled', 'cooldownAge', 'cooldownHistoryRetentionDays',
+    'cooldownCleanupBatchLimit', 'cooldownSnapshotEnabled', 'cooldownSnapshotAge',
+    REPO_TYPES_KEY,
+  ],
+  http_client: [
+    'httpProxyTimeout', 'httpConnTimeout', 'httpIdleTimeout', 'httpFollowRedirects',
+    'httpAcquireTimeout', 'httpMaxConns', 'httpMaxQueued',
+  ],
+  http_server: ['httpServerTimeout'],
+  external_links: ['grafanaUrl', 'registryUrl'],
 }
 
 const baseline = ref<Baseline | null>(null)
 
 function snapshot(): Baseline {
-  return {
-    prefixes: prefixes.value,
-    jwtExpires: jwtExpires.value,
-    jwtExpirySeconds: jwtExpirySeconds.value,
-    authAccessTtl: authAccessTtl.value,
-    authRefreshTtl: authRefreshTtl.value,
-    authApiMaxTtl: authApiMaxTtl.value,
-    authAllowPermanent: authAllowPermanent.value,
-    cbFailureRatePercent: cbFailureRatePercent.value,
-    cbMinCalls: cbMinCalls.value,
-    cbWindowSeconds: cbWindowSeconds.value,
-    cbInitialBlockSeconds: cbInitialBlockSeconds.value,
-    cbMaxBlockSeconds: cbMaxBlockSeconds.value,
-    ubRatePct: ubRatePct.value,
-    ubMinCalls: ubMinCalls.value,
-    ubWindowSeconds: ubWindowSeconds.value,
-    ubSeedBackoffSeconds: ubSeedBackoffSeconds.value,
-    ubMaxBackoffSeconds: ubMaxBackoffSeconds.value,
-    trustForwardedHeaders: trustForwardedHeaders.value,
-    clientBaseHostAllowlist: clientBaseHostAllowlist.value,
-    clientBaseUrl: clientBaseUrl.value,
-    clientBaseScheme: clientBaseScheme.value,
-    maxRequestBodyMiB: maxRequestBodyMiB.value,
-    fsStorageRoots: fsStorageRoots.value,
-    egressBlockPrivate: egressBlockPrivate.value,
-    egressAllowHosts: egressAllowHosts.value,
-    upstreamCredentialAllowHosts: upstreamCredentialAllowHosts.value,
-    loginThrottleMaxFailures: loginThrottleMaxFailures.value,
-    loginThrottleWindowSeconds: loginThrottleWindowSeconds.value,
-    cooldownEnabled: cooldownEnabled.value,
-    cooldownAge: cooldownAge.value,
-    cooldownHistoryRetentionDays: cooldownHistoryRetentionDays.value,
-    cooldownCleanupBatchLimit: cooldownCleanupBatchLimit.value,
-    cooldownSnapshotEnabled: cooldownSnapshotEnabled.value,
-    cooldownSnapshotAge: cooldownSnapshotAge.value,
-    // The Cooldown repo_types override map is tracked via JSON so
-    // any edit to the rows (add/remove/toggle/age) flips the dirty
-    // bit without per-field watchers.
-    cooldownRepoTypesJson: JSON.stringify(cooldownConfig.value?.repo_types ?? {}),
-    httpProxyTimeout: httpProxyTimeout.value,
-    httpConnTimeout: httpConnTimeout.value,
-    httpIdleTimeout: httpIdleTimeout.value,
-    httpFollowRedirects: httpFollowRedirects.value,
-    httpAcquireTimeout: httpAcquireTimeout.value,
-    httpMaxConns: httpMaxConns.value,
-    httpMaxQueued: httpMaxQueued.value,
-    httpServerTimeout: httpServerTimeout.value,
-    grafanaUrl: grafanaUrl.value,
-    registryUrl: registryUrl.value,
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(TRACKED) as TrackedKey[]) {
+    out[key] = TRACKED[key].value
   }
+  out[REPO_TYPES_KEY] = JSON.stringify(cooldownConfig.value?.repo_types ?? {})
+  return out as Baseline
 }
 
-const isDirtyPrefixes = computed(() =>
-  !!baseline.value && baseline.value.prefixes !== prefixes.value)
-const isDirtyJwt = computed(() =>
-  !!baseline.value
-    && (baseline.value.jwtExpires !== jwtExpires.value
-      || baseline.value.jwtExpirySeconds !== jwtExpirySeconds.value))
-const isDirtyAuth = computed(() =>
-  !!baseline.value
-    && (baseline.value.authAccessTtl !== authAccessTtl.value
-      || baseline.value.authRefreshTtl !== authRefreshTtl.value
-      || baseline.value.authApiMaxTtl !== authApiMaxTtl.value
-      || baseline.value.authAllowPermanent !== authAllowPermanent.value))
-const isDirtyCircuitBreaker = computed(() =>
-  !!baseline.value
-    && (baseline.value.cbFailureRatePercent !== cbFailureRatePercent.value
-      || baseline.value.cbMinCalls !== cbMinCalls.value
-      || baseline.value.cbWindowSeconds !== cbWindowSeconds.value
-      || baseline.value.cbInitialBlockSeconds !== cbInitialBlockSeconds.value
-      || baseline.value.cbMaxBlockSeconds !== cbMaxBlockSeconds.value))
-const isDirtyUpstreamBreaker = computed(() =>
-  !!baseline.value
-    && (baseline.value.ubRatePct !== ubRatePct.value
-      || baseline.value.ubMinCalls !== ubMinCalls.value
-      || baseline.value.ubWindowSeconds !== ubWindowSeconds.value
-      || baseline.value.ubSeedBackoffSeconds !== ubSeedBackoffSeconds.value
-      || baseline.value.ubMaxBackoffSeconds !== ubMaxBackoffSeconds.value))
-const isDirtyClientBaseUrl = computed(() =>
-  !!baseline.value
-    && (baseline.value.trustForwardedHeaders !== trustForwardedHeaders.value
-      || baseline.value.clientBaseHostAllowlist !== clientBaseHostAllowlist.value
-      || baseline.value.clientBaseUrl !== clientBaseUrl.value
-      || baseline.value.clientBaseScheme !== clientBaseScheme.value))
-const isDirtyRequestLimits = computed(() =>
-  !!baseline.value
-    && (baseline.value.maxRequestBodyMiB !== maxRequestBodyMiB.value
-      || baseline.value.fsStorageRoots !== fsStorageRoots.value))
-const isDirtyEgress = computed(() =>
-  !!baseline.value
-    && (baseline.value.egressBlockPrivate !== egressBlockPrivate.value
-      || baseline.value.egressAllowHosts !== egressAllowHosts.value
-      || baseline.value.upstreamCredentialAllowHosts !== upstreamCredentialAllowHosts.value))
-const isDirtyLoginThrottle = computed(() =>
-  !!baseline.value
-    && (baseline.value.loginThrottleMaxFailures !== loginThrottleMaxFailures.value
-      || baseline.value.loginThrottleWindowSeconds !== loginThrottleWindowSeconds.value))
-const isDirtyCooldown = computed(() =>
-  !!baseline.value
-    && (baseline.value.cooldownEnabled !== cooldownEnabled.value
-      || baseline.value.cooldownAge !== cooldownAge.value
-      || baseline.value.cooldownHistoryRetentionDays !== cooldownHistoryRetentionDays.value
-      || baseline.value.cooldownCleanupBatchLimit !== cooldownCleanupBatchLimit.value
-      || baseline.value.cooldownSnapshotEnabled !== cooldownSnapshotEnabled.value
-      || baseline.value.cooldownSnapshotAge !== cooldownSnapshotAge.value
-      || baseline.value.cooldownRepoTypesJson
-        !== JSON.stringify(cooldownConfig.value?.repo_types ?? {})))
-const isDirtyHttpClient = computed(() =>
-  !!baseline.value
-    && (baseline.value.httpProxyTimeout !== httpProxyTimeout.value
-      || baseline.value.httpConnTimeout !== httpConnTimeout.value
-      || baseline.value.httpIdleTimeout !== httpIdleTimeout.value
-      || baseline.value.httpFollowRedirects !== httpFollowRedirects.value
-      || baseline.value.httpAcquireTimeout !== httpAcquireTimeout.value
-      || baseline.value.httpMaxConns !== httpMaxConns.value
-      || baseline.value.httpMaxQueued !== httpMaxQueued.value))
-const isDirtyHttpServer = computed(() =>
-  !!baseline.value && baseline.value.httpServerTimeout !== httpServerTimeout.value)
-const isDirtyExternalLinks = computed(() =>
-  !!baseline.value
-    && (baseline.value.grafanaUrl !== grafanaUrl.value
-      || baseline.value.registryUrl !== registryUrl.value))
+function sectionDirty(id: Exclude<SectionId, 'bulkhead'>) {
+  return computed(() => {
+    const b = baseline.value
+    if (!b) return false
+    const live = snapshot()
+    return SECTION_FIELDS[id].some(key => b[key] !== live[key])
+  })
+}
+
+const isDirtyPrefixes = sectionDirty('prefixes')
+const isDirtyJwt = sectionDirty('jwt')
+const isDirtyAuth = sectionDirty('auth')
+const isDirtyCircuitBreaker = sectionDirty('circuit_breaker')
+const isDirtyUpstreamBreaker = sectionDirty('upstream_breaker')
+const isDirtyClientBaseUrl = sectionDirty('client_base_url')
+const isDirtyRequestLimits = sectionDirty('request_limits')
+const isDirtyEgress = sectionDirty('egress')
+const isDirtyLoginThrottle = sectionDirty('login_throttle')
+const isDirtyCooldown = sectionDirty('cooldown')
+const isDirtyHttpClient = sectionDirty('http_client')
+const isDirtyHttpServer = sectionDirty('http_server')
+const isDirtyExternalLinks = sectionDirty('external_links')
 
 /**
  * Bulkhead dirty bit comes from the existing {@code useRuntimeSettings}
@@ -1012,47 +994,70 @@ const dirtyCount = computed(() => dirtySections.value.length)
 /**
  * Per-section save dispatch. Reuses the existing per-section save
  * functions so behaviour matches what the old individual Save buttons
- * did — only the trigger is unified.
+ * did — only the trigger is unified. Resolves to whether the section
+ * was actually persisted (false on client validation or server error).
  */
-async function saveSectionById(id: SectionId): Promise<void> {
+function saveSectionById(id: SectionId): Promise<boolean> {
   switch (id) {
-    case 'prefixes': await savePrefixes(); break
-    case 'jwt': await Promise.resolve(saveJwt()); break
-    case 'auth': await saveAuthSettings(); break
-    case 'circuit_breaker': await saveCircuitBreakerSettings(); break
-    case 'upstream_breaker': await saveUpstreamBreakerSettings(); break
-    case 'client_base_url': await saveClientBaseUrlSettings(); break
-    case 'request_limits': await saveRequestLimitsSettings(); break
-    case 'egress': await saveEgressSettings(); break
-    case 'login_throttle': await saveLoginThrottleSettings(); break
-    case 'cooldown': await saveCooldown(); break
-    case 'http_client': await Promise.resolve(saveHttpClient()); break
-    case 'bulkhead': await runtime.saveAllDirty(); break
-    case 'http_server': await Promise.resolve(saveHttpServer()); break
-    case 'external_links': await saveExternalLinks(); break
+    case 'prefixes': return savePrefixes()
+    case 'jwt': return saveJwt()
+    case 'auth': return saveAuthSettings()
+    case 'circuit_breaker': return saveCircuitBreakerSettings()
+    case 'upstream_breaker': return saveUpstreamBreakerSettings()
+    case 'client_base_url': return saveClientBaseUrlSettings()
+    case 'request_limits': return saveRequestLimitsSettings()
+    case 'egress': return saveEgressSettings()
+    case 'login_throttle': return saveLoginThrottleSettings()
+    case 'cooldown': return saveCooldown()
+    case 'http_client': return saveHttpClient()
+    case 'bulkhead': return runtime.saveAllDirty()
+    case 'http_server': return saveHttpServer()
+    case 'external_links': return saveExternalLinks()
   }
+}
+
+/**
+ * Advance the baseline for one saved section only, so a section that
+ * failed keeps its edits and stays dirty.
+ */
+function commitSection(id: SectionId, live: Baseline) {
+  if (id === 'bulkhead' || !baseline.value) return
+  const next: Record<string, unknown> = { ...baseline.value }
+  for (const key of SECTION_FIELDS[id]) {
+    next[key] = live[key]
+  }
+  baseline.value = next as Baseline
 }
 
 const savingAll = ref(false)
 
 /**
- * Submit every dirty section in parallel, refresh the baseline so the
- * dirty bar clears, and emit one consolidated toast. Hot-reload
+ * Submit every dirty section in parallel, advance the baseline for the
+ * sections that saved, and emit one consolidated toast. A section the
+ * server (or client validation) rejected keeps its edits and stays
+ * dirty; its own error toast carries the server's message. Hot-reload
  * sections take effect immediately; restart-required ones are flagged
- * with their reason from {@link SECTION_META} so the admin knows the
- * old value is still live until the next process boot.
+ * with their reason from {@link SECTION_META}.
  */
 async function saveAll() {
   const ids = dirtySections.value.slice()
   if (ids.length === 0) return
   savingAll.value = true
-  const restartRequired = ids.filter(id => !SECTION_META[id].hotReload)
   try {
-    // saveSectionById delegates to the existing per-section funcs,
-    // each of which already manages its own try/catch + per-toast.
-    // The unified toasts below summarise the batch outcome.
-    await Promise.all(ids.map(saveSectionById))
-    baseline.value = snapshot()
+    const results = await Promise.all(
+      ids.map(async id => ({ id, ok: await saveSectionById(id).catch(() => false) })),
+    )
+    const live = snapshot()
+    const saved = results.filter(r => r.ok).map(r => r.id)
+    const failed = results.filter(r => !r.ok).map(r => r.id)
+    for (const id of saved) commitSection(id, live)
+    if (failed.length > 0) {
+      notify.error(
+        `${failed.length} of ${ids.length} section${ids.length === 1 ? '' : 's'} not saved`,
+        failed.map(id => SECTION_META[id].label).join(' • '),
+      )
+    }
+    const restartRequired = saved.filter(id => !SECTION_META[id].hotReload)
     if (restartRequired.length > 0) {
       notify.warn(
         'Some changes need a restart',
@@ -1060,7 +1065,7 @@ async function saveAll() {
           .map(id => `${SECTION_META[id].label}: ${SECTION_META[id].restartReason ?? 'requires restart'}`)
           .join(' • '),
       )
-    } else {
+    } else if (failed.length === 0) {
       notify.success(
         `Saved ${ids.length} section${ids.length === 1 ? '' : 's'}`,
         'All changes took effect immediately (hot reload).',
@@ -1074,48 +1079,15 @@ async function saveAll() {
 function discardAll() {
   if (!baseline.value) return
   const b = baseline.value
-  prefixes.value = b.prefixes
-  jwtExpires.value = b.jwtExpires
-  jwtExpirySeconds.value = b.jwtExpirySeconds
-  authAccessTtl.value = b.authAccessTtl
-  authRefreshTtl.value = b.authRefreshTtl
-  authApiMaxTtl.value = b.authApiMaxTtl
-  authAllowPermanent.value = b.authAllowPermanent
-  cbFailureRatePercent.value = b.cbFailureRatePercent
-  cbMinCalls.value = b.cbMinCalls
-  cbWindowSeconds.value = b.cbWindowSeconds
-  cbInitialBlockSeconds.value = b.cbInitialBlockSeconds
-  cbMaxBlockSeconds.value = b.cbMaxBlockSeconds
-  ubRatePct.value = b.ubRatePct
-  ubMinCalls.value = b.ubMinCalls
-  ubWindowSeconds.value = b.ubWindowSeconds
-  ubSeedBackoffSeconds.value = b.ubSeedBackoffSeconds
-  ubMaxBackoffSeconds.value = b.ubMaxBackoffSeconds
-  trustForwardedHeaders.value = b.trustForwardedHeaders
-  clientBaseHostAllowlist.value = b.clientBaseHostAllowlist
-  clientBaseUrl.value = b.clientBaseUrl
-  cooldownEnabled.value = b.cooldownEnabled
-  cooldownAge.value = b.cooldownAge
-  cooldownHistoryRetentionDays.value = b.cooldownHistoryRetentionDays
-  cooldownCleanupBatchLimit.value = b.cooldownCleanupBatchLimit
-  cooldownSnapshotEnabled.value = b.cooldownSnapshotEnabled
-  cooldownSnapshotAge.value = b.cooldownSnapshotAge
+  for (const key of Object.keys(TRACKED) as TrackedKey[]) {
+    (TRACKED[key] as { value: unknown }).value = b[key]
+  }
   if (cooldownConfig.value) {
     cooldownConfig.value = {
       ...cooldownConfig.value,
-      repo_types: JSON.parse(b.cooldownRepoTypesJson),
+      repo_types: JSON.parse(b[REPO_TYPES_KEY]),
     }
   }
-  httpProxyTimeout.value = b.httpProxyTimeout
-  httpConnTimeout.value = b.httpConnTimeout
-  httpIdleTimeout.value = b.httpIdleTimeout
-  httpFollowRedirects.value = b.httpFollowRedirects
-  httpAcquireTimeout.value = b.httpAcquireTimeout
-  httpMaxConns.value = b.httpMaxConns
-  httpMaxQueued.value = b.httpMaxQueued
-  httpServerTimeout.value = b.httpServerTimeout
-  grafanaUrl.value = b.grafanaUrl
-  registryUrl.value = b.registryUrl
   // Bulkhead reset uses its own discard path: revert each per-key
   // edit back to the loaded row value so the composable's anyDirty
   // flag clears.

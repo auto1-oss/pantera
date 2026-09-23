@@ -189,7 +189,7 @@ Consistency requirements: docs must never contradict each other or the code (e.g
 2. Loader implementing `Supplier<YourConfig>`: DB → env (`PANTERA_<KEY>`) → hardcoded default per field; `AtomicReference` cache; `invalidate()`; static `install(dao)` from `VertxMain` + `activeSupplier()` fallback for DB-less boots.
 3. Consumers read **through the supplier** on each decision so changes apply without restart (re-allocate any size-dependent state on change).
 4. `AdminAuthHandler`: GET/PUT with a key whitelist and validation by round-tripping the config constructor before writing; `loader.invalidate()` after write.
-5. `pantera-ui` `SettingsView.vue`: new card + SECTION_META entry + save-bar/dirty/discard wiring; label it so it cannot be confused with sibling settings. Update `configuration-reference.md` + `environment-variables.md`.
+5. `pantera-ui` `SettingsView.vue`: new card + `SECTION_META` entry + its refs in `TRACKED` and `SECTION_FIELDS` (these drive save-bar dirty state, per-section baseline commit and Discard) + a save function that resolves `false` on failure; label it so it cannot be confused with sibling settings. Update `configuration-reference.md` + `environment-variables.md`.
 
 **Add a metric + panel**:
 1. Record via `MicrometerMetrics` (guarded by `isInitialized()`), bounded tags only.

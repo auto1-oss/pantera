@@ -60,29 +60,34 @@ export function useRuntimeSettings() {
     return false
   })
 
-  async function saveOne(key: RuntimeSettingKey) {
-    if (!isDirty(key)) return
+  async function saveOne(key: RuntimeSettingKey): Promise<boolean> {
+    if (!isDirty(key)) return true
     saving[key] = true
     try {
       const updated = await patchRuntimeSetting(key, edited[key])
       rows[key] = updated
       edited[key] = updated.value
       notify.success('Setting saved', key)
+      return true
     } catch (err: unknown) {
       const ax = err as { response?: { data?: { message?: string } }; message?: string }
       const detail = ax.response?.data?.message ?? ax.message ?? 'Unknown error'
       notify.error(`Failed to save ${key}`, detail)
       edited[key] = rows[key].value
+      return false
     } finally {
       saving[key] = false
     }
   }
 
-  async function saveAllDirty() {
+  /** Saves every dirty key; resolves false when any key was rejected. */
+  async function saveAllDirty(): Promise<boolean> {
     const dirty = (Object.keys(rows) as RuntimeSettingKey[]).filter(isDirty)
+    let allSaved = true
     for (const key of dirty) {
-      await saveOne(key)
+      allSaved = (await saveOne(key)) && allSaved
     }
+    return allSaved
   }
 
   async function resetOne(key: RuntimeSettingKey) {
