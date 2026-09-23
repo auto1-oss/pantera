@@ -16,6 +16,9 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.SubStorage;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry;
+import com.auto1.pantera.pypi.NormalizedProjectName;
+import com.auto1.pantera.pypi.http.IndexGenerator;
 import com.auto1.pantera.pypi.meta.PypiSidecar;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.api.RepoAuthzHandler;
@@ -28,7 +31,9 @@ import io.vertx.ext.web.RoutingContext;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 
 /**
  * PyPI yank/unyank API handler.
@@ -39,13 +44,34 @@ import java.util.concurrent.CompletableFuture;
  *   <li>POST /api/v1/pypi/:repo/:package/:version/unyank — no body</li>
  * </ul>
  *
- * <p>Both endpoints iterate over all distribution files ({@code .whl}, {@code .tar.gz},
- * {@code .zip}, {@code .egg}) stored under {@code {package}/{version}/} in the
- * repository and apply the corresponding {@link PypiSidecar} operation.</p>
+ * <p>Both endpoints apply the {@link PypiSidecar} operation to every
+ * distribution file ({@code .whl}, {@code .tar.gz}, {@code .zip},
+ * {@code .egg}) stored under {@code {normalized-package}/{version}/}, then
+ * regenerate the package's persisted PEP 503/691 index so clients see the
+ * change on their next resolve. An unknown repository or a version with no
+ * distribution files answers {@code 404}.</p>
  *
  * @since 2.1.0
  */
 public final class PypiHandler {
+
+    /**
+     * Result of a yank/unyank.
+     */
+    enum Outcome {
+        /**
+         * Sidecars updated and index regenerated.
+         */
+        APPLIED,
+        /**
+         * The repository does not exist.
+         */
+        NO_REPOSITORY,
+        /**
+         * The version has no distribution files.
+         */
+        NO_FILES
+    }
 
     /**
      * Longest yank reason accepted (chars) — PEP 592 reasons are short
@@ -53,6 +79,10 @@ public final class PypiHandler {
      */
     private static final int MAX_REASON = 512;
 
+    /**
+     * Logger name.
+     */
+    private static final String LOGGER = "com.auto1.pantera.api.v1";
 
     /**
      * Distribution file suffixes that carry PyPI sidecar metadata.
@@ -61,20 +91,16 @@ public final class PypiHandler {
         List.of(".whl", ".tar.gz", ".zip", ".egg");
 
     /**
-     * Repository settings CRUD.
-     */
-    private final CrudRepoSettings crs;
-
-    /**
-     * Repository data (storage resolution).
-     */
-    private final RepoData repoData;
-
-    /**
      * Pantera security policy — yank/unyank are lifecycle WRITES on the
      * named repository and must be authorized as such.
      */
     private final Policy<?> policy;
+
+    /**
+     * Repo-scoped storage by repository name; empty when the repository
+     * does not exist. Blocking — called on the handler executor only.
+     */
+    private final Function<String, Optional<Storage>> storages;
 
     /**
      * Ctor.
@@ -85,9 +111,17 @@ public final class PypiHandler {
     public PypiHandler(
         final CrudRepoSettings crs, final RepoData repoData, final Policy<?> policy
     ) {
-        this.crs = crs;
-        this.repoData = repoData;
+        this(policy, repo -> PypiHandler.scoped(crs, repoData, repo));
+    }
+
+    /**
+     * Ctor.
+     * @param policy Pantera security policy
+     * @param storages Repo-scoped storage by repository name (blocking)
+     */
+    PypiHandler(final Policy<?> policy, final Function<String, Optional<Storage>> storages) {
         this.policy = policy;
+        this.storages = storages;
     }
 
     /**
@@ -107,30 +141,32 @@ public final class PypiHandler {
             new RepoAuthzHandler(this.policy, "repo", Action.Standard.WRITE);
         router.post("/api/v1/pypi/:repo/:package/:version/yank")
             .handler(repoWrite)
-            .handler(this::yankHandler);
+            .handler(ctx -> this.handle(ctx, true, extractReason(ctx)));
         router.post("/api/v1/pypi/:repo/:package/:version/unyank")
             .handler(repoWrite)
-            .handler(this::unyankHandler);
+            .handler(ctx -> this.handle(ctx, false, null));
     }
 
     /**
-     * POST /api/v1/pypi/:repo/:package/:version/yank.
+     * Run a yank ({@code yank=true}) or unyank off the event loop and answer.
      * @param ctx Routing context
+     * @param yank Yank when true, unyank otherwise
+     * @param reason Yank reason (nullable)
      */
-    private void yankHandler(final RoutingContext ctx) {
+    private void handle(final RoutingContext ctx, final boolean yank, final String reason) {
         final String repo = ctx.pathParam("repo");
         final String pkg = ctx.pathParam("package");
         final String version = ctx.pathParam("version");
-        final String reason = extractReason(ctx);
-        CompletableFuture.<Void>supplyAsync(() -> {
-            this.applyYank(repo, pkg, version, reason);
-            return null;
-        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+        final String action = yank ? "yank" : "unyank";
+        CompletableFuture.supplyAsync(
+            () -> this.lifecycle(repo, pkg, version, yank, reason),
+            HandlerExecutor.get()
+        ).whenComplete((outcome, err) -> {
             if (err != null) {
-                EcsLogger.error("com.auto1.pantera.api.v1")
-                    .message("PyPI yank failed")
+                EcsLogger.error(PypiHandler.LOGGER)
+                    .message("PyPI " + action + " failed")
                     .eventCategory("web")
-                    .eventAction("yank")
+                    .eventAction(action)
                     .eventOutcome("failure")
                     .field("repository.name", repo)
                     .field("package.name", pkg)
@@ -138,12 +174,27 @@ public final class PypiHandler {
                     .error(err)
                     .field("log.source", "application")
                     .log();
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(
+                    ctx, 500, "INTERNAL_ERROR", "PyPI " + action + " failed"
+                );
+            } else if (outcome == Outcome.NO_REPOSITORY) {
+                ApiResponse.sendError(
+                    ctx, 404, "NOT_FOUND",
+                    String.format("Repository '%s' not found", repo)
+                );
+            } else if (outcome == Outcome.NO_FILES) {
+                ApiResponse.sendError(
+                    ctx, 404, "NOT_FOUND",
+                    String.format(
+                        "No distribution files for %s %s in repository '%s'",
+                        pkg, version, repo
+                    )
+                );
             } else {
-                EcsLogger.info("com.auto1.pantera.api.v1")
-                    .message("PyPI yank applied")
+                EcsLogger.info(PypiHandler.LOGGER)
+                    .message("PyPI " + action + " applied")
                     .eventCategory("web")
-                    .eventAction("yank")
+                    .eventAction(action)
                     .eventOutcome("success")
                     .field("repository.name", repo)
                     .field("package.name", pkg)
@@ -156,80 +207,48 @@ public final class PypiHandler {
     }
 
     /**
-     * POST /api/v1/pypi/:repo/:package/:version/unyank.
-     * @param ctx Routing context
+     * Yank or unyank every distribution file of a release, then regenerate
+     * the package's persisted index. Blocking: called on the handler
+     * executor only.
+     *
+     * <p>The persisted {@code .pypi/<pkg>/<pkg>.{html,json}} index is what
+     * the hosted simple API serves; updating only the sidecars left the
+     * change invisible to pip and uv until the next upload of the
+     * package.</p>
+     *
+     * @param repo Repository name
+     * @param pkg Package name (any PEP 503 spelling)
+     * @param version Version string
+     * @param yank Yank when true, unyank otherwise
+     * @param reason Yank reason (nullable)
+     * @return Outcome
      */
-    private void unyankHandler(final RoutingContext ctx) {
-        final String repo = ctx.pathParam("repo");
-        final String pkg = ctx.pathParam("package");
-        final String version = ctx.pathParam("version");
-        CompletableFuture.<Void>supplyAsync(() -> {
-            this.applyUnyank(repo, pkg, version);
-            return null;
-        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
-            if (err != null) {
-                EcsLogger.error("com.auto1.pantera.api.v1")
-                    .message("PyPI unyank failed")
-                    .eventCategory("web")
-                    .eventAction("unyank")
-                    .eventOutcome("failure")
-                    .field("repository.name", repo)
-                    .field("package.name", pkg)
-                    .field("package.version", version)
-                    .error(err)
-                    .field("log.source", "application")
-                    .log();
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+    Outcome lifecycle(
+        final String repo, final String pkg, final String version,
+        final boolean yank, final String reason
+    ) {
+        final Optional<Storage> found = this.storages.apply(repo);
+        if (found.isEmpty()) {
+            return Outcome.NO_REPOSITORY;
+        }
+        final Storage scoped = found.get();
+        final String normalized = new NormalizedProjectName.Simple(pkg).value();
+        final Collection<Key> files = distFiles(scoped, normalized, version);
+        if (files.isEmpty()) {
+            return Outcome.NO_FILES;
+        }
+        final List<CompletableFuture<Void>> futures = new ArrayList<>(files.size());
+        for (final Key file : files) {
+            if (yank) {
+                futures.add(PypiSidecar.yank(scoped, file, reason));
             } else {
-                EcsLogger.info("com.auto1.pantera.api.v1")
-                    .message("PyPI unyank applied")
-                    .eventCategory("web")
-                    .eventAction("unyank")
-                    .eventOutcome("success")
-                    .field("repository.name", repo)
-                    .field("package.name", pkg)
-                    .field("package.version", version)
-                    .field("log.source", "application")
-                    .log();
-                ctx.response().setStatusCode(204).end();
+                futures.add(PypiSidecar.unyank(scoped, file));
             }
-        });
-    }
-
-    /**
-     * Resolve repo-scoped storage and apply yank to all distribution files.
-     * This method is called from a blocking executor thread.
-     * @param repo Repository name
-     * @param pkg Package name
-     * @param version Version string
-     * @param reason Yank reason, may be null
-     */
-    private void applyYank(final String repo, final String pkg, final String version,
-        final String reason) {
-        final Storage scoped = this.resolveScoped(repo);
-        final Collection<Key> files = distFiles(scoped, pkg, version);
-        final List<CompletableFuture<Void>> futures = new ArrayList<>(files.size());
-        for (final Key file : files) {
-            futures.add(PypiSidecar.yank(scoped, file, reason));
         }
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-    }
-
-    /**
-     * Resolve repo-scoped storage and apply unyank to all distribution files.
-     * This method is called from a blocking executor thread.
-     * @param repo Repository name
-     * @param pkg Package name
-     * @param version Version string
-     */
-    private void applyUnyank(final String repo, final String pkg, final String version) {
-        final Storage scoped = this.resolveScoped(repo);
-        final Collection<Key> files = distFiles(scoped, pkg, version);
-        final List<CompletableFuture<Void>> futures = new ArrayList<>(files.size());
-        for (final Key file : files) {
-            futures.add(PypiSidecar.unyank(scoped, file));
-        }
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        new IndexGenerator(scoped, new Key.From(normalized), "/").generate().join();
+        FilteredMetadataCacheRegistry.instance().invalidateAfterUpload("pypi", normalized);
+        return Outcome.APPLIED;
     }
 
     /**
@@ -237,21 +256,34 @@ public final class PypiHandler {
      * {@link RepoData#repoStorage} returns the raw underlying storage; wrapping it in
      * a {@link SubStorage} with the repo name as prefix gives the same view that
      * the PyPI adapter uses, so sidecar keys are relative to the repo root.
+     * @param crs Repository settings CRUD
+     * @param data Repository data
      * @param repo Repository name
-     * @return Repo-scoped storage
+     * @return Repo-scoped storage, empty when the repository does not exist
      */
-    private Storage resolveScoped(final String repo) {
+    private static Optional<Storage> scoped(
+        final CrudRepoSettings crs, final RepoData data, final String repo
+    ) {
         final RepositoryName rname = new RepositoryName.Simple(repo);
-        final Storage raw = this.repoData.repoStorage(rname, this.crs)
-            .toCompletableFuture().join();
-        return new SubStorage(new Key.From(repo), raw);
+        final Optional<Storage> result;
+        if (crs.exists(rname)) {
+            result = Optional.of(
+                new SubStorage(
+                    new Key.From(repo),
+                    data.repoStorage(rname, crs).toCompletableFuture().join()
+                )
+            );
+        } else {
+            result = Optional.empty();
+        }
+        return result;
     }
 
     /**
      * List distribution files under {@code {pkg}/{version}/} in the scoped storage.
      * Only files whose names end with a recognised distribution suffix are returned.
      * @param scoped Repo-scoped storage
-     * @param pkg Package name
+     * @param pkg Normalized package name
      * @param version Version string
      * @return Relative keys for matching distribution files
      */

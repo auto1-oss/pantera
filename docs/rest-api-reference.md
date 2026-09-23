@@ -1523,6 +1523,66 @@ curl -X DELETE http://localhost:8086/api/v1/repositories/maven-local/packages \
 
 ---
 
+### POST /api/v1/pypi/:repo/:package/:version/yank
+
+Yank a release of a hosted PyPI package (PEP 592). Every distribution file of
+the version is marked yanked and the package's simple index is regenerated, so
+pip and uv see the change on their next resolve: an unpinned requirement skips
+the release, an exact pin still installs it with a warning. `:package` accepts
+any PEP 503 spelling (`QA_Pkg`, `qa-pkg`).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `adapter_basic_permissions` `write` on `:repo`.
+
+**Request Body (optional):**
+
+```json
+{
+  "reason": "broken build"
+}
+```
+
+The reason is optional, capped at 512 characters, and shown to clients as the
+yank reason. Without a reason the release is still yanked.
+
+**Response (204):** No content on success.
+
+**Errors:** `404 NOT_FOUND` when the repository does not exist or the version
+has no distribution files; `403` without `write` on the repository.
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/pypi/pypi/requests/2.31.0/yank \
+  -H "Authorization: Bearer eyJhbGciOi..." \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "broken build"}'
+```
+
+---
+
+### POST /api/v1/pypi/:repo/:package/:version/unyank
+
+Reverse a yank: every distribution file of the version is marked not yanked and
+the package's simple index is regenerated.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `adapter_basic_permissions` `write` on `:repo`.
+
+**Response (204):** No content on success.
+
+**Errors:** `404 NOT_FOUND` when the repository does not exist or the version
+has no distribution files; `403` without `write` on the repository.
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/pypi/pypi/requests/2.31.0/unyank \
+  -H "Authorization: Bearer eyJhbGciOi..."
+```
+
+---
+
 ## 9. Search
 
 ### GET /api/v1/search
