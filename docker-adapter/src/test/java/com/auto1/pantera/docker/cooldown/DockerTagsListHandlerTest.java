@@ -21,11 +21,13 @@ import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -134,6 +136,34 @@ final class DockerTagsListHandlerTest {
             tagsOf(node),
             containsInAnyOrder("1.24", "1.25")
         );
+    }
+
+    /**
+     * B10: the upstream here is the auth-enforcing DockerSlice. Dropping
+     * the inbound headers dropped {@code Authorization}, so every
+     * authenticated tags/list got a 401 from Pantera itself.
+     */
+    @Test
+    void forwardsInboundHeadersToUpstream() throws Exception {
+        final String body = tagsJson("library/nginx", "1.24");
+        final Slice authed = (line, headers, content) -> {
+            if (headers.values("Authorization").isEmpty()) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.unauthorized().build()
+                );
+            }
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(body.getBytes(StandardCharsets.UTF_8)).build()
+            );
+        };
+        final Response resp = new DockerTagsListHandler(
+            authed, this.cooldown, new NullInspector(), "docker-proxy", "docker-test"
+        ).handle(
+            new RequestLine(RqMethod.GET, "/v2/library/nginx/tags/list"),
+            Headers.from("Authorization", "Basic YWxpY2U6c2VjcmV0"),
+            "alice"
+        ).get();
+        assertThat(resp.status(), new IsEqual<>(RsStatus.OK));
     }
 
     @Test

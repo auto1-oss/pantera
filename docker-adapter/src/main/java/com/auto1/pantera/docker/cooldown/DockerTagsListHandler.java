@@ -231,7 +231,10 @@ public final class DockerTagsListHandler {
         final AuditContext ctx = new AuditContext(
             MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
         );
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+        // Forward the inbound headers: the upstream is the auth-enforcing
+        // DockerSlice, so dropping them dropped Authorization and every
+        // authenticated tags/list answered 401 (B10).
+        return this.upstream.response(line, headers, Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->
