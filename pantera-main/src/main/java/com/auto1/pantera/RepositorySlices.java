@@ -1644,8 +1644,10 @@ public class RepositorySlices {
                 ),
                 new com.auto1.pantera.http.rt.RtRulePath(
                     com.auto1.pantera.npm.http.auth.OAuthLoginSlice.WEB_LOGIN,
-                    new com.auto1.pantera.npm.http.DeclinedEndpointSlice(
-                        "npm web login", "repositories/npm.md#logging-in-with-npm-login"
+                    new com.auto1.pantera.npm.http.auth.LoginBodyCapSlice(
+                        new com.auto1.pantera.npm.http.DeclinedEndpointSlice(
+                            "npm web login", "repositories/npm.md#logging-in-with-npm-login"
+                        )
                     )
                 ),
                 new com.auto1.pantera.http.rt.RtRulePath(

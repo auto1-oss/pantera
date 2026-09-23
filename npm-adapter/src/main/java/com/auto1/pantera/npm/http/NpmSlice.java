@@ -468,21 +468,25 @@ public final class NpmSlice implements Slice {
             ),
             new RtRulePath(
                 com.auto1.pantera.npm.http.auth.OAuthLoginSlice.LEGACY_LOGIN,
-                // Use JWT-only OAuth login or npm token-based adduser
-                jwtOnly && basicAuth != null
-                    ? new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens)  // JWT-only
-                    : (basicAuth != null 
-                        ? new PanteraAddUserSlice(  // Creates npm tokens
-                            basicAuth,
-                            new StorageTokenRepository(storage),
-                            new TokenGenerator()
-                        )
-                        : new AddUserSlice(  // Standalone npm tokens
-                            new StorageUserRepository(storage, new BCryptPasswordHasher()),
-                            new StorageTokenRepository(storage),
-                            new BCryptPasswordHasher(),
-                            new TokenGenerator()
-                        ))
+                // Reachable without credentials: the body is capped before
+                // any of the handlers below buffers it.
+                new com.auto1.pantera.npm.http.auth.LoginBodyCapSlice(
+                    // Use JWT-only OAuth login or npm token-based adduser
+                    jwtOnly && basicAuth != null
+                        ? new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens)  // JWT-only
+                        : (basicAuth != null
+                            ? new PanteraAddUserSlice(  // Creates npm tokens
+                                basicAuth,
+                                new StorageTokenRepository(storage),
+                                new TokenGenerator()
+                            )
+                            : new AddUserSlice(  // Standalone npm tokens
+                                new StorageUserRepository(storage, new BCryptPasswordHasher()),
+                                new StorageTokenRepository(storage),
+                                new BCryptPasswordHasher(),
+                                new TokenGenerator()
+                            ))
+                )
             ),
             new RtRulePath(
                 new RtRule.All(
@@ -523,7 +527,9 @@ public final class NpmSlice implements Slice {
             ),
             new RtRulePath(
                 com.auto1.pantera.npm.http.auth.OAuthLoginSlice.WEB_LOGIN,
-                new DeclinedEndpointSlice("npm web login", NpmSlice.LOGIN_DOCS)
+                new com.auto1.pantera.npm.http.auth.LoginBodyCapSlice(
+                    new DeclinedEndpointSlice("npm web login", NpmSlice.LOGIN_DOCS)
+                )
             ),
             new RtRulePath(
                 new RtRule.All(

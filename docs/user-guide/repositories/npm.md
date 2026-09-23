@@ -39,7 +39,7 @@ Instead of pasting a token you can run `npm login`, see [Logging In with `npm lo
 npm login --registry http://pantera-host:8080/npm-group/
 ```
 
-npm first tries its web login, which Pantera declines, and then prompts for your Pantera username and password (to skip the web attempt, pass `--auth-type=legacy`). Pantera checks the password and returns a Pantera API token, which npm writes to your user `.npmrc` as the `_authToken` for that registry path. The token is labelled `npm login`, expires after 30 days (or sooner, if an administrator has set a shorter maximum token lifetime), and appears in your token list in the UI, where you can revoke it. Users who sign in only through SSO have no Pantera password, so they generate an API token in the UI instead.
+npm first tries its web login, which Pantera declines, and then prompts for your Pantera username and password (to skip the web attempt, pass `--auth-type=legacy`). Pantera checks the password and returns a Pantera API token, which npm writes to your user `.npmrc` as the `_authToken` for that registry path. The token is labelled `npm login`, expires after 30 days (or sooner, if an administrator has set a shorter maximum token lifetime), and appears in your token list in the UI, where you can revoke it. Users who sign in only through SSO have no Pantera password, so they generate an API token in the UI instead. The login request body is limited to 64 KiB (a real login is far smaller); a larger body is answered `413`.
 
 `npm logout` is not supported (Pantera does not revoke tokens through the npm registry API, so the command fails): delete the `_authToken` line from your user `.npmrc` and revoke the token in the UI.
 

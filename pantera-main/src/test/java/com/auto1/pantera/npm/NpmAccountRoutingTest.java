@@ -29,6 +29,8 @@ import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.settings.repo.Repositories;
 import com.auto1.pantera.test.TestSettings;
 import com.auto1.pantera.test.TestStoragesCache;
+import io.reactivex.Flowable;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Collection;
@@ -36,6 +38,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.json.Json;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -102,6 +105,44 @@ final class NpmAccountRoutingTest {
                 String.format("%s: web login answers a non-retried 404", repo),
                 response.status().code(), new IsEqual<>(404)
             );
+        }
+    }
+
+    @Test
+    void refusesOversizedAnonymousLoginBodiesWithoutReadingThem(@TempDir final Path tmp)
+        throws Exception {
+        final int chunks = 1024;
+        for (final String repo : List.of("npm-local", "npm-proxy", "npm-group")) {
+            for (final RequestLine line : List.of(
+                new RequestLine(
+                    RqMethod.PUT, String.format("/%s/-/user/org.couchdb.user:nobody", repo)
+                ),
+                new RequestLine(RqMethod.POST, String.format("/%s/-/v1/login", repo))
+            )) {
+                final AtomicInteger pulled = new AtomicInteger();
+                final Response response = NpmAccountRoutingTest.slices(tmp).slice(
+                    new Key.From(repo), 8080
+                ).response(
+                    line,
+                    Headers.EMPTY,
+                    new Content.From(
+                        Flowable.range(0, chunks).map(
+                            idx -> {
+                                pulled.incrementAndGet();
+                                return ByteBuffer.wrap(new byte[16 * 1024]);
+                            }
+                        )
+                    )
+                ).get(30, TimeUnit.SECONDS);
+                MatcherAssert.assertThat(
+                    String.format("%s %s: an oversized anonymous body is answered 413", repo, line),
+                    response.status().code(), new IsEqual<>(413)
+                );
+                MatcherAssert.assertThat(
+                    String.format("%s %s: the body is cancelled at the cap", repo, line),
+                    pulled.get() < chunks, new IsEqual<>(true)
+                );
+            }
         }
     }
 

@@ -50,6 +50,13 @@ import javax.json.JsonValue;
  * <p>The password check and the token store are blocking, so both run on
  * the shared auth worker pool, never on the event loop.</p>
  *
+ * <p>The request is reachable without credentials, so its body is capped by
+ * {@link LoginBodyCapSlice} before it is buffered: a body declared larger
+ * than {@link LoginBodyCapSlice#MAX_BODY_BYTES} is refused without being
+ * read, and a streamed body is metered and cancelled the moment it crosses
+ * the cap. Both answer {@code 413} with a JSON error and never reach the
+ * credentials check.</p>
+ *
  * @since 1.2
  */
 public final class OAuthLoginSlice implements Slice {
@@ -120,28 +127,35 @@ public final class OAuthLoginSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
-        return body.asStringFuture().thenCompose(
-            text -> {
-                final Optional<JsonObject> json = OAuthLoginSlice.parse(text);
-                final String name = json.map(obj -> OAuthLoginSlice.string(obj, "name"))
-                    .orElse("");
-                final String password = json.map(obj -> OAuthLoginSlice.string(obj, "password"))
-                    .orElse("");
-                final CompletableFuture<Response> result;
-                if (name.isEmpty() || password.isEmpty()) {
-                    result = CompletableFuture.completedFuture(
-                        ResponseBuilder.badRequest()
-                            .jsonBody(OAuthLoginSlice.error("name and password are required"))
-                            .build()
-                    );
-                } else {
-                    result = CompletableFuture.supplyAsync(
-                        () -> this.login(name, password), AuthWorkerPool.AUTH_EXECUTOR
-                    );
-                }
-                return result;
-            }
-        );
+        return new LoginBodyCapSlice(
+            (rql, rqh, bounded) -> bounded.asStringFuture().thenCompose(this::answer)
+        ).response(line, headers, body);
+    }
+
+    /**
+     * Answer a login body that fits the cap.
+     * @param text Body
+     * @return Completion with the response
+     */
+    private CompletableFuture<Response> answer(final String text) {
+        final Optional<JsonObject> json = OAuthLoginSlice.parse(text);
+        final String name = json.map(obj -> OAuthLoginSlice.string(obj, "name"))
+            .orElse("");
+        final String password = json.map(obj -> OAuthLoginSlice.string(obj, "password"))
+            .orElse("");
+        final CompletableFuture<Response> result;
+        if (name.isEmpty() || password.isEmpty()) {
+            result = CompletableFuture.completedFuture(
+                ResponseBuilder.badRequest()
+                    .jsonBody(OAuthLoginSlice.error("name and password are required"))
+                    .build()
+            );
+        } else {
+            result = CompletableFuture.supplyAsync(
+                () -> this.login(name, password), AuthWorkerPool.AUTH_EXECUTOR
+            );
+        }
+        return result;
     }
 
     /**
