@@ -19,6 +19,7 @@ import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
 import com.auto1.pantera.cooldown.metadata.MetadataRewriteException;
+import com.auto1.pantera.docker.misc.OfficialImageName;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -139,6 +140,11 @@ public final class DockerTagsListHandler {
     private final DockerMetadataRewriter rewriter;
 
     /**
+     * Canonical cooldown artifact name for a request-path image name.
+     */
+    private final CooldownImageName names;
+
+    /**
      * Ctor.
      *
      * @param upstream Upstream Docker registry proxy slice
@@ -154,6 +160,31 @@ public final class DockerTagsListHandler {
         final String repoType,
         final String repoName
     ) {
+        this(
+            upstream, cooldown, inspector, repoType, repoName,
+            new CooldownImageName(repoName, new OfficialImageName(false))
+        );
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param upstream Upstream Docker registry proxy slice
+     * @param cooldown Cooldown evaluation service
+     * @param inspector Cooldown inspector
+     * @param repoType Repository type (e.g. {@code "docker-proxy"})
+     * @param repoName Repository name
+     * @param names Canonical cooldown artifact naming
+     */
+    public DockerTagsListHandler(
+        final Slice upstream,
+        final CooldownService cooldown,
+        final CooldownInspector inspector,
+        final String repoType,
+        final String repoName,
+        final CooldownImageName names
+    ) {
+        this.names = names;
         this.upstream = upstream;
         this.cooldown = cooldown;
         this.inspector = inspector;
@@ -191,8 +222,10 @@ public final class DockerTagsListHandler {
         final RequestLine line, final Headers headers, final String user
     ) {
         final String path = line.uri().getPath();
-        final String image = this.detector.extractPackageName(path).orElseThrow(
-            () -> new IllegalArgumentException("Not a /tags/list path: " + path)
+        final String image = this.names.of(
+            this.detector.extractPackageName(path).orElseThrow(
+                () -> new IllegalArgumentException("Not a /tags/list path: " + path)
+            )
         );
         RequestContextHeaders.bindToMdc(headers);
         final AuditContext ctx = new AuditContext(

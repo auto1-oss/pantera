@@ -1011,6 +1011,111 @@ final class JdbcCooldownServiceTest {
         );
     }
 
+    @Test
+    void unblockingDockerTagReleasesItsDigestsButNoUnrelatedOne() {
+        final String repo = "docker_hub_linked";
+        final String image = "library/nginx";
+        final String index = "sha256:" + "a".repeat(64);
+        final String child = "sha256:" + "b".repeat(64);
+        final String unrelated = "sha256:" + "c".repeat(64);
+        CooldownLinkedVersions.instance().register(
+            repo,
+            (artifact, version) -> CompletableFuture.completedFuture(
+                image.equals(artifact) && "1.27".equals(version)
+                    ? List.of(index, child) : List.of()
+            )
+        );
+        final CooldownInspector fresh = JdbcCooldownServiceTest.releasedAt(
+            Instant.now().minus(Duration.ofHours(1))
+        );
+        // A tag pull evaluates the tag AND the manifest digest it resolves to.
+        for (final String version : List.of("1.27", index)) {
+            MatcherAssert.assertThat(
+                version + " is blocked before the unblock",
+                this.service.evaluate(dockerRequest(repo, image, version), fresh).join().blocked(),
+                new IsEqual<>(true)
+            );
+        }
+        this.service.unblock("docker-proxy", repo, image, "1.27", "alice").join();
+        final JdbcCooldownService after = this.freshService();
+        MatcherAssert.assertThat(
+            "tag allowed",
+            after.evaluate(dockerRequest(repo, image, "1.27"), fresh).join().blocked(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "index digest of the tag allowed",
+            after.evaluate(dockerRequest(repo, image, index), fresh).join().blocked(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "child manifest never pulled before is allowed on its first pull",
+            after.evaluate(dockerRequest(repo, image, child), fresh).join().blocked(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "unrelated fresh digest of the same image stays blocked",
+            after.evaluate(dockerRequest(repo, image, unrelated), fresh).join().blocked(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void freshDockerTagIsBlockedFromItsRecordedReleaseDate() {
+        final com.auto1.pantera.publishdate.DbPublishDateRegistry dates =
+            new com.auto1.pantera.publishdate.DbPublishDateRegistry(this.dataSource, java.util.Map.of());
+        com.auto1.pantera.publishdate.PublishDateRegistries.installDefault(dates);
+        try {
+            // Wired exactly as DockerProxy wires a Docker Hub proxy.
+            final com.auto1.pantera.docker.cache.DockerProxyCooldownInspector inspector =
+                new com.auto1.pantera.docker.cache.DockerProxyCooldownInspector(
+                    new com.auto1.pantera.docker.misc.OfficialImageName(true)
+                );
+            inspector.setReleaseDateCallback(
+                new com.auto1.pantera.adapters.docker.DockerReleaseDates(dates, "docker-proxy")
+            );
+            // CacheManifests records under the client's trimmed spelling.
+            inspector.recordRelease("nginx", "1.28", Instant.now().minus(Duration.ofHours(2)));
+            // Another instance / after restart: nothing in the inspector, the
+            // date must come from the registry row just persisted.
+            MatcherAssert.assertThat(
+                this.service.evaluate(
+                    dockerRequest("docker_hub_dates", "library/nginx", "1.28"),
+                    JdbcCooldownServiceTest.noDate()
+                ).join().blocked(),
+                new IsEqual<>(true)
+            );
+        } finally {
+            com.auto1.pantera.publishdate.PublishDateRegistries.installDefault(
+                (repoType, name, version) -> CompletableFuture.completedFuture(Optional.empty())
+            );
+        }
+    }
+
+    private static CooldownRequest dockerRequest(
+        final String repo, final String image, final String version
+    ) {
+        return new CooldownRequest("docker-proxy", repo, image, version, "u", Instant.now());
+    }
+
+    private static CooldownInspector noDate() {
+        return new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(
+                final String artifact, final String version
+            ) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(
+                final String artifact, final String version
+            ) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+    }
+
     private JdbcCooldownService freshService() {
         return new JdbcCooldownService(CooldownSettings.defaults(), this.repository, this.executor);
     }

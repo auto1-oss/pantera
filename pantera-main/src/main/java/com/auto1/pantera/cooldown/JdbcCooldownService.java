@@ -49,6 +49,12 @@ final class JdbcCooldownService implements CooldownService {
     private final CooldownCircuitBreaker circuitBreaker;
 
     /**
+     * Per-repository resolvers of versions released together with a
+     * manually unblocked one (docker: digests reachable from a tag).
+     */
+    private final CooldownLinkedVersions linked;
+
+    /**
      * Per-key single-flight for {@link #evaluate}. Closes the
      * thundering-herd window between L1-cooldown-miss and the
      * DB lookup that follows: N concurrent callers asking about the
@@ -169,6 +175,7 @@ final class JdbcCooldownService implements CooldownService {
             .contextualize(Objects.requireNonNull(executor));
         this.cache = Objects.requireNonNull(cache);
         this.circuitBreaker = Objects.requireNonNull(circuitBreaker);
+        this.linked = CooldownLinkedVersions.instance();
         this.evaluateSingleFlight = new SingleFlight<>(
             Duration.ofSeconds(30), 10_000, this.executor
         );
@@ -674,16 +681,123 @@ final class JdbcCooldownService implements CooldownService {
         // duplicate publish is harmless (self-message filtering is by instanceId).
         this.publishDecisionInvalidation(repoName, artifact, version);
         // Then update database and metrics
-        return CompletableFuture.runAsync(
+        return CompletableFuture.supplyAsync(
             () -> {
-                this.unblockSingle(repoType, repoName, artifact, version, actor);
+                final Optional<DbBlockRecord> released =
+                    this.unblockSingle(repoType, repoName, artifact, version, actor);
                 // Decrement active blocks metric (O(1), no DB query)
                 this.decrementActiveBlocksMetric(repoType, repoName);
                 // Unmark all-blocked status and decrement metric
                 this.unmarkAllBlockedPackage(repoType, repoName, artifact);
+                return released;
             },
             this.executor
+        ).thenCompose(
+            released -> released
+                .map(rec -> this.releaseLinked(rec, actor))
+                .orElseGet(() -> CompletableFuture.completedFuture(null))
         );
+    }
+
+    /**
+     * Release the versions linked to a just-released block (see
+     * {@link CooldownLinkedVersions}; for docker: the digests reachable from a
+     * released tag). A linked version with an ACTIVE row is released like the
+     * named one; one with no row yet (a child manifest never pulled while the
+     * tag was blocked) gets a row that is released on creation, so its first
+     * pull is allowed instead of opening a fresh block; one already released
+     * is left alone. Failures are logged — the named version is released
+     * regardless.
+     *
+     * @param source Released block
+     * @param actor Unblocking user
+     * @return Completion
+     */
+    private CompletableFuture<Void> releaseLinked(final DbBlockRecord source, final String actor) {
+        final CompletableFuture<List<String>> linked;
+        try {
+            linked = this.linked.forRepo(source.repoName()).linked(source.artifact(), source.version());
+        } catch (final RuntimeException ex) {
+            this.warnLinkedFailure(source, ex);
+            return CompletableFuture.completedFuture(null);
+        }
+        return linked
+            .thenAcceptAsync(
+                versions -> versions.stream()
+                    .filter(v -> !v.equals(source.version()))
+                    .distinct()
+                    .forEach(v -> this.releaseLinkedVersion(source, v, actor)),
+                this.executor
+            )
+            .exceptionally(err -> {
+                this.warnLinkedFailure(source, err);
+                return null;
+            });
+    }
+
+    /**
+     * Release one version linked to {@code source}.
+     */
+    private void releaseLinkedVersion(
+        final DbBlockRecord source, final String version, final String actor
+    ) {
+        this.cache.unblock(source.repoName(), source.artifact(), version);
+        final Optional<DbBlockRecord> existing = this.repository.find(
+            source.repoType(), source.repoName(), source.artifact(), version
+        );
+        if (existing.isPresent()) {
+            if (existing.get().status() == BlockStatus.ACTIVE) {
+                this.release(existing.get(), actor, Instant.now());
+                this.decrementActiveBlocksMetric(source.repoType(), source.repoName());
+            }
+            return;
+        }
+        final DbBlockRecord created;
+        try {
+            created = this.repository.insertBlock(
+                source.repoType(), source.repoName(), source.artifact(), version,
+                source.reason(), Instant.now(), source.blockedUntil(), SYSTEM_ACTOR,
+                Optional.empty(), source.releaseDate()
+            );
+        } catch (final IllegalStateException raced) {
+            // A concurrent pull created the row between find and insert:
+            // release that one instead.
+            this.repository.find(source.repoType(), source.repoName(), source.artifact(), version)
+                .filter(rec -> rec.status() == BlockStatus.ACTIVE)
+                .ifPresent(rec -> this.release(rec, actor, Instant.now()));
+            return;
+        }
+        this.repository.archiveAndRelease(created.id(), ArchiveReason.MANUAL_UNBLOCK, actor);
+        EcsLogger.info("com.auto1.pantera.cooldown")
+            .message("Released linked cooldown version with its unblocked parent "
+                + source.version() + " (kept INACTIVE until blocked_until=" + source.blockedUntil()
+                + ", unblocked_by=" + actor + ")")
+            .eventCategory("database")
+            .eventAction("block_released")
+            .eventOutcome("success")
+            .field("package.name", source.artifact())
+            .field("package.version", version)
+            .field("repository.type", source.repoType())
+            .field("repository.name", source.repoName())
+            .field("log.source", "application")
+            .log();
+        this.publishDecisionInvalidation(source.repoName(), source.artifact(), version);
+    }
+
+    private void warnLinkedFailure(final DbBlockRecord source, final Throwable err) {
+        EcsLogger.warn("com.auto1.pantera.cooldown")
+            .message("Failed to release versions linked to the unblocked version; "
+                + "they stay blocked until released individually")
+            .eventCategory("database")
+            .eventAction("block_released")
+            .eventOutcome("failure")
+            .field("package.name", source.artifact())
+            .field("package.version", source.version())
+            .field("repository.type", source.repoType())
+            .field("repository.name", source.repoName())
+            .error(err)
+            .field("log.source", "application")
+            .log();
     }
 
     @Override
@@ -700,9 +814,11 @@ final class JdbcCooldownService implements CooldownService {
         // entry, which costs an L1 scan on every peer.
         this.publishBulkInvalidation();
         // Then update database and metrics
-        return CompletableFuture.runAsync(
+        return CompletableFuture.supplyAsync(
             () -> {
-                final int unblockedCount = this.unblockAllBlocking(repoType, repoName, actor);
+                final List<DbBlockRecord> blocks =
+                    this.repository.findActiveForRepo(repoType, repoName);
+                final int unblockedCount = this.unblockAllBlocking(repoType, repoName, actor, blocks);
                 // Decrement active blocks metric by count (O(1), no DB query)
                 for (int i = 0; i < unblockedCount; i++) {
                     this.decrementActiveBlocksMetric(repoType, repoName);
@@ -713,8 +829,17 @@ final class JdbcCooldownService implements CooldownService {
                 // envelopes for the repo unconditionally — active per-version blocks have been
                 // cleared so every package's next metadata request must re-filter.
                 this.invalidateAllEnvelopes(repoType, repoName);
+                return blocks;
             },
             this.executor
+        ).thenCompose(
+            // Linked versions that never had a row (docker child manifests)
+            // must be released too; ones the bulk release covered are skipped.
+            blocks -> CompletableFuture.allOf(
+                blocks.stream()
+                    .map(rec -> this.releaseLinked(rec, actor))
+                    .toArray(CompletableFuture[]::new)
+            )
         );
     }
 
@@ -1227,26 +1352,32 @@ final class JdbcCooldownService implements CooldownService {
         this.publishDecisionInvalidation(record.repoName(), record.artifact(), record.version());
     }
 
-    private void unblockSingle(
+    /**
+     * Release the named version's ACTIVE block, if any.
+     *
+     * @return The block that was released (empty when nothing was ACTIVE)
+     */
+    private Optional<DbBlockRecord> unblockSingle(
         final String repoType,
         final String repoName,
         final String artifact,
         final String version,
         final String actor
     ) {
-        final Optional<DbBlockRecord> record = this.repository.find(repoType, repoName, artifact, version);
-        record.filter(value -> value.status() == BlockStatus.ACTIVE)
-            .ifPresent(value -> this.release(value, actor, Instant.now()));
+        final Optional<DbBlockRecord> record = this.repository.find(repoType, repoName, artifact, version)
+            .filter(value -> value.status() == BlockStatus.ACTIVE);
+        record.ifPresent(value -> this.release(value, actor, Instant.now()));
+        return record;
     }
 
     private int unblockAllBlocking(
         final String repoType,
         final String repoName,
-        final String actor
+        final String actor,
+        final List<DbBlockRecord> blocks
     ) {
         final Instant now = Instant.now();
         // Log each active block before the bulk release
-        final List<DbBlockRecord> blocks = this.repository.findActiveForRepo(repoType, repoName);
         for (final DbBlockRecord record : blocks) {
             EcsLogger.debug("com.auto1.pantera.cooldown")
                 .message("Releasing cooldown block (bulk unblock-all): reason=" + record.reason().name()
