@@ -36,6 +36,12 @@ Add Pantera as a Composer repository in your project's `composer.json`:
 
 Set `secure-http` to `false` only if your Pantera instance does not use HTTPS.
 
+### Using a Proxy Repository Directly
+
+You can also point Composer at a `php-proxy` repository (for example `http://pantera-host:8080/php-proxy`) when you only need upstream packages. The proxy answers `packages.json` itself and sends the per-package lookups back to its own `/p2/` endpoint. Use a group when you also need packages from a local repository.
+
+Dev-branch dists (`dev-*`, `*-dev`) downloaded through a proxy are tied to the commit named in the metadata. The dist URL ends in `?ref=<commit>`, so after the branch moves, `composer update` downloads the new commit rather than a cached copy of the old one.
+
 ### Configure Authentication
 
 Create or edit `~/.composer/auth.json`:
@@ -111,7 +117,7 @@ The local Composer repository indexes uploaded archives and makes them available
 Pantera takes the package version from the first of these that is present:
 
 1. `"version"` in the archive's `composer.json`.
-2. A version in the file name, such as `my-package-1.0.0.zip` or `my-package-v2.1.0-beta.tar.gz`.
+2. A `major.minor.patch` version in the file name, such as `my-package-1.0.0.zip`.
 3. `dev-master`. An archive with no version in `composer.json` or in its file name is published as `dev-master`, and the upload does not warn about it.
 
 ### Re-uploading a Version
@@ -129,6 +135,19 @@ To ship a change, publish a new version. The same rules apply to JSON package re
 
 An archive that cannot be read, has no `composer.json`, or has a `composer.json` that is not valid JSON is rejected with `400 Bad Request`.
 
+### Delete a Package Archive
+
+Composer has no delete command. Delete an archive from the Pantera UI or with the REST API ([`DELETE /api/v1/repositories/:name/artifacts`](../../rest-api-reference.md)), using its storage path:
+
+```bash
+curl -X DELETE http://pantera-host:8086/api/v1/repositories/php-local/artifacts \
+  -H "Authorization: Bearer your-jwt-token" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "artifacts/vendor/my-package/1.0.0/vendor-my-package-1.0.0.zip"}'
+```
+
+Uploaded archives are stored as `artifacts/<vendor>/<package>/<version>/<vendor>-<package>-<version>.<zip|tar.gz>`. Consumers that locked the deleted version fail to install it. To ship a fix, publish a new version.
+
 ---
 
 ## Common Issues
@@ -140,6 +159,10 @@ An archive that cannot be read, has no `composer.json`, or has a `composer.json`
 | `curl error 60: SSL certificate problem` | HTTPS verification failure | Set `"secure-http": false` in composer.json (non-HTTPS) or install proper certs |
 | Package found on Packagist but not resolving | Proxy not configured for packagist.org | Ask admin to verify the php-proxy remote URL |
 | `Your requirements could not be resolved` | Dependency conflict, not a Pantera issue | Run `composer update --with-all-dependencies` to resolve conflicts |
+| `409 Conflict` on upload | That release is already published with different content | Publish a new version |
+| `400 Bad Request` on upload | The archive is unreadable or its `composer.json` is missing or invalid | Rebuild the archive with `composer archive` |
+| `503 Service Unavailable` with `Retry-After` from a group, or `502` from a proxy | The upstream could not be reached or sent invalid metadata | Retry later. The package is not reported as missing during an upstream outage |
+| `403 Forbidden` from a group | Your account cannot read one of the group's member repositories | Ask an admin for read access on the member repositories |
 
 ---
 

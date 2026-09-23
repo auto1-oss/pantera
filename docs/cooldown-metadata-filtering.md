@@ -39,7 +39,7 @@ and any unbounded-latest resolution endpoint the client can query.
 | pypi-proxy         | `/simple/{pkg}/` (PEP 503 HTML index), `/pypi/{pkg}/json` and `/pypi/{pkg}/{ver}/json` (JSON API). `info.version` and `urls` are rewritten to the highest non-blocked version using PEP 440 ordering. |
 | docker-proxy       | `/v2/{name}/tags/list` (filters the `tags` array); `/v2/{name}/manifests/{tag}` (returns 404 `MANIFEST_UNKNOWN` when the tag resolves to a blocked digest or the tag itself is blocked). `/manifests/<digest>` continues through the existing digest-level cooldown check. |
 | go-proxy           | `/{module}/@v/list` (filters the version list); `/{module}/@latest` (rewrites `Version` to the highest non-blocked version if upstream latest is blocked; preserves `Origin`; returns 403 if every version is blocked). |
-| php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json` (per-package version filtering); `/packages.json`, `/repo.json` (root aggregation -- filters inline packages, passes through lazy-providers schemes unchanged). |
+| php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json` (per-package version filtering); `/packages.json`, `/repo.json` (the proxy serves its own root, whose `metadata-url` points at its `/p2/` endpoint, so versions are filtered per package; the upstream root is not fetched). |
 | file-proxy         | **No metadata filtering.** File / raw proxies have no version-resolution semantics -- no tags, no version lists, no packument. Cooldown applies only at the artifact-fetch layer, based on the file's cached-at / remote-modified timestamp relative to the cooldown window. See the dedicated section below. |
 
 ### Hosted-only adapters (out of scope)

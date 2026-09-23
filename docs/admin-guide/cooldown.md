@@ -31,7 +31,7 @@ versions are invisible to client resolvers) as of v2.2.0.
 | pypi-proxy         | `/simple/{pkg}/` and `/pypi/{pkg}/json`. `info.version` + `urls` rewritten using PEP 440 ordering. |
 | docker-proxy       | `/v2/{name}/tags/list` filters the tags array; `/v2/{name}/manifests/{tag}` returns `MANIFEST_UNKNOWN` (404) when the tag is blocked or resolves to a blocked digest. |
 | go-proxy           | `/{module}/@v/list` and `/{module}/@latest`. If `@latest` is blocked, the response is rewritten to the highest non-blocked version; 403 if every version is blocked. |
-| php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json`, and root `/packages.json` / `/repo.json`. Lazy-providers schemes pass through -- per-package documents are filtered when Composer fetches them. |
+| php-proxy (Composer) | `/packages/{vendor}/{pkg}.json` and `/p2/{vendor}/{pkg}.json`. The root `/packages.json` / `/repo.json` is served by the proxy itself and points Composer at `/p2/`, where versions are filtered. |
 | file-proxy         | **No metadata filtering.** See "file-proxy scope" below. |
 
 ### file-proxy scope: artifact-fetch layer only
@@ -290,7 +290,7 @@ curl -sv -u user:token \
 # Composer -- per-package.
 curl -s http://pantera-host:8080/php-proxy/p2/monolog/monolog.json | jq '.packages."monolog/monolog" | keys'
 
-# Composer -- root aggregation (inline packages filtered; lazy-providers pass-through).
+# Composer -- repository root (metadata-url points at the proxy's /p2/ endpoint).
 curl -s http://pantera-host:8080/php-proxy/packages.json | jq .
 
 # Maven -- metadata rewriting.
