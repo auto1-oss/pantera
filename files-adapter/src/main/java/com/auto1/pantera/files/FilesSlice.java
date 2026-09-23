@@ -82,6 +82,11 @@ public final class FilesSlice extends Slice.Wrap {
     private static final String REPO_TYPE = "file";
 
     /**
+     * Request path of a directory listing: ends with a slash.
+     */
+    private static final Pattern DIRECTORY = Pattern.compile(".*/");
+
+    /**
      * Ctor used by Pantera server which knows `Authentication` implementation.
      * @param storage The storage. And default parameters for free access.
      * @param perms Access permissions.
@@ -161,6 +166,16 @@ public final class FilesSlice extends Slice.Wrap {
                                     storage,
                                     BlobListFormat.Standard.HTML,
                                     FilesSlice.HTML_TEXT
+                                )
+                            ),
+                            new RtRulePath(
+                                // A directory path (trailing slash) can never be a
+                                // stored key: list it as plain text for any Accept.
+                                new RtRule.ByPath(FilesSlice.DIRECTORY),
+                                new ListBlobsSlice(
+                                    storage,
+                                    BlobListFormat.Standard.TEXT,
+                                    FilesSlice.PLAIN_TEXT
                                 )
                             ),
                             new RtRulePath(

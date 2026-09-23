@@ -87,15 +87,20 @@ curl -fL --netrc -o tool.tar.gz \
 
 ## Directory Browsing
 
-Pantera supports directory listing for file repositories. Access a directory path in your browser or via curl to see its contents:
+Pantera supports directory listing for file repositories. Request a directory path ending with `/` to get a plain-text list of the files under it (one repository-relative path per line, including files in subdirectories):
 
 ```bash
 # List root contents
-curl http://pantera-host:8080/bin/
+curl -u your-username:your-jwt-token http://pantera-host:8080/bin/
 
 # List a subdirectory
-curl http://pantera-host:8080/bin/releases/
+curl -u your-username:your-jwt-token http://pantera-host:8080/bin/releases/
+
+# Same listing as a JSON array
+curl -u your-username:your-jwt-token -H 'Accept: application/json' http://pantera-host:8080/bin/releases/
 ```
+
+The `Accept` header selects the format: `text/plain` (the default for a path ending with `/`), `application/json`, or `text/html` (a list of links). A browser opening a directory path gets an HTML index page.
 
 You can also browse file repositories through the Management UI by navigating to the repository detail page.
 
