@@ -15,7 +15,6 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.Headers;
-import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
@@ -77,11 +76,11 @@ public final class FileMetaSlice implements Slice {
                         if (exist) {
                             return this.storage.metadata(key)
                                 .thenApply(metadata -> {
-                                    ResponseBuilder builder = ResponseBuilder.from(resp.status())
-                                        .headers(resp.headers())
-                                        .body(resp.body());
-                                    from(metadata).stream().forEach(builder::header);
-                                    return builder.build();
+                                    // Not ResponseBuilder.body(): it would reset the
+                                    // Content-Length of a HEAD response to 0.
+                                    final Headers merged = resp.headers().copy();
+                                    from(metadata).stream().forEach(merged::add);
+                                    return new Response(resp.status(), merged, resp.body());
                                 });
                         }
                         return CompletableFuture.completedFuture(resp);
@@ -103,10 +102,14 @@ public final class FileMetaSlice implements Slice {
         fmtd.put(Meta.OP_MD5, "X-Pantera-MD5");
         fmtd.put(Meta.OP_CREATED_AT, "X-Pantera-CreatedAt");
         fmtd.put(Meta.OP_SIZE, "X-Pantera-Size");
+        // A storage that does not track a field (no MD5 in memory, for one)
+        // simply omits its header instead of failing the whole response.
         return new Headers(
             fmtd.entrySet().stream()
-                .map(entry ->
-                    new Header(entry.getValue(), mtd.read(entry.getKey()).orElseThrow().toString()))
+                .flatMap(
+                    entry -> mtd.read(entry.getKey()).stream()
+                        .map(val -> new Header(entry.getValue(), val.toString()))
+                )
                 .toList()
         );
     }
