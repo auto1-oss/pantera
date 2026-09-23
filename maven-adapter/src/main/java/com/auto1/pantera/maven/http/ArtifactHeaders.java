@@ -13,6 +13,7 @@ package com.auto1.pantera.maven.http;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.ContentFileName;
 import com.auto1.pantera.http.headers.Header;
 
 import java.net.URLConnection;
@@ -48,10 +49,7 @@ final class ArtifactHeaders {
      * @return Headers with content disposition
      */
     private static Header contentDisposition(final Key location) {
-        return new Header(
-            "Content-Disposition",
-            String.format("attachment; filename=\"%s\"", new KeyLastPart(location).get())
-        );
+        return new ContentFileName(new KeyLastPart(location).get());
     }
 
     /**

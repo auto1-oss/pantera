@@ -1395,7 +1395,7 @@ Download an artifact file. Streams the content directly from storage with `Conte
 | `path`    | string | Yes      | Artifact path in the repository |
 
 **Response (200):** Binary file content with headers:
-- `Content-Disposition: attachment; filename="<filename>"`
+- `Content-Disposition: attachment; filename="<filename>"` (RFC 6266: quotes, backslashes, control and non-ASCII characters in the quoted name are replaced by `_`, and `filename*=UTF-8''<percent-encoded name>` carries the exact name whenever it differs)
 - `Content-Type: application/octet-stream`
 - `Content-Length: <size>` (when available)
 
@@ -1451,7 +1451,7 @@ Download an artifact using an HMAC download token instead of JWT authentication.
 | `token`   | string | Yes      | HMAC download token from `/download-token` |
 
 **Response (200):** Binary file content with headers:
-- `Content-Disposition: attachment; filename="<filename>"`
+- `Content-Disposition: attachment; filename="<filename>"` (RFC 6266: quotes, backslashes, control and non-ASCII characters in the quoted name are replaced by `_`, and `filename*=UTF-8''<percent-encoded name>` carries the exact name whenever it differs)
 - `Content-Type: application/octet-stream`
 - `Content-Length: <size>` (when available)
 

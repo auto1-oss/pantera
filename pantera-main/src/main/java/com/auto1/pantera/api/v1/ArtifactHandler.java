@@ -20,6 +20,7 @@ import com.auto1.pantera.api.v1.download.DownloadTokenSupport;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.headers.ContentFileName;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
@@ -784,7 +785,7 @@ public final class ArtifactHandler {
                     ctx.response()
                         .setStatusCode(200)
                         .putHeader("Content-Disposition",
-                            "attachment; filename=\"" + filename + "\"")
+                            new ContentFileName(filename).getValue())
                         .putHeader("Content-Type", "application/octet-stream");
                     if (size >= 0) {
                         ctx.response().putHeader("Content-Length", String.valueOf(size));
@@ -948,7 +949,7 @@ public final class ArtifactHandler {
                     ctx.response()
                         .setStatusCode(200)
                         .putHeader("Content-Disposition",
-                            "attachment; filename=\"" + filename + "\"")
+                            new ContentFileName(filename).getValue())
                         .putHeader("Content-Type", "application/octet-stream");
                     if (size >= 0) {
                         ctx.response().putHeader("Content-Length", String.valueOf(size));
