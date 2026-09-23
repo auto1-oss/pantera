@@ -15,7 +15,6 @@ import com.auto1.pantera.cooldown.CooldownLinkedVersions;
 import com.auto1.pantera.docker.composite.MultiReadDocker;
 import com.auto1.pantera.docker.cooldown.CooldownImageName;
 import com.auto1.pantera.docker.misc.OfficialImageName;
-import com.auto1.pantera.docker.composite.ReadWriteDocker;
 import com.auto1.pantera.docker.http.DockerSlice;
 import com.auto1.pantera.docker.http.TrimmedDocker;
 import com.auto1.pantera.docker.proxy.ProxyDocker;
@@ -160,7 +159,13 @@ public final class DockerProxy implements Slice {
                         cfg.name(),
                         new SubStorage(RegistryRoot.V2, storage)
                     );
-                    return new ReadWriteDocker(new MultiReadDocker(local, proxies), local);
+                    // Read-only for clients: uploads and manifest PUTs
+                    // answer 405 UNSUPPORTED (MultiReadDocker refuses
+                    // writes). Only the CacheDocker writers inside
+                    // `proxies` populate this storage. A ReadWriteDocker
+                    // here let any user with push overwrite a cached
+                    // upstream tag for every puller (B35).
+                    return new MultiReadDocker(local, proxies);
                 }
             )
             .orElse(proxies);

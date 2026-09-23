@@ -85,7 +85,7 @@ docker pull pantera-host:8080/docker-group/library/ubuntu:22.04
 
 ## Push Images
 
-Push images to a local Docker repository:
+Push images to a local Docker repository. Proxy and group repositories are read-only: a push to them fails with `405 UNSUPPORTED` (`docker push` reports `unsupported`).
 
 ### Step 1: Tag the Image
 
@@ -124,6 +124,7 @@ The proxy tries each configured upstream in order until it finds the requested i
 | `http: server gave HTTP response to HTTPS client` | Docker expects HTTPS by default | Add Pantera to `insecure-registries` in `daemon.json` |
 | `unauthorized: authentication required` | Not logged in or token expired | Run `docker login` with a fresh JWT token |
 | `denied: requested access to the resource is denied` | User lacks push permission | Contact admin for write access to the Docker local repository |
+| Push fails with `unsupported` (405) | The target is a proxy or group repository | Push to a local (`docker`) repository instead |
 | `manifest unknown` | Image not cached in proxy yet | Verify the image path matches upstream (include `library/` for official images) |
 | Push fails with `500 Internal Server Error` | Large layer upload timeout | Ask admin to increase `proxy_timeout` and check Nginx `client_max_body_size` |
 | Pull is slow for first request | Image being fetched from upstream for the first time | This is expected; subsequent pulls will be fast from cache |
