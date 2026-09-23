@@ -24,9 +24,11 @@ import com.auto1.pantera.rpm.pkg.Package;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.schedulers.Schedulers;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -72,6 +74,18 @@ public final class AstoRepoAdd {
     }
 
     /**
+     * Writes metadata for the packages already in the repository metadata
+     * (none, for a new repository) without picking up anything waiting in
+     * {@link com.auto1.pantera.rpm.http.RpmUpload#TO_ADD}: those belong to
+     * the upload that stored them, which indexes them itself.
+     * @return Completable action
+     */
+    public CompletionStage<Void> performEmpty() {
+        return new AstoMetadataAdd(this.asto, this.cnfg).perform(Collections.emptyList())
+            .thenCompose(temp -> this.publish(temp, false));
+    }
+
+    /**
      * Performs whole workflow to add items, listed in {@link com.auto1.pantera.rpm.http.RpmUpload#TO_ADD}
      * location, to the repository and metadata files. Returns list with info about added
      * packages.
@@ -100,34 +114,77 @@ public final class AstoRepoAdd {
      * @return Completable action
      */
     private CompletionStage<Void> generateRepomdAndMoveXmls(final Key temp) {
+        return this.publish(temp, true);
+    }
+
+    /**
+     * Creates repomd metadata file and moves the metadata xmls to the
+     * repository under the storage lock, optionally together with the
+     * packages waiting in {@link com.auto1.pantera.rpm.http.RpmUpload#TO_ADD}.
+     * @param temp Temp location of metadata files
+     * @param added Whether to move the waiting packages too
+     * @return Completable action
+     */
+    private CompletionStage<Void> publish(final Key temp, final boolean added) {
         return new AstoCreateRepomd(this.asto, this.cnfg).perform(temp).thenCompose(
             nothing -> new AstoMetadataNames(this.asto, this.cnfg).prepareNames(temp).thenCompose(
                 keys -> {
                     final StorageLock lock = new StorageLock(this.asto, AstoRepoAdd.META);
-                    return lock.acquire().thenCompose(ignored -> this.remove(AstoRepoAdd.META))
-                        .thenCompose(
-                            ignored -> CompletableFuture.allOf(
-                                keys.entrySet().stream().map(
-                                    entry -> this.asto.move(entry.getKey(), entry.getValue())
-                                ).toArray(CompletableFuture[]::new)
-                            )
-                        ).thenCompose(
-                            ignored -> this.asto.list(RpmUpload.TO_ADD)
-                                .thenCompose(
-                                    list -> CompletableFuture.allOf(
-                                        list.stream().map(
-                                            key -> this.asto.move(
-                                                key, AstoRepoAdd.removeTempPart(key)
-                                            )
-                                        ).toArray(CompletableFuture[]::new)
-                                    )
+                    return lock.acquire().thenCompose(
+                        acquired -> this.remove(AstoRepoAdd.META)
+                            .thenCompose(
+                                ignored -> CompletableFuture.allOf(
+                                    keys.entrySet().stream().map(
+                                        entry -> this.asto.move(entry.getKey(), entry.getValue())
+                                    ).toArray(CompletableFuture[]::new)
                                 )
-                        )
-                        .thenCompose(ignored -> lock.release())
-                        .thenCompose(ignored -> this.remove(temp));
+                            ).thenCompose(ignored -> this.moveAdded(added))
+                            .handle(
+                                (ignored, err) -> lock.release().thenCompose(
+                                    released -> AstoRepoAdd.failedIf(err)
+                                )
+                            ).thenCompose(Function.identity())
+                    ).thenCompose(ignored -> this.remove(temp));
                 }
             )
         );
+    }
+
+    /**
+     * Moves the packages waiting in {@link com.auto1.pantera.rpm.http.RpmUpload#TO_ADD}
+     * to the repository.
+     * @param added Whether to move them at all
+     * @return Completable action
+     */
+    private CompletableFuture<Void> moveAdded(final boolean added) {
+        final CompletableFuture<Void> res;
+        if (added) {
+            res = this.asto.list(RpmUpload.TO_ADD).thenCompose(
+                list -> CompletableFuture.allOf(
+                    list.stream().map(
+                        key -> this.asto.move(key, AstoRepoAdd.removeTempPart(key))
+                    ).toArray(CompletableFuture[]::new)
+                )
+            );
+        } else {
+            res = CompletableFuture.allOf();
+        }
+        return res;
+    }
+
+    /**
+     * Completed future, or one failed with the given error.
+     * @param err Error, or null
+     * @return Future
+     */
+    private static CompletionStage<Void> failedIf(final Throwable err) {
+        final CompletionStage<Void> res;
+        if (err == null) {
+            res = CompletableFuture.completedFuture(null);
+        } else {
+            res = CompletableFuture.failedFuture(err);
+        }
+        return res;
     }
 
     /**

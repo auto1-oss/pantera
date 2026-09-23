@@ -29,6 +29,11 @@ import java.util.concurrent.CompletionStage;
  * repository without it, so a new repository was unusable until the first
  * upload.
  *
+ * <p>Generation runs in the repository's {@link RepodataQueue}, which
+ * uploads and deletes also go through, and re-checks for metadata there, so
+ * it never replaces metadata an upload wrote and never contends with an
+ * upload or another read for the {@code repodata/} storage lock.</p>
+ *
  * @since 2.2.9
  */
 final class EmptyRepodataSlice implements Slice {
@@ -77,14 +82,8 @@ final class EmptyRepodataSlice implements Slice {
                     if (exists) {
                         res = CompletableFuture.allOf();
                     } else {
-                        EcsLogger.info("com.auto1.pantera.rpm")
-                            .message("Generating empty repository metadata")
-                            .eventCategory("file")
-                            .eventAction("rpm_metadata_init")
-                            .eventOutcome("success")
-                            .field("repository.name", this.config.name())
-                            .log();
-                        res = new AstoRepoAdd(this.asto, this.config).perform();
+                        res = new RepodataQueue(this.asto).run(this::initialise)
+                            .handle(this::logged);
                     }
                     return res;
                 }
@@ -94,5 +93,59 @@ final class EmptyRepodataSlice implements Slice {
         }
         return ready.toCompletableFuture()
             .thenCompose(nothing -> this.origin.response(line, headers, body));
+    }
+
+    /**
+     * Generate empty metadata unless an upload or another read wrote
+     * metadata while this read waited for the queue. Runs in the
+     * repository's {@link RepodataQueue}.
+     * @return Whether this call generated the metadata
+     */
+    private CompletionStage<Boolean> initialise() {
+        return this.asto.exists(EmptyRepodataSlice.REPOMD).thenCompose(
+            exists -> {
+                final CompletionStage<Boolean> res;
+                if (exists) {
+                    res = CompletableFuture.completedFuture(false);
+                } else {
+                    res = new AstoRepoAdd(this.asto, this.config).performEmpty()
+                        .thenApply(nothing -> true);
+                }
+                return res;
+            }
+        );
+    }
+
+    /**
+     * Log the outcome. A failure is not answered with an error: another node
+     * sharing the storage may hold the metadata lock and be writing the
+     * metadata, so the read serves whatever is stored now (the metadata that
+     * node wrote, or 404 while there is none).
+     * @param created Whether empty metadata was generated
+     * @param err Error, or null
+     * @return Nothing
+     */
+    private Void logged(final Boolean created, final Throwable err) {
+        if (err != null) {
+            EcsLogger.warn("com.auto1.pantera.rpm")
+                .message("Could not generate empty repository metadata; serving what is stored")
+                .eventCategory("file")
+                .eventAction("rpm_metadata_init")
+                .eventOutcome("failure")
+                .field("repository.name", this.config.name())
+                .field("log.source", "application")
+                .error(err)
+                .log();
+        } else if (created) {
+            EcsLogger.info("com.auto1.pantera.rpm")
+                .message("Generated empty repository metadata")
+                .eventCategory("file")
+                .eventAction("rpm_metadata_init")
+                .eventOutcome("success")
+                .field("repository.name", this.config.name())
+                .field("log.source", "application")
+                .log();
+        }
+        return null;
     }
 }

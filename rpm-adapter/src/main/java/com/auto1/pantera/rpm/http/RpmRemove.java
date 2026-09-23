@@ -99,8 +99,9 @@ public final class RpmRemove implements Slice {
                                     queue -> {
                                         final Collection<PackageInfo> infos =
                                             new ArrayList<>(1);
-                                        return new AstoRepoRemove(this.asto, this.cnfg, infos)
-                                            .perform().thenAccept(
+                                        return new RepodataQueue(this.asto).run(
+                                            new AstoRepoRemove(this.asto, this.cnfg, infos)::perform
+                                        ).thenAccept(
                                                 nothing -> infos.forEach(
                                                     item -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                                                         new ArtifactEvent(
@@ -113,7 +114,9 @@ public final class RpmRemove implements Slice {
                                             );
                                     }
                                 ).orElseGet(
-                                    () -> new AstoRepoRemove(this.asto, this.cnfg).perform()
+                                    () -> new RepodataQueue(this.asto).run(
+                                        new AstoRepoRemove(this.asto, this.cnfg)::perform
+                                    )
                                 ).thenApply(ignored -> RsStatus.ACCEPTED);
                             } else if (!valid) {
                                 res = this.asto.delete(temp)
