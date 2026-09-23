@@ -29,8 +29,13 @@ export async function putRepo(name: string, config: Record<string, unknown>): Pr
   await getApiClient().put(`/repositories/${name}`, config)
 }
 
-export async function deleteRepo(name: string): Promise<void> {
-  await getApiClient().delete(`/repositories/${name}`)
+/**
+ * Delete a repository. A large repository's data removal outlives the
+ * request: the server then answers 202 and finishes in the background.
+ */
+export async function deleteRepo(name: string): Promise<'deleted' | 'deleting'> {
+  const res = await getApiClient().delete(`/repositories/${name}`)
+  return res.status === 202 ? 'deleting' : 'deleted'
 }
 
 export async function moveRepo(name: string, newName: string): Promise<void> {

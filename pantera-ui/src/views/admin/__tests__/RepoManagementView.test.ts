@@ -12,7 +12,7 @@ const bulkUpdateAccessPolicyMock = vi.fn()
 
 vi.mock('@/api/repos', () => ({
   listRepos: (...args: unknown[]) => listReposMock(...args),
-  deleteRepo: vi.fn().mockResolvedValue(undefined),
+  deleteRepo: vi.fn().mockResolvedValue('deleted'),
   moveRepo: vi.fn().mockResolvedValue(undefined),
   bulkUpdateAccessPolicy: (...args: unknown[]) => bulkUpdateAccessPolicyMock(...args),
 }))
