@@ -48,6 +48,27 @@ class CatalogSliceGetTest {
         );
     }
 
+    /**
+     * B78: in path-routed mode the repository name is the first path
+     * segment, so the catalog is reachable at {@code /v2/<repo>/_catalog}.
+     */
+    @Test
+    void shouldReturnCatalogUnderRepositoryPrefix() {
+        final byte[] catalog = "{...}".getBytes();
+        ResponseAssert.check(
+            TestDockerAuth.slice(new FakeDocker(() -> new Content.From(catalog)))
+                .response(
+                    new RequestLine(RqMethod.GET, "/v2/docker-local/_catalog"),
+                    TestDockerAuth.headers(), Content.EMPTY
+                )
+                .join(),
+            RsStatus.OK,
+            catalog,
+            new ContentLength(catalog.length),
+            ContentType.json()
+        );
+    }
+
     @Test
     void shouldSupportPagination() {
         final String from = "foo";

@@ -105,6 +105,20 @@ Blob uploads may be monolithic or chunked (several `PATCH` requests with `Conten
 
 ---
 
+## List Images and Tags
+
+```bash
+# Images in a repository (needs the 'catalog' registry permission)
+curl -u 'your-username:your-api-token' http://pantera-host:8080/v2/docker-local/_catalog
+
+# Tags of an image
+curl -u 'your-username:your-api-token' http://pantera-host:8080/v2/docker-local/myapp/tags/list
+```
+
+The catalog is per repository (`/v2/<repo>/_catalog`) and lists names with the repository prefix (`docker-local/myapp`); there is no registry-wide `/v2/_catalog`. Both endpoints page with `?n=<count>&last=<name>`.
+
+---
+
 ## Delete Images
 
 The registry API does not delete: `DELETE /v2/<repo>/<image>/manifests/<reference>` and `DELETE /v2/<repo>/<image>/blobs/<digest>` answer `405 UNSUPPORTED` (so `skopeo delete` and `crane delete` report the operation as unsupported, not the image as missing).

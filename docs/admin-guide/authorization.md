@@ -73,6 +73,8 @@ docker_registry_permissions:
 | Value | Description |
 |-------|-------------|
 | `base` | Access the Docker V2 API base endpoint |
+| `catalog` | List the images of a repository: `GET /v2/<repo>/_catalog` |
+| `*` | Both of the above |
 
 ### all_permission
 

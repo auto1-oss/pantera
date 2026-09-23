@@ -1431,7 +1431,7 @@ User files are YAML files stored under the policy storage path, typically inside
 |---------------|-------|--------|
 | `adapter_basic_permissions` | Per-repository | `read`, `write`, `delete`, `*` (all) |
 | `docker_repository_permissions` | Per-registry, per-repo | `pull`, `push`, `overwrite`, `*` |
-| `docker_registry_permissions` | Per-registry | `base` |
+| `docker_registry_permissions` | Per-registry | `base`, `catalog`, `*` |
 | `all_permission` | Global | `{}` (grants everything) |
 
 ### Example User Files
@@ -1521,7 +1521,7 @@ permissions:
 |----------------|-------------|----------------|
 | `adapter_basic_permissions` | `<repo_name>` -> list | `read`, `write`, `delete`, `*` |
 | `docker_repository_permissions` | `<registry>` -> `<repo>` -> list | `pull`, `push`, `overwrite`, `*` |
-| `docker_registry_permissions` | `<registry>` -> list | `base` |
+| `docker_registry_permissions` | `<registry>` -> list | `base`, `catalog`, `*` |
 | `all_permission` | `{}` | Grants unrestricted access to all repositories |
 
 Use `"*"` as a wildcard to match all repositories or registries.
