@@ -29,6 +29,10 @@ twine upload --repository-url http://localhost:8081/test_prefix/api/pypi/pypi \
 
 ## Running
 
+`test.sh` and the pytest suite both read the index from `PANTERA_URL`
+(default: the dev stack's `pypi_group` with the sample credentials), e.g.
+`PANTERA_URL=http://user:token@localhost:8081/test_prefix/api/pypi/pypi_group/simple/ ./test.sh`.
+
 ```bash
 cd pantera-main/docker-compose/pantera/artifacts/python-uv
 
