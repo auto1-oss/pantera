@@ -8,7 +8,7 @@
  *
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
-package com.auto1.pantera.composer.http.proxy;
+package com.auto1.pantera.pypi.http;
 
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
@@ -32,14 +32,14 @@ import org.junit.jupiter.api.Test;
  * timestamp (S3 before 2.2.9, vertx-file, in-memory) is treated as stale —
  * never as fresh forever.
  *
- * @since 0.4
+ * @since 2.2.9
  */
 final class CacheTimeControlTest {
 
     /**
      * Cached item key.
      */
-    private static final Key ITEM = new Key.From("p2/vendor/package.json");
+    private static final Key ITEM = new Key.From("requests/index.html");
 
     @Test
     void freshWhenUpdatedWithinTtl() {

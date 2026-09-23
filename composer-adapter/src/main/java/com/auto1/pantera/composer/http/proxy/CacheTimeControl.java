@@ -12,6 +12,7 @@ package com.auto1.pantera.composer.http.proxy;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.Remote;
@@ -71,21 +72,15 @@ final class CacheTimeControl implements CacheControl {
                     if (exists) {
                         res = this.storage.metadata(item)
                             .thenApply(
-                                metadata -> {
-                                    // Try to get last updated time from filesystem
-                                    final Instant updatedAt = metadata.read(
-                                        raw -> {
-                                            if (raw.containsKey("updated-at")) {
-                                                return Instant.parse(raw.get("updated-at"));
-                                            }
-                                            // Fallback: assume valid if no timestamp
-                                            return Instant.now();
-                                        }
-                                    );
-                                    final Duration age = Duration.between(updatedAt, Instant.now());
-                                    final boolean valid = age.compareTo(this.expiration) < 0;
-                                    return valid;
-                                }
+                                // A storage that reports no updated-at gives no
+                                // evidence of freshness: treat the entry as
+                                // stale (refresh) rather than fresh forever.
+                                metadata -> metadata.read(Meta.OP_UPDATED_AT)
+                                    .map(
+                                        updated -> Duration.between(updated, Instant.now())
+                                            .compareTo(this.expiration) < 0
+                                    )
+                                    .orElse(false)
                             );
                     } else {
                         res = CompletableFuture.completedFuture(false);
