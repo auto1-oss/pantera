@@ -1087,7 +1087,7 @@ repo:
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `url` | string | Yes | -- | Public URL |
+| `url` | string | Yes | -- | Client-facing URL of the repository; anaconda-client uploads are sent to upload URLs built from it |
 
 ```yaml
 repo:

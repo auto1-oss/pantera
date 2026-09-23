@@ -355,6 +355,16 @@ curl -fsS -H 'Authorization: token your-api-token' \
   "http://pantera-host:8080/my-conda/$SUBDIR/$(basename "$PKG")"
 ```
 
+`anaconda upload` works too. Point anaconda-client at the repository and log in with your Pantera credentials:
+
+```bash
+anaconda config --set url http://pantera-host:8080/my-conda
+anaconda login --username your-username --password your-api-token
+anaconda upload conda-bld/noarch/my-package-1.0.0-0.tar.bz2
+```
+
+anaconda-client posts the package file without credentials, so the authenticated stage step hands it a single-use upload URL. That URL is valid for 10 minutes, for that one file only, and needs WRITE permission on the repository. It is built from the repository's configured `url`, so `url` must be the address clients use.
+
 <details>
 <summary>Server-Side Repository Configuration</summary>
 

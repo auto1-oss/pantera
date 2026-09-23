@@ -28,6 +28,8 @@ import com.auto1.pantera.composer.http.PhpComposer;
 import com.auto1.pantera.conan.ItemTokenizer;
 import com.auto1.pantera.conan.http.ConanSlice;
 import com.auto1.pantera.conda.http.CondaSlice;
+import com.auto1.pantera.conda.http.CondaUrlTokenSlice;
+import com.auto1.pantera.conda.http.UploadTickets;
 import com.auto1.pantera.debian.Config;
 import com.auto1.pantera.debian.http.DebianSlice;
 import com.auto1.pantera.docker.Docker;
@@ -1403,10 +1405,17 @@ public class RepositorySlices {
                 );
                 break;
             case "conda":
-                slice = new CondaSlice(
-                    cfg.storage(), securityPolicy(), authentication(), tokens,
-                    cfg.url().toString(), cfg.name(), artifactEvents(),
-                    this.settings.syncArtifactIndexer()
+                // Conda routes are repository-relative: on the main port the
+                // repository name must be trimmed (package downloads looked
+                // up a key that included it and 404ed); a dedicated port
+                // serves the repository at its root.
+                slice = trimUnlessDedicatedPort(
+                    cfg,
+                    new CondaSlice(
+                        cfg.storage(), securityPolicy(), authentication(), tokens,
+                        cfg.url().toString(), cfg.name(), artifactEvents(),
+                        this.settings.syncArtifactIndexer(), this.condaUploadTickets()
+                    )
                 );
                 break;
             case "conan":
@@ -1771,8 +1780,9 @@ public class RepositorySlices {
      * Present credentials some clients send outside the {@code Authorization}
      * header as that header, so the anonymous-access gate (which only looks
      * at it) lets them through to the adapter's own credential check:
-     * NuGet's {@code X-NuGet-ApiKey}. Nothing is granted here; the adapter
-     * still validates the credential.
+     * conda's {@code /t/<token>/} URL token and NuGet's
+     * {@code X-NuGet-ApiKey}. Nothing is granted here; the adapter still
+     * validates the credential.
      *
      * @param cfg Repository config
      * @param gated Repository slice behind the anonymous-access gate
@@ -1780,10 +1790,28 @@ public class RepositorySlices {
      */
     private static Slice credentialsInClientForm(final RepoConfig cfg, final Slice gated) {
         final Slice res;
-        if ("nuget".equals(cfg.type())) {
+        if ("conda".equals(cfg.type())) {
+            res = new CondaUrlTokenSlice(gated, cfg.port().isEmpty());
+        } else if ("nuget".equals(cfg.type())) {
             res = new NuGetApiKeySlice(gated);
         } else {
             res = gated;
+        }
+        return res;
+    }
+
+    /**
+     * Upload tickets for the anaconda-client form upload, signed with the
+     * cluster-wide RS256 key pair so every node accepts them.
+     *
+     * @return Upload tickets
+     */
+    private UploadTickets condaUploadTickets() {
+        final UploadTickets res;
+        if (this.tokens instanceof com.auto1.pantera.auth.JwtTokens jwt) {
+            res = new UploadTickets(jwt.privateKey(), jwt.publicKey());
+        } else {
+            res = new UploadTickets();
         }
         return res;
     }

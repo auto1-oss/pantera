@@ -14,6 +14,7 @@ import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMappingBuilder;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.auth.JwtTokens;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -28,6 +29,7 @@ import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.settings.repo.Repositories;
 import com.auto1.pantera.test.TestSettings;
 import com.auto1.pantera.test.TestStoragesCache;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -47,8 +49,8 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * Client requests through the real {@link RepositorySlices} wiring on the
  * main port (repository name in the path, anonymous-access gate in front):
- * conan must trim the repository name and NuGet's API key must count as a
- * credential.
+ * conda and conan must trim the repository name, conda's URL token and
+ * NuGet's API key must count as credentials.
  *
  * @since 2.2.9
  */
@@ -80,6 +82,29 @@ final class FormatClientWiringTest {
             null, null, null
         );
         this.jwt = this.tokens.generate(new AuthUser("alice", "test"));
+    }
+
+    @Test
+    void condaPackageDownloadsOnMainPortWithUrlToken() throws Exception {
+        new FileStorage(this.tmp).save(
+            new Key.From("my-conda", "linux-64", "pkg-1.0-0.tar.bz2"),
+            new Content.From("package bytes".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        final Response rsp = this.slices(
+            "my-conda", this.repo("conda").add("url", "http://localhost/my-conda")
+        ).slice(new Key.From("my-conda"), 8080).response(
+            new RequestLine(
+                RqMethod.GET,
+                String.format("/my-conda/t/%s/linux-64/pkg-1.0-0.tar.bz2", this.jwt)
+            ),
+            Headers.EMPTY, Content.EMPTY
+        ).get(30, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "status", rsp.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "body", rsp.body().asString(), new IsEqual<>("package bytes")
+        );
     }
 
     @Test
