@@ -71,6 +71,13 @@ composer require vendor/package
 
 Pantera resolves packages through the group repository, checking your local repository first and then falling through to the proxied upstream (Packagist).
 
+How a group resolves package metadata:
+
+- Local (hosted) members are always asked before proxy members, whatever the member order in the group.
+- A package that exists in a local member belongs to that member. The group never asks a proxy member about it, including its `dev-*` branches, so Packagist cannot add versions to a private package and private package names are not sent upstream.
+- A `403` from a member is returned as `403`. A group reader also needs read permission on the member repositories.
+- When a member cannot answer (for example, the upstream is down) and no other member has the package, the group returns `503` with `Retry-After` instead of `404`.
+
 ---
 
 ## Publish Packages

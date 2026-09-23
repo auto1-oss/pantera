@@ -1205,7 +1205,11 @@ public class RepositorySlices {
                             composerDelegate,
                             this::slice, cfg.name(), cfg.members(), port,
                             this.settings.prefixes().prefixes().stream()
-                                .findFirst().orElse("")
+                                .findFirst().orElse(""),
+                            // Proxy (or proxy-containing) members are asked
+                            // for p2 metadata only after the hosted members
+                            // have been ruled out as owners of the name.
+                            proxyMembers(cfg.members())
                         ),
                         authentication(),
                         tokens.auth(),
