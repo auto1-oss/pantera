@@ -183,7 +183,11 @@ public final class UserDao implements CrudUsers {
                     ps.setString(5, ssoSubject);
                     ps.setString(6, pass);
                     ps.setString(7, email);
-                    ps.setString(8, provider);
+                    // An update without an explicit type (e.g. a roles-only
+                    // edit from the UI) keeps the stored provider: turning an
+                    // SSO user into "local" made the 2.2.9 SSO identity
+                    // binding reject that user's next login.
+                    ps.setString(8, info.containsKey("type") ? provider : null);
                     ps.setString(9, ssoSubject);
                     ps.executeUpdate();
                 }

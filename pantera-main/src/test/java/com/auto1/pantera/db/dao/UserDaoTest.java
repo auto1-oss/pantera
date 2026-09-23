@@ -99,6 +99,28 @@ class UserDaoTest {
     }
 
     @Test
+    void updateWithoutTypeKeepsTheSsoProvider() {
+        // A roles-only save from the UI carries no "type": it must not turn
+        // an Okta user into a local one (the SSO identity binding would then
+        // reject the user's next Okta login).
+        this.dao.addOrUpdate(
+            Json.createObjectBuilder().add("type", "okta").add("email", "o@example.com").build(),
+            "okta-user"
+        );
+        this.dao.addOrUpdate(
+            Json.createObjectBuilder().add("roles", Json.createArrayBuilder()).build(),
+            "okta-user"
+        );
+        assertEquals("okta", this.dao.get("okta-user").get().getString("auth_provider"));
+    }
+
+    @Test
+    void newUserWithoutTypeIsLocal() {
+        this.dao.addOrUpdate(Json.createObjectBuilder().add("pass", "secret123").build(), "plain-user");
+        assertEquals("local", this.dao.get("plain-user").get().getString("auth_provider"));
+    }
+
+    @Test
     void enablesAndDisablesUser() {
         addTestUser("dave");
         this.dao.disable("dave");
