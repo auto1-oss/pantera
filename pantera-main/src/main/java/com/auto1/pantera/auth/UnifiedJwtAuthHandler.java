@@ -164,6 +164,21 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
     }
 
     /**
+     * Token issue time at the best precision it carries: the millisecond
+     * {@code iat_ms} claim Pantera stamps since 2.2.9, else the one-second
+     * JWT {@code iat} (B45).
+     * @param decoded Verified token
+     * @return Issue time, or {@code null} when the token has neither claim
+     */
+    private static java.time.Instant issuedAt(final DecodedJWT decoded) {
+        final Long millis = decoded.getClaim(AuthTokenRest.IAT_MS).asLong();
+        if (millis != null) {
+            return java.time.Instant.ofEpochMilli(millis);
+        }
+        return decoded.getIssuedAtAsInstant();
+    }
+
+    /**
      * Perform full token validation: signature, expiry, required claims, and
      * type-specific revocation/DB checks.
      * @param token JWT string
@@ -192,7 +207,7 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
             case ACCESS:
                 if (this.blocklist != null
                     && (this.blocklist.isRevokedJti(jti)
-                        || this.blocklist.isRevokedUser(sub, decoded.getIssuedAtAsInstant()))) {
+                        || this.blocklist.isRevokedUser(sub, UnifiedJwtAuthHandler.issuedAt(decoded)))) {
                     EcsLogger.info("com.auto1.pantera.auth")
                         .message("Access token rejected: blocklisted")
                         .eventCategory("authentication")

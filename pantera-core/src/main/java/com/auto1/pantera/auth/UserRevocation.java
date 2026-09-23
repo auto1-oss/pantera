@@ -19,10 +19,14 @@ import java.time.temporal.ChronoUnit;
  * fresh login after a password change or an admin "revoke sessions" — are
  * not affected.
  *
- * <p>JWT {@code iat} has one-second resolution, so the comparison is made
- * at whole seconds: a token issued in the same second as the revocation is
- * treated as issued after it. Rejecting it instead would lock out a client
- * that re-authenticates immediately (the UI does, after a password change).</p>
+ * <p>The comparison is made at millisecond precision. Pantera stamps every
+ * token it issues with a millisecond issue time ({@code iat_ms}) next to the
+ * one-second JWT {@code iat}; comparing at whole seconds let a token issued
+ * earlier in the same second as the revocation survive it (B45), while the
+ * millisecond claim still accepts the immediate re-login that follows a
+ * password change. A token carrying only the one-second {@code iat} (issued
+ * before 2.2.9) is compared at its truncated second, so one issued in the
+ * revocation's second is conservatively treated as revoked.</p>
  *
  * @param revokedAt When the revocation was issued
  * @param expiresAt When the entry lapses (tokens older than that are expired anyway)
@@ -33,7 +37,8 @@ public record UserRevocation(Instant revokedAt, Instant expiresAt) {
     /**
      * Whether a token issued at {@code issuedAt} is revoked by this entry.
      *
-     * @param issuedAt Token {@code iat}; {@code null} (no claim) counts as revoked
+     * @param issuedAt Token issue time (millisecond precision when the token
+     *     carries it); {@code null} (no claim) counts as revoked
      * @param now Current time
      * @return True if the token must be rejected
      */
@@ -42,7 +47,7 @@ public record UserRevocation(Instant revokedAt, Instant expiresAt) {
             return false;
         }
         return issuedAt == null
-            || issuedAt.isBefore(this.revokedAt.truncatedTo(ChronoUnit.SECONDS));
+            || issuedAt.isBefore(this.revokedAt.truncatedTo(ChronoUnit.MILLIS));
     }
 
     /**

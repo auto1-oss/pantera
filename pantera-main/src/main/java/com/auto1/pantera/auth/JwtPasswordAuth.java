@@ -147,8 +147,18 @@ public final class JwtPasswordAuth implements Authentication {
             // authorize as a repository password.
             final TokenType type = TokenType.fromClaim(principal.getString(AuthTokenRest.TYPE));
             final String jti = principal.getString(AuthTokenRest.JTI);
+            // Millisecond issue time when present (B45), else the
+            // one-second iat.
+            final Long iatMs = principal.getLong(AuthTokenRest.IAT_MS);
             final Long iat = principal.getLong("iat");
-            final Instant issuedAt = iat == null ? null : Instant.ofEpochSecond(iat);
+            final Instant issuedAt;
+            if (iatMs != null) {
+                issuedAt = Instant.ofEpochMilli(iatMs);
+            } else if (iat != null) {
+                issuedAt = Instant.ofEpochSecond(iat);
+            } else {
+                issuedAt = null;
+            }
             if (!this.gate.allows(type, jti, tokenSubject, issuedAt)) {
                 EcsLogger.warn("com.auto1.pantera.auth")
                     .message("JWT-as-password rejected: token revoked, disabled, or wrong type")

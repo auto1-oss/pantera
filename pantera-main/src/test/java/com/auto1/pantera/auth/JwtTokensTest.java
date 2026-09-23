@@ -57,6 +57,53 @@ class JwtTokensTest {
     }
 
     @Test
+    void userRevocationRejectsEveryEarlierTokenEvenInTheSameSecond() {
+        // B45: a session issued in the same second as a revocation (password
+        // change, admin revoke) survived it and could mint API tokens.
+        final java.util.Map<String, UserRevocation> revs =
+            new java.util.concurrent.ConcurrentHashMap<>();
+        final RevocationBlocklist blocklist = new RevocationBlocklist() {
+            @Override
+            public boolean isRevokedJti(final String jti) {
+                return false;
+            }
+
+            @Override
+            public boolean isRevokedUser(final String username, final java.time.Instant issued) {
+                final UserRevocation rev = revs.get(username);
+                return rev != null && rev.revokes(issued, java.time.Instant.now());
+            }
+
+            @Override
+            public void revokeJti(final String jti, final int ttl) {
+                // not exercised
+            }
+
+            @Override
+            public void revokeUser(final String username, final int ttl) {
+                final java.time.Instant now = java.time.Instant.now();
+                revs.put(username, new UserRevocation(now, now.plusSeconds(ttl)));
+            }
+        };
+        final JwtTokens tokens =
+            new JwtTokens(this.privateKey, this.publicKey, null, null, blocklist);
+        final AuthUser alice = new AuthUser("alice", "local");
+        final String before = tokens.generate(alice);
+        blocklist.revokeUser("alice", 3600);
+        final String after = tokens.generate(alice);
+        MatcherAssert.assertThat(
+            "the session issued before the revocation must be rejected",
+            tokens.auth().user(before).toCompletableFuture().join().isPresent(),
+            new org.hamcrest.core.IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the login right after the revocation must be accepted",
+            tokens.auth().user(after).toCompletableFuture().join().isPresent(),
+            new org.hamcrest.core.IsEqual<>(true)
+        );
+    }
+
+    @Test
     void generatesToken() {
         MatcherAssert.assertThat(
             new JwtTokens(this.privateKey, this.publicKey, null, null, null)

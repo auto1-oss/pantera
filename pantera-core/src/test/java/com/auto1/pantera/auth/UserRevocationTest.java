@@ -41,14 +41,24 @@ final class UserRevocationTest {
     }
 
     @Test
-    void acceptsTokenIssuedInTheSameSecondOrLater() {
+    void revokesTokenIssuedEarlierInTheSameSecond() {
+        // B45: comparing at whole seconds let a token issued 400 ms before
+        // the revocation (same second) survive it.
         MatcherAssert.assertThat(
-            "Same second (iat is truncated to seconds) must be accepted",
-            REV.revokes(Instant.parse("2026-09-23T14:07:22Z"), AT.plusSeconds(5)),
+            REV.revokes(AT.minusMillis(400), AT.plusSeconds(5)),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void acceptsTokenIssuedAfterTheRevocation() {
+        MatcherAssert.assertThat(
+            "A login later in the same second must be accepted",
+            REV.revokes(AT.plusMillis(100), AT.plusSeconds(5)),
             new IsEqual<>(false)
         );
         MatcherAssert.assertThat(
-            "Later login must be accepted",
+            "A later login must be accepted",
             REV.revokes(Instant.parse("2026-09-23T14:08:00Z"), AT.plusSeconds(60)),
             new IsEqual<>(false)
         );

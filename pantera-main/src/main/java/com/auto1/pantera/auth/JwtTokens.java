@@ -209,15 +209,17 @@ public final class JwtTokens implements Tokens {
         final AuthUser user, final int expirySeconds,
         final UUID jti, final String label
     ) {
+        final Instant now = Instant.now();
         final var builder = JWT.create()
             .withSubject(user.name())
             .withClaim(AuthTokenRest.CONTEXT, user.authContext())
             .withClaim(AuthTokenRest.TYPE, TokenType.API.value())
             .withJWTId(jti.toString())
-            .withIssuedAt(Instant.now());
+            .withIssuedAt(now)
+            .withClaim(AuthTokenRest.IAT_MS, now.toEpochMilli());
         final Instant expiresAt;
         if (expirySeconds > 0) {
-            expiresAt = Instant.now().plusSeconds(expirySeconds);
+            expiresAt = now.plusSeconds(expirySeconds);
             builder.withExpiresAt(expiresAt);
         } else {
             expiresAt = null;
@@ -271,13 +273,15 @@ public final class JwtTokens implements Tokens {
         final int ttl = this.settingsDao != null
             ? this.settingsDao.getInt("access_token_ttl_seconds", 3600)
             : this.defaultAccessTtl;
+        final Instant now = Instant.now();
         return JWT.create()
             .withSubject(user.name())
             .withClaim(AuthTokenRest.CONTEXT, user.authContext())
             .withClaim(AuthTokenRest.TYPE, TokenType.ACCESS.value())
             .withJWTId(UUID.randomUUID().toString())
-            .withIssuedAt(Instant.now())
-            .withExpiresAt(Instant.now().plusSeconds(ttl))
+            .withIssuedAt(now)
+            .withClaim(AuthTokenRest.IAT_MS, now.toEpochMilli())
+            .withExpiresAt(now.plusSeconds(ttl))
             .sign(this.algorithm);
     }
 
@@ -289,13 +293,15 @@ public final class JwtTokens implements Tokens {
             ? this.settingsDao.getInt("refresh_token_ttl_seconds", 604800)
             : this.defaultRefreshTtl;
         final UUID jti = UUID.randomUUID();
-        final Instant expiresAt = Instant.now().plusSeconds(ttl);
+        final Instant now = Instant.now();
+        final Instant expiresAt = now.plusSeconds(ttl);
         final String token = JWT.create()
             .withSubject(user.name())
             .withClaim(AuthTokenRest.CONTEXT, user.authContext())
             .withClaim(AuthTokenRest.TYPE, TokenType.REFRESH.value())
             .withJWTId(jti.toString())
-            .withIssuedAt(Instant.now())
+            .withIssuedAt(now)
+            .withClaim(AuthTokenRest.IAT_MS, now.toEpochMilli())
             .withExpiresAt(expiresAt)
             .sign(this.algorithm);
         if (this.tokenDao != null) {

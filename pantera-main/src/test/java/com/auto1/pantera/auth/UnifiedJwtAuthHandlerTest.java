@@ -276,6 +276,31 @@ class UnifiedJwtAuthHandlerTest {
         );
     }
 
+    @Test
+    void sameSecondTokenIssuedBeforeTheRevocationIsRejected() {
+        // B45: iat has one-second resolution; a token issued earlier in the
+        // same second as the revocation survived it. The millisecond
+        // issue-time claim closes the gap without rejecting the re-login.
+        final InMemoryBlocklist blocklist = new InMemoryBlocklist();
+        final UnifiedJwtAuthHandler guarded =
+            new UnifiedJwtAuthHandler(this.publicKey, null, blocklist);
+        final Instant revoked = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+            .plusMillis(500);
+        blocklist.put("erin", new UserRevocation(revoked, Instant.now().plusSeconds(3600)));
+        MatcherAssert.assertThat(
+            "a token issued 300 ms before the revocation must be rejected",
+            guarded.user(this.accessToken("erin", revoked.minusMillis(300)))
+                .toCompletableFuture().join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "a token issued 200 ms after the revocation must be accepted",
+            guarded.user(this.accessToken("erin", revoked.plusMillis(200)))
+                .toCompletableFuture().join().isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
     private String accessToken(final String sub, final Instant issuedAt) {
         return JWT.create()
             .withSubject(sub)
@@ -283,6 +308,7 @@ class UnifiedJwtAuthHandlerTest {
             .withClaim("type", "access")
             .withJWTId(java.util.UUID.randomUUID().toString())
             .withIssuedAt(issuedAt)
+            .withClaim("iat_ms", issuedAt.toEpochMilli())
             .withExpiresAt(Instant.now().plusSeconds(3600))
             .sign(this.algorithm);
     }
@@ -314,6 +340,10 @@ class UnifiedJwtAuthHandlerTest {
         public void revokeUser(final String username, final int ttlSeconds) {
             final Instant now = Instant.now();
             this.users.put(username, new UserRevocation(now, now.plusSeconds(ttlSeconds)));
+        }
+
+        void put(final String username, final UserRevocation rev) {
+            this.users.put(username, rev);
         }
     }
 }
