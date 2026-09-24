@@ -138,6 +138,10 @@ This release contains security hardening and a broad set of bug fixes across for
   ([@aydasraf](https://github.com/aydasraf))
 - **Audit records carry their own request's correlation.** Records written on pooled worker threads always carry the originating request's `trace.id`, `client.ip`, user and package fields, instead of values left over from an earlier request on the same thread (seen on php-proxy metadata listings and pypi-proxy cache misses).
   ([@aydasraf](https://github.com/aydasraf))
+- **REST deletes keep every format index consistent.** Deleting an artifact or package through the REST API now removes it from the format index of local conda, gem, npm, helm, NuGet, Go and Hex repositories (for gems, `latest_specs` falls back to the highest remaining version), and conda, gem, helm and Hex index updates no longer race with concurrent uploads. Deleting a path whose files are already gone removes its search rows; a path that is neither stored nor indexed answers `404`. Delete Debian and RPM packages with an HTTP `DELETE` on the repository so their indexes are updated.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Search reindex does real work.** `POST /api/v1/search/reindex` now removes index rows of deleted repositories and rebuilds file-system repositories from storage, dropping rows for files that are gone; a concurrent request answers `409`, and the new `GET /api/v1/search/reindex` reports progress. The backfill CLI jar is now `pantera-backfill-<version>-cli.jar`.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
