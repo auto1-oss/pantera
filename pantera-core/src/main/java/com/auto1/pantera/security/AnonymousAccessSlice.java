@@ -19,6 +19,7 @@ import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.WwwAuthenticate;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.rt.RtRule;
@@ -211,7 +212,7 @@ public final class AnonymousAccessSlice implements Slice {
                 ? "anonymous_read_disabled"
                 : "anonymous_write_disabled")
             .field("http.request.method", line.method().value())
-            .field("url.path", line.uri().getPath())
+            .field("url.path", LogSanitizer.sanitizeUrl(line.uri().getPath()))
             .field("repository.name", this.repoName)
             .field("http.response.status_code", 401)
             .field("log.source", "http")

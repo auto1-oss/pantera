@@ -21,6 +21,7 @@ import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.EcsLogEvent;
+import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.observability.StructuredLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.trace.SpanContext;
@@ -322,8 +323,10 @@ public final class EcsLoggingSlice implements Slice {
             this.repoName,
             this.repoType,
             RequestContext.ArtifactRef.EMPTY,
-            line.uri().toString(),
-            line.uri().getPath(),
+            // A /t/<token>/ path segment is a credential (conda channel
+            // tokens, anaconda upload tickets): never log it.
+            LogSanitizer.sanitizeUrl(line.uri().toString()),
+            LogSanitizer.sanitizeUrl(line.uri().getPath()),
             com.auto1.pantera.http.context.Deadline.in(java.time.Duration.ofSeconds(30))
         );
     }
