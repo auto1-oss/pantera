@@ -48,6 +48,7 @@ final class GroupMergeSlicesTest {
         final List<String> paths = new ArrayList<>();
         final JsonArray keys = GroupMergeSlicesTest.json(
             new GroupKeysSlice(
+                "npm-group",
                 List.of("npm-local", "npm-proxy", "npm-down"),
                 List.of(
                     GroupMergeSlicesTest.member(paths, 200, "{\"keys\":[{\"keyid\":\"SHA256:local\"}]}"),
@@ -78,6 +79,7 @@ final class GroupMergeSlicesTest {
     void searchMergesHostedAndUpstreamResults() {
         final JsonObject body = GroupMergeSlicesTest.json(
             new GroupSearchSlice(
+                "npm-group",
                 List.of("npm-local", "npm-proxy"),
                 List.of(
                     GroupMergeSlicesTest.member(
@@ -114,6 +116,7 @@ final class GroupMergeSlicesTest {
     @Test
     void keysAnswerServiceUnavailableWhenEveryMemberFails() {
         final Response response = new GroupKeysSlice(
+            "npm-group",
             List.of("npm-local", "npm-proxy", "npm-broken"),
             List.of(
                 GroupMergeSlicesTest.member(new ArrayList<>(), 500, ""),
@@ -141,8 +144,34 @@ final class GroupMergeSlicesTest {
     }
 
     @Test
+    void allMembersUnavailableLogNamesTheGroupAndTheTrace() {
+        try (LogCapture logs = LogCapture.of("com.auto1.pantera.npm")) {
+            new GroupKeysSlice(
+                "qa-npm-group",
+                List.of("npm-proxy"),
+                List.of(GroupMergeSlicesTest.member(new ArrayList<>(), 503, ""))
+            ).response(
+                new RequestLine(RqMethod.GET, "/-/npm/v1/keys"),
+                Headers.from("X-Pantera-Ctx-Trace-Id", "trace-r25"),
+                Content.EMPTY
+            ).join();
+            final java.util.Map<String, Object> line =
+                logs.action("group_all_members_unavailable").get(0);
+            MatcherAssert.assertThat(
+                "the log names the group that answered 503",
+                line.get("repository.name"), new IsEqual<>("qa-npm-group")
+            );
+            MatcherAssert.assertThat(
+                "the log carries the request's trace id",
+                line.get("trace.id"), new IsEqual<>("trace-r25")
+            );
+        }
+    }
+
+    @Test
     void searchAnswersServiceUnavailableWhenEveryMemberFails() {
         final Response response = new GroupSearchSlice(
+            "npm-group",
             List.of("npm-local", "npm-proxy"),
             List.of(
                 GroupMergeSlicesTest.member(new ArrayList<>(), 503, ""),
@@ -167,6 +196,7 @@ final class GroupMergeSlicesTest {
     void searchIsAnEmptySuccessWhenMembersOnlyDecline() {
         MatcherAssert.assertThat(
             new GroupSearchSlice(
+                "npm-group",
                 List.of("npm-local", "npm-proxy"),
                 List.of(
                     GroupMergeSlicesTest.member(new ArrayList<>(), 404, ""),
@@ -183,6 +213,7 @@ final class GroupMergeSlicesTest {
     @Test
     void keysToleratesANonStringKeyid() {
         final Response response = new GroupKeysSlice(
+            "npm-group",
             List.of("npm-local", "npm-proxy"),
             List.of(
                 GroupMergeSlicesTest.member(new ArrayList<>(), 200, "{\"keys\":[{\"keyid\":42}]}"),
@@ -212,6 +243,7 @@ final class GroupMergeSlicesTest {
         final CountDownLatch subscribed = new CountDownLatch(1);
         final Response response = new GroupKeysSlice(
             new MemberFanout(
+                "npm-group",
                 List.of("npm-local", "npm-slow"),
                 List.of(
                     GroupMergeSlicesTest.member(

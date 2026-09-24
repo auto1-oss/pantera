@@ -61,11 +61,12 @@ public final class GroupSearchSlice implements Slice {
 
     /**
      * Ctor.
+     * @param group Group repository name
      * @param names Member repository names
      * @param slices Member repository slices, same order
      */
-    public GroupSearchSlice(final List<String> names, final List<Slice> slices) {
-        this(new MemberFanout(names, slices));
+    public GroupSearchSlice(final String group, final List<String> names, final List<Slice> slices) {
+        this(new MemberFanout(group, names, slices));
     }
 
     /**

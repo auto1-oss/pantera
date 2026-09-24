@@ -48,9 +48,23 @@ migration; it is purely noise at this point.
   circuit, never 404.
 - A cached "not found" is per file: a missing `-sources.jar` or
   `.module` never hides the `.jar` or `.pom` of the same version.
-- A member redirect (`3xx`) does not count as a member failure and is
-  not relayed. pypi groups rewrite `/simple/<name>/` to the PEP 503
-  normalised name before asking members.
+- When the index names the members that hold the file and they all fail,
+  the group answers by the kind of failure: `500` with
+  `X-Pantera-Fault: storage-unavailable` when a hosted member's storage
+  failed, `502` with a `proxies-failed` fault when a proxy member's
+  upstream failed, and `503` with `Retry-After` when the proxy member's
+  upstream circuit breaker is open.
+- A member redirect (`3xx`) or a member that does not support the method
+  (`405`, for example `HEAD` on a proxy endpoint that only answers `GET`)
+  does not count as a member failure and is not relayed. pypi groups
+  rewrite `/simple/<name>/` to the PEP 503 normalised name before asking
+  members.
+- A group always serves through its members' current configuration.
+  Editing, re-pointing or deleting a member (or changing the members of a
+  nested group) applies to every group that contains it at once; the
+  groups do not need to be saved again.
+- A group answers `405 Method Not Allowed` with `Allow: GET, HEAD` to
+  writes.
 - go groups merge `<module>/@v/list` across all members, so the list
   holds both the hosted and the upstream versions. The merge follows the
   group member circuit breaker: a member whose circuit is open only

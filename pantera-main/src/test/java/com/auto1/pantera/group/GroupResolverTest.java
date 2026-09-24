@@ -682,6 +682,122 @@ final class GroupResolverTest {
             "Response must have X-Pantera-Fault: storage-unavailable");
     }
 
+    // ---- Index hit on a proxy member: upstream fault, not storage fault ----
+
+    @Test
+    void indexHit_proxyMemberUpstreamFailure_isProxiesFailedNotStorage() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_A)));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, staticSlice(RsStatus.BAD_GATEWAY));
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "a proxy member's upstream failure is a 502",
+            resp.status(), new IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+        MatcherAssert.assertThat(
+            "the fault names the proxies, not the storage",
+            resp.headers().values(FaultTranslator.HEADER_FAULT).get(0).startsWith("proxies-failed"),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void indexHit_proxyMemberCircuitOpen_is503WithRetryAfter() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_A)));
+        final NegativeCache negCache = buildNegativeCache();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, circuitOpenSlice("17"));
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), negCache, slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "an open upstream circuit is temporary unavailability",
+            resp.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the breaker's Retry-After reaches the client",
+            resp.headers().values("Retry-After"), new IsEqual<>(List.of("17"))
+        );
+        MatcherAssert.assertThat(
+            "the answer carries the circuit-open marker",
+            resp.headers().values(
+                com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER
+            ).isEmpty(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "nothing is negative-cached",
+            negCache.isKnown404(new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION)),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void memberRejectingTheMethodIsSkippedWithoutConviction() {
+        final AutoBlockRegistry registry = new AutoBlockRegistry(
+            new AutoBlockSettings(
+                0.5, 1, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+        final MemberSlice proxy = new MemberSlice(
+            PROXY_A, staticSlice(RsStatus.METHOD_NOT_ALLOWED), registry, true
+        );
+        final GroupResolver resolver = new GroupResolver(
+            GROUP,
+            List.of(new MemberSlice(HOSTED, notFoundSlice(), false), proxy),
+            Collections.emptyList(),
+            Optional.of(new RecordingIndex(Optional.of(List.of(PROXY_A)))),
+            REPO_TYPE,
+            Set.of(PROXY_A),
+            buildNegativeCache(),
+            java.util.concurrent.ForkJoinPool.commonPool()
+        );
+        final Response resp = resolver.response(
+            new RequestLine("HEAD", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "a member that cannot answer the method is not a server fault",
+            resp.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "the member is not convicted for rejecting the method",
+            proxy.isCircuitOpen(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void membersAreResolvedPerRequestSoConfigChangesApply() {
+        final AtomicInteger generation = new AtomicInteger(0);
+        final SliceResolver resolver = (name, port, depth) -> {
+            final int gen = generation.get();
+            return (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.ok().textBody("gen-" + gen).build()
+            );
+        };
+        final GroupResolver group = new GroupResolver(
+            resolver, GROUP, List.of(PROXY_A), 8080, 0, 10L,
+            Collections.emptyList(), Optional.empty(), Set.of(PROXY_A), REPO_TYPE,
+            buildNegativeCache(), null, Runnable::run
+        );
+        group.response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY)
+            .join().body().asString();
+        generation.set(1);
+        MatcherAssert.assertThat(
+            "the group serves through the member's current slice",
+            group.response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY)
+                .join().body().asString(),
+            new IsEqual<>("gen-1")
+        );
+    }
+
     // ---- No index configured: full two-phase fanout ----
 
     @Test

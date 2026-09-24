@@ -304,19 +304,42 @@ public final class GroupResolver implements Slice {
             if (reg != null) {
                 out.add(new MemberSlice(
                     name,
-                    resolver.slice(new Key.From(name), port, 0),
+                    currentMemberSlice(resolver, name, port),
                     reg,
                     safeProxies.contains(name)
                 ));
             } else {
                 out.add(new MemberSlice(
                     name,
-                    resolver.slice(new Key.From(name), port, 0),
+                    currentMemberSlice(resolver, name, port),
                     safeProxies.contains(name)
                 ));
             }
         }
         return out;
+    }
+
+    /**
+     * Member slice that resolves the member's CURRENT repository slice on
+     * every request instead of capturing the one that existed when the
+     * group was built. The resolver is a cache lookup, so this is cheap;
+     * it makes a member's config change (a re-pointed upstream, a new
+     * storage, a deleted repository) apply to every group that embeds the
+     * member as soon as the member itself is invalidated, and it never
+     * serves through a slice whose upstream client lease was released on
+     * eviction.
+     *
+     * @param resolver Slice resolver
+     * @param name Member repository name
+     * @param port Server port
+     * @return Delegating slice
+     */
+    private static Slice currentMemberSlice(
+        final SliceResolver resolver, final String name, final int port
+    ) {
+        final Key key = new Key.From(name);
+        return (line, headers, body) -> resolver.slice(key, port, 0)
+            .response(line, headers, body);
     }
 
     /**
@@ -351,8 +374,10 @@ public final class GroupResolver implements Slice {
         final boolean isReadOperation = "GET".equals(method) || "HEAD".equals(method);
         final boolean isNpmAudit = "POST".equals(method) && path.contains("/-/npm/v1/security/");
         if (!isReadOperation && !isNpmAudit) {
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.methodNotAllowed().build()
+            return body.asBytesFuture().thenApply(
+                ignored -> ResponseBuilder.methodNotAllowed()
+                    .header("Allow", "GET, HEAD")
+                    .build()
             );
         }
 
@@ -989,7 +1014,8 @@ public final class GroupResolver implements Slice {
         // index-vs-storage drift behind a fanout.
         final Set<String> tried = new HashSet<>(excluded);
         targeted.forEach(m -> tried.add(m.name()));
-        return querySequentially(targeted, line, headers, body, true, pinKey)
+        final WalkState walk = new WalkState();
+        return querySequentially(targeted, line, headers, body, true, pinKey, walk)
             .thenCompose(resp -> {
                 if (isAuthoritative(resp)) {
                     return CompletableFuture.completedFuture(resp);
@@ -1016,27 +1042,56 @@ public final class GroupResolver implements Slice {
                     );
                 }
                 if (resp.status().serverError()) {
-                    drainBody(resp.body());
-                    EcsLogger.warn("com.auto1.pantera.group")
-                        .message("Index-hit member(s) failed with status "
-                            + resp.status().code() + "; answering 500 storage-unavailable")
-                        .eventCategory("web")
-                        .eventAction("group_targeted_read_failed")
-                        .eventOutcome("failure")
-                        .field("repository.name", this.group)
-                        .field("url.path", line.uri().getPath())
-                        .field("http.response.status_code", resp.status().code())
-                        .field("log.source", "application")
-                        .log();
                     return CompletableFuture.completedFuture(
-                        FaultTranslator.translate(
-                            new Fault.StorageUnavailable(null, line.uri().getPath()),
-                            null
-                        )
+                        this.targetedReadFailure(resp, walk, line)
                     );
                 }
                 return CompletableFuture.completedFuture(resp);
             });
+    }
+
+    /**
+     * Answer for an index-hit read whose members could not serve the file.
+     * An open upstream circuit relays the walk's 503 + Retry-After + marker
+     * (temporarily unavailable, never a storage fault); a hosted member's
+     * failure is a storage fault (500); a proxy member's failure is an
+     * upstream fault (502 {@code proxies-failed}).
+     *
+     * @param resp Walk terminal (5xx)
+     * @param walk Walk state of the targeted read
+     * @param line Request line
+     * @return Response
+     */
+    private Response targetedReadFailure(
+        final Response resp, final WalkState walk, final RequestLine line
+    ) {
+        if (!resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+            return resp;
+        }
+        drainBody(resp.body());
+        final Fault fault;
+        final String answer;
+        if (walk.hostedFailed.get()) {
+            fault = new Fault.StorageUnavailable(null, line.uri().getPath());
+            answer = "500 storage-unavailable";
+        } else {
+            fault = new Fault.AllProxiesFailed(
+                this.group, java.util.List.of(), java.util.Optional.empty()
+            );
+            answer = "502 proxies-failed";
+        }
+        EcsLogger.warn("com.auto1.pantera.group")
+            .message("Index-hit member(s) failed with status "
+                + resp.status().code() + "; answering " + answer)
+            .eventCategory("web")
+            .eventAction("group_targeted_read_failed")
+            .eventOutcome("failure")
+            .field("repository.name", this.group)
+            .field("url.path", line.uri().getPath())
+            .field("http.response.status_code", resp.status().code())
+            .field("log.source", "application")
+            .log();
+        return FaultTranslator.translate(fault, null);
     }
 
     /**
@@ -1439,7 +1494,7 @@ public final class GroupResolver implements Slice {
             if (err != null) {
                 if (!(err instanceof java.util.concurrent.CancellationException)) {
                     member.recordFailure();
-                    walk.anyServerError.set(true);
+                    walk.noteFailure(member);
                     recordMemberOutcome(member, "error", memberLatency);
                 }
                 tryNextSequentialMember(iter, line, headers, requestBytes,
@@ -1505,18 +1560,25 @@ public final class GroupResolver implements Slice {
                 });
                 return;
             }
-            if (status.redirection()) {
+            if (status.redirection() || status == RsStatus.METHOD_NOT_ALLOWED) {
                 // A member redirect (e.g. a PEP 503 hosted index answering
                 // 301 to the normalised project name) is not a failure and
                 // not an authoritative absence: its Location is member-
-                // relative, so it cannot be relayed through the group. Skip
-                // the member without conviction and mark the walk so a
+                // relative, so it cannot be relayed through the group. A
+                // member that does not support the method (405, e.g. HEAD
+                // on a GET-only endpoint) is not failing either. Skip the
+                // member without conviction and mark the walk so a
                 // terminal 404 is not negative-cached.
                 drainBody(resp.body());
                 walk.anyUnverified.set(true);
-                recordMemberOutcome(member, "redirect", memberLatency);
+                recordMemberOutcome(
+                    member,
+                    status.redirection() ? "redirect" : "method_not_allowed",
+                    memberLatency
+                );
                 EcsLogger.debug("com.auto1.pantera.group")
-                    .message("Group member answered a redirect, trying next")
+                    .message("Group member answered " + status.code()
+                        + " (redirect or unsupported method), trying next")
                     .eventCategory("web")
                     .eventAction("group_member_fallthrough")
                     .field("repository.name", this.group)
@@ -1556,7 +1618,7 @@ public final class GroupResolver implements Slice {
             // Other 4xx or any 5xx -> record failure, cascade.
             drainBody(resp.body());
             member.recordFailure();
-            walk.anyServerError.set(true);
+            walk.noteFailure(member);
             recordMemberOutcome(member, "error", memberLatency);
             EcsLogger.warn("com.auto1.pantera.group")
                 .message("Group member returned non-2xx, trying next")
@@ -1667,6 +1729,10 @@ public final class GroupResolver implements Slice {
         private final java.util.concurrent.atomic.AtomicBoolean anyServerError =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
+        /** A hosted (non-proxy) member genuinely 5xx'd or threw. */
+        private final java.util.concurrent.atomic.AtomicBoolean hostedFailed =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
         /** A member was skipped due to an open circuit (either layer). */
         private final java.util.concurrent.atomic.AtomicBoolean skippedOpen =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -1698,6 +1764,17 @@ public final class GroupResolver implements Slice {
 
         WalkState(final boolean partial) {
             this.partial = partial;
+        }
+
+        /**
+         * Record a member's genuine failure.
+         * @param member Failed member
+         */
+        void noteFailure(final MemberSlice member) {
+            this.anyServerError.set(true);
+            if (!member.isProxy()) {
+                this.hostedFailed.set(true);
+            }
         }
 
         /**

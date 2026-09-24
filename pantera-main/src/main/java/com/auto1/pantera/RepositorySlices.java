@@ -432,10 +432,69 @@ public class RepositorySlices {
      * @param name Repository name
      */
     public void invalidateRepo(final String name) {
+        final Set<String> stale = new HashSet<>();
+        stale.add(name);
+        final Set<String> groups = this.groupsEmbedding(name);
+        stale.addAll(groups);
         this.slices.asMap().keySet().stream()
-            .filter(k -> k.name().string().equals(name))
+            .filter(k -> stale.contains(k.name().string()))
             .forEach(this.slices::invalidate);
+        if (!groups.isEmpty()) {
+            EcsLogger.info("com.auto1.pantera")
+                .message(
+                    "Repository changed; groups embedding it are rebuilt on next request: "
+                        + String.join(", ", new java.util.TreeSet<>(groups))
+                )
+                .eventCategory("configuration")
+                .eventAction("group_member_config_change")
+                .eventOutcome("success")
+                .field("repository.name", name)
+                .field("log.source", "application")
+                .log();
+        }
         this.syncCooldownOverride(name);
+    }
+
+    /**
+     * Slice that serves through the repository's CURRENT slice, resolved on
+     * every request, so a group embedding it follows the repository's
+     * config changes.
+     *
+     * @param name Repository name
+     * @param port Server port
+     * @return Delegating slice
+     */
+    private Slice currentSlice(final String name, final int port) {
+        final Key key = new Key.From(name);
+        return (line, headers, body) -> this.slice(key, port, 0).response(line, headers, body);
+    }
+
+    /**
+     * Group repositories that embed {@code name}, directly or through
+     * nested groups. A group caches its flattened member list, so a nested
+     * group's membership change must rebuild every enclosing group.
+     *
+     * @param name Repository name
+     * @return Names of the enclosing groups
+     */
+    private Set<String> groupsEmbedding(final String name) {
+        final Set<String> found = new HashSet<>();
+        if (this.repos == null) {
+            return found;
+        }
+        final java.util.Deque<String> pending = new java.util.ArrayDeque<>();
+        pending.push(name);
+        while (!pending.isEmpty()) {
+            final String current = pending.pop();
+            for (final RepoConfig cfg : this.repos.configs()) {
+                if (cfg.type() != null && cfg.type().endsWith("-group")
+                    && cfg.members().contains(current) && found.add(cfg.name())) {
+                    pending.push(cfg.name());
+                }
+            }
+        }
+        found.remove(name);
+        return found;
     }
 
     /**
@@ -999,8 +1058,10 @@ public class RepositorySlices {
                             com.auto1.pantera.http.rt.MethodRule.DELETE
                         ),
                         new CombinedAuthzSliceWrap(
-                            new com.auto1.pantera.http.slice.SliceSimple(
-                                com.auto1.pantera.http.ResponseBuilder.methodNotAllowed()
+                            (line, headers, body) -> body.asBytesFuture().thenApply(
+                                ignored -> com.auto1.pantera.http.ResponseBuilder
+                                    .methodNotAllowed()
+                                    .header("Allow", "GET, HEAD")
                                     .build()
                             ),
                             authentication(),
@@ -1047,7 +1108,7 @@ public class RepositorySlices {
                 // The same member list backs the merged keys and search routes.
                 final java.util.List<String> auditMemberNames = cfg.members();
                 final java.util.List<Slice> auditMemberSlices = auditMemberNames.stream()
-                    .map(name -> this.slice(new Key.From(name), port, 0))
+                    .map(name -> this.currentSlice(name, port))
                     .collect(java.util.stream.Collectors.toList());
                 final Slice npmGroupAuditSlice = new com.auto1.pantera.npm.http.audit.GroupAuditSlice(
                     auditMemberNames, auditMemberSlices
@@ -1129,7 +1190,7 @@ public class RepositorySlices {
                             ),
                             new CombinedAuthzSliceWrap(
                                 new com.auto1.pantera.npm.http.GroupKeysSlice(
-                                    auditMemberNames, auditMemberSlices
+                                    cfg.name(), auditMemberNames, auditMemberSlices
                                 ),
                                 authentication(),
                                 tokens.auth(),
@@ -1146,7 +1207,7 @@ public class RepositorySlices {
                             ),
                             new CombinedAuthzSliceWrap(
                                 new com.auto1.pantera.npm.http.GroupSearchSlice(
-                                    auditMemberNames, auditMemberSlices
+                                    cfg.name(), auditMemberNames, auditMemberSlices
                                 ),
                                 authentication(),
                                 tokens.auth(),

@@ -176,6 +176,21 @@ final class NpmAccountRoutingTest {
     }
 
     @Test
+    void proxyWriteRefusalNamesTheAllowedMethods(@TempDir final Path tmp) throws Exception {
+        for (final RqMethod method : List.of(RqMethod.PUT, RqMethod.DELETE)) {
+            MatcherAssert.assertThat(
+                String.format("%s to a proxy lists the allowed methods", method),
+                NpmAccountRoutingTest.slices(tmp).slice(new Key.From("npm-proxy"), 8080).response(
+                    new RequestLine(method, "/npm-proxy/@qa%2fpkg"),
+                    Headers.from(new Authorization.Bearer(NpmAccountRoutingTest.TOKEN)),
+                    new Content.From("{}".getBytes(StandardCharsets.UTF_8))
+                ).get(30, TimeUnit.SECONDS).headers().values("Allow"),
+                new IsEqual<>(List.of("GET, HEAD"))
+            );
+        }
+    }
+
+    @Test
     void groupDistTagsReachTheHostedMember(@TempDir final Path tmp) throws Exception {
         new PerVersionLayout(
             NpmAccountRoutingTest.repo(

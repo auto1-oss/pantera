@@ -49,11 +49,12 @@ public final class GroupKeysSlice implements Slice {
 
     /**
      * Ctor.
+     * @param group Group repository name
      * @param names Member repository names
      * @param slices Member repository slices, same order
      */
-    public GroupKeysSlice(final List<String> names, final List<Slice> slices) {
-        this(new MemberFanout(names, slices));
+    public GroupKeysSlice(final String group, final List<String> names, final List<Slice> slices) {
+        this(new MemberFanout(group, names, slices));
     }
 
     /**

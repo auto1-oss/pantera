@@ -18,6 +18,8 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import java.io.StringReader;
 import java.net.URI;
@@ -74,6 +76,11 @@ final class MemberFanout {
     private static final String LOGGER = "com.auto1.pantera.npm";
 
     /**
+     * Group repository name.
+     */
+    private final String group;
+
+    /**
      * Member repository names, in declared order.
      */
     private final List<String> names;
@@ -90,20 +97,25 @@ final class MemberFanout {
 
     /**
      * Ctor.
+     * @param group Group repository name
      * @param names Member repository names
      * @param slices Member repository slices, same order
      */
-    MemberFanout(final List<String> names, final List<Slice> slices) {
-        this(names, slices, MemberFanout.TIMEOUT);
+    MemberFanout(final String group, final List<String> names, final List<Slice> slices) {
+        this(group, names, slices, MemberFanout.TIMEOUT);
     }
 
     /**
      * Ctor.
+     * @param group Group repository name
      * @param names Member repository names
      * @param slices Member repository slices, same order
      * @param timeout Per-member answer timeout
      */
-    MemberFanout(final List<String> names, final List<Slice> slices, final Duration timeout) {
+    MemberFanout(
+        final String group, final List<String> names, final List<Slice> slices,
+        final Duration timeout
+    ) {
         if (names.size() != slices.size()) {
             throw new IllegalArgumentException(
                 String.format(
@@ -112,6 +124,7 @@ final class MemberFanout {
                 )
             );
         }
+        this.group = group;
         this.names = List.copyOf(names);
         this.slices = List.copyOf(slices);
         this.timeout = timeout;
@@ -146,7 +159,7 @@ final class MemberFanout {
                 }
                 final Response response;
                 if (answers.isEmpty() && failed) {
-                    response = MemberFanout.unavailable(line, retry);
+                    response = this.unavailable(line, headers, retry);
                 } else {
                     response = merge.apply(answers);
                 }
@@ -320,11 +333,15 @@ final class MemberFanout {
      * Group answer when no member answered and at least one failed: 503 with
      * Retry-After, never an empty success.
      * @param line Group request line
+     * @param headers Group request headers (carry the request's trace id)
      * @param hint Largest member Retry-After hint, seconds
      * @return Response
      */
-    private static Response unavailable(final RequestLine line, final long hint) {
+    private Response unavailable(final RequestLine line, final Headers headers, final long hint) {
         final long retry = Math.max(MemberFanout.MIN_RETRY, hint);
+        // Runs on whichever thread completed the last member: restore the
+        // request's correlation fields before logging.
+        RequestContextHeaders.bindToMdc(headers);
         EcsLogger.warn(MemberFanout.LOGGER)
             .message(
                 "All npm group members unavailable for a merged endpoint, returning 503, "
@@ -333,6 +350,8 @@ final class MemberFanout {
             .eventCategory("network")
             .eventAction("group_all_members_unavailable")
             .eventOutcome("failure")
+            .field("repository.name", this.group)
+            .field("trace.id", MemberFanout.traceId(headers))
             .field("url.path", line.uri().getPath())
             .field("http.response.status_code", RsStatus.SERVICE_UNAVAILABLE.code())
             .field("log.source", "application")
@@ -345,6 +364,16 @@ final class MemberFanout {
                     .build()
             )
             .build();
+    }
+
+    /**
+     * Trace id of the request, from the internal context header.
+     * @param headers Request headers
+     * @return Trace id, or null when absent
+     */
+    private static String traceId(final Headers headers) {
+        return headers.find(EcsLoggingSlice.CTX_TRACE_ID_HEADER).stream()
+            .findFirst().map(header -> header.getValue()).orElse(null);
     }
 
     /**
