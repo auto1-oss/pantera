@@ -185,7 +185,11 @@ curl http://localhost:8080/.health
 
 ### First Login
 
-On a fresh install Pantera creates an `admin` user automatically. Its initial password is the value of `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` when it is set; otherwise a random password written to `/var/pantera/bootstrap-admin-password` (the `pantera.home` directory), readable only by the server user. It is never written to the log. Read it on the server (with the bundled docker-compose stack: `docker exec pantera cat /var/pantera/bootstrap-admin-password`), then delete the file after your first login. If that file cannot be written, the admin user is not created and the startup log says why.
+On a fresh install Pantera creates a default admin user automatically:
+
+| Username | Password |
+|---|---|
+| `admin` | `admin` |
 
 The `must_change_password` flag is set, so the very first login goes to a forced password-change screen. The new password must meet these rules (server-side `PasswordPolicy.java`):
 
@@ -194,7 +198,7 @@ The `must_change_password` flag is set, so the very first login goes to a forced
 - Not equal to the username
 - Not a well-known weak password (`admin`, `password`, `changeme`, etc.)
 
-**Change the initial password immediately.** Any non-compliant password is rejected with HTTP 400 `WEAK_PASSWORD`.
+**Change the default immediately in production.** Any non-compliant password is rejected with HTTP 400 `WEAK_PASSWORD`.
 
 The bootstrap only runs when the `users` table is empty, so an existing install is never overwritten.
 

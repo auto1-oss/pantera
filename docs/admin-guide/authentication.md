@@ -13,7 +13,7 @@ On a fresh install with an empty `users` table, Pantera bootstraps a single defa
 | Field | Value |
 |---|---|
 | **Username** | `admin` |
-| **Password** | `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`, or a generated one in `/var/pantera/bootstrap-admin-password` (see below) |
+| **Password** | `admin` |
 | **Role** | `admin` (all permissions) |
 | **Must change password** | `true` |
 
@@ -27,7 +27,7 @@ On a fresh install with an empty `users` table, Pantera bootstraps a single defa
 - **Not** equal to the username
 - **Not** in the well-known weak-password list (`password`, `admin`, `changeme`, ...)
 
-The initial password is the value of `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` when it is set; otherwise a random password written to `/var/pantera/bootstrap-admin-password` (the `pantera.home` directory), readable only by the server user. It is never written to the log. Read it on the server (with the bundled docker-compose stack: `docker exec pantera cat /var/pantera/bootstrap-admin-password`), then delete the file after your first login. If that file cannot be written, the admin user is not created and the startup log says why. The startup log records only the file's location.
+The initial password is the value of `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` when it is set; otherwise a random password that is printed once, at WARN level, in the startup log of the start that creates the admin user (with the bundled docker-compose stack: `docker logs pantera 2>&1 | grep 'GENERATED password'`).
 
 The same rules apply to every local password: self-service changes, an admin resetting a user's password, and the initial password in the **Create User** dialog. The UI shows the checklist while you type and displays the server's rejection message if a password (or a role you are not allowed to grant) is refused.
 

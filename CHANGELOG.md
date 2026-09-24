@@ -6,7 +6,7 @@ This release contains security hardening and a broad set of bug fixes across for
 
 ### ⚠️ Breaking changes
 
-- **The bundled bootstrap administrator is no longer created with a fixed default password.** On a database-backed first start the password is taken from `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`, or a random one is generated and written to `/var/pantera/bootstrap-admin-password` (readable by the server user only), never to the log. Existing installations are unaffected; automation that assumed the old default must set the variable.
+- **The bundled bootstrap administrator is no longer created with a fixed default password.** On a database-backed first start the password is taken from `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`, or a random one is generated and printed once, at WARN level, in the startup log; the administrator must change it at first sign-in. Existing installations are unaffected; automation that assumed the old default must set the variable.
   ([@aydasraf](https://github.com/aydasraf))
 - **Filesystem repository roots must sit under an approved base directory.** The approved roots (default `/var/pantera/data`) are an admin setting (Settings → *Request & Storage Limits*, or `PUT /api/v1/admin/request-limits-settings`), with `PANTERA_FS_STORAGE_ROOTS` as the fallback while none is saved. They are enforced when a repository is created, or its path changed, through the API or UI: an `fs` or `vertx-file` path, or a storage alias (global or per-repository) resolving to one, outside them (symlinks followed) is rejected with `400` until a root covering it is added. Existing repositories keep serving and stay editable as long as their path is unchanged.
   ([@aydasraf](https://github.com/aydasraf))
