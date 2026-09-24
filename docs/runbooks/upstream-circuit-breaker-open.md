@@ -37,7 +37,11 @@ why the upstream hasn't recovered.
 1. **External outage check first**. `curl -v https://<upstream>/` from outside
    Pantera (locally on your laptop or from a different VM). If the upstream is
    broken globally, page the upstream vendor and wait. The breaker will
-   auto-close once the HEAD probe succeeds at the next backoff interval.
+   auto-close once the HEAD probe of the upstream root (`HEAD /`) gets any
+   answer other than a server error at the next backoff interval. A `404`
+   or `501 Not Implemented` (an upstream that does not support `HEAD`)
+   counts as recovered; any other `5xx` keeps the breaker open and the next
+   probe waits longer.
 2. **Reachability check**. From a Pantera box: `curl -v https://<upstream>/`.
    If THIS fails but a laptop curl works, you have a DNS / firewall / TLS
    issue specific to the Pantera deployment. Investigate the network path.
