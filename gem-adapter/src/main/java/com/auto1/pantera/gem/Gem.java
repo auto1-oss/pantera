@@ -89,11 +89,11 @@ public final class Gem {
                 this.storage, key -> key.string().endsWith(".gem") || key.equals(gem)
             ).copy(new FileStorage(tmp)).thenCompose(
                 ignore -> this.shared.apply(RubyGemMeta::new)
-                    .thenApply(meta -> meta.info(tmp.resolve(gem.string())))
+                    .thenApply(meta -> Gem.read(meta, tmp.resolve(gem.string())))
                     .thenCompose(
                         info -> {
                             final RevisionFormat fmt = new RevisionFormat();
-                            final String name = info.toString(fmt);
+                            final String name = Gem.fileName(info, fmt);
                             final Path dir = gem.parent()
                                 .map(key -> tmp.resolve(key.string())).orElse(tmp);
                             return CompletableFuture.supplyAsync(
@@ -187,11 +187,58 @@ public final class Gem {
             || name.indexOf('\\') >= 0
             || !dest.startsWith(root)
             || !root.equals(dest.getParent())) {
-            throw new PanteraIOException(
-                "Gem file name escapes the indexing directory: " + name
+            throw new InvalidGemException(
+                "The upload is not a valid gem: its file name escapes the indexing directory",
+                null
             );
         }
         return dest;
+    }
+
+    /**
+     * Read the specification of an uploaded gem.
+     * @param meta Gem metadata reader
+     * @param path Uploaded gem
+     * @return Gem specification
+     * @throws InvalidGemException If the file cannot be read as a gem
+     */
+    private static GemMeta.MetaInfo read(final GemMeta meta, final Path path) {
+        try {
+            return meta.info(path);
+        } catch (final RuntimeException ex) {
+            // RubyGems raises Gem::Package::FormatError & co. for a truncated
+            // or foreign file; the upload is the client's error, not ours.
+            // Its message names the server-side temporary path, so the
+            // client only gets the verdict.
+            throw new InvalidGemException(
+                "The upload is not a valid gem: it cannot be read as a gem package", ex
+            );
+        }
+    }
+
+    /**
+     * File name ({@code <name>-<version>}) a gem is stored under.
+     * @param info Gem specification
+     * @param fmt Revision format collecting name and version
+     * @return File name
+     * @throws InvalidGemException If the specification lacks a name or version
+     */
+    private static String fileName(final GemMeta.MetaInfo info, final RevisionFormat fmt) {
+        final String res;
+        try {
+            res = info.toString(fmt);
+        } catch (final RuntimeException ex) {
+            throw new InvalidGemException(
+                "The upload is not a valid gem: its specification cannot be read", ex
+            );
+        }
+        if (fmt.name == null || fmt.version == null) {
+            throw new InvalidGemException(
+                "The upload is not a valid gem: its specification has no name or version",
+                null
+            );
+        }
+        return res;
     }
 
     /**

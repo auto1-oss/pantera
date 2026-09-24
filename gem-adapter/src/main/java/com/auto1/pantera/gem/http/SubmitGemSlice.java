@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.gem.Gem;
+import com.auto1.pantera.gem.InvalidGemException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -154,12 +155,33 @@ final class SubmitGemSlice implements Slice {
                     )
                     .<Response>thenApply(
                         deleted -> {
-                            if (err != null) {
-                                throw new CompletionException(err);
+                            if (err == null) {
+                                return ResponseBuilder.created().build();
                             }
-                            return ResponseBuilder.created().build();
+                            final Throwable cause = SubmitGemSlice.cause(err);
+                            if (cause instanceof InvalidGemException) {
+                                // A truncated or foreign file is the client's
+                                // error: say why instead of answering 500.
+                                return ResponseBuilder.badRequest()
+                                    .textBody(cause.getMessage())
+                                    .build();
+                            }
+                            throw new CompletionException(err);
                         }
                     )
             ).thenCompose(Function.identity());
+    }
+
+    /**
+     * Unwrap completion wrappers.
+     * @param err Error
+     * @return Underlying cause
+     */
+    private static Throwable cause(final Throwable err) {
+        Throwable res = err;
+        while (res instanceof CompletionException && res.getCause() != null) {
+            res = res.getCause();
+        }
+        return res;
     }
 }
