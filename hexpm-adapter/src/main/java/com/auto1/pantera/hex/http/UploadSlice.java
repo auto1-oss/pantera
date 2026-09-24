@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.OneTimePublisher;
 import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.hex.proto.generated.PackageOuterClass;
 import com.auto1.pantera.hex.proto.generated.SignedOuterClass;
 import com.auto1.pantera.hex.tarball.MetadataConfig;
@@ -159,25 +160,33 @@ public final class UploadSlice implements Slice {
                         }
                     }
                 ).thenCompose(
-                    nothing -> this.storage.exists(packagekey.get())
-                ).thenCompose(
-                    packageExists -> this.readReleasesListFromStorage(
-                        packageExists,
-                        releases,
-                        packagekey
-                    ).thenAccept(
-                        nothing -> UploadSlice.handleReleases(releases, replace, version)
-                    ).thenApply(
-                        nothing -> UploadSlice.constructSignedPackage(
-                            name, version, innerchcksum, outerchcksum, releases, this.rname
-                        )
-                    ).thenCompose(
-                        signedPackage -> this.saveSignedPackageToStorage(
-                            packagekey, signedPackage
-                        )
-                    ).thenCompose(
-                        nothing -> this.saveTarContentToStorage(
-                            name, version, tarcontent
+                    // The release list and the tarball are written under the
+                    // package's registry lock: concurrent publishes of one
+                    // package do not lose each other's release, and a
+                    // management-API delete never sees a listed release
+                    // whose tarball is not written yet.
+                    nothing -> new IndexUpdateLock(this.storage, packagekey.get()).run(
+                        locked -> locked.exists(packagekey.get()).thenCompose(
+                            packageExists -> this.readReleasesListFromStorage(
+                                packageExists,
+                                releases,
+                                packagekey
+                            ).thenAccept(
+                                ignored -> UploadSlice.handleReleases(releases, replace, version)
+                            ).thenApply(
+                                ignored -> UploadSlice.constructSignedPackage(
+                                    name, version, innerchcksum, outerchcksum, releases,
+                                    this.rname
+                                )
+                            ).thenCompose(
+                                signedPackage -> this.saveSignedPackageToStorage(
+                                    packagekey, signedPackage
+                                )
+                            ).thenCompose(
+                                ignored -> this.saveTarContentToStorage(
+                                    name, version, tarcontent
+                                )
+                            )
                         )
                     )
                 ).thenCompose(
