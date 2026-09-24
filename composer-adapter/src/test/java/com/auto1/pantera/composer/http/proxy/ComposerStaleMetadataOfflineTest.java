@@ -90,6 +90,69 @@ final class ComposerStaleMetadataOfflineTest {
         );
     }
 
+    @Test
+    @Timeout(20)
+    void failedBackgroundRefreshIsNotReportedAsA502() throws Exception {
+        final InMemoryStorage mem = new InMemoryStorage();
+        mem.save(
+            new Key.From("acme/bar.json"),
+            new Content.From(
+                "{\"packages\":{\"acme/bar\":{}}}".getBytes(StandardCharsets.UTF_8)
+            )
+        ).join();
+        final Storage storage = new Aged(mem, Duration.ofHours(13));
+        final Slice down = (line, headers, body) -> CompletableFuture.completedFuture(
+            com.auto1.pantera.http.ResponseBuilder.from(
+                com.auto1.pantera.http.RsStatus.SERVICE_UNAVAILABLE
+            ).build()
+        );
+        try (LogCapture logs = LogCapture.of("com.auto1.pantera.composer")) {
+            final Response resp = new CachedProxySlice(
+                down,
+                new AstoRepository(storage),
+                new ComposerStorageCache(new AstoRepository(storage)),
+                Optional.empty(),
+                "php_proxy",
+                "http://localhost:8080/php_proxy",
+                "https://packagist.example"
+            ).response(
+                new RequestLine(RqMethod.GET, "/p2/acme/bar.json"),
+                Headers.from("X-Pantera-Ctx-Trace-Id", "trace-r27"),
+                Content.EMPTY
+            ).join();
+            MatcherAssert.assertThat(
+                "the client is served the stale copy",
+                resp.status().code(), new IsEqual<>(200)
+            );
+            while (logs.action("stale_while_revalidate").isEmpty()) {
+                Thread.sleep(5);
+            }
+            final Map<String, Object> refresh = logs.action("stale_while_revalidate").get(0);
+            MatcherAssert.assertThat(
+                "the failed background refresh is reported as a failure",
+                refresh.get("event.outcome"), new IsEqual<>("failure")
+            );
+            MatcherAssert.assertThat(
+                "the refresh log carries the request's trace id",
+                refresh.get("trace.id"), new IsEqual<>("trace-r27")
+            );
+            MatcherAssert.assertThat(
+                "no log claims a 502 the client never got",
+                logs.action("metadata_fetch").stream().anyMatch(
+                    event -> String.valueOf(event.get("message")).contains("502")
+                ),
+                new IsEqual<>(false)
+            );
+            MatcherAssert.assertThat(
+                "the upstream status log carries the request's trace id",
+                logs.action("remote_fetch").stream()
+                    .filter(event -> "failure".equals(event.get("event.outcome")))
+                    .findFirst().map(event -> event.get("trace.id")).orElse(null),
+                new IsEqual<>("trace-r27")
+            );
+        }
+    }
+
     /**
      * Storage whose metadata reports every entry as last updated some time ago.
      */

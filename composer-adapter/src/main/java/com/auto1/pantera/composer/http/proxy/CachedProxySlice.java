@@ -14,6 +14,8 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.FromStorageCache;
@@ -250,7 +252,7 @@ final class CachedProxySlice implements Slice {
 
             // Check cache FIRST before any network calls — offline mode
             // serves cached content even when upstream is unreachable.
-            return this.checkCacheFirst(line, name);
+            return this.checkCacheFirst(line, headers, name);
         });
     }
 
@@ -259,11 +261,13 @@ final class CachedProxySlice implements Slice {
      * metadata is served even when the upstream is unavailable.
      *
      * @param line Request line
+     * @param headers Request headers (carry the request's trace id)
      * @param name Package name
      * @return Response future
      */
     private CompletableFuture<Response> checkCacheFirst(
         final RequestLine line,
+        final Headers headers,
         final String name
     ) {
         // Check storage cache FIRST before any network calls. Metadata is
@@ -290,7 +294,7 @@ final class CachedProxySlice implements Slice {
                         cachedKey, Remote.EMPTY
                     ).thenCompose(fresh -> {
                         if (!fresh) {
-                            this.backgroundRefresh(line, name);
+                            this.backgroundRefresh(line, headers, name);
                         }
                         return this.serveCachedMetadata(bytes);
                     });
@@ -299,7 +303,7 @@ final class CachedProxySlice implements Slice {
             // Cache MISS - fetch through cache. Per-version cooldown is
             // owned by ComposerPackageMetadataHandler / ComposerRootPackagesHandler;
             // CachedProxySlice's job is pure cache + URL-rewrite + integrity.
-            return this.fetchThroughCache(line, name);
+            return this.fetchThroughCache(line, headers, name, true);
         }).toCompletableFuture();
     }
 
@@ -322,34 +326,63 @@ final class CachedProxySlice implements Slice {
 
     /**
      * Trigger background refresh of metadata (stale-while-revalidate pattern).
-     * Serves stale content immediately while refreshing in background.
+     * Serves stale content immediately while refreshing in background. The
+     * client already got the stale copy, so a failed refresh is reported as
+     * such — never as the 502 a foreground miss would answer.
      *
      * @param line Request line
+     * @param headers Request headers (carry the request's trace id)
      * @param name Package name
      */
     private void backgroundRefresh(
         final RequestLine line,
+        final Headers headers,
         final String name
     ) {
         if (this.refreshing.add(name)) {
             CompletableFuture.runAsync(() -> {
+                RequestContextHeaders.bindToMdc(headers);
                 try {
-                    this.fetchThroughCache(line, name).join();
-                    EcsLogger.debug("com.auto1.pantera.composer")
-                        .message("Background refresh completed")
-                        .eventCategory("database")
-                        .eventAction("stale_while_revalidate")
-                        .eventOutcome("success")
-                        .field("package.name", name)
-                        .field("log.source", "application")
-                        .log();
+                    final Response refreshed =
+                        this.fetchThroughCache(line, headers, name, false).join();
+                    refreshed.body().asBytesFuture().join();
+                    if (refreshed.status().success()) {
+                        EcsLogger.debug("com.auto1.pantera.composer")
+                            .message("Background refresh completed")
+                            .eventCategory("database")
+                            .eventAction("stale_while_revalidate")
+                            .eventOutcome("success")
+                            .field("repository.name", this.rname)
+                            .field("package.name", name)
+                            .field("trace.id", CachedProxySlice.traceId(headers))
+                            .field("log.source", "application")
+                            .log();
+                    } else {
+                        EcsLogger.warn("com.auto1.pantera.composer")
+                            .message(
+                                "Background refresh of stale metadata failed (status "
+                                    + refreshed.status().code()
+                                    + "); the cached copy stays served"
+                            )
+                            .eventCategory("database")
+                            .eventAction("stale_while_revalidate")
+                            .eventOutcome("failure")
+                            .field("event.reason", "upstream_unavailable")
+                            .field("repository.name", this.rname)
+                            .field("package.name", name)
+                            .field("trace.id", CachedProxySlice.traceId(headers))
+                            .field("log.source", "application")
+                            .log();
+                    }
                 } catch (final Exception err) {
                     EcsLogger.warn("com.auto1.pantera.composer")
-                        .message("Background refresh failed")
+                        .message("Background refresh of stale metadata failed; the cached copy stays served")
                         .eventCategory("database")
                         .eventAction("stale_while_revalidate")
                         .eventOutcome("failure")
+                        .field("repository.name", this.rname)
                         .field("package.name", name)
+                        .field("trace.id", CachedProxySlice.traceId(headers))
                         .error(err)
                         .field("log.source", "application")
                         .log();
@@ -361,15 +394,31 @@ final class CachedProxySlice implements Slice {
     }
 
     /**
+     * Trace id of the request, from the internal context header.
+     *
+     * @param headers Request headers
+     * @return Trace id, or null when absent
+     */
+    private static String traceId(final Headers headers) {
+        return headers.find(EcsLoggingSlice.CTX_TRACE_ID_HEADER).stream()
+            .findFirst().map(Header::getValue).orElse(null);
+    }
+
+    /**
      * Fetch package through cache.
      *
      * @param line Request line
+     * @param headers Request headers (carry the request's trace id)
      * @param name Package name
+     * @param foreground Whether the client waits on this lookup (false for a
+     *  stale-while-revalidate refresh, whose caller reports the outcome)
      * @return Response future
      */
     private CompletableFuture<Response> fetchThroughCache(
         final RequestLine line,
-        final String name
+        final Headers headers,
+        final String name,
+        final boolean foreground
     ) {
         // Package name for merge: strip ~dev suffix since Packagist JSON uses base name
         final String packageName = name.replaceAll("~dev$", "");
@@ -385,7 +434,7 @@ final class CachedProxySlice implements Slice {
                         pckgs -> pckgs.orElse(new JsonPackages())
                     ).thenCompose(Packages::content)
                     .thenCombine(
-                        this.packageFromRemote(line, failure),
+                        this.packageFromRemote(line, headers, failure),
                         (lcl, rmt) -> new MergePackage.WithRemote(packageName, lcl).merge(rmt)
                     ).thenCompose(Function.identity())
                     .thenCompose(contentOpt -> {
@@ -420,7 +469,9 @@ final class CachedProxySlice implements Slice {
             new CacheTimeControl(this.repo.storage())
         ).thenCompose((java.util.Optional<? extends Content> pkgs) -> {
             if (pkgs.isEmpty()) {
-                return CompletableFuture.completedFuture(this.missResponse(failure, name));
+                return CompletableFuture.completedFuture(
+                    this.missResponse(failure, name, headers, foreground)
+                );
             }
             // Content is already pre-rewritten at write time.
             // Persist the rewritten bytes under {name}.json so
@@ -453,7 +504,7 @@ final class CachedProxySlice implements Slice {
                 .error(throwable)
                 .field("log.source", "application")
                 .log();
-            return this.missResponse(failure, name);
+            return this.missResponse(failure, name, headers, foreground);
         }).toCompletableFuture();
     }
 
@@ -465,22 +516,32 @@ final class CachedProxySlice implements Slice {
      *
      * @param failure Upstream failure record of this lookup
      * @param name Package name
+     * @param headers Request headers (carry the request's trace id)
+     * @param foreground Whether the 502 goes to a waiting client (logged
+     *  here) or to a background refresh (logged by its caller)
      * @return Response
      */
-    private Response missResponse(final UpstreamFailure failure, final String name) {
+    private Response missResponse(
+        final UpstreamFailure failure, final String name, final Headers headers,
+        final boolean foreground
+    ) {
         if (!failure.failed()) {
             return ResponseBuilder.notFound().build();
         }
-        EcsLogger.warn("com.auto1.pantera.composer")
-            .message("Upstream could not answer the metadata lookup; returning 502")
-            .eventCategory("network")
-            .eventAction("metadata_fetch")
-            .eventOutcome("failure")
-            .field("event.reason", "upstream_unavailable")
-            .field("repository.name", this.rname)
-            .field("package.name", name)
-            .field("log.source", "application")
-            .log();
+        if (foreground) {
+            RequestContextHeaders.bindToMdc(headers);
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("Upstream could not answer the metadata lookup; returning 502")
+                .eventCategory("network")
+                .eventAction("metadata_fetch")
+                .eventOutcome("failure")
+                .field("event.reason", "upstream_unavailable")
+                .field("repository.name", this.rname)
+                .field("package.name", name)
+                .field("trace.id", CachedProxySlice.traceId(headers))
+                .field("log.source", "application")
+                .log();
+        }
         final ResponseBuilder builder = ResponseBuilder.badGateway();
         if (failure.circuitOpen()) {
             // Preserve the upstream breaker's marker so a php-group does not
@@ -744,12 +805,13 @@ final class CachedProxySlice implements Slice {
     /**
      * Obtains info about package from remote.
      * @param line The request line (usually like this `GET /p2/vendor/package.json HTTP_1_1`)
+     * @param headers Request headers (carry the request's trace id)
      * @param failure Record of an upstream failure for this lookup
      * @return Content from respond of remote. If there were some errors,
      *  empty will be returned and the failure recorded.
      */
     private CompletionStage<Optional<? extends Content>> packageFromRemote(
-        final RequestLine line, final UpstreamFailure failure
+        final RequestLine line, final Headers headers, final UpstreamFailure failure
     ) {
         final long startTime = System.currentTimeMillis();
         return CachedProxySlice.recording(
@@ -789,12 +851,15 @@ final class CachedProxySlice implements Slice {
                                 if (CachedProxySlice.isUpstreamFailure(response.status().code())) {
                                     failure.record(response.headers());
                                 }
+                                RequestContextHeaders.bindToMdc(headers);
                                 EcsLogger.warn("com.auto1.pantera.composer")
                                     .message("Remote returned non-success status")
                                     .eventCategory("web")
                                     .eventAction("remote_fetch")
                                     .eventOutcome("failure")
+                                    .field("repository.name", this.rname)
                                     .field("url.path", line.uri().getPath())
+                                    .field("trace.id", CachedProxySlice.traceId(headers))
                                     .field("http.response.status_code", response.status().code())
                                     .field("log.source", "http")
                                     .log();
