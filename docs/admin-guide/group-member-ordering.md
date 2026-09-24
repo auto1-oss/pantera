@@ -64,7 +64,9 @@ migration; it is purely noise at this point.
   nested group) applies to every group that contains it at once; the
   groups do not need to be saved again.
 - A group answers `405 Method Not Allowed` with `Allow: GET, HEAD` to
-  writes.
+  writes. The one exception is the npm audit endpoint
+  (`POST .../-/npm/v1/security/...`), which an npm group forwards to its
+  members.
 - go groups merge `<module>/@v/list` across all members, so the list
   holds both the hosted and the upstream versions. The merge follows the
   group member circuit breaker: a member whose circuit is open only

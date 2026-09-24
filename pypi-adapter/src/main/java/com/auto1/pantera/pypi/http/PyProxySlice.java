@@ -16,7 +16,6 @@ import com.auto1.pantera.asto.cache.StreamThroughCache;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.impl.NoopCooldownService;
-import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
@@ -26,6 +25,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.MethodNotAllowedSlice;
 import com.auto1.pantera.publishdate.PublishDateRegistries;
 import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
@@ -166,22 +166,10 @@ public final class PyProxySlice extends Slice.Wrap {
                     new HeadAsGetSlice(proxy)
                 ),
                 new RtRulePath(
-                    new RtRule.ByPath(PyProxySlice.FILE), PyProxySlice.notAllowed("GET")
+                    new RtRule.ByPath(PyProxySlice.FILE), new MethodNotAllowedSlice("GET")
                 ),
-                new RtRulePath(RtRule.FALLBACK, PyProxySlice.notAllowed("GET, HEAD"))
+                new RtRulePath(RtRule.FALLBACK, new MethodNotAllowedSlice("GET, HEAD"))
             )
-        );
-    }
-
-    /**
-     * 405 refusal naming the allowed methods; the request body is drained.
-     *
-     * @param allow Allowed methods
-     * @return Slice
-     */
-    private static Slice notAllowed(final String allow) {
-        return (line, headers, body) -> body.asBytesFuture().thenApply(
-            ignored -> ResponseBuilder.methodNotAllowed().header("Allow", allow).build()
         );
     }
 

@@ -31,6 +31,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.http.slice.MethodNotAllowedSlice;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.IndexOutcome;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -374,11 +375,7 @@ public final class GroupResolver implements Slice {
         final boolean isReadOperation = "GET".equals(method) || "HEAD".equals(method);
         final boolean isNpmAudit = "POST".equals(method) && path.contains("/-/npm/v1/security/");
         if (!isReadOperation && !isNpmAudit) {
-            return body.asBytesFuture().thenApply(
-                ignored -> ResponseBuilder.methodNotAllowed()
-                    .header("Allow", "GET, HEAD")
-                    .build()
-            );
+            return new MethodNotAllowedSlice("GET, HEAD").response(line, headers, body);
         }
 
         // Reject Maven/Gradle version-range coordinates that leaked into the

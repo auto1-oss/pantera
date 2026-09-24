@@ -1058,11 +1058,8 @@ public class RepositorySlices {
                             com.auto1.pantera.http.rt.MethodRule.DELETE
                         ),
                         new CombinedAuthzSliceWrap(
-                            (line, headers, body) -> body.asBytesFuture().thenApply(
-                                ignored -> com.auto1.pantera.http.ResponseBuilder
-                                    .methodNotAllowed()
-                                    .header("Allow", "GET, HEAD")
-                                    .build()
+                            new com.auto1.pantera.http.slice.MethodNotAllowedSlice(
+                                "GET, HEAD"
                             ),
                             authentication(),
                             tokens.auth(),

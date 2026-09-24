@@ -26,6 +26,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import io.reactivex.Flowable;
+import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.reactivestreams.Subscriber;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
@@ -115,5 +119,56 @@ final class PyProxySliceHeadTest {
             Optional.empty(),
             "pypi_proxy"
         );
+    }
+
+    @Test
+    void writeRefusalDrainsTheBodyWithoutMaterialisingIt() {
+        final DeclaredHugeBody body = new DeclaredHugeBody();
+        final Response resp = PyProxySliceHeadTest.slice().response(
+            new RequestLine(RqMethod.PUT, "/six/"), Headers.EMPTY, body
+        ).join();
+        MatcherAssert.assertThat(
+            "a write to a proxy is refused",
+            resp.status(), new IsEqual<>(RsStatus.METHOD_NOT_ALLOWED)
+        );
+        MatcherAssert.assertThat(
+            "the refusal must not pre-allocate the client's declared Content-Length",
+            body.materialised.get(), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the refusal still consumes the request body",
+            body.subscribed.get(), new IsEqual<>(true)
+        );
+    }
+
+    /**
+     * Request body that declares ~2 GB but carries a few bytes, and records
+     * whether it was materialised with {@code asBytesFuture()} (which
+     * pre-allocates from the declared length) or merely drained.
+     */
+    private static final class DeclaredHugeBody implements Content {
+
+        private final AtomicBoolean materialised = new AtomicBoolean();
+
+        private final AtomicBoolean subscribed = new AtomicBoolean();
+
+        @Override
+        public Optional<Long> size() {
+            return Optional.of(2_000_000_000L);
+        }
+
+        @Override
+        public CompletableFuture<byte[]> asBytesFuture() {
+            this.materialised.set(true);
+            return Content.super.asBytesFuture();
+        }
+
+        @Override
+        public void subscribe(final Subscriber<? super ByteBuffer> subscriber) {
+            this.subscribed.set(true);
+            Flowable.just(
+                ByteBuffer.wrap("ten  bytes".getBytes(StandardCharsets.UTF_8))
+            ).subscribe(subscriber);
+        }
     }
 }
