@@ -13,6 +13,7 @@ package com.auto1.pantera.http.observability;
 import com.auto1.pantera.audit.AuditAction;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
+import com.auto1.pantera.http.log.LogSanitizer;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.HashMap;
@@ -248,7 +249,7 @@ public final class StructuredLogger {
                 payload.put("event.duration", this.durationMs);
             }
             if (this.body != null && !this.body.isEmpty()) {
-                payload.put("message", this.body);
+                payload.put("message", LogSanitizer.sanitizeText(this.body));
             } else {
                 payload.put("message", defaultMessage(this.status));
             }
@@ -449,8 +450,7 @@ public final class StructuredLogger {
                 payload.put("message", "Upstream call failed: " + this.address);
                 payload.put("event.outcome", "failure");
                 payload.put("error.type", this.cause.getClass().getName());
-                payload.put("error.message",
-                    this.cause.getMessage() == null ? this.cause.toString() : this.cause.getMessage());
+                payload.put("error.message", messageOf(this.cause));
                 payload.put("error.stack_trace", stackTraceOf(this.cause));
             } else {
                 payload.put("message", "Upstream call: " + this.address);
@@ -562,8 +562,7 @@ public final class StructuredLogger {
             if (this.cause != null) {
                 payload.put("event.outcome", "failure");
                 payload.put("error.type", this.cause.getClass().getName());
-                payload.put("error.message",
-                    this.cause.getMessage() == null ? this.cause.toString() : this.cause.getMessage());
+                payload.put("error.message", messageOf(this.cause));
                 payload.put("error.stack_trace", stackTraceOf(this.cause));
             }
             final Logger logger = LogManager.getLogger(this.component);
@@ -880,7 +879,9 @@ public final class StructuredLogger {
     }
 
     private static String messageOf(final Throwable t) {
-        return t.getMessage() == null ? t.toString() : t.getMessage();
+        return LogSanitizer.sanitizeText(
+            t.getMessage() == null ? t.toString() : t.getMessage()
+        );
     }
 
     private static String stackTraceOf(final Throwable t) {

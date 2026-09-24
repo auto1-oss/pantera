@@ -17,6 +17,7 @@ import org.apache.logging.log4j.message.MapMessage;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * ECS (Elastic Common Schema) compliant logger for non-HTTP application logs.
@@ -60,6 +61,16 @@ import java.util.Map;
  * @since 1.18.24
  */
 public final class EcsLogger {
+
+    /**
+     * URL- and path-bearing ECS fields. Their values are passed through
+     * {@link LogSanitizer#sanitizeUrl(String)} so a credential carried in a
+     * request path, query string or userinfo never reaches the log sink,
+     * whichever call site supplied it.
+     */
+    private static final Set<String> URL_FIELDS = Set.of(
+        "url.original", "url.path", "url.full", "url.query", "file.path"
+    );
 
     private final org.apache.logging.log4j.Logger logger;
     private final LogLevel level;
@@ -164,9 +175,14 @@ public final class EcsLogger {
      * @return this
      */
     public EcsLogger error(final Throwable error) {
-        this.fields.put("error.message", error.getMessage() != null ? error.getMessage() : error.toString());
+        this.fields.put(
+            "error.message",
+            LogSanitizer.sanitizeText(
+                error.getMessage() != null ? error.getMessage() : error.toString()
+            )
+        );
         this.fields.put("error.type", error.getClass().getName());
-        this.fields.put("error.stack_trace", getStackTrace(error));
+        this.fields.put("error.stack_trace", LogSanitizer.sanitizeText(getStackTrace(error)));
         this.fields.put("event.outcome", "failure");
         return this;
     }
@@ -229,7 +245,9 @@ public final class EcsLogger {
      * @return this
      */
     public EcsLogger field(final String key, final Object value) {
-        if (value != null) {
+        if (value instanceof String str && URL_FIELDS.contains(key)) {
+            this.fields.put(key, LogSanitizer.sanitizeUrl(str));
+        } else if (value != null) {
             this.fields.put(key, value);
         }
         return this;
@@ -254,7 +272,8 @@ public final class EcsLogger {
      * (async continuations, CLI tools), the field() value is preserved.
      */
     public void log() {
-        final String logMessage = this.message != null ? this.message : "Application event";
+        final String logMessage = this.message != null
+            ? LogSanitizer.sanitizeText(this.message) : "Application event";
 
         // Early out if the level is disabled — avoid building the payload at all.
         if (!isLevelEnabled()) {
