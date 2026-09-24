@@ -54,7 +54,7 @@ logs/.analysis/
 # shipped product. Keep them on disk locally, but out of the repo so the
 # tree stays tight for users / admins / devs.
 analysis/
-audit/
+/audit/
 benchmark/
 docs/analysis/
 docs/superpowers/
