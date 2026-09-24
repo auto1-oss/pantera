@@ -979,7 +979,6 @@ final class ProxySlice implements Slice {
         final RequestLine line, final String user, final AuditContext ctx
     ) {
         final AtomicReference<Headers> remote = new AtomicReference<>(Headers.EMPTY);
-        final AtomicBoolean remoteSuccess = new AtomicBoolean(false);
         final Key key = ProxySlice.keyFromPath(line);
         final RequestLine upstream = this.upstreamLine(line);
         
@@ -1041,7 +1040,6 @@ final class ProxySlice implements Slice {
                     return fetch.thenApply(response -> {
                         remote.set(response.headers());
                         if (response.status().success()) {
-                            remoteSuccess.set(true);
                             // Genuine cache miss + successful upstream fetch —
                             // the only branch that should publish. Bind the
                             // already-resolved context onto whatever thread
@@ -1062,10 +1060,9 @@ final class ProxySlice implements Slice {
                                         .recordDropped(ProxySlice.this.rname);
                                 }
                             });
-                            ProxySlice.this.auditArtifactAccess(
-                                ctx, line, user, response.body().size().orElse(0L),
-                                AuditLogger.OUTCOME_SUCCESS, null
-                            );
+                            // The access record is written once the body
+                            // is cached (below), where its size is known
+                            // even for a chunked upstream answer (R43).
                             return Optional.of(response.body());
                         }
                         return Optional.empty();
@@ -1084,16 +1081,14 @@ final class ProxySlice implements Slice {
                     }
                     return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
                 }
-                // Cache hit (remote fetch already audited+enqueued above when
-                // remoteSuccess is true). The artifact was already published
-                // to the DB the first time it was cached — this is a read,
-                // not a publish. No ProxyArtifactEvent here; audit as access.
-                if (!remoteSuccess.get()) {
-                    this.auditArtifactAccess(
-                        ctx, line, user, content.get().size().orElse(0L),
-                        AuditLogger.OUTCOME_SUCCESS, null
-                    );
-                }
+                // Cache hit or cache miss (a miss was enqueued as a publish
+                // above): either way this serve is an access. The size is
+                // the cached content's; a chunked upstream body does not
+                // know it, so fall back to the upstream Content-Length.
+                this.auditArtifactAccess(
+                    ctx, line, user, ProxySlice.accessSize(content.get(), remote.get()),
+                    AuditLogger.OUTCOME_SUCCESS, null
+                );
                 // Serve artifact content (cooldown already evaluated and passed)
                 return this.serveArtifactContent(line, content.get(), remote.get());
             }
@@ -1685,6 +1680,40 @@ final class ProxySlice implements Slice {
         AuditLogger.access(
             ctx, this.rtype, this.rname, artifactName, version, size, user, outcome, reason
         );
+    }
+
+    /**
+     * Size recorded in the {@code artifact_access} audit record of a served
+     * artifact: the served (cached) content's size, else the Content-Length
+     * the upstream announced (a chunked upstream body does not know its
+     * size), else 0.
+     * @param content Served content
+     * @param remote Upstream response headers (empty or null on a cache hit)
+     * @return Size in bytes
+     */
+    static long accessSize(final Content content, final Headers remote) {
+        return content.size().or(() -> ProxySlice.contentLength(remote)).orElse(0L);
+    }
+
+    /**
+     * The Content-Length an upstream response announced.
+     * @param headers Upstream response headers (may be null on a cache hit)
+     * @return Length, empty when absent or malformed
+     */
+    private static Optional<Long> contentLength(final Headers headers) {
+        Optional<Long> result = Optional.empty();
+        if (headers != null) {
+            for (final Header header : headers) {
+                if ("content-length".equalsIgnoreCase(header.getKey())) {
+                    try {
+                        result = Optional.of(Long.parseLong(header.getValue().trim()));
+                    } catch (final NumberFormatException ignored) {
+                        result = Optional.empty();
+                    }
+                }
+            }
+        }
+        return result;
     }
 
     private Optional<ArtifactCoordinates> extract(final RequestLine line) {
