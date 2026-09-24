@@ -32,7 +32,9 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 /**
  * Test for {@link ContentTypeSlice}: proxied Maven files get the same
- * Content-Type as locally served ones, an upstream type is kept.
+ * Content-Type as locally served ones, whether they come from the cache or
+ * straight from upstream (R20); an upstream type is kept only for files
+ * Pantera does not type itself.
  *
  * @since 2.2.9
  */
@@ -43,7 +45,10 @@ final class ContentTypeSliceTest {
         "/g/a/1.0/a-1.0.module,,application/json",
         "/g/a/1.0/a-1.0.jar.sha1,,text/plain",
         "/g/a/1.0/a-1.0.jar,,application/java-archive",
-        "/g/a/maven-metadata.xml,application/xml; charset=utf-8,application/xml; charset=utf-8"
+        "/g/a/maven-metadata.xml,application/xml; charset=utf-8,application/xml; charset=utf-8",
+        "/g/a/1.0/a-1.0.module,application/vnd.org.gradle.module+json,application/json",
+        "/g/a/1.0/a-1.0.pom,text/xml,application/x-maven-pom+xml",
+        "/g/a/1.0/a-1.0.jar.sha1,application/octet-stream,text/plain"
     })
     void typesSuccessfulResponses(final String path, final String upstream, final String type) {
         MatcherAssert.assertThat(
@@ -59,6 +64,25 @@ final class ContentTypeSliceTest {
                 new RequestLine(RqMethod.GET, path), Headers.EMPTY, Content.EMPTY
             ).join().headers().values("Content-Type"),
             new IsEqual<>(List.of(type))
+        );
+    }
+
+    @Test
+    void replacesAnUpstreamTypeWhateverTheHeaderNameCase() {
+        MatcherAssert.assertThat(
+            new ContentTypeSlice(
+                (line, headers, body) -> CompletableFuture.completedFuture(
+                    new Response(
+                        RsStatus.OK,
+                        Headers.from("content-type", "application/vnd.org.gradle.module+json"),
+                        Content.EMPTY
+                    )
+                )
+            ).response(
+                new RequestLine(RqMethod.HEAD, "/g/a/1.0/a-1.0.module"),
+                Headers.EMPTY, Content.EMPTY
+            ).join().headers().values("Content-Type"),
+            new IsEqual<>(List.of("application/json"))
         );
     }
 

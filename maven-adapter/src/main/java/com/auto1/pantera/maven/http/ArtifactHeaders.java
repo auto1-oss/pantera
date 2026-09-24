@@ -78,21 +78,34 @@ final class ArtifactHeaders {
      * @return Content type header
      */
     static Header contentType(final Key key) {
-        final String type;
-        final String src = key.string();
-        type = switch (extension(key)) {
-            case "jar" -> "application/java-archive";
-            case "pom" -> "application/x-maven-pom+xml";
-            // Gradle Module Metadata is a JSON document.
-            case "module" -> "application/json";
-            case "md5", "sha1", "sha256", "sha512" -> "text/plain";
-            case "asc" -> "application/pgp-signature";
-            default -> URLConnection.guessContentTypeFromName(src);
-        };
         // "*" is not a media type; responses also carry nosniff, so an
         // unknown file is announced as opaque bytes.
         return new Header(
-            "Content-Type", Optional.ofNullable(type).orElse("application/octet-stream")
+            "Content-Type",
+            mavenType(key)
+                .or(() -> Optional.ofNullable(URLConnection.guessContentTypeFromName(key.string())))
+                .orElse("application/octet-stream")
+        );
+    }
+
+    /**
+     * The Content-Type Pantera assigns to a Maven file kind itself (archives,
+     * POMs, Gradle Module Metadata, checksums, signatures), whatever an
+     * upstream announced for it.
+     * @param key Artifact key
+     * @return Maven content type, empty for other files
+     */
+    static Optional<String> mavenType(final Key key) {
+        return Optional.ofNullable(
+            switch (extension(key)) {
+                case "jar" -> "application/java-archive";
+                case "pom" -> "application/x-maven-pom+xml";
+                // Gradle Module Metadata is a JSON document.
+                case "module" -> "application/json";
+                case "md5", "sha1", "sha256", "sha512" -> "text/plain";
+                case "asc" -> "application/pgp-signature";
+                default -> null;
+            }
         );
     }
 
