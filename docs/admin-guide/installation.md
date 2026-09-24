@@ -267,9 +267,16 @@ Fixtures that hold secrets are not committed (2.2.9):
 - **Keycloak realm**: `keycloak-export/pantera-realm.json` reads the client
   secret from `KEYCLOAK_CLIENT_SECRET` and the sample user's password from
   `PANTERA_DEV_SSO_USER_PASSWORD` (both required in `.env`; the password is
-  temporary and must be changed at first login). A realm already imported
-  from an older checkout keeps its old values — re-import it (or rotate the
-  client secret in the Keycloak admin console) after upgrading.
+  temporary and must be changed at first login). Keycloak only imports the
+  realm when it does not exist yet, so a realm imported from an older
+  checkout keeps its old values. Re-import it after upgrading (this resets
+  the realm, including the sample user's password):
+
+  ```bash
+  docker compose stop keycloak
+  docker compose run --rm --no-deps keycloak import --dir /opt/keycloak/data/import --override true
+  docker compose start keycloak
+  ```
 
 ### Stack Services
 
