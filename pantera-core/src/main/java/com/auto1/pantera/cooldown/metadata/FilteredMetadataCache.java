@@ -752,12 +752,13 @@ public class FilteredMetadataCache implements Cleanable<String> {
      * @param packageName Package name, for logging
      * @param deleted Keys deleted by previous pages
      */
-    private void sweepL2Step(
+    private CompletableFuture<Integer> sweepL2Step(
         final io.lettuce.core.ScanCursor cursor,
         final String pattern,
         final String packageName,
         final int deleted
     ) {
+        final CompletableFuture<Integer> done = new CompletableFuture<>();
         this.l2Connection.async()
             .scan(cursor, io.lettuce.core.ScanArgs.Builder.matches(pattern).limit(500))
             .whenComplete((result, error) -> {
@@ -771,11 +772,17 @@ public class FilteredMetadataCache implements Cleanable<String> {
                         .error(error)
                         .field("log.source", "application")
                         .log();
+                    done.completeExceptionally(error);
                     return;
                 }
                 final java.util.List<String> keys = result.getKeys();
-                if (!keys.isEmpty()) {
-                    this.l2Connection.async().del(keys.toArray(new String[0]));
+                final CompletableFuture<?> del;
+                if (keys.isEmpty()) {
+                    del = CompletableFuture.completedFuture(null);
+                } else {
+                    del = this.l2Connection.async().del(keys.toArray(new String[0]))
+                        .toCompletableFuture()
+                        .exceptionally(ignored -> 0L);
                     for (final String key : keys) {
                         if (this.l1Cache != null) {
                             this.l1Cache.invalidate(key);
@@ -785,21 +792,191 @@ public class FilteredMetadataCache implements Cleanable<String> {
                     }
                 }
                 final int total = deleted + keys.size();
-                if (result.isFinished()) {
-                    if (total > 0) {
-                        com.auto1.pantera.http.log.EcsLogger.info("com.auto1.pantera.cooldown.metadata")
-                            .message("L2 envelope sweep dropped " + total + " stale entrie(s)")
-                            .eventCategory("database")
-                            .eventAction("envelope_invalidate_l2")
-                            .eventOutcome("success")
-                            .field("package.name", packageName)
-                            .field("log.source", "application")
-                            .log();
-                    }
-                } else {
-                    this.sweepL2Step(result, pattern, packageName, total);
-                }
+                del.thenRun(() -> this.sweepL2Next(result, pattern, packageName, total, done));
             });
+        return done;
+    }
+
+    /**
+     * Continue or finish an L2 sweep once a page's deletes have landed.
+     *
+     * @param result Scan page just processed
+     * @param pattern MATCH pattern
+     * @param packageName Package name, for logging
+     * @param total Keys deleted so far
+     * @param done Sweep completion
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private void sweepL2Next(
+        final io.lettuce.core.KeyScanCursor<String> result, final String pattern,
+        final String packageName, final int total, final CompletableFuture<Integer> done
+    ) {
+        if (result.isFinished()) {
+            if (total > 0) {
+                com.auto1.pantera.http.log.EcsLogger.info("com.auto1.pantera.cooldown.metadata")
+                    .message("L2 envelope sweep dropped " + total + " stale entrie(s)")
+                    .eventCategory("database")
+                    .eventAction("envelope_invalidate_l2")
+                    .eventOutcome("success")
+                    .field("package.name", packageName)
+                    .field("log.source", "application")
+                    .log();
+            }
+            done.complete(total);
+        } else {
+            this.sweepL2Step(result, pattern, packageName, total)
+                .whenComplete((sum, err) -> {
+                    if (err == null) {
+                        done.complete(sum);
+                    } else {
+                        done.completeExceptionally(err);
+                    }
+                });
+        }
+    }
+
+    /**
+     * {@link #invalidateByPackageName(String)} whose future completes once
+     * the L2 sweep has finished, with honest counts: envelopes dropped from
+     * this node's L1, and envelope keys deleted from L2 (cluster-wide; peers
+     * drop their L1 twins via the invalidation publisher). Admin tooling
+     * uses this where it must report — and act after — a completed sweep.
+     *
+     * @param packageName Canonical package name as the cache stores it
+     * @return Future of {@code [l1Dropped, l2Deleted]}
+     */
+    public CompletableFuture<int[]> invalidatePackageAwaiting(final String packageName) {
+        if (packageName == null || packageName.isEmpty()) {
+            return CompletableFuture.completedFuture(new int[]{0, 0});
+        }
+        this.notifyPackageChanged(packageName);
+        final String suffix = ":" + packageName;
+        int local = 0;
+        if (this.l1Cache != null) {
+            for (final String key : java.util.List.copyOf(this.l1Cache.asMap().keySet())) {
+                if (key.endsWith(suffix)) {
+                    this.l1Cache.invalidate(key);
+                    this.inflight.remove(key);
+                    this.publishInvalidation(key);
+                    local = local + 1;
+                }
+            }
+        }
+        final int l1 = local;
+        if (this.l2Connection == null) {
+            return CompletableFuture.completedFuture(new int[]{l1, 0});
+        }
+        return this.sweepL2Step(
+            io.lettuce.core.ScanCursor.INITIAL,
+            "metadata:*:" + escapeGlob(packageName), packageName, 0
+        ).thenApply(l2 -> new int[]{l1, l2});
+    }
+
+    /**
+     * Where the filtered envelope of one package in one repository lives
+     * right now: this node's L1 (with the age of the youngest variant) and
+     * L2 (with the longest remaining TTL across variants). Matches every
+     * repo-type and variant segment, so callers need only the repository
+     * and package names.
+     *
+     * @param repoName Repository name
+     * @param packageName Canonical package name
+     * @return Future of the envelope state
+     */
+    public CompletableFuture<EnvelopeState> probe(
+        final String repoName, final String packageName
+    ) {
+        final String suffix = ":" + packageName;
+        final String segment = ":" + repoName + ":";
+        long age = -1L;
+        if (this.l1Cache != null) {
+            for (final java.util.Map.Entry<String, CacheEntry> entry
+                : this.l1Cache.asMap().entrySet()) {
+                final String key = entry.getKey();
+                if (key.endsWith(suffix) && FilteredMetadataCache.repoSegment(key, segment)) {
+                    final long cur = Duration.between(
+                        entry.getValue().createdAt(), Instant.now()
+                    ).toMillis();
+                    age = age < 0 ? cur : Math.min(age, cur);
+                }
+            }
+        }
+        final boolean inL1 = age >= 0;
+        final long l1Age = age;
+        if (this.l2Connection == null) {
+            return CompletableFuture.completedFuture(
+                new EnvelopeState(inL1, l1Age, false, -2L)
+            );
+        }
+        final String pattern = "metadata:*:" + escapeGlob(repoName) + ":*:"
+            + escapeGlob(packageName);
+        return this.scanAll(io.lettuce.core.ScanCursor.INITIAL, pattern, new java.util.ArrayList<>())
+            .thenCompose(found -> {
+                final java.util.List<CompletableFuture<Long>> ttls = found.stream()
+                    .filter(key -> key.endsWith(suffix)
+                        && FilteredMetadataCache.repoSegment(key, segment))
+                    .map(key -> this.l2Connection.async().pttl(key).toCompletableFuture())
+                    .toList();
+                return CompletableFuture.allOf(ttls.toArray(new CompletableFuture[0]))
+                    .thenApply(ignored -> ttls.stream()
+                        .map(CompletableFuture::join)
+                        .filter(java.util.Objects::nonNull)
+                        .filter(ttl -> ttl != -2L)
+                        .max(Long::compare)
+                        .map(ttl -> new EnvelopeState(inL1, l1Age, true, ttl))
+                        .orElseGet(() -> new EnvelopeState(inL1, l1Age, false, -2L)));
+            });
+    }
+
+    /**
+     * Collect every L2 key matching a pattern (cursor SCAN to completion).
+     *
+     * @param cursor Scan cursor
+     * @param pattern MATCH pattern
+     * @param acc Accumulator
+     * @return Future of the matching keys
+     */
+    private CompletableFuture<java.util.List<String>> scanAll(
+        final io.lettuce.core.ScanCursor cursor, final String pattern,
+        final java.util.List<String> acc
+    ) {
+        return this.l2Connection.async()
+            .scan(cursor, io.lettuce.core.ScanArgs.Builder.matches(pattern).limit(1000))
+            .toCompletableFuture()
+            .thenCompose(page -> {
+                acc.addAll(page.getKeys());
+                if (page.isFinished()) {
+                    return CompletableFuture.completedFuture(acc);
+                }
+                return this.scanAll(page, pattern, acc);
+            });
+    }
+
+    /**
+     * Whether a canonical key's repository segment (third segment) equals
+     * the given {@code :repo:} marker.
+     *
+     * @param key Canonical key {@code metadata:type:repo:variant:package}
+     * @param segment {@code ":" + repoName + ":"}
+     * @return True when the key belongs to the repository
+     */
+    private static boolean repoSegment(final String key, final String segment) {
+        final int first = key.indexOf(':', "metadata:".length());
+        return first > 0 && key.startsWith(segment, first);
+    }
+
+    /**
+     * Envelope presence across tiers.
+     *
+     * @param l1Present Whether this node's L1 holds an envelope
+     * @param l1AgeMs Age of the youngest L1 envelope, {@code -1} when absent
+     * @param l2Present Whether L2 holds an envelope
+     * @param l2TtlMs Longest remaining L2 TTL in ms, {@code -2} when absent,
+     *  {@code -1} when it never expires
+     */
+    public record EnvelopeState(
+        boolean l1Present, long l1AgeMs, boolean l2Present, long l2TtlMs
+    ) {
     }
 
     /**
@@ -1171,6 +1348,15 @@ public class FilteredMetadataCache implements Cleanable<String> {
             this.createdAt = Instant.now();
             this.blockedVersions = blockedVersions == null
                 ? null : java.util.Set.copyOf(blockedVersions);
+        }
+
+        /**
+         * When this entry was computed.
+         *
+         * @return Creation instant
+         */
+        public Instant createdAt() {
+            return this.createdAt;
         }
 
         /**

@@ -262,6 +262,15 @@ public final class FilteredMetadataCacheRegistry {
      *                 or empty → no-op.
      * @return number of L1 entries invalidated on this instance.
      */
+    /**
+     * The installed shared envelope cache, for admin diagnostics.
+     *
+     * @return Shared cache, empty before boot wiring (tests, DB-less boots)
+     */
+    public java.util.Optional<FilteredMetadataCache> sharedCache() {
+        return java.util.Optional.ofNullable(this.shared);
+    }
+
     public int invalidateAfterUpload(final String repoType, final String packageName) {
         return this.invalidate(repoType, packageName, "upload", "envelope_invalidate_on_upload");
     }
