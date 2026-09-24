@@ -345,7 +345,7 @@ final class CachedProxySlice implements Slice {
                 try {
                     final Response refreshed =
                         this.fetchThroughCache(line, headers, name, false).join();
-                    refreshed.body().asBytesFuture().join();
+                    refreshed.body().discard().join();
                     if (refreshed.status().success()) {
                         EcsLogger.debug("com.auto1.pantera.composer")
                             .message("Background refresh completed")

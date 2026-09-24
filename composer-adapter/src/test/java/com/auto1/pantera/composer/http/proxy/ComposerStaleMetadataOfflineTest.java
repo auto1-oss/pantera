@@ -124,10 +124,13 @@ final class ComposerStaleMetadataOfflineTest {
                 "the client is served the stale copy",
                 resp.status().code(), new IsEqual<>(200)
             );
-            while (logs.action("stale_while_revalidate").isEmpty()) {
+            // Filter by package: a refresh started by another test in this
+            // JVM (acme/foo) can log inside this capture window.
+            while (ComposerStaleMetadataOfflineTest.refreshOf(logs, "acme/bar").isEmpty()) {
                 Thread.sleep(5);
             }
-            final Map<String, Object> refresh = logs.action("stale_while_revalidate").get(0);
+            final Map<String, Object> refresh =
+                ComposerStaleMetadataOfflineTest.refreshOf(logs, "acme/bar").get();
             MatcherAssert.assertThat(
                 "the failed background refresh is reported as a failure",
                 refresh.get("event.outcome"), new IsEqual<>("failure")
@@ -177,5 +180,19 @@ final class ComposerStaleMetadataOfflineTest {
                 }
             });
         }
+    }
+
+    /**
+     * The stale-while-revalidate log line of one package, if logged yet.
+     * @param logs Captured logs
+     * @param pkg Package name
+     * @return Event payload
+     */
+    private static Optional<Map<String, Object>> refreshOf(
+        final LogCapture logs, final String pkg
+    ) {
+        return logs.action("stale_while_revalidate").stream()
+            .filter(event -> pkg.equals(event.get("package.name")))
+            .findFirst();
     }
 }
