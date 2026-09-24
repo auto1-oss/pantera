@@ -115,7 +115,9 @@ curl -u 'your-username:your-api-token' http://pantera-host:8080/v2/docker-local/
 curl -u 'your-username:your-api-token' http://pantera-host:8080/v2/docker-local/myapp/tags/list
 ```
 
-The catalog is per repository (`/v2/<repo>/_catalog`) and lists names with the repository prefix (`docker-local/myapp`); there is no registry-wide `/v2/_catalog`. Both endpoints page with `?n=<count>&last=<name>`; a full tags page carries a `Link: <...>; rel="next"` header pointing at the next page. A tags request for an image the repository does not hold answers `404 NAME_UNKNOWN`.
+The catalog is per repository (`/v2/<repo>/_catalog`) and lists full image names with the repository prefix (`docker-local/myapp`, `docker-local/team/tools/builder`); there is no registry-wide `/v2/_catalog`. A proxy repository's catalog lists the images it has cached. A group's catalog is the union of its members' catalogs, named under the group (`docker-group/myapp`), which are the names you pull through the group; each member contributes only if you hold the `catalog` permission on it.
+
+Both endpoints page with `?n=<count>&last=<name>`. On every repository type, a full page (catalog or tags) carries a `Link: <...>; rel="next"` header pointing at the next page. The catalog's `last` is a name from an earlier page, including the repository prefix. A `last` outside the repository (`400 NAME_INVALID`) or an `n` that is not a non-negative integer (`400 PAGINATION_NUMBER_INVALID`) is rejected. A tags request for an image the repository does not hold answers `404 NAME_UNKNOWN`.
 
 ---
 

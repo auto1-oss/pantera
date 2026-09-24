@@ -1360,7 +1360,7 @@ public class RepositorySlices {
             case "pypi-group":
             case "docker-group":
                 final List<String> genericFlatMembers = flattenMembers(cfg.name());
-                final Slice genericResolver = new GroupResolver(
+                final GroupResolver genericResolver = new GroupResolver(
                     this::slice, cfg.name(), genericFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
@@ -1373,12 +1373,7 @@ public class RepositorySlices {
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        // pip search is XML-RPC POST; a group cannot search,
-                        // so it answers an XML-RPC fault instead of an empty
-                        // 405 that crashes pip.
-                        "pypi-group".equals(cfg.type())
-                            ? new com.auto1.pantera.pypi.http.SearchFaultSlice(genericResolver)
-                            : genericResolver,
+                        RepositorySlices.genericGroup(cfg.type(), genericResolver),
                         authentication(),
                         tokens.auth(),
                         new OperationControl(
@@ -1848,6 +1843,29 @@ public class RepositorySlices {
         final HttpClientSettings effective = cfg.httpClientSettings()
             .orElseGet(settings::httpClientSettings);
         return this.sharedClients.acquire(effective);
+    }
+
+    /**
+     * Format-specific front of a generic group walk. pip search is XML-RPC
+     * POST; a group cannot search, so it answers an XML-RPC fault instead of
+     * an empty 405 that crashes pip. A docker group answers its catalog
+     * itself (the union of its members under the group's name) and points
+     * tags-page links at the group.
+     *
+     * @param type Repository type
+     * @param resolver Group walk
+     * @return Group slice
+     */
+    private static Slice genericGroup(final String type, final GroupResolver resolver) {
+        final Slice res;
+        if ("pypi-group".equals(type)) {
+            res = new com.auto1.pantera.pypi.http.SearchFaultSlice(resolver);
+        } else if ("docker-group".equals(type)) {
+            res = new com.auto1.pantera.group.DockerGroupSlice(resolver);
+        } else {
+            res = resolver;
+        }
+        return res;
     }
 
     private static Slice trimPathSlice(final Slice original) {

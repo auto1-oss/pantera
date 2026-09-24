@@ -75,7 +75,7 @@ docker_registry_permissions:
 | Value | Description |
 |-------|-------------|
 | `base` | Access the Docker V2 API base endpoint |
-| `catalog` | List the images of a repository: `GET /v2/<repo>/_catalog` |
+| `catalog` | List the images of a repository: `GET /v2/<repo>/_catalog`. A group's catalog needs `read` on the group and lists the members on which the user holds `catalog` |
 | `*` | Both of the above |
 
 ### all_permission
