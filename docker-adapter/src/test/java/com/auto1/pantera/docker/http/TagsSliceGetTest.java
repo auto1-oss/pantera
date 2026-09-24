@@ -11,11 +11,14 @@
 package com.auto1.pantera.docker.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.docker.Catalog;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.Layers;
 import com.auto1.pantera.docker.Manifests;
 import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.docker.asto.Uploads;
 import com.auto1.pantera.docker.fake.FullTagsManifests;
 import com.auto1.pantera.docker.misc.Pagination;
@@ -147,6 +150,57 @@ class TagsSliceGetTest {
         MatcherAssert.assertThat(
             response.headers().values(NegativeCache.SKIP_HEADER).isEmpty(),
             new IsEqual<>(false)
+        );
+    }
+
+    /**
+     * T06: a hosted repository answers 404 NAME_UNKNOWN for an image it
+     * does not hold even when a {@code last} cursor is sent. The empty 200
+     * it gave before won a group walk over the proxy member that holds the
+     * image, so every page after the first came back empty.
+     */
+    @Test
+    void hostedAnswersNameUnknownForUnknownImageWithCursor() {
+        final InMemoryStorage storage = new InMemoryStorage();
+        storage.save(
+            new Key.From("repositories/team/img/_manifests/tags/1/current/link"),
+            new Content.From("sha256:abc".getBytes())
+        ).join();
+        MatcherAssert.assertThat(
+            TestDockerAuth.slice(new AstoDocker("registry", storage)).response(
+                new RequestLine(RqMethod.GET, "/v2/library/alpine/tags/list?n=2&last=2.7"),
+                TestDockerAuth.headers(),
+                Content.EMPTY
+            ).join(),
+            new IsErrorsResponse(RsStatus.NOT_FOUND, "NAME_UNKNOWN")
+        );
+    }
+
+    /**
+     * T06: a cursor past the last tag of an image the repository holds is
+     * an empty page (200), not NAME_UNKNOWN.
+     */
+    @Test
+    void hostedAnswersEmptyPageForKnownImagePastLastTag() {
+        final InMemoryStorage storage = new InMemoryStorage();
+        storage.save(
+            new Key.From("repositories/team/img/_manifests/tags/1/current/link"),
+            new Content.From("sha256:abc".getBytes())
+        ).join();
+        final Response response = TestDockerAuth.slice(new AstoDocker("registry", storage))
+            .response(
+                new RequestLine(RqMethod.GET, "/v2/team/img/tags/list?n=2&last=1"),
+                TestDockerAuth.headers(),
+                Content.EMPTY
+            ).join();
+        MatcherAssert.assertThat(
+            "known image past its last tag is 200",
+            response.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the page is empty",
+            new String(response.body().asBytesFuture().join()),
+            new IsEqual<>("{\"name\":\"team/img\",\"tags\":[]}")
         );
     }
 

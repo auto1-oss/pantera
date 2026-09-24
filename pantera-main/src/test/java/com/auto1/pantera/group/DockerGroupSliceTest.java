@@ -11,20 +11,29 @@
 package com.auto1.pantera.group;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.cache.NegativeCacheConfig;
+import com.auto1.pantera.docker.asto.AstoDocker;
+import com.auto1.pantera.docker.http.DockerSlice;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
+import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.timeout.AutoBlockRegistry;
 import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -264,6 +273,77 @@ final class DockerGroupSliceTest {
             "the body is relayed",
             body(resp),
             new IsEqual<>("{\"name\":\"ayd/test\",\"tags\":[\"2.0.0\"]}")
+        );
+    }
+
+    /**
+     * T05: following the group's tags Link for an image only the proxy
+     * member holds keeps returning the proxy's pages. The hosted member,
+     * walked first, must answer 404 NAME_UNKNOWN for the cursor page, not
+     * an empty 200 that wins the walk.
+     */
+    @Test
+    void pagesProxyTagsPastAHostedMemberThatLacksTheImage() {
+        final InMemoryStorage storage = new InMemoryStorage();
+        storage.save(
+            new Key.From("repositories/team/img/_manifests/tags/1/current/link"),
+            new Content.From("sha256:abc".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        final Slice hosted = new DockerSlice(new AstoDocker("docker_local", storage));
+        final Slice local = (line, headers, body) -> hosted.response(
+            new RequestLine(
+                line.method().value(),
+                "/v2" + line.uri().toString().substring("/docker_local".length())
+            ),
+            headers, body
+        );
+        final Slice proxy = (line, headers, body) -> CompletableFuture.completedFuture(
+            ResponseBuilder.ok()
+                .header(
+                    "Link",
+                    "</v2/docker_proxy/library/alpine/tags/list?n=2&last=20190408>; rel=\"next\""
+                )
+                .jsonBody("{\"name\":\"library/alpine\",\"tags\":[\"20190228\",\"20190408\"]}")
+                .build()
+        );
+        final List<MemberSlice> members = List.of(
+            new MemberSlice("docker_local", local, false),
+            new MemberSlice("docker_proxy", proxy, true)
+        );
+        final Response resp = new DockerGroupSlice(
+            new GroupResolver(
+                "docker_group", members, List.of(), Optional.empty(), "docker-group",
+                Set.of("docker_proxy"),
+                new NegativeCache(
+                    new NegativeCacheConfig(
+                        Duration.ofMinutes(5), 10_000, false,
+                        NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
+                        NegativeCacheConfig.DEFAULT_L1_TTL,
+                        NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
+                        NegativeCacheConfig.DEFAULT_L2_TTL
+                    )
+                ),
+                ForkJoinPool.commonPool()
+            ),
+            "docker_group",
+            members
+        ).response(
+            new RequestLine("GET", "/library/alpine/tags/list?n=2&last=2.7"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the proxy page is served",
+            body(resp),
+            new IsEqual<>("{\"name\":\"library/alpine\",\"tags\":[\"20190228\",\"20190408\"]}")
+        );
+        MatcherAssert.assertThat(
+            "the next Link stays on the group",
+            resp.headers().values("Link"),
+            new IsEqual<>(
+                List.of(
+                    "</v2/docker_group/library/alpine/tags/list?n=2&last=20190408>; rel=\"next\""
+                )
+            )
         );
     }
 

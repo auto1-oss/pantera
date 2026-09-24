@@ -67,12 +67,18 @@ public final class JoinedTagsSource {
         // know the name), but the joined listing is then marked
         // incomplete so an empty result is not taken as NAME_UNKNOWN proof.
         final AtomicBoolean complete = new AtomicBoolean(true);
+        // The name is known when a source that answered holds it; a failed
+        // source proves nothing either way.
+        final AtomicBoolean known = new AtomicBoolean(false);
         CompletableFuture<List<String>>[] futs = new CompletableFuture[manifests.size()];
         for (int i = 0; i < manifests.size(); i++) {
             futs[i] = this.load(manifests.get(i))
                 .thenCompose(tags -> {
                     if (!tags.complete()) {
                         complete.set(false);
+                    }
+                    if (tags.known()) {
+                        known.set(true);
                     }
                     return new ParsedTags(tags).tags();
                 })
@@ -86,7 +92,7 @@ public final class JoinedTagsSource {
             .thenApply(v -> {
                 final List<String> names = new ArrayList<>();
                 Arrays.stream(futs).forEach(fut -> names.addAll(fut.getNow(List.of())));
-                return new TagsPage(repo, names, pagination, complete.get());
+                return new TagsPage(repo, names, pagination, complete.get(), known.get());
             });
     }
 

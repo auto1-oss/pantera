@@ -14,7 +14,9 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.docker.misc.Pagination;
 import com.google.common.base.Splitter;
 import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import wtf.g4s8.hamcrest.json.JsonContains;
@@ -22,6 +24,7 @@ import wtf.g4s8.hamcrest.json.JsonHas;
 import wtf.g4s8.hamcrest.json.JsonValueIs;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -74,6 +77,26 @@ final class AstoTagsTest {
                     ).map(JsonValueIs::new).collect(Collectors.toList())
                 )
             )
+        );
+    }
+
+    /**
+     * T06: an image with no tag keys is unknown to the repository, whatever
+     * page is asked; one with tags is known even past its last tag.
+     */
+    @Test
+    void knowsNameOnlyWhenItHasTags() {
+        MatcherAssert.assertThat(
+            "no tag keys: unknown",
+            new AstoTags(this.name, new Key.From("foo"), List.of(), Pagination.from("2.7", 2))
+                .known(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "tag keys, cursor past the last tag: known",
+            new AstoTags(this.name, new Key.From("foo"), this.keys, Pagination.from("zzz", 2))
+                .known(),
+            new IsEqual<>(true)
         );
     }
 }

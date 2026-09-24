@@ -63,35 +63,40 @@ final class TagsSlice extends DockerActionSlice {
                 .tags(page)
                 .thenCompose(
                     tags -> tags.json().asBytesFuture().thenApply(
-                        bytes -> TagsSlice.render(line, name, page, tags.complete(), bytes)
+                        bytes -> TagsSlice.render(
+                            line, name, page, new Listing(tags.complete(), tags.known()), bytes
+                        )
                     )
                 )
         );
     }
 
     /**
-     * Render the tags listing. An empty first page means the repository
-     * holds no such name: 404 NAME_UNKNOWN (marked non-authoritative for
-     * the negative cache when a source could not be read). A full page
-     * links to the next one.
+     * Render the tags listing. An empty page means the repository holds no
+     * such name — 404 NAME_UNKNOWN (marked non-authoritative for the
+     * negative cache when a source could not be read) — when it is the
+     * first page, or whatever the page when the tag sources prove the name
+     * absent: an empty 200 for a cursor page of an image the repository
+     * does not hold would win a group walk over the member that holds it.
+     * A full page links to the next one.
      *
      * @param line Request line
      * @param name Image name
      * @param page Requested page
-     * @param complete Whether every tag source answered
+     * @param listing What the tag sources told about the listing
      * @param bytes Tags JSON
      * @return Response
      */
     private static Response render(
         final RequestLine line, final String name, final Pagination page,
-        final boolean complete, final byte[] bytes
+        final Listing listing, final byte[] bytes
     ) {
         final Optional<List<String>> listed = TagsSlice.parse(bytes);
         final Response response;
         if (listed.isPresent() && listed.get().isEmpty()
-            && page.last() == null && page.limit() > 0) {
+            && (!listing.known() || page.last() == null && page.limit() > 0)) {
             final ResponseBuilder missing = ResponseBuilder.notFound();
-            if (!complete) {
+            if (!listing.complete()) {
                 missing.header(NegativeCache.SKIP_HEADER, "true");
             }
             response = missing.jsonBody(new NameUnknownError(name).json()).build();
@@ -131,5 +136,14 @@ final class TagsSlice extends DockerActionSlice {
     private String name(RequestLine line) {
         return ImageRepositoryName.validate(new RqByRegex(line, PathPatterns.TAGS)
             .path().group("name"));
+    }
+
+    /**
+     * What the tag sources told about a listing.
+     *
+     * @param complete Whether every tag source answered
+     * @param known Whether a tag source holds the name
+     */
+    private record Listing(boolean complete, boolean known) {
     }
 }

@@ -87,4 +87,56 @@ final class JoinedTagsSourceTest {
             new org.hamcrest.core.IsEqual<>(true)
         );
     }
+
+    /**
+     * T06: the joined listing knows the name when any source holds it.
+     */
+    @Test
+    void knowsNameWhenAnySourceHoldsIt() {
+        MatcherAssert.assertThat(
+            new JoinedTagsSource(
+                "my-test",
+                java.util.List.of(
+                    new FullTagsManifests(new UnknownTags()),
+                    new FullTagsManifests(() -> new Content.From("{\"tags\":[]}".getBytes()))
+                ),
+                Pagination.from("zzz", 2)
+            ).tags().join().known(),
+            new org.hamcrest.core.IsEqual<>(true)
+        );
+    }
+
+    /**
+     * T06: the joined listing does not know the name when no source that
+     * answered holds it (a failed source proves nothing either way).
+     */
+    @Test
+    void doesNotKnowNameWhenNoSourceHoldsIt() {
+        MatcherAssert.assertThat(
+            new JoinedTagsSource(
+                "my-test",
+                java.util.List.of(
+                    new FullTagsManifests(new UnknownTags()),
+                    new com.auto1.pantera.docker.fake.FaultyGetManifests()
+                ),
+                Pagination.from("zzz", 2)
+            ).tags().join().known(),
+            new org.hamcrest.core.IsEqual<>(false)
+        );
+    }
+
+    /**
+     * Tags of a source that does not hold the name.
+     */
+    private static final class UnknownTags implements com.auto1.pantera.docker.Tags {
+        @Override
+        public Content json() {
+            return new Content.From("{\"tags\":[]}".getBytes());
+        }
+
+        @Override
+        public boolean known() {
+            return false;
+        }
+    }
 }

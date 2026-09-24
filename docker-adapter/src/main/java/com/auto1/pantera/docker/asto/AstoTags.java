@@ -56,6 +56,11 @@ final class AstoTags implements Tags {
     }
 
     @Override
+    public boolean known() {
+        return !this.keys.isEmpty();
+    }
+
+    @Override
     public Content json() {
         return new Content.From(
             Json.createObjectBuilder()
