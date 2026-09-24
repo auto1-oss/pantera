@@ -244,8 +244,12 @@ public final class DockerTagsListHandler {
                             .build()
                     );
                 }
+                // Keep the page's Link: rel="next": the next page starts
+                // after this page's last upstream tag whether or not
+                // cooldown hid some of this page (R29).
+                final List<String> links = resp.headers().values("Link");
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, image, user, ctx)
+                    this.processUpstream(bytes, image, user, ctx, links)
                 );
             });
     }
@@ -260,7 +264,7 @@ public final class DockerTagsListHandler {
      */
     private CompletableFuture<Response> processUpstream(
         final byte[] upstreamBytes, final String image, final String user,
-        final AuditContext ctx
+        final AuditContext ctx, final List<String> links
     ) {
         final JsonNode parsed;
         try {
@@ -283,8 +287,7 @@ public final class DockerTagsListHandler {
                 "/tags/list parse fallback (unfiltered upstream bytes)"
             );
             return CompletableFuture.completedFuture(
-                ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
+                this.ok(links)
                     .body(upstreamBytes)
                     .build()
             );
@@ -298,8 +301,7 @@ public final class DockerTagsListHandler {
                 ctx, this.repoType, this.repoName, image, user, List.of()
             );
             return CompletableFuture.completedFuture(
-                ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
+                this.ok(links)
                     .body(upstreamBytes)
                     .build()
             );
@@ -310,8 +312,7 @@ public final class DockerTagsListHandler {
                 AuditLogger.resolution(
                     ctx, this.repoType, this.repoName, image, user, List.of()
                 );
-                return ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
+                return this.ok(links)
                     .body(upstreamBytes)
                     .build();
             }
@@ -333,8 +334,7 @@ public final class DockerTagsListHandler {
                 AuditLogger.resolution(
                     ctx, this.repoType, this.repoName, image, user, List.copyOf(blocked)
                 );
-                return ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
+                return this.ok(links)
                     .body(body)
                     .build();
             } catch (final MetadataRewriteException ex) {
@@ -356,12 +356,24 @@ public final class DockerTagsListHandler {
                     ctx, this.repoType, this.repoName, image, user,
                     "/tags/list rewrite fallback (unfiltered upstream bytes served)"
                 );
-                return ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
+                return this.ok(links)
                     .body(upstreamBytes)
                     .build();
             }
         });
+    }
+
+    /**
+     * A 200 tags answer carrying the upstream page's Link headers.
+     *
+     * @param links Link header values of the upstream page
+     * @return Response builder
+     */
+    private ResponseBuilder ok(final List<String> links) {
+        final ResponseBuilder res = ResponseBuilder.ok()
+            .header("Content-Type", this.rewriter.contentType());
+        links.forEach(link -> res.header("Link", link));
+        return res;
     }
 
     /**

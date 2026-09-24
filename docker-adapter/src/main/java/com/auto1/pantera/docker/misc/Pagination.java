@@ -11,6 +11,7 @@
 package com.auto1.pantera.docker.misc;
 
 import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.docker.error.PaginationNumberInvalidException;
 import com.auto1.pantera.http.rq.RqParams;
 import org.apache.hc.core5.net.URIBuilder;
 
@@ -18,6 +19,8 @@ import javax.json.Json;
 import javax.json.JsonArrayBuilder;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.List;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
@@ -36,8 +39,29 @@ public record Pagination(String last, int limit) {
         final RqParams params = new RqParams(uri);
         return new Pagination(
             params.value("last").orElse(null),
-            params.value("n").map(Integer::parseInt).orElse(Integer.MAX_VALUE)
+            params.value("n").map(Pagination::size).orElse(Integer.MAX_VALUE)
         );
+    }
+
+    /**
+     * Parse the {@code n} page size.
+     *
+     * @param value Page size as sent
+     * @return Page size
+     * @throws PaginationNumberInvalidException When it is not a non-negative
+     *  integer (answered 400, not 500)
+     */
+    private static int size(final String value) {
+        final int size;
+        try {
+            size = Integer.parseInt(value);
+        } catch (final NumberFormatException ex) {
+            throw new PaginationNumberInvalidException(value, ex);
+        }
+        if (size < 0) {
+            throw new PaginationNumberInvalidException(value);
+        }
+        return size;
     }
 
     public static Pagination from(String repoName, Integer limit) {
@@ -75,6 +99,29 @@ public record Pagination(String last, int limit) {
         } catch (URISyntaxException e) {
             throw new PanteraException(e);
         }
+    }
+
+    /**
+     * The {@code Link: <...>; rel="next"} header value for a page served
+     * with these parameters: present when a page size was requested and the
+     * page is full, pointing after the page's last entry.
+     *
+     * @param path Path the client requested (the next page's path)
+     * @param page Entries of the served page, in order
+     * @return Link header value, empty when there is no next page to link
+     */
+    public Optional<String> nextLink(final String path, final List<String> page) {
+        Optional<String> link = Optional.empty();
+        if (this.limit > 0 && this.limit != Integer.MAX_VALUE && page.size() >= this.limit) {
+            link = Optional.of(
+                String.format(
+                    "<%s>; rel=\"next\"",
+                    new Pagination(page.get(page.size() - 1), this.limit)
+                        .uriWithPagination(path)
+                )
+            );
+        }
+        return link;
     }
 
     /**

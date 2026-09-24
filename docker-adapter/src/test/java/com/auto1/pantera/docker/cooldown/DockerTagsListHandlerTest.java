@@ -239,6 +239,40 @@ final class DockerTagsListHandlerTest {
         assertThat(bodyToBytes(resp).length, equalTo(0));
     }
 
+    /**
+     * R29: a full proxied tags page keeps the {@code Link: rel="next"} header
+     * the tags slice produced, whether or not cooldown filtered the page.
+     * Rebuilding the response from the body alone dropped it, so a client
+     * following Link stopped after the first page.
+     */
+    @Test
+    void keepsNextPageLink() throws Exception {
+        final String link = "</v2/docker-test/library/nginx/tags/list?n=2&last=1.25>; rel=\"next\"";
+        final Slice linked = (line, headers, body) -> CompletableFuture.completedFuture(
+            ResponseBuilder.ok()
+                .header("Link", link)
+                .body(tagsJson("library/nginx", "1.24", "1.25").getBytes(StandardCharsets.UTF_8))
+                .build()
+        );
+        final DockerTagsListHandler handler = new DockerTagsListHandler(
+            linked, this.cooldown, new NullInspector(), "docker-proxy", "docker-test"
+        );
+        final RequestLine line = new RequestLine(
+            RqMethod.GET, "/v2/docker-test/library/nginx/tags/list?n=2"
+        );
+        assertThat(
+            "Link kept on an unfiltered page",
+            handler.handle(line, Headers.EMPTY, "alice").get().headers().values("Link"),
+            new IsEqual<>(List.of(link))
+        );
+        this.cooldown.block("1.24");
+        assertThat(
+            "Link kept on a filtered page",
+            handler.handle(line, Headers.EMPTY, "alice").get().headers().values("Link"),
+            new IsEqual<>(List.of(link))
+        );
+    }
+
     // ===== Helpers =====
 
     private static String tagsJson(final String name, final String... tags) {

@@ -99,17 +99,8 @@ final class TagsSlice extends DockerActionSlice {
             final ResponseBuilder found = ResponseBuilder.ok()
                 .header(ContentType.json())
                 .body(bytes);
-            if (listed.isPresent() && page.limit() > 0 && page.limit() != Integer.MAX_VALUE
-                && listed.get().size() >= page.limit()) {
-                found.header(
-                    "Link",
-                    String.format(
-                        "<%s>; rel=\"next\"",
-                        new Pagination(listed.get().get(listed.get().size() - 1), page.limit())
-                            .uriWithPagination(line.uri().getPath())
-                    )
-                );
-            }
+            listed.flatMap(names -> page.nextLink(line.uri().getPath(), names))
+                .ifPresent(link -> found.header("Link", link));
             response = found.build();
         }
         return response;
