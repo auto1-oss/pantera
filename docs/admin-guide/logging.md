@@ -98,10 +98,10 @@ Example slow-request query (>5s):
 | `url.path` | Request path component |
 | `url.query` | Query string (if present) |
 | `url.domain` | Target hostname |
-
-Credentials carried in a URL are masked as `***REDACTED***` in every URL field, in `file.path`, and in `message` / `error.message` / `error.stack_trace`: query parameters such as `token`, `signature` or `api_key`, `user:password@` userinfo, JWTs anywhere in the text, the token segment of `/-/user/token/<token>` (sent by `npm logout`) and `/-/npm/v1/tokens/token/<key>`, and the conda token segment of `/t/<token>/`.
 | `url.port` | Target port |
 | `url.full` | Complete URL including scheme |
+
+Credentials carried in a URL are masked as `***REDACTED***` in every URL field, in `file.path`, and in `message` / `error.message` / `error.stack_trace`: query parameters such as `token`, `signature` or `api_key`, `user:password@` userinfo, JWTs anywhere in the text, the token segment of `/-/user/token/<token>` (sent by `npm logout`) and `/-/npm/v1/tokens/token/<key>`, and the conda token segment of `/t/<token>/`.
 
 ### User and Auth Fields
 
