@@ -23,6 +23,7 @@ import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.http.slice.PathClashResponse;
 import com.auto1.pantera.http.slice.ContentWithSize;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -68,6 +69,14 @@ final class GoUploadSlice implements Slice {
      * Storage key of a module's version list.
      */
     private static final Pattern LIST = Pattern.compile("^(.+/)?@v/list$");
+
+    /**
+     * Storage key beneath a module's version list. {@code @v/list} is always
+     * a file, so such a key clashes with it; storing one while the list is
+     * absent would create a directory in its place and break every later
+     * list rewrite.
+     */
+    private static final Pattern UNDER_LIST = Pattern.compile("^(.+/)?@v/list/.+$");
 
     /**
      * Serializes publishes of the same version file and rewrites of the same
@@ -176,10 +185,17 @@ final class GoUploadSlice implements Slice {
                     .build()
             );
         }
+        final PathClashResponse clash = new PathClashResponse(key);
+        if (UNDER_LIST.matcher(key.string()).matches()) {
+            return body.asBytesFuture().thenApply(
+                ignored -> clash.conflict("version_list_is_a_file")
+            );
+        }
         final Matcher matcher = ARTIFACT.matcher(normalise(sanitizedPath));
         if (!matcher.matches()) {
             return this.storage.save(key, new ContentWithSize(body, headers))
-                .thenApply(ignored -> ResponseBuilder.created().build());
+                .thenApply(ignored -> ResponseBuilder.created().build())
+                .exceptionally(clash::recover);
         }
         final String module = matcher.group("module");
         final String version = matcher.group("version");
@@ -198,7 +214,7 @@ final class GoUploadSlice implements Slice {
                 return this.published(outcome, headers, module, version, key, zip)
                     .thenApply(ignored -> ResponseBuilder.created().build());
             }
-        );
+        ).exceptionally(clash::recover);
     }
 
     /**

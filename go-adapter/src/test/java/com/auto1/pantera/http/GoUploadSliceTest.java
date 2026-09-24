@@ -14,12 +14,14 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.ContentIs;
 import com.auto1.pantera.http.hm.RsHasStatus;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
@@ -42,6 +44,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -341,6 +344,72 @@ final class GoUploadSliceTest {
                 StandardCharsets.UTF_8
             ),
             new IsEqual<>("v1.0.0\n")
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/@v/v1.0.0.mod/x", "/@v/v1.0.0.mod/d/e.txt"})
+    void uploadUnderAnExistingFileIsConflict(final String suffix, @TempDir final Path tmp) {
+        final Storage storage = new FileStorage(tmp);
+        final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.empty());
+        GoUploadSliceTest.put(slice, MODULE + "/@v/v1.0.0.mod", "mod");
+        MatcherAssert.assertThat(
+            "a path through an existing file is a conflict",
+            GoUploadSliceTest.put(slice, MODULE + suffix, "x").status(),
+            new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the existing file is untouched",
+            storage.value(new Key.From(MODULE + "/@v/v1.0.0.mod")).join(),
+            new ContentIs("mod".getBytes(StandardCharsets.UTF_8))
+        );
+    }
+
+    @Test
+    void versionFileUnderAnExistingFileIsConflict(@TempDir final Path tmp) {
+        final Storage storage = new FileStorage(tmp);
+        final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.empty());
+        GoUploadSliceTest.put(slice, "example.com/plain", "file");
+        MatcherAssert.assertThat(
+            GoUploadSliceTest.put(slice, "example.com/plain/@v/v1.0.0.mod", "mod").status(),
+            new IsEqual<>(RsStatus.CONFLICT)
+        );
+    }
+
+    @Test
+    void writeBeneathThePublishedVersionListIsConflict(@TempDir final Path tmp) {
+        final Storage storage = new FileStorage(tmp);
+        final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.empty());
+        GoUploadSliceTest.put(slice, MODULE + "/@v/v1.0.0.zip", "zip");
+        MatcherAssert.assertThat(
+            "a write beneath @v/list is a conflict",
+            GoUploadSliceTest.put(slice, MODULE + "/@v/list/file", "x").status(),
+            new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the list still reflects the published zips",
+            new String(
+                storage.value(new Key.From(MODULE + "/@v/list")).join().asBytes(),
+                StandardCharsets.UTF_8
+            ),
+            new IsEqual<>("v1.0.0\n")
+        );
+    }
+
+    @Test
+    void writeBeneathAnAbsentVersionListCreatesNothing() {
+        // A directory named @v/list would break every later list rewrite.
+        final Storage storage = new InMemoryStorage();
+        final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.empty());
+        MatcherAssert.assertThat(
+            "a write beneath @v/list is a conflict",
+            GoUploadSliceTest.put(slice, MODULE + "/@v/list/file", "x").status(),
+            new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "nothing is stored",
+            storage.list(Key.ROOT).join().isEmpty(),
+            new IsEqual<>(true)
         );
     }
 
