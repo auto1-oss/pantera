@@ -32,9 +32,7 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
-import org.slf4j.MDC;
 
 import javax.json.Json;
 import javax.json.JsonException;
@@ -172,9 +170,7 @@ public final class DockerProxyCooldownSlice implements Slice {
     ) {
         final String path = line.uri().getPath();
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext ctx = new AuditContext(headers);
         // GET /v2/<name>/tags/list — route through the tags-list filter
         // handler. This is where the Docker cooldown bundle registered
         // in CooldownWiring is actually consumed; without this dispatch

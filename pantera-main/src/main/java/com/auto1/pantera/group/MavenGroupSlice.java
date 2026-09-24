@@ -374,10 +374,7 @@ public final class MavenGroupSlice implements Slice {
                 // blind spot.
                 com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
                 final com.auto1.pantera.audit.AuditContext hitCtx =
-                    new com.auto1.pantera.audit.AuditContext(
-                        org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
-                        org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
-                    );
+                    new com.auto1.pantera.audit.AuditContext(headers);
                 final String hitPkg =
                     new com.auto1.pantera.maven.cooldown.MavenMetadataCoordinates()
                         .packageName(path)
@@ -678,10 +675,7 @@ public final class MavenGroupSlice implements Slice {
         // must reflect this request, not whatever the worker thread has bound.
         com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
         com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
-            new com.auto1.pantera.audit.AuditContext(
-                org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
-                org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
-            ),
+            new com.auto1.pantera.audit.AuditContext(headers),
             this.repoType, this.group, pkg,
             new com.auto1.pantera.http.headers.Login(headers).getValue(),
             "group relays member metadata verbatim; cooldown is enforced by proxy members"

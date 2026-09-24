@@ -25,13 +25,11 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.fasterxml.jackson.databind.JsonNode;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
-import org.slf4j.MDC;
 
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
@@ -228,9 +226,7 @@ public final class DockerTagsListHandler {
             )
         );
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext ctx = new AuditContext(headers);
         // Forward the inbound headers: the upstream is the auth-enforcing
         // DockerSlice, so dropping them dropped Authorization and every
         // authenticated tags/list answered 401 (B10).

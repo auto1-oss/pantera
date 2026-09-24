@@ -20,7 +20,6 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -52,7 +51,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.Supplier;
-import org.slf4j.MDC;
 
 /**
  * PyPI proxy slice with negative, metadata and integrity-verified caching.
@@ -708,15 +706,18 @@ public final class CachedPyProxySlice implements Slice {
     }
 
     /**
-     * Correlation context of the request, bound from its internal
-     * {@code X-Pantera-Ctx-*} headers on the calling thread.
+     * Build an {@link AuditContext} for the current request from its internal
+     * {@code X-Pantera-Ctx-*} headers, which are authoritative on any thread
+     * (the thread's MDC is never read: a pooled thread can hold another
+     * request's values). The headers are also bound to this thread's MDC for
+     * the application logs that follow.
      *
-     * @param headers Request headers
-     * @return Audit context
+     * @param headers Inbound request headers
+     * @return Context carrying the request's trace id / client IP
      */
     private static AuditContext captureAuditContext(final Headers headers) {
         RequestContextHeaders.bindToMdc(headers);
-        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
+        return new AuditContext(headers);
     }
 
     /**

@@ -656,10 +656,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         // context, not whatever (or nothing) is bound to the worker thread
         // that eventually runs the .thenCompose continuation.
         com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(inboundHeaders);
-        final com.auto1.pantera.audit.AuditContext auditCtx = new com.auto1.pantera.audit.AuditContext(
-            org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
-            org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
-        );
+        final com.auto1.pantera.audit.AuditContext auditCtx = new com.auto1.pantera.audit.AuditContext(inboundHeaders);
         final String owner = new Login(inboundHeaders).getValue();
         final String path = line.uri().getPath();
         final MavenMetadataCoordinates coords = new MavenMetadataCoordinates();

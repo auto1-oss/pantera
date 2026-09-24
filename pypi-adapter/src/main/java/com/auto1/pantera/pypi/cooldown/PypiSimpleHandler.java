@@ -24,7 +24,6 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -33,7 +32,6 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
-import org.slf4j.MDC;
 
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
@@ -191,9 +189,7 @@ public final class PypiSimpleHandler {
         // continuations below, which may run on a worker thread that never
         // had MDC bound.
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext ctx = new AuditContext(headers);
         final String path = line.uri().getPath();
         // PEP 503 normalization (lowercase + collapse runs of [-_.] to single
         // '-'): the artifact-publish path stores release dates under the

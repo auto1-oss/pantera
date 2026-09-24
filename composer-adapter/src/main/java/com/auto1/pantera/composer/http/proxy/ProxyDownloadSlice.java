@@ -23,7 +23,6 @@ import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
@@ -31,7 +30,6 @@ import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
-import org.slf4j.MDC;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -837,16 +835,17 @@ public final class ProxyDownloadSlice implements Slice {
     }
 
     /**
-     * Build an {@link AuditContext} for the current request. Reads the
-     * internal {@code X-Pantera-Ctx-*} headers into MDC first (a no-op if
-     * already populated by {@code EcsLoggingSlice} on the request thread;
-     * a real restore on a worker thread that never had it).
+     * Build an {@link AuditContext} for the current request from its internal
+     * {@code X-Pantera-Ctx-*} headers, which are authoritative on any thread
+     * (the thread's MDC is never read: a pooled thread can hold another
+     * request's values). The headers are also bound to this thread's MDC for
+     * the application logs that follow.
      *
      * @param headers Inbound request headers
-     * @return Context carrying whatever trace id / client IP could be resolved
+     * @return Context carrying the request's trace id / client IP
      */
     private AuditContext captureAuditContext(final Headers headers) {
         RequestContextHeaders.bindToMdc(headers);
-        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
+        return new AuditContext(headers);
     }
 }

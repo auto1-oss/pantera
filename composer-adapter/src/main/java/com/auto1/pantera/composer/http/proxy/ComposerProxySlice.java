@@ -29,7 +29,6 @@ import com.auto1.pantera.http.client.auth.AuthClientSlice;
 import com.auto1.pantera.http.client.auth.Authenticator;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rt.MethodRule;
@@ -289,15 +288,13 @@ public class ComposerProxySlice implements Slice {
     ) {
         final String path = line.uri().getPath();
         final String user = new Login(headers).getValue();
-        // Bound as early as possible — before any async hop — so the
+        // Captured at entry from the request's X-Pantera-Ctx-* headers —
+        // before any async hop, and never from MDC, which on a pooled
+        // thread can hold another request's values — so the
         // AuditLogger.resolution() call downstream in the cooldown
-        // handlers gets real trace.id / client.ip instead of nulls from
-        // a worker thread that never had EcsLoggingSlice's MDC bound.
+        // handlers carries this request's trace.id / client.ip.
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext auditCtx = new AuditContext(
-            org.slf4j.MDC.get(EcsMdc.TRACE_ID),
-            org.slf4j.MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext auditCtx = new AuditContext(headers);
         // Cooldown handlers run ahead of the legacy route so blocked
         // versions cannot leak through the root / per-package
         // metadata surfaces. Mirrors the Go / PyPI / Docker

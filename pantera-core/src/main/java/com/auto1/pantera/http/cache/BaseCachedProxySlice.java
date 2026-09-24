@@ -36,7 +36,6 @@ import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.resilience.SingleFlight;
@@ -44,7 +43,6 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.security.PathTraversalGuard;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
-import org.slf4j.MDC;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.nio.ByteBuffer;
@@ -860,19 +858,18 @@ public abstract class BaseCachedProxySlice implements Slice {
     }
 
     /**
-     * Build an {@link AuditContext} for the current request. Reads the
-     * internal {@code X-Pantera-Ctx-*} headers into MDC first (a no-op if
-     * this call is already on the request thread with MDC populated by
-     * {@code EcsLoggingSlice}; a real restore on a worker thread that never
-     * had it) so both the request-thread and worker-thread cases end up with
-     * the correct value.
+     * Build an {@link AuditContext} for the current request from its internal
+     * {@code X-Pantera-Ctx-*} headers, which are authoritative on any thread
+     * (the thread's MDC is never read: a pooled thread can hold another
+     * request's values). The headers are also bound to this thread's MDC for
+     * the application logs that follow.
      *
      * @param headers Inbound request headers
-     * @return Context carrying whatever trace id / client IP could be resolved
+     * @return Context carrying the request's trace id / client IP
      */
     protected final AuditContext captureAuditContext(final Headers headers) {
         RequestContextHeaders.bindToMdc(headers);
-        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
+        return new AuditContext(headers);
     }
 
     /**

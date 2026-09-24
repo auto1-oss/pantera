@@ -150,10 +150,7 @@ public final class DownloadPackageSlice implements Slice {
         // context rather than whatever (or nothing) the continuation's
         // worker thread has bound.
         com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
-        final com.auto1.pantera.audit.AuditContext auditCtx = new com.auto1.pantera.audit.AuditContext(
-            org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
-            org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
-        );
+        final com.auto1.pantera.audit.AuditContext auditCtx = new com.auto1.pantera.audit.AuditContext(headers);
         final String owner = new com.auto1.pantera.http.headers.Login(headers).getValue();
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored -> {
