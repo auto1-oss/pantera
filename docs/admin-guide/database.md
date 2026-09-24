@@ -65,9 +65,68 @@ Pantera relies on standard PostgreSQL tuning. Notes specific to this workload:
 
 ---
 
+## Rebuilding the Search Index
+
+The `artifacts` table is the search index. Upload, proxy and delete paths keep
+it up to date. It can still drift from storage: for example, it can keep rows
+for repositories that were deleted, or rows for files removed outside
+Pantera. To rebuild it, start a full rebuild and poll its status:
+
+```bash
+curl -X POST http://localhost:8086/api/v1/search/reindex \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8086/api/v1/search/reindex \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Both calls need `api_search_permissions:write`. The rebuild:
+
+- **Prunes** the rows of repositories that no longer exist, in batches of 500.
+  If no repository is configured, it prunes nothing.
+- **Rebuilds** each repository whose storage is on the local file system
+  (`fs` or `vertx-file`). It scans the repository directory with the same
+  scanners as the `pantera-backfill` CLI and upserts what it finds. It then
+  deletes the repository's artifact rows whose files are gone. Rows written
+  by uploads during the rebuild are kept. Checksum, signature and metadata
+  rows are kept. Existing rows keep their owner and creation time.
+- **Skips** the following repositories, and logs the reason for each:
+  - group repositories;
+  - S3 and other non-local storage;
+  - Conan, RPM and NuGet repositories (these types have no scanner);
+  - repositories whose storage directory does not exist yet.
+
+  Skipped repositories keep their rows as they are.
+
+Only one rebuild runs at a time. A second `POST` on the same node returns
+`409`. In a cluster, a PostgreSQL advisory lock allows only one node to
+rebuild; a node that cannot take the lock reports this in `last_error`.
+Status is kept per node, so poll the node that accepted the `POST`.
+
+The scanners take an artifact's version from its parent directory, while
+the upload path takes it from the artifact's file name. When the two
+disagree, the rebuild replaces the upload's row with the scanner's row.
+This happens, for example, for a version that appears only in the file name,
+such as `foo/bar/thing-2.0.jar`.
+
+Every state change is logged by `com.auto1.pantera.index` with
+`event.category=database`:
+
+| `event.action` | When it is logged |
+|---|---|
+| `search_reindex_start` | The rebuild starts |
+| `search_reindex_prune` | The rows of one deleted repository have been pruned |
+| `search_reindex_repo` | A repository is rebuilt, skipped (with `event.reason`) or fails |
+| `search_reindex_finish` | The rebuild ends; `event.outcome` is `failure` if any repository failed or the run could not start |
+
+The trigger itself is recorded in the admin audit trail as `SEARCH_REINDEX`.
+
+---
+
 ## Related Pages
 
 - [Environment Variables](environment-variables.md) -- `PANTERA_DB_*` reference.
 - [Performance Tuning](performance-tuning.md) -- Pool sizing vs. worker threads.
 - [Monitoring](monitoring.md) -- Hikari metric catalogue.
 - [Backup and Recovery](backup-and-recovery.md) -- PostgreSQL backup workflow.
+- [REST API Reference](../rest-api-reference.md#post-apiv1searchreindex) -- Index rebuild endpoints.

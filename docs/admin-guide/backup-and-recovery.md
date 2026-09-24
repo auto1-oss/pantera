@@ -323,8 +323,10 @@ curl http://localhost:8086/api/v1/repositories \
 curl http://localhost:8086/api/v1/search/stats \
   -H "Authorization: Bearer $TOKEN"
 
-# Trigger search reindex if needed
+# Trigger search reindex if needed, then poll until "state" is "idle"
 curl -X POST http://localhost:8086/api/v1/search/reindex \
+  -H "Authorization: Bearer $TOKEN"
+curl http://localhost:8086/api/v1/search/reindex \
   -H "Authorization: Bearer $TOKEN"
 ```
 

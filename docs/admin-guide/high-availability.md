@@ -237,7 +237,7 @@ For AWS deployments:
 
 ## Quartz Scheduler Clustering
 
-In HA mode, Pantera uses Quartz JDBC job store for clustered scheduling. Background jobs (cleanup, reindex, etc.) are distributed across nodes with only one node executing each job at a time.
+In HA mode, Pantera uses Quartz JDBC job store for clustered scheduling. Background jobs (cleanup, etc.) are distributed across nodes with only one node executing each job at a time. The search index rebuild (`POST /api/v1/search/reindex`) is not a Quartz job: it runs on the node that accepted the request, and a PostgreSQL advisory lock keeps it to one node at a time.
 
 Quartz clustering requires:
 

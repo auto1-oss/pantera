@@ -132,7 +132,7 @@ Maven, Gradle (Maven-layout), Docker, NPM, PyPI, Composer (PHP), Helm, Go, Gem (
 | `pantera-storage-s3` | AWS S3 storage with `DiskCacheStorage` (LRU/LFU on-disk read-through cache with watermark eviction). |
 | `vertx-server` | `VertxSliceServer` -- adapts a `Slice` into a Vert.x HTTP server handler. |
 | `http-client` | Jetty-based HTTP client (`JettyClientSlices`) used by proxy adapters to fetch from upstream registries. |
-| `pantera-backfill` | Standalone CLI tool (`BackfillCli`) for bulk re-indexing the `artifacts` database table from storage. |
+| `pantera-backfill` | Per-format storage scanners (`ScannerFactory`, `*Scanner`, `ArtifactRecord`) and the standalone CLI (`BackfillCli`) for bulk re-indexing the `artifacts` table from storage. The thin jar is a `pantera-main` dependency (the scanners behind `POST /api/v1/search/reindex`, package `com.auto1.pantera.index.reindex`); the runnable CLI is the shaded `pantera-backfill-<version>-cli.jar`. The CLI's `log4j2.xml` lives in `src/cli/resources` and goes only into the CLI jar, so it never shadows the server's logging config. |
 | `pantera-import-cli` | Migration tool for importing artifacts from external registries into Pantera. |
 
 ### Repository Adapters

@@ -112,7 +112,7 @@ done
 
 ## Backfill CLI Tool
 
-The `pantera-backfill` CLI tool scans existing artifact directories on disk and populates the PostgreSQL metadata database. This is useful when:
+The `pantera-backfill` CLI tool scans existing artifact directories on disk and populates the PostgreSQL metadata database. The runnable jar is built as `pantera-backfill/target/pantera-backfill-<version>-cli.jar`; the examples below call it `pantera-backfill.jar`. A running server can do the same from its own repository configuration with `POST /api/v1/search/reindex`, which also removes rows for deleted repositories and deleted files (see the [REST API Reference](../rest-api-reference.md#post-apiv1searchreindex)). This is useful when:
 
 - You have copied artifacts directly to storage (filesystem or S3) and need to index them.
 - The database was rebuilt and needs to be repopulated from existing storage.

@@ -30,6 +30,9 @@ import com.auto1.pantera.db.dao.UserDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.index.reindex.CrudReindexRepos;
+import com.auto1.pantera.index.reindex.IndexReindex;
+import com.auto1.pantera.index.reindex.JdbcReindexStore;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.PanteraSecurity;
@@ -516,7 +519,9 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             crs, this.settings.cooldown(), this.dataSource,
             this.security.policy()
         ).register(router);
-        new SearchHandler(this.artifactIndex, this.security.policy(), crs::listAll).register(router);
+        new SearchHandler(
+            this.artifactIndex, this.security.policy(), crs::listAll, this.reindexer(crs)
+        ).register(router);
         this.pypiHandler(crs).register(router);
         if (this.dataSource != null) {
             new AdminAuthHandler(
@@ -610,22 +615,53 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 this.security.policy()
             );
         } else {
-            final StorageAliasDao aliases = new StorageAliasDao(this.dataSource);
-            handler = new PypiHandler(
-                this.security.policy(),
-                new DbRepoStorage(
-                    crs,
-                    repo -> {
-                        final List<javax.json.JsonObject> merged =
-                            new ArrayList<>(aliases.listGlobal());
-                        merged.addAll(aliases.listForRepo(repo));
-                        return merged;
-                    },
-                    this.caches.storagesCache()
+            handler = new PypiHandler(this.security.policy(), this.dbRepoStorage(crs));
+        }
+        return handler;
+    }
+
+    /**
+     * The process-wide search index rebuild job, or null without a database.
+     * Repositories live in the DB, so their storage is resolved alias-aware
+     * like the serving path ({@link DbRepoStorage}).
+     * @param crs Repository settings
+     * @return Job, null when there is no database
+     */
+    private IndexReindex reindexer(final CrudRepoSettings crs) {
+        final IndexReindex job;
+        if (this.dataSource == null) {
+            job = null;
+        } else {
+            final DataSource source = this.dataSource;
+            final DbRepoStorage storages = this.dbRepoStorage(crs);
+            job = SharedReindex.obtain(
+                source,
+                () -> new IndexReindex(
+                    new JdbcReindexStore(source), new CrudReindexRepos(crs, storages)
                 )
             );
         }
-        return handler;
+        return job;
+    }
+
+    /**
+     * Repository storage resolved alias-aware from the DB: global aliases,
+     * then the repository's own, as {@code DbRepositories} merges them.
+     * @param crs Repository settings
+     * @return Storage resolver
+     */
+    private DbRepoStorage dbRepoStorage(final CrudRepoSettings crs) {
+        final StorageAliasDao aliases = new StorageAliasDao(this.dataSource);
+        return new DbRepoStorage(
+            crs,
+            repo -> {
+                final List<javax.json.JsonObject> merged =
+                    new ArrayList<>(aliases.listGlobal());
+                merged.addAll(aliases.listForRepo(repo));
+                return merged;
+            },
+            this.caches.storagesCache()
+        );
     }
 
     /**

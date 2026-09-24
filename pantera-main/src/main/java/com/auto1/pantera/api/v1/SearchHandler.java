@@ -20,6 +20,8 @@ import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.ScopedSearchIndex;
 import com.auto1.pantera.index.SearchQueryParser;
 import com.auto1.pantera.index.SearchQueryParser.FieldFilter;
+import com.auto1.pantera.index.reindex.IndexReindex;
+import com.auto1.pantera.index.reindex.ReindexStatus;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.perms.FreePermissions;
 import com.auto1.pantera.security.policy.Policy;
@@ -45,7 +47,8 @@ import org.eclipse.jetty.http.HttpStatus;
  * <ul>
  *   <li>GET /api/v1/search?q={query}&amp;page={0}&amp;size={20} — paginated search</li>
  *   <li>GET /api/v1/search/locate?path={path} — locate repos containing artifact</li>
- *   <li>POST /api/v1/search/reindex — trigger full reindex (202)</li>
+ *   <li>POST /api/v1/search/reindex — start a full index rebuild (202, 409 if running)</li>
+ *   <li>GET /api/v1/search/reindex — index rebuild status</li>
  *   <li>GET /api/v1/search/stats — index statistics</li>
  * </ul>
  *
@@ -93,6 +96,11 @@ public final class SearchHandler {
     private final Supplier<Collection<String>> repositories;
 
     /**
+     * Index rebuild job, null when there is no database to rebuild.
+     */
+    private final IndexReindex reindexer;
+
+    /**
      * Ctor without a repository enumerator: only unrestricted callers
      * (FreePermissions / wildcard read) can search; everyone else is scoped
      * to nothing. Kept for callers and tests that do not wire settings.
@@ -104,7 +112,7 @@ public final class SearchHandler {
     }
 
     /**
-     * Ctor.
+     * Ctor without an index rebuild job (reindex answers 503).
      * @param index Artifact index
      * @param policy Pantera security policy
      * @param repositories Enumerator of configured repository names
@@ -113,9 +121,25 @@ public final class SearchHandler {
         final ArtifactIndex index, final Policy<?> policy,
         final Supplier<Collection<String>> repositories
     ) {
+        this(index, policy, repositories, null);
+    }
+
+    /**
+     * Ctor.
+     * @param index Artifact index
+     * @param policy Pantera security policy
+     * @param repositories Enumerator of configured repository names
+     * @param reindexer Index rebuild job, null when there is no database
+     */
+    public SearchHandler(
+        final ArtifactIndex index, final Policy<?> policy,
+        final Supplier<Collection<String>> repositories,
+        final IndexReindex reindexer
+    ) {
         this.index = Objects.requireNonNull(index, "index");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.repositories = Objects.requireNonNull(repositories, "repositories");
+        this.reindexer = reindexer;
     }
 
     /**
@@ -136,6 +160,11 @@ public final class SearchHandler {
         router.post("/api/v1/search/reindex")
             .handler(new AuthzHandler(this.policy, ApiSearchPermission.WRITE))
             .handler(this::reindex);
+        // GET /api/v1/search/reindex — status of the rebuild job; admin
+        // scope like the trigger (its last error names repositories).
+        router.get("/api/v1/search/reindex")
+            .handler(new AuthzHandler(this.policy, ApiSearchPermission.WRITE))
+            .handler(this::reindexStatus);
         // GET /api/v1/search
         router.get("/api/v1/search")
             .handler(new AuthzHandler(this.policy, ApiSearchPermission.READ))
@@ -391,27 +420,148 @@ public final class SearchHandler {
     }
 
     /**
-     * Trigger a full reindex (async, returns 202).
+     * Start a full index rebuild on its dedicated thread. Answers 202 when
+     * started, 409 when a rebuild is already running in this process, 503
+     * when there is no database-backed index to rebuild. Non-blocking: the
+     * job only flips an atomic flag and hands off to its own executor.
      * @param ctx Routing context
      */
     private void reindex(final RoutingContext ctx) {
-        EcsLogger.info("com.auto1.pantera.api.v1")
-            .message("Full reindex triggered via API")
-            .eventCategory("database")
-            .eventAction("reindex")
-            .field("user.name",
-                ctx.user() != null
-                    ? ctx.user().principal().getString(AuthTokenRest.SUB)
-                    : null)
-            .field("log.source", "application")
-            .log();
+        if (this.reindexer == null) {
+            SearchHandler.noDatabase(ctx);
+            return;
+        }
+        final String actor = ctx.user() != null
+            ? ctx.user().principal().getString(AuthTokenRest.SUB) : null;
+        final boolean started = this.reindexer.start(actor);
+        SearchHandler.audit(actor, started, SearchHandler.clientIp(ctx));
+        final JsonObject body = SearchHandler.statusJson(this.reindexer.status());
+        if (started) {
+            ctx.response()
+                .setStatusCode(HttpStatus.ACCEPTED_202)
+                .putHeader("Content-Type", "application/json")
+                .end(body
+                    .put("status", "started")
+                    .put("message", "Full reindex initiated")
+                    .encode());
+        } else {
+            ctx.response()
+                .setStatusCode(HttpStatus.CONFLICT_409)
+                .putHeader("Content-Type", "application/json")
+                .end(body
+                    .put("code", HttpStatus.CONFLICT_409)
+                    .put("status", "running")
+                    .put("message", "A search index rebuild is already running")
+                    .encode());
+        }
+    }
+
+    /**
+     * Index rebuild status.
+     * @param ctx Routing context
+     */
+    private void reindexStatus(final RoutingContext ctx) {
+        if (this.reindexer == null) {
+            SearchHandler.noDatabase(ctx);
+            return;
+        }
         ctx.response()
-            .setStatusCode(HttpStatus.ACCEPTED_202)
+            .setStatusCode(HttpStatus.OK_200)
+            .putHeader("Content-Type", "application/json")
+            .end(SearchHandler.statusJson(this.reindexer.status()).encode());
+    }
+
+    /**
+     * Answer 503: there is no database-backed index to rebuild.
+     * @param ctx Routing context
+     */
+    private static void noDatabase(final RoutingContext ctx) {
+        ctx.response()
+            .setStatusCode(HttpStatus.SERVICE_UNAVAILABLE_503)
             .putHeader("Content-Type", "application/json")
             .end(new JsonObject()
-                .put("status", "started")
-                .put("message", "Full reindex initiated")
+                .put("code", HttpStatus.SERVICE_UNAVAILABLE_503)
+                .put("message", "Search index rebuild requires a database")
                 .encode());
+    }
+
+    /**
+     * Status as JSON.
+     * @param status Status
+     * @return JSON object
+     */
+    private static JsonObject statusJson(final ReindexStatus status) {
+        return new JsonObject()
+            .put("state", status.state())
+            .put("started_at", SearchHandler.instant(status.startedAt()))
+            .put("finished_at", SearchHandler.instant(status.finishedAt()))
+            .put("repos_total", status.reposTotal())
+            .put("repos_done", status.reposDone())
+            .put("repos_skipped", status.reposSkipped())
+            .put("repos_failed", status.reposFailed())
+            .put("rows_pruned", status.rowsPruned())
+            .put("rows_upserted", status.rowsUpserted())
+            .put("rows_removed", status.rowsRemoved())
+            .put("last_error", status.lastError());
+    }
+
+    /**
+     * ISO-8601 text of an instant.
+     * @param instant Instant, may be null
+     * @return Text, null for null
+     */
+    private static String instant(final java.time.Instant instant) {
+        return instant == null ? null : instant.toString();
+    }
+
+    /**
+     * Audit the rebuild trigger: the admin audit trail plus a configuration
+     * log line.
+     * @param actor User
+     * @param started Whether a run started (false: one was already running)
+     * @param clientIp Client IP, may be null
+     */
+    private static void audit(final String actor, final boolean started, final String clientIp) {
+        com.auto1.pantera.audit.AuditServiceRegistry.instance().sharedService().record(
+            new com.auto1.pantera.audit.AuditEvent(
+                java.time.Instant.now(), actor, "SEARCH_REINDEX", "artifacts",
+                java.util.Map.of("outcome", started ? "started" : "already_running"),
+                started, clientIp
+            )
+        );
+        EcsLogger.info("com.auto1.pantera.api.v1")
+            .message(
+                started ? "Full search index rebuild triggered via API"
+                    : "Search index rebuild refused: one is already running"
+            )
+            .eventCategory("configuration")
+            .eventAction("search_reindex")
+            .eventOutcome(started ? "success" : "failure")
+            .field("user.name", actor)
+            .field("client.ip", clientIp)
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * Client IP of the request: {@code X-Forwarded-For} (first entry), then
+     * {@code X-Real-IP}, then the TCP peer — the order the other admin
+     * audit helpers use.
+     * @param ctx Routing context
+     * @return Client IP, null when unknown
+     */
+    private static String clientIp(final RoutingContext ctx) {
+        String hint = ctx.request().getHeader("X-Forwarded-For");
+        if (hint != null && hint.contains(",")) {
+            hint = hint.substring(0, hint.indexOf(',')).trim();
+        }
+        if (hint == null || hint.isBlank()) {
+            hint = ctx.request().getHeader("X-Real-IP");
+        }
+        if ((hint == null || hint.isBlank()) && ctx.request().remoteAddress() != null) {
+            hint = ctx.request().remoteAddress().host();
+        }
+        return hint == null || hint.isBlank() ? null : hint;
     }
 
     /**

@@ -138,11 +138,25 @@ SOFTWARE.
               <goal>shade</goal>
             </goals>
             <configuration>
+              <!--
+                The runnable CLI is attached as pantera-backfill-<v>-cli.jar so
+                the main artifact stays a thin jar: pantera-main reuses the
+                scanners for POST /api/v1/search/reindex. The CLI's log4j2.xml
+                lives outside src/main/resources and is added only to the CLI
+                jar, so it can never shadow the server's ECS logging config.
+              -->
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <shadedClassifierName>cli</shadedClassifierName>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>com.auto1.pantera.backfill.BackfillCli</mainClass>
                 </transformer>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.IncludeResourceTransformer">
+                  <resource>log4j2.xml</resource>
+                  <file>${project.basedir}/src/cli/resources/log4j2.xml</file>
+                </transformer>
               </transformers>
             </configuration>
           </execution>

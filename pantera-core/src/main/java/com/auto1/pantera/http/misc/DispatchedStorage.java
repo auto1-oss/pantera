@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 
 import java.util.Collection;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
@@ -124,6 +125,11 @@ public final class DispatchedStorage implements Storage {
     @Override
     public String identifier() {
         return this.delegate.identifier();
+    }
+
+    @Override
+    public Optional<java.nio.file.Path> pathFor(final Key key) {
+        return this.delegate.pathFor(key);
     }
 
     /**

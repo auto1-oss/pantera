@@ -256,7 +256,7 @@ docker exec -it pantera-db psql -U pantera -d pantera \
 | Cause | Solution |
 |-------|----------|
 | PostgreSQL under-resourced | Increase CPU and memory for the database |
-| Search index stale | Run `POST /api/v1/search/reindex` to rebuild |
+| Search index stale | Run `POST /api/v1/search/reindex` to rebuild; follow it with `GET /api/v1/search/reindex` (see [Database](database.md#rebuilding-the-search-index)) |
 | LIKE fallback timeout | Increase `PANTERA_SEARCH_LIKE_TIMEOUT_MS` (default: 3000 ms) |
 | Deep pagination | Limit page depth; pages > 100 degrade performance |
 | Missing indexes | Run `V104__performance_indexes.sql` or upgrade to apply it |

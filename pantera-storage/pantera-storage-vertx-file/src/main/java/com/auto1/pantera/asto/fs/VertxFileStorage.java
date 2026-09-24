@@ -43,6 +43,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -526,6 +527,18 @@ public final class VertxFileStorage implements Storage {
     @Override
     public String identifier() {
         return this.id;
+    }
+
+    /**
+     * Returns the on-disk path of the artifact under {@code key}, contained
+     * in the storage root like every other operation. Callers MUST treat it
+     * as read-only.
+     * @param key Artifact key
+     * @return Storage-owned path for this key
+     */
+    @Override
+    public Optional<Path> pathFor(final Key key) {
+        return Optional.of(this.path(key));
     }
 
     /**

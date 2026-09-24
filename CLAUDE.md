@@ -98,7 +98,7 @@ Invariants that must hold (they broke once — see the breaker-cascade fix in 2.
 
 **Reactive bodies.** `Content` is a `Publisher<ByteBuffer>`. Bodies must always be consumed, even on error paths — ignoring the publisher leaks ByteBuffers (`resp.body().asBytesFuture().thenAccept(b -> {})` to discard deliberately).
 
-**Module map.** `pantera-core` (Slice, Storage interface, cache, security framework, cluster bus, audit), `pantera-storage/{core,vertx-file,s3}`, `pantera-main` (entry `VertxMain`, REST API `AsyncApiVerticle`/`AdminAuthHandler`, DB layer, Flyway, Quartz, `RepositorySlices` wiring, `GroupResolver`), `vertx-server` (Vert.x HTTP adapter), `http-client` (`JettyClientSlices` + rate limit + breaker), `pantera-backfill` / `pantera-import-cli` (standalone CLIs), `*-adapter` (one per format), `pantera-ui` (Vue 3 + PrimeVue + Pinia), `build-tools` (PMD ruleset jar), `test_images/` (client images for integration tests).
+**Module map.** `pantera-core` (Slice, Storage interface, cache, security framework, cluster bus, audit), `pantera-storage/{core,vertx-file,s3}`, `pantera-main` (entry `VertxMain`, REST API `AsyncApiVerticle`/`AdminAuthHandler`, DB layer, Flyway, Quartz, `RepositorySlices` wiring, `GroupResolver`), `vertx-server` (Vert.x HTTP adapter), `http-client` (`JettyClientSlices` + rate limit + breaker), `pantera-backfill` (per-format storage scanners reused by `POST /api/v1/search/reindex` + the standalone CLI, shaded as the `-cli` jar) / `pantera-import-cli` (standalone CLI), `*-adapter` (one per format), `pantera-ui` (Vue 3 + PrimeVue + Pinia), `build-tools` (PMD ruleset jar), `test_images/` (client images for integration tests).
 
 ## Logging — strict requirements
 

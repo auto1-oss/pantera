@@ -1762,24 +1762,118 @@ curl "http://localhost:8086/api/v1/search/locate?path=com/google/guava/guava/32.
 
 ### POST /api/v1/search/reindex
 
-Trigger a full reindex of all artifacts. The reindex runs asynchronously.
+Start a full rebuild of the artifact search index. The request returns at
+once; the rebuild runs in the background on a dedicated thread. Follow its
+progress with `GET /api/v1/search/reindex`.
+
+A rebuild has two phases:
+
+1. **Prune.** Deletes the index rows of every repository that no longer
+   exists, in batches of 500. This phase is skipped when no repository is
+   configured, so a failed repository listing cannot empty the index.
+2. **Rebuild.** For each repository whose storage is on the local file
+   system (`fs` or `vertx-file`), Pantera scans the storage with the same
+   per-format scanners the `pantera-backfill` CLI uses. It upserts one row per
+   artifact it finds, then deletes that repository's artifact rows for files
+   that are no longer in storage. The following are left as they are:
+   - rows an upload wrote after the rebuild of that repository started;
+   - checksum, signature and metadata rows.
+
+   An existing row keeps its owner and creation time. The rebuild only
+   updates its size and storage key.
+
+Repositories are **skipped** (their rows are left untouched, and the reason is
+logged) when:
+
+- they are group repositories;
+- their storage is not on the local file system, such as S3;
+- their type has no scanner (Conan, RPM, NuGet);
+- their storage directory does not exist yet.
+
+Only one rebuild runs at a time: a second request on the same node gets
+`409`. In a cluster, a node that finds the rebuild lock held by another
+node finishes at once, and its status reports that in `last_error`.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_search_permissions:write`
 
-**Response (202):**
+**Response (202):** The response contains the status fields of
+`GET /api/v1/search/reindex`, plus:
 
 ```json
 {
   "status": "started",
-  "message": "Full reindex initiated"
+  "message": "Full reindex initiated",
+  "state": "running",
+  "started_at": "2026-09-24T10:00:00Z",
+  "finished_at": null,
+  "repos_total": 0,
+  "repos_done": 0,
+  "repos_skipped": 0,
+  "repos_failed": 0,
+  "rows_pruned": 0,
+  "rows_upserted": 0,
+  "rows_removed": 0,
+  "last_error": null
 }
 ```
+
+**Response (409):** a rebuild is already running. The body has the same
+status fields, with `"code": 409` and `"status": "running"`.
+
+**Response (503):** no database is configured, so there is no index to rebuild.
 
 **curl example:**
 
 ```bash
 curl -X POST http://localhost:8086/api/v1/search/reindex \
+  -H "Authorization: Bearer eyJhbGciOi..."
+```
+
+---
+
+### GET /api/v1/search/reindex
+
+Status of the current or last index rebuild on this node.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_search_permissions:write`
+
+**Response (200):**
+
+```json
+{
+  "state": "idle",
+  "started_at": "2026-09-24T10:00:00Z",
+  "finished_at": "2026-09-24T10:03:12Z",
+  "repos_total": 42,
+  "repos_done": 42,
+  "repos_skipped": 6,
+  "repos_failed": 0,
+  "rows_pruned": 1830,
+  "rows_upserted": 51200,
+  "rows_removed": 12,
+  "last_error": null
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `state` | `running` or `idle` |
+| `started_at` / `finished_at` | ISO-8601 start and end of the current or last run. `null` before the first run; `finished_at` is `null` while running |
+| `repos_total` / `repos_done` | Repositories in the run, and how many are finished (rebuilt, skipped or failed) |
+| `repos_skipped` / `repos_failed` | Repositories skipped (see above) and repositories whose rebuild failed |
+| `rows_pruned` | Rows deleted because their repository no longer exists |
+| `rows_upserted` | Rows inserted or changed from storage |
+| `rows_removed` | Rows deleted because their artifact is no longer in storage |
+| `last_error` | Last error of the run (a failed repository, or a run that could not start), else `null` |
+
+**Response (503):** no database is configured.
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/search/reindex \
   -H "Authorization: Bearer eyJhbGciOi..."
 ```
 
