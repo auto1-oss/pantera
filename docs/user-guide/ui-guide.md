@@ -133,7 +133,7 @@ Search is case-insensitive and tokenizes on dots, dashes, slashes, and underscor
 
 ## Cooldown Management Panel
 
-The Cooldown page (`/admin/cooldown`) shows the current state of the cooldown system:
+The Cooldown page (`/cooldown`) shows the current state of the cooldown system. Administrators see two tabs, **Blocked artifacts** (described below) and **Inspect package**.
 
 ### Cooldown-Enabled Repositories
 
@@ -159,6 +159,18 @@ A paginated, searchable table of all currently blocked artifacts:
 
 - Use the search bar to filter by package name, version, or repository.
 - Click the unlock button on a row to unblock that specific artifact (requires write permissions).
+
+### Inspect Package (administrators)
+
+The **Inspect package** tab answers "why is this version still hidden (or visible)?" for one package across every proxy and group repository of a type. Pick the repository type, enter the package name (for Maven and Gradle use `groupId:artifactId`) and optionally narrow to one repository, then click **Inspect**.
+
+The versions table lists every known version with its cooldown state (`blocked`, `released`, `expired` or `none`), when the block ends, and the repositories whose served metadata shows or hides it. A red **mismatch** badge marks a version whose visibility contradicts its cooldown state: released but still hidden, or blocked but still visible. A mismatch means a cache layer still holds stale metadata.
+
+Below the table, one panel per repository shows its mode (and group members), the metadata the repository serves right now (HTTP status and number of visible versions, fetched in-process exactly as a client would get it), the filtered-metadata envelope in L1 (age) and L2 (remaining TTL), and any negative cache entries for the package. Formats whose metadata cannot be inspected yet say so. **Troubleshoot this** opens the Troubleshoot page on that repository's metadata URL.
+
+**Refresh package** clears every cache layer for the package on all nodes (filtered metadata, negative cache, cached upstream metadata), inspects again and shows a before/after summary: which versions became visible in each repository and the mismatch count before and after.
+
+The tab can be deep-linked: `/cooldown?tab=inspect&repoType=npm&package=lodash&repo=npm-proxy` (`repo` is optional).
 
 ---
 
@@ -219,6 +231,8 @@ Admin panels appear in the sidebar under **Administration** only if you have the
 | Roles & Permissions | `api_role_permissions:write` | Manage RBAC roles |
 | Storage Configuration | `api_storage_alias_permissions:create` | Manage storage aliases |
 | System Settings | Admin role | Configure server settings, auth providers |
+| Negative Cache | Admin role | Find and clear cached "not found" answers |
+| Troubleshoot | Admin role | Explain why a URL fails or serves stale metadata |
 
 If you do not see the Administration section, you have read-only access. Contact your administrator for elevated permissions.
 
@@ -288,6 +302,32 @@ Submitting the modal creates the repository through the standard admin API and a
 ### Implementation Reference
 
 The group-member picker is implemented in `pantera-ui/src/components/admin/RepoConfigForm.vue` at lines 558-576 (the `AutoComplete` element), with the compatibility rule at `compatibleTypes()` (line 98) and the inline-create handler at `createMemberRepo()` (line 135).
+
+---
+
+## Negative Cache (administrators)
+
+The Negative Cache page (`/admin/neg-cache`) shows the cached "not found" answers that make Pantera return 404 without asking upstream again. With Valkey configured the list is cluster-wide: L2 (Valkey) entries merged with the L1 entries of the node that answered. Without Valkey only that node's L1 is visible. The header shows which node answered and the source (`L2+L1` or `L1-only`).
+
+- **Stats** -- L1 size (this node), L2 size (cluster), hit rate and status.
+- **Check a URL** -- paste the URL a client requested, or `/<repo>/<path>`. Every negative cache key the repository (and, for a group, each member) would use for that path is listed with its L1/L2 presence and remaining TTL, under a verdict: *This URL is shadowed by the negative cache* or *not shadowed*. Each present key has a **Clear** button; **Troubleshoot this** opens the Troubleshoot page for the URL.
+- **Entries** -- one search box matches package name, version and repository (case-insensitive substring); the Repository and Type dropdowns list the values present in the data. Each row shows scope, type, package, version, tiers (L1/L2) and remaining TTL. **Clear** removes that entry; **Clear package** (after a confirmation) removes every entry for the package in all repositories, tiers and nodes.
+- **Advanced** -- invalidation by pattern (exact match per field, `*` wildcard), behind a confirmation dialog and limited to 10 requests per minute.
+
+Every clear reports the number of entries actually removed from L1 and L2, then reloads the list and stats.
+
+---
+
+## Troubleshoot (administrators)
+
+The Troubleshoot page (`/admin/troubleshoot`) explains why a request fails or returns stale metadata. Enter a full client URL or `/<repo>/<path>` and click **Troubleshoot**. The page shows:
+
+- **Repository** -- name, type and mode; for a group, the members in walk order.
+- **Parsed request** -- package, version and kind (artifact or metadata), with a link to the cooldown inspector for the package.
+- **Response** -- the status, selected headers and the start of the body of an in-process request made as an administrator.
+- **Checks** -- one line per layer (repository, group, negative cache, cooldown, metadata, upstream) with an ok, problem or info status and a message. A problem that has a known remedy offers a button (for example clearing the package from the negative cache or refreshing its metadata); after the fix runs the troubleshoot is repeated automatically.
+
+The **Package** mode takes a repository type and package name and opens the cooldown inspector. Deep link: `/admin/troubleshoot?url=<url>`.
 
 ---
 

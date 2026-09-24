@@ -400,14 +400,10 @@ docker exec -it pantera-db psql -U pantera -d pantera \
 
 **Resolution:**
 
-1. Run the troubleshooter on the failing URL (UI: **Troubleshoot**; API:
-   `GET /api/v1/admin/troubleshoot?url=<client URL>`). It lists every
-   negative-cache key the request maps to -- the group's key and each
-   member's -- with its L1/L2 state, and offers a one-click invalidation.
-2. Or clear every entry of the package, in all scopes and tiers, on every
-   node: `POST /api/v1/admin/neg-cache/invalidate-package` with
-   `{"artifactName": "<package>", "repoType": "<format>"}`.
-3. To reduce future impact, lower the negative cache TTL in `meta.caches.negative.ttl`.
+1. In the Management UI, open **Administration > Troubleshoot** and enter the failing URL. It lists every negative-cache key the request maps to (the group's key and each member's) with its L1/L2 state, and offers a one-click fix that clears them on every node.
+2. Alternatively open **Administration > Negative Cache**, use **Check a URL** to see which keys shadow the URL, and clear them (per key, or **Clear package** for every entry of the package).
+3. Without the UI, use the API: `GET /api/v1/admin/troubleshoot?url=<client URL>` to diagnose, or clear every entry of the package, in all scopes and tiers, on every node with `POST /api/v1/admin/neg-cache/invalidate-package` and `{"artifactName": "<package>", "repoType": "<format>"}`.
+4. To reduce future impact, lower the negative cache TTL in `meta.caches.negative.ttl`.
 
 Restarting a node is not a fix: with Valkey the entry lives on in L2 and is
 promoted back into the restarted node's L1 on the next request. See the

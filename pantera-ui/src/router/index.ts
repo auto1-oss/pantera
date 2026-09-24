@@ -145,6 +145,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAdmin: true },
   },
   {
+    path: '/admin/troubleshoot',
+    name: 'admin-troubleshoot',
+    component: () => import('@/views/admin/TroubleshootView.vue'),
+    meta: { requiresAdmin: true },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     component: () => import('@/views/NotFoundView.vue'),

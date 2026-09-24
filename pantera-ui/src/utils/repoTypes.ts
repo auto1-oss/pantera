@@ -80,6 +80,11 @@ export function getTechInfo(raw: string): TechInfo {
   return TECH_MAP[base] ?? DEFAULT_TECH
 }
 
+/** Base technology of a raw repo type (e.g. "npm-proxy" -> "npm"). */
+export function repoTypeBase(raw: string): string {
+  return parseType(raw).base
+}
+
 /** Technology label (e.g. "npm", "Maven", "Docker"). */
 export function techLabel(raw: string): string {
   return getTechInfo(raw).label

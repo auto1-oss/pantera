@@ -244,7 +244,7 @@ For the complete cooldown API specification, see the [REST API Reference](../res
 Cooldown state is persisted in the `artifact_cooldowns` PostgreSQL table. Monitor cooldown activity through:
 
 - **REST API** -- `GET /api/v1/cooldown/overview` for per-repo block counts and `GET /api/v1/cooldown/blocked` for individual blocked artifacts.
-- **Management UI** -- The Cooldown view in the Pantera UI (port 8090) provides a searchable, paginated list of blocked artifacts with one-click unblock.
+- **Management UI** -- The Cooldown view in the Pantera UI (port 8090) provides a searchable, paginated list of blocked artifacts with one-click unblock. Administrators also get an **Inspect package** tab that shows, per version, the cooldown state next to the versions each repository actually serves, flags mismatches (released but still hidden) and offers **Refresh package** to clear stale cache layers (see [Management UI](../user-guide/ui-guide.md#inspect-package-administrators)).
 - **Database queries** -- Direct SQL queries against the `artifact_cooldowns` table for custom reporting.
 - **Logging** -- Cooldown block and unblock events are logged at INFO level under the `com.auto1.pantera` logger.
 
