@@ -338,8 +338,7 @@ Exchange a refresh token for a new access token:
 
 ```bash
 curl -X POST http://pantera-host:8086/api/v1/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+  -H "Authorization: Bearer $REFRESH_TOKEN"
 ```
 
 ### Generating API Tokens

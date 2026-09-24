@@ -108,47 +108,27 @@ curl -X POST http://localhost:8086/api/v1/auth/token \
 
 ### POST /api/v1/auth/refresh
 
-Exchange a refresh token for a new access token. The refresh token must not be expired or revoked.
+Exchange a refresh token for a new token pair (an access token plus a rotated refresh token). The refresh token must not be expired or revoked.
 
-**Authentication:** None required.
-
-**Request Body:**
-
-```json
-{
-  "refresh_token": "eyJhbGciOiJSUzI1NiIs..."
-}
-```
-
-| Field           | Type   | Required | Description          |
-|-----------------|--------|----------|----------------------|
-| `refresh_token` | string | Yes      | Valid refresh token  |
+**Authentication:** the **refresh** token (not an access or API token) as `Authorization: Bearer <refresh_token>`. The request has no body; a refresh token sent in a JSON body is not read, and the call answers `401`.
 
 **Response (200):**
 
 ```json
 {
   "token": "eyJhbGciOiJSUzI1NiIs...",
+  "refresh_token": "eyJhbGciOiJSUzI1NiIs...",
   "expires_in": 3600
 }
 ```
 
-**Response (401):**
-
-```json
-{
-  "error": "UNAUTHORIZED",
-  "message": "Refresh token expired or revoked",
-  "status": 401
-}
-```
+**Response (401):** the refresh token is missing, expired or revoked, or the bearer token is not a refresh token.
 
 **curl example:**
 
 ```bash
 curl -X POST http://localhost:8086/api/v1/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+  -H "Authorization: Bearer $REFRESH_TOKEN"
 ```
 
 ---

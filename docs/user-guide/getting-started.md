@@ -126,8 +126,7 @@ When your access token expires, exchange the refresh token for a new one:
 
 ```bash
 curl -X POST http://pantera-host:8086/api/v1/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+  -H "Authorization: Bearer $REFRESH_TOKEN"
 ```
 
 The Management UI handles token refresh automatically. If you are scripting against the API, store the refresh token and call this endpoint when you receive a `401`.
