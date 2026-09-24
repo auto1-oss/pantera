@@ -17,6 +17,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.Arrays;
@@ -128,6 +129,15 @@ public final class RaceSlice implements Slice {
             final java.util.concurrent.atomic.AtomicInteger notAllowedCount =
                 new java.util.concurrent.atomic.AtomicInteger(0);
 
+            // First circuit-open fast-fail (a 5xx carrying the
+            // X-Pantera-Circuit-Open marker) captured with its headers, so
+            // the marker and Retry-After reach the group resolver when no
+            // remote answered and none genuinely failed. Collapsing it into
+            // a bare 502 made a group convict this repository on the
+            // breaker's own output (CLAUDE.md breaker invariants).
+            final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstCircuitOpen =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
             // Start all repository requests in parallel
             for (int i = 0; i < this.targets.size(); i++) {
                 final int index = i;
@@ -189,7 +199,9 @@ public final class RaceSlice implements Slice {
                     // Failure paths: drain body, classify, race-continue.
                     final boolean isForbidden = code == RsStatus.FORBIDDEN.code();
                     final boolean is5xx = code >= 500;
-                    if (is5xx) {
+                    final boolean circuitOpen = is5xx && !res.headers()
+                        .values(UpstreamCircuitOpenException.HEADER).isEmpty();
+                    if (is5xx && !circuitOpen) {
                         anyServerError.set(true);
                     }
                     EcsLogger.debug("com.auto1.pantera.http")
@@ -220,6 +232,11 @@ public final class RaceSlice implements Slice {
                                 null,
                                 new DrainedResponse(res.status(), res.headers(), bytes)
                             );
+                        } else if (circuitOpen) {
+                            firstCircuitOpen.compareAndSet(
+                                null,
+                                new DrainedResponse(res.status(), res.headers(), bytes)
+                            );
                         } else if (code == RsStatus.METHOD_NOT_ALLOWED.code()) {
                             notAllowedCount.incrementAndGet();
                             firstNotAllowed.compareAndSet(
@@ -231,7 +248,8 @@ public final class RaceSlice implements Slice {
                             completeBasedOnPriority(
                                 result, firstForbidden, firstNotFound, anyServerError,
                                 notAllowedCount.get() == this.targets.size()
-                                    ? firstNotAllowed.get() : null
+                                    ? firstNotAllowed.get() : null,
+                                firstCircuitOpen.get()
                             );
                         }
                         return null;
@@ -253,7 +271,8 @@ public final class RaceSlice implements Slice {
                     anyServerError.set(true);
                     if (failedCount.incrementAndGet() == this.targets.size()) {
                         completeBasedOnPriority(
-                            result, firstForbidden, firstNotFound, anyServerError, null
+                            result, firstForbidden, firstNotFound, anyServerError, null,
+                            firstCircuitOpen.get()
                         );
                     }
                     return null;
@@ -271,8 +290,13 @@ public final class RaceSlice implements Slice {
      *   <li>If any target returned 403 — forward the FIRST 403 captured (its
      *       drained body, headers, status). 403 says "exists but blocked";
      *       outranks 404 (definitively absent) and 5xx (transient).</li>
-     *   <li>If any target returned 5xx (or threw) — return 502, since at
-     *       least one upstream's true state is unknown.</li>
+     *   <li>If any target returned an unmarked 5xx (or threw) — return
+     *       502, since at least one upstream's true state is unknown.</li>
+     *   <li>If a target's outbound circuit breaker fast-failed (5xx with the
+     *       {@link UpstreamCircuitOpenException#HEADER} marker) — relay that
+     *       response with its marker and {@code Retry-After}: the remote was
+     *       not asked, so this is neither a failure to convict on nor a
+     *       proof of absence.</li>
      *   <li>If EVERY target answered 405 — forward the first 405: the
      *       method is not supported (e.g. an upload to a read-only proxy),
      *       which a 404 would misreport as a missing path.</li>
@@ -286,7 +310,8 @@ public final class RaceSlice implements Slice {
         final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstForbidden,
         final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstNotFound,
         final java.util.concurrent.atomic.AtomicBoolean anyServerError,
-        final DrainedResponse allNotAllowed
+        final DrainedResponse allNotAllowed,
+        final DrainedResponse circuitOpen
     ) {
         final DrainedResponse forbidden = firstForbidden.get();
         if (forbidden != null) {
@@ -301,6 +326,12 @@ public final class RaceSlice implements Slice {
                     .textBody("All upstream remotes failed")
                     .build()
             );
+            return;
+        }
+        if (circuitOpen != null) {
+            result.complete(new Response(
+                circuitOpen.status, circuitOpen.headers, new Content.From(circuitOpen.bytes)
+            ));
             return;
         }
         if (allNotAllowed != null) {
