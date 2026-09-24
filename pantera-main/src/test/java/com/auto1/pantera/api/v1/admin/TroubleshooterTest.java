@@ -100,6 +100,34 @@ final class TroubleshooterTest {
     }
 
     @Test
+    void attributesACooldownForbiddenToCooldownNotPermissions() throws Exception {
+        final FakeFetch fetch = new FakeFetch()
+            .answer("npm_proxy", "/openai", 200, "{\"versions\":{\"1.0.0\":{}}}")
+            .answer(
+                "npm_proxy", "/openai/-/openai-2.0.0.tgz", 403,
+                "{\"error\":\"version in cooldown\",\"blocked_until\":\"2099-01-01T00:00:00Z\"}"
+            );
+        final CooldownLookup rows = (repos, names) -> List.of(new CooldownPackageRow(
+            "npm-proxy", "npm_proxy", "openai", "2.0.0", "blocked",
+            Instant.now().plus(1, ChronoUnit.DAYS), "FRESH_RELEASE", true, null
+        ));
+        final String message = TroubleshooterTest.check(
+            this.troubleshooter(
+                fetch, new NegativeCache(new NegativeCacheConfig()), rows
+            ).explain("/npm_proxy/openai/-/openai-2.0.0.tgz", null).get(10, TimeUnit.SECONDS),
+            "request"
+        ).getString("message");
+        MatcherAssert.assertThat(
+            "a cooldown 403 is attributed to cooldown",
+            message.contains("cooldown"), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "a cooldown 403 is not blamed on read permissions",
+            message.contains("permission"), new IsEqual<>(false)
+        );
+    }
+
+    @Test
     void offersARefreshForAReleasedButHiddenVersion() throws Exception {
         final FakeFetch fetch = new FakeFetch()
             .answer("npm_proxy", "/openai", 200, "{\"versions\":{\"1.0.0\":{}}}");

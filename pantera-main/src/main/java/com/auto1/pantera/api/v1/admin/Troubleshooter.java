@@ -389,6 +389,9 @@ public final class Troubleshooter {
         } else if (resp.status() >= 200 && resp.status() < 400) {
             status = OK;
             message = "Request answers " + resp.status();
+        } else if (resp.status() == 403 && Troubleshooter.cooldownForbidden(resp)) {
+            status = INFO;
+            message = "Request answers 403 because the version is in cooldown — see the cooldown check";
         } else if (resp.status() == 401 || resp.status() == 403) {
             status = INFO;
             message = "Request answers " + resp.status()
@@ -402,6 +405,18 @@ public final class Troubleshooter {
             message = "Request answers " + resp.status();
         }
         return Troubleshooter.check("request", "repository", status, message, null);
+    }
+
+    /**
+     * Whether a 403 comes from cooldown rather than authorization: the
+     * cooldown header, or the cooldown JSON body some adapters answer with.
+     *
+     * @param resp Response
+     * @return True for a cooldown block
+     */
+    private static boolean cooldownForbidden(final RepoFetch.Fetched resp) {
+        return resp.header("X-Pantera-Cooldown") != null
+            || Troubleshooter.snippet(resp).contains("\"blocked_until\"");
     }
 
     /**
