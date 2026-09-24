@@ -11,9 +11,11 @@
 package com.auto1.pantera.pypi.http;
 
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.pypi.NormalizedProjectName;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * Release version of a stored PyPI distribution.
@@ -34,6 +36,11 @@ final class DistFilename {
     private static final List<String> SDIST_SUFFIXES = List.of(
         ".tar.gz", ".tar.bz2", ".tar.z", ".tgz", ".zip", ".tar"
     );
+
+    /**
+     * A valid (not yet normalized) Python project name.
+     */
+    private static final Pattern PROJECT = Pattern.compile("[A-Za-z0-9.\\-_]+");
 
     /**
      * Filename.
@@ -80,6 +87,29 @@ final class DistFilename {
             final int dash = stem.lastIndexOf('-');
             result = dash > 0 && dash < stem.length() - 1
                 ? Optional.of(stem.substring(dash + 1)) : Optional.empty();
+        }
+        return result;
+    }
+
+    /**
+     * Normalized project name encoded in the filename ({@code name-ver-...whl},
+     * {@code name-ver-...egg}, {@code name-ver.tar.gz}, ...).
+     * @return Project name, empty when the name has no recognised shape
+     */
+    Optional<String> project() {
+        final String lower = this.name.toLowerCase(Locale.ROOT);
+        final String raw;
+        if (lower.endsWith(".whl") || lower.endsWith(".egg")) {
+            final int dash = this.name.indexOf('-');
+            raw = dash > 0 ? this.name.substring(0, dash) : "";
+        } else {
+            final String stem = this.stem(lower);
+            final int dash = stem.lastIndexOf('-');
+            raw = dash > 0 ? stem.substring(0, dash) : "";
+        }
+        Optional<String> result = Optional.empty();
+        if (DistFilename.PROJECT.matcher(raw).matches()) {
+            result = Optional.of(new NormalizedProjectName.Simple(raw).value());
         }
         return result;
     }

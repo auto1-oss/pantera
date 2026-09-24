@@ -13,10 +13,15 @@ package com.auto1.pantera.pypi.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.response.CooldownResponseFactory;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.context.ContextualExecutor;
+import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -47,6 +52,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.Supplier;
+import org.slf4j.MDC;
 
 /**
  * PyPI proxy slice with negative, metadata and integrity-verified caching.
@@ -255,7 +261,11 @@ public final class CachedPyProxySlice implements Slice {
         // requested path is a primary artifact. All other paths fall
         // through to the existing metadata / origin flow unchanged.
         if (this.cacheWriter != null && isPrimaryArtifact(path)) {
-            return this.verifyAndServePrimary(line, headers, key, path);
+            // Captured before any async hop: the cache-hit access record
+            // must carry THIS request's correlation, not a pooled thread's.
+            return this.verifyAndServePrimary(
+                line, headers, key, path, CachedPyProxySlice.captureAuditContext(headers)
+            );
         }
 
         // Check metadata cache for wheels and index pages
@@ -462,12 +472,13 @@ public final class CachedPyProxySlice implements Slice {
      * Maven primary-path decision.
      */
     private CompletableFuture<Response> verifyAndServePrimary(
-        final RequestLine line, final Headers headers, final Key key, final String path
+        final RequestLine line, final Headers headers, final Key key, final String path,
+        final AuditContext actx
     ) {
         final Storage storage = this.rawStorage.orElseThrow();
         return storage.exists(key).thenCompose(present -> {
             if (present) {
-                return this.serveFromCache(storage, key);
+                return this.serveFromCache(storage, key, new Login(headers).getValue(), actx);
             }
             // T-P06: single-flight the cache-miss leg. The leader streams
             // upstream → tee → client + storage; followers park on the
@@ -486,7 +497,9 @@ public final class CachedPyProxySlice implements Slice {
                 return this.streamPrimary(line, headers, key, path, leaderGate);
             }
             return gate.exceptionally(err -> null)
-                .thenCompose(ignored -> this.verifyAndServePrimary(line, headers, key, path));
+                .thenCompose(
+                    ignored -> this.verifyAndServePrimary(line, headers, key, path, actx)
+                );
         }).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.pypi")
                 .message("PyPI primary-artifact verify-and-serve failed; returning 502")
@@ -667,14 +680,43 @@ public final class CachedPyProxySlice implements Slice {
     }
 
     /**
-     * Serve the primary from storage after a successful atomic write.
+     * Serve a cached primary. This is an artifact serve (a cache hit, or a
+     * single-flight follower re-entering against the now-warm cache), so it
+     * leaves the {@code artifact_access} audit record the cache-miss fetch
+     * gets from the origin.
+     *
+     * @param storage Cache storage
+     * @param key Primary key
+     * @param user Requesting user
+     * @param actx Request correlation captured before any async hop
+     * @return Response with the cached bytes
      */
     private CompletableFuture<Response> serveFromCache(
-        final Storage storage, final Key key
+        final Storage storage, final Key key, final String user, final AuditContext actx
     ) {
-        return storage.value(key).thenApply(content ->
-            ResponseBuilder.ok().body(content).build()
-        );
+        return storage.value(key).thenApply(content -> {
+            final String file = key.string().substring(key.string().lastIndexOf('/') + 1);
+            final DistFilename dist = new DistFilename(file);
+            AuditLogger.access(
+                actx, this.repoType, this.repoName,
+                dist.project().orElse(file), dist.version().orElse(null),
+                content.size().orElse(0L), user,
+                AuditLogger.OUTCOME_SUCCESS, null
+            );
+            return ResponseBuilder.ok().body(content).build();
+        });
+    }
+
+    /**
+     * Correlation context of the request, bound from its internal
+     * {@code X-Pantera-Ctx-*} headers on the calling thread.
+     *
+     * @param headers Request headers
+     * @return Audit context
+     */
+    private static AuditContext captureAuditContext(final Headers headers) {
+        RequestContextHeaders.bindToMdc(headers);
+        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
     }
 
     /**
