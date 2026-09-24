@@ -31,11 +31,13 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 
+import java.io.InputStream;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.regex.Pattern;
@@ -125,17 +127,25 @@ public final class UpdateSlice implements Slice {
             .thenCompose(nothing -> this.asto.value(key))
             .thenCompose(
                 content -> new ContentAsStream<String>(content)
-                    .process(input -> new Control.FromInputStream(input).asString())
+                    .process(UpdateSlice::control)
             )
             .thenCompose(
                 control -> {
-                    final List<String> common = new ControlField.Architecture().value(control)
-                        .stream().filter(item -> this.config.archs().contains(item))
+                    final List<String> archs = UpdateSlice.architectures(control);
+                    final List<String> common = archs.stream()
+                        .filter(item -> this.config.archs().contains(item))
                         .collect(Collectors.toList());
                     final CompletableFuture<Response> res;
                     if (common.isEmpty()) {
                         res = this.asto.delete(key).thenApply(
-                            nothing -> ResponseBuilder.badRequest().build()
+                            nothing -> ResponseBuilder.badRequest()
+                                .textBody(
+                                    String.format(
+                                        "Package architecture '%s' is not one of this repository's architectures (%s)",
+                                        String.join(" ", archs),
+                                        String.join(" ", this.config.archs())
+                                    )
+                                ).build()
                         );
                     } else {
                         // Always run logEvents — it now also drives the
@@ -158,8 +168,17 @@ public final class UpdateSlice implements Slice {
                     if (throwable == null) {
                         return CompletableFuture.completedFuture(resp);
                     } else {
-                        res = this.asto.delete(key)
-                            .thenApply(nothing -> ResponseBuilder.internalError().build());
+                        final Throwable cause = UpdateSlice.cause(throwable);
+                        res = this.asto.delete(key).thenApply(
+                            nothing -> {
+                                if (cause instanceof InvalidPackageException) {
+                                    return ResponseBuilder.badRequest()
+                                        .textBody(cause.getMessage())
+                                        .build();
+                                }
+                                return ResponseBuilder.internalError().build();
+                            }
+                        );
                     }
                     return res;
                 }
@@ -235,5 +254,72 @@ public final class UpdateSlice implements Slice {
                     .invalidateAfterUpload("debian", name);
                 return CompletableFuture.allOf(syncs.toArray(CompletableFuture[]::new));
             });
+    }
+
+    /**
+     * Control file of an uploaded package.
+     * @param input Package bytes
+     * @return Control file
+     * @throws InvalidPackageException If the upload is not a Debian package
+     */
+    private static String control(final InputStream input) {
+        try {
+            return new Control.FromInputStream(input).asString();
+        } catch (final IllegalStateException ex) {
+            throw new InvalidPackageException(
+                String.format("The upload is not a valid Debian package: %s", ex.getMessage()),
+                ex
+            );
+        }
+    }
+
+    /**
+     * Architectures a control file declares.
+     * @param control Control file
+     * @return Architectures
+     * @throws InvalidPackageException If the control file declares none
+     */
+    private static List<String> architectures(final String control) {
+        final List<String> res;
+        try {
+            res = new ControlField.Architecture().value(control);
+        } catch (final RuntimeException ex) {
+            throw new InvalidPackageException(
+                "The upload is not a valid Debian package: its control file has no Architecture",
+                ex
+            );
+        }
+        return res;
+    }
+
+    /**
+     * Unwrap completion wrappers.
+     * @param err Error
+     * @return Underlying cause
+     */
+    private static Throwable cause(final Throwable err) {
+        Throwable res = err;
+        while (res instanceof CompletionException && res.getCause() != null) {
+            res = res.getCause();
+        }
+        return res;
+    }
+
+    /**
+     * The upload is not a Debian package Pantera can index.
+     * @since 2.2.9
+     */
+    private static final class InvalidPackageException extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Ctor.
+         * @param message Reason for the client
+         * @param cause Cause
+         */
+        InvalidPackageException(final String message, final Throwable cause) {
+            super(message, cause);
+        }
     }
 }
