@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.asto.streams.ContentAsStream;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.conda.asto.AstoMergedJson;
 import com.auto1.pantera.conda.meta.InfoIndex;
 import com.auto1.pantera.http.Headers;
@@ -129,12 +130,21 @@ public final class UpdateSlice implements Slice {
                         .thenApply(JsonObjectBuilder::build)
                         .thenCompose(
                             json -> {
-                                CompletionStage<Void> action = new AstoMergedJson(
-                                    this.asto, new Key.From(matcher.group(2), "repodata.json")
-                                ).merge(
-                                    Collections.singletonMap(matcher.group(3), json)
-                                ).thenCompose(
-                                    ignored -> this.asto.move(temp, new Key.From(matcher.group(1)))
+                                // Merge and move under the repodata lock the
+                                // management-API delete prunes under: the
+                                // package is listed only once its file is
+                                // in place, and neither side loses the
+                                // other's change.
+                                final Key repodata =
+                                    new Key.From(matcher.group(2), "repodata.json");
+                                CompletionStage<Void> action = new IndexUpdateLock(
+                                    this.asto, repodata
+                                ).run(
+                                    locked -> new AstoMergedJson(locked, repodata).merge(
+                                        Collections.singletonMap(matcher.group(3), json)
+                                    ).thenCompose(
+                                        ignored -> locked.move(temp, main)
+                                    )
                                 );
                                 action = action.thenCompose(nothing -> {
                                     final String pkgName = json.getString("name", "<no name>");

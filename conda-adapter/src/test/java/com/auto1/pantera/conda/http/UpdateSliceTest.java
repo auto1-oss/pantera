@@ -205,6 +205,45 @@ class UpdateSliceTest {
         );
     }
 
+    @Test
+    void mergesUnderTheRepodataLockTheDeletePrunesUnder() throws IOException {
+        final String name = "7zip-19.00-h59b6b97_2.conda";
+        final Key repodata = new Key.From("linux-64", "repodata.json");
+        final java.util.concurrent.CompletableFuture<Void> parked =
+            new java.util.concurrent.CompletableFuture<>();
+        final java.util.concurrent.CompletableFuture<Void> entered =
+            new java.util.concurrent.CompletableFuture<>();
+        final java.util.concurrent.CompletableFuture<Void> holder =
+            new com.auto1.pantera.asto.lock.storage.IndexUpdateLock(this.asto, repodata).run(
+                locked -> {
+                    entered.complete(null);
+                    return parked;
+                }
+            );
+        entered.join();
+        final java.util.concurrent.CompletableFuture<com.auto1.pantera.http.Response> upload =
+            new UpdateSlice(this.asto, Optional.of(this.events), UpdateSliceTest.RNAME)
+                .response(
+                    new RequestLine(RqMethod.POST, String.format("/linux-64/%s", name)),
+                    UpdateSliceTest.HEADERS,
+                    new Content.From(this.body(new TestResource(name).asBytes()))
+                );
+        MatcherAssert.assertThat(
+            "the package is not listed while another writer holds the repodata lock",
+            this.asto.exists(repodata).join(), new IsEqual<>(false)
+        );
+        parked.complete(null);
+        holder.join();
+        MatcherAssert.assertThat(
+            "the upload completes once the lock is released",
+            upload.join().status(), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the package is listed",
+            this.asto.value(repodata).join().asString().contains(name), new IsEqual<>(true)
+        );
+    }
+
     private byte[] body(final byte[] file) throws IOException {
         final ByteArrayOutputStream body = new ByteArrayOutputStream();
         body.write(
