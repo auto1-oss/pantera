@@ -198,6 +198,29 @@ public final class MavenProxySlice extends Slice.Wrap {
     }
 
     /**
+     * Storage-path prefix of an artifact's metadata, from
+     * {@code groupId:artifactId} or {@code group/path/artifactId}.
+     *
+     * @param pkg Package coordinate
+     * @return Prefix ending in {@code /}, empty when the coordinate names
+     *  no artifact
+     */
+    private static String metadataPrefix(final String pkg) {
+        final String trimmed = pkg == null ? "" : pkg.trim();
+        final int colon = trimmed.indexOf(':');
+        final String path;
+        if (colon > 0 && colon < trimmed.length() - 1) {
+            path = trimmed.substring(0, colon).replace('.', '/') + "/"
+                + trimmed.substring(colon + 1);
+        } else if (trimmed.indexOf('/') > 0) {
+            path = trimmed;
+        } else {
+            path = "";
+        }
+        return path.isEmpty() ? "" : path.replaceAll("^/+|/+$", "") + "/";
+    }
+
+    /**
      * Build the routing slice with ChecksumProxySlice wrapping CachedProxySlice.
      */
     private static Slice buildRoute(
@@ -238,6 +261,22 @@ public final class MavenProxySlice extends Slice.Wrap {
             valkeyConn,
             rname,
             java.time.Clock.systemUTC()
+        );
+        // Admin "refresh package": drop the cached maven-metadata.xml of an
+        // artifact (both tiers) so the next read refetches it; the
+        // refreshed-content hook then drops the filtered envelopes.
+        com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance().register(
+            rname,
+            pkg -> {
+                final String prefix = MavenProxySlice.metadataPrefix(pkg);
+                if (prefix.isEmpty()) {
+                    return java.util.concurrent.CompletableFuture.completedFuture(
+                        "unsupported_name"
+                    );
+                }
+                metadataCache.invalidatePrefix(prefix);
+                return java.util.concurrent.CompletableFuture.completedFuture("invalidated");
+            }
         );
         final CachedProxySlice cached = new CachedProxySlice(
             remote, cache, events, rname, upstreamUrl, rtype,

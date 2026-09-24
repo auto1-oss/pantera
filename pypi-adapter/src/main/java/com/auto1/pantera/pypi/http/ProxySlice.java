@@ -350,6 +350,43 @@ final class ProxySlice implements Slice {
         this.jsonHandler = new PypiJsonHandler(
             jsonApiUpstream, cooldown, rtype, rname
         );
+        // Admin "refresh package": revalidate a project's cached simple
+        // index through the same refresh path stale-while-revalidate uses.
+        com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance()
+            .register(rname, this::revalidate);
+    }
+
+    /**
+     * Revalidate a project's cached simple index (PEP 503 HTML and PEP 691
+     * JSON variants) against the upstream now, keeping the cached copy on
+     * any upstream failure. Variants not cached are left alone — the next
+     * client read fetches them fresh.
+     *
+     * @param project Project name, any spelling (normalised here)
+     * @return Future of the joined per-variant outcome
+     */
+    CompletableFuture<String> revalidate(final String project) {
+        final String normalized = new NormalizedProjectName.Simple(project).value();
+        final RequestLine line = new RequestLine(
+            com.auto1.pantera.http.rq.RqMethod.GET, String.format("/%s/", normalized)
+        );
+        final java.util.List<CompletableFuture<String>> variants = new java.util.ArrayList<>(2);
+        for (final SimpleApiFormat format : SimpleApiFormat.values()) {
+            final Key key = ProxySlice.keyFromPath(line, format);
+            variants.add(
+                this.asyncStorage.exists(key).thenCompose(exists -> {
+                    if (!exists) {
+                        return CompletableFuture.completedFuture("not_cached");
+                    }
+                    return this.refreshIndex(key, line, this.upstreamLine(line), format);
+                })
+            );
+        }
+        return CompletableFuture.allOf(variants.toArray(new CompletableFuture[0]))
+            .thenApply(ignored -> variants.stream()
+                .map(CompletableFuture::join)
+                .distinct()
+                .collect(java.util.stream.Collectors.joining(",")));
     }
 
     @Override
@@ -880,115 +917,27 @@ final class ProxySlice implements Slice {
         }
         CompletableFuture.runAsync(() -> {
             try {
-                // Build request with conditional header if available
-                final String lm = this.lastModifiedCache.getIfPresent(keyStr);
-                Headers extra = lm != null
-                    ? Headers.from(new Header("If-Modified-Since", lm))
-                    : Headers.EMPTY;
-                // Include PEP 691 Accept header when client requested JSON
-                if (format == SimpleApiFormat.JSON) {
-                    extra = extra.copy().add(
-                        new Header("Accept", SimpleApiFormat.JSON.contentType())
-                    );
-                }
-                // Fetch from upstream
-                this.fetchFromUpstreamWithHeaders(line, upstream, extra)
-                    .thenCompose(response -> {
-                        if (response.status().code() == 304) {
-                            // Not modified — keep cached version
-                            EcsLogger.debug("com.auto1.pantera.pypi")
-                                .message(String.format("Background refresh: 304 Not Modified for key '%s'", keyStr))
-                                .eventCategory("database")
-                                .eventAction("stale_while_revalidate")
-                                .eventOutcome("success")
-                                .field("log.source", "application")
-                                .log();
-                            return CompletableFuture.completedFuture((Void) null);
-                        }
-                        if (!response.status().success()) {
-                            // Keep the stale index (fail-open), but say so:
-                            // before 2.2.7 a persistently failing upstream
-                            // (404/5xx) was swallowed here with no log at all
-                            // — the completion handler even reported success
-                            // — leaving silently frozen simple indexes with
-                            // zero ELK trace. The timestamp is NOT bumped, so
-                            // the next request retries.
-                            EcsLogger.warn("com.auto1.pantera.pypi")
-                                .message(String.format(
-                                    "Background refresh got non-success upstream status for key '%s' — keeping stale index, will retry",
-                                    keyStr
-                                ))
-                                .eventCategory("database")
-                                .eventAction("stale_while_revalidate")
-                                .eventOutcome("failure")
-                                .field("http.response.status_code", response.status().code())
-                                .field("log.source", "application")
-                                .log();
-                            return CompletableFuture.completedFuture((Void) null);
-                        }
-                        // Store new Last-Modified
-                        this.storeLastModified(key, response.headers());
-                        // Pre-rewrite and save
-                        final String path = line.uri().getPath();
-                        final CompletableFuture<Optional<Content>> rewritten;
-                        if (path != null && path.endsWith(".metadata")) {
-                            rewritten = CompletableFuture.completedFuture(
-                                Optional.of(response.body())
-                            );
-                        } else {
-                            rewritten = this.preRewriteContent(
-                                response.body(), response.headers(), line
-                            );
-                        }
-                        return rewritten.thenCompose(opt -> {
-                            if (opt.isPresent()) {
-                                return opt.get().asBytesFuture().thenCompose(bytes ->
-                                    this.asyncStorage.save(
-                                        key, new Content.From(bytes)
-                                    ).thenRun(() ->
-                                        // One INFO per genuine content refresh
-                                        // (at most once per index per TTL
-                                        // window) so refresh activity is
-                                        // visible in ELK — its total absence
-                                        // is what made the 2.2.6 stale-
-                                        // metadata incident undiagnosable.
-                                        EcsLogger.info("com.auto1.pantera.pypi")
-                                            .message(String.format(
-                                                "Background refresh replaced cached index for key '%s'",
-                                                keyStr
-                                            ))
-                                            .eventCategory("database")
-                                            .eventAction("stale_while_revalidate")
-                                            .eventOutcome("success")
-                                            .field("event.reason", "content_changed")
-                                            .field("log.source", "application")
-                                            .log()
-                                    )
-                                );
-                            }
-                            return CompletableFuture.completedFuture(null);
-                        });
-                    }).whenComplete((v, err) -> {
-                        this.refreshing.end(keyStr);
-                        if (err != null) {
-                            EcsLogger.warn("com.auto1.pantera.pypi")
-                                .message(String.format("Background refresh failed for key '%s'", keyStr))
-                                .eventCategory("database")
-                                .eventAction("stale_while_revalidate")
-                                .eventOutcome("failure")
-                                .error(err)
-                                .field("log.source", "application")
-                                .log();
-                        } else {
-                            EcsLogger.debug("com.auto1.pantera.pypi")
-                                .message(String.format("Background refresh completed for key '%s'", keyStr))
-                                .eventCategory("database")
-                                .eventAction("stale_while_revalidate")
-                                .eventOutcome("success")
-                                .field("log.source", "application")
-                                .log();
-                        }
-                    });
+                this.refreshIndex(key, line, upstream, format).whenComplete((outcome, err) -> {
+                    this.refreshing.end(keyStr);
+                    if (err != null) {
+                        EcsLogger.warn("com.auto1.pantera.pypi")
+                            .message(String.format("Background refresh failed for key '%s'", keyStr))
+                            .eventCategory("database")
+                            .eventAction("stale_while_revalidate")
+                            .eventOutcome("failure")
+                            .error(err)
+                            .field("log.source", "application")
+                            .log();
+                    } else {
+                        EcsLogger.debug("com.auto1.pantera.pypi")
+                            .message(String.format("Background refresh completed for key '%s'", keyStr))
+                            .eventCategory("database")
+                            .eventAction("stale_while_revalidate")
+                            .eventOutcome("success")
+                            .field("log.source", "application")
+                            .log();
+                    }
+                });
             } catch (final Exception ex) {
                 this.refreshing.end(keyStr);
                 EcsLogger.warn("com.auto1.pantera.pypi")
@@ -1001,6 +950,149 @@ final class ProxySlice implements Slice {
                     .log();
             }
         }, ContextualExecutor.contextualize(ForkJoinPool.commonPool()));
+    }
+
+    /**
+     * Refresh one cached index page from the upstream: conditional request
+     * (If-Modified-Since) when a validator is known, keep the cached page on
+     * 304 or any non-success status, otherwise pre-rewrite and replace it.
+     * A replaced project page drops the cooldown-filtered envelopes of the
+     * project, so the new version list is served instead of the envelope
+     * computed from the stale page.
+     *
+     * @param key Storage key of the cached page
+     * @param line Client-shaped request line of the page
+     * @param upstream Upstream request line
+     * @param format Simple API serialization
+     * @return Future of the outcome: {@code not_modified},
+     *  {@code refreshed}, {@code unchanged} or {@code upstream_status_<code>}
+     */
+    private CompletableFuture<String> refreshIndex(
+        final Key key, final RequestLine line,
+        final RequestLine upstream, final SimpleApiFormat format
+    ) {
+        final String keyStr = key.string();
+        // Build request with conditional header if available
+        final String lm = this.lastModifiedCache.getIfPresent(keyStr);
+        Headers extra = lm != null
+            ? Headers.from(new Header("If-Modified-Since", lm))
+            : Headers.EMPTY;
+        // Include PEP 691 Accept header when client requested JSON
+        if (format == SimpleApiFormat.JSON) {
+            extra = extra.copy().add(
+                new Header("Accept", SimpleApiFormat.JSON.contentType())
+            );
+        }
+        return this.fetchFromUpstreamWithHeaders(line, upstream, extra)
+            .thenCompose(response -> {
+                if (response.status().code() == 304) {
+                    // Not modified — keep cached version
+                    EcsLogger.debug("com.auto1.pantera.pypi")
+                        .message(String.format("Background refresh: 304 Not Modified for key '%s'", keyStr))
+                        .eventCategory("database")
+                        .eventAction("stale_while_revalidate")
+                        .eventOutcome("success")
+                        .field("log.source", "application")
+                        .log();
+                    return response.body().asBytesFuture().thenApply(ignored -> "not_modified");
+                }
+                if (!response.status().success()) {
+                    // Keep the stale index (fail-open), but say so:
+                    // before 2.2.7 a persistently failing upstream
+                    // (404/5xx) was swallowed here with no log at all
+                    // — the completion handler even reported success
+                    // — leaving silently frozen simple indexes with
+                    // zero ELK trace. The timestamp is NOT bumped, so
+                    // the next request retries.
+                    EcsLogger.warn("com.auto1.pantera.pypi")
+                        .message(String.format(
+                            "Background refresh got non-success upstream status for key '%s' — keeping stale index, will retry",
+                            keyStr
+                        ))
+                        .eventCategory("database")
+                        .eventAction("stale_while_revalidate")
+                        .eventOutcome("failure")
+                        .field("http.response.status_code", response.status().code())
+                        .field("log.source", "application")
+                        .log();
+                    return response.body().asBytesFuture().thenApply(
+                        ignored -> "upstream_status_" + response.status().code()
+                    );
+                }
+                return this.replaceIndex(key, line, response);
+            });
+    }
+
+    /**
+     * Save a successfully refreshed index page (pre-rewritten) and drop the
+     * project's filtered-metadata envelopes.
+     *
+     * @param key Storage key of the cached page
+     * @param line Client-shaped request line of the page
+     * @param response Successful upstream response
+     * @return Future of {@code refreshed} or {@code unchanged}
+     */
+    private CompletableFuture<String> replaceIndex(
+        final Key key, final RequestLine line, final Response response
+    ) {
+        final String keyStr = key.string();
+        // Store new Last-Modified
+        this.storeLastModified(key, response.headers());
+        // Pre-rewrite and save
+        final String path = line.uri().getPath();
+        final boolean metadataFile = path != null && path.endsWith(".metadata");
+        final CompletableFuture<Optional<Content>> rewritten;
+        if (metadataFile) {
+            rewritten = CompletableFuture.completedFuture(
+                Optional.of(response.body())
+            );
+        } else {
+            rewritten = this.preRewriteContent(
+                response.body(), response.headers(), line
+            );
+        }
+        return rewritten.thenCompose(opt -> {
+            if (opt.isEmpty()) {
+                return CompletableFuture.completedFuture("unchanged");
+            }
+            return opt.get().asBytesFuture().thenCompose(bytes ->
+                this.asyncStorage.save(
+                    key, new Content.From(bytes)
+                ).thenApply(saved -> {
+                    // One INFO per genuine content refresh
+                    // (at most once per index per TTL
+                    // window) so refresh activity is
+                    // visible in ELK — its total absence
+                    // is what made the 2.2.6 stale-
+                    // metadata incident undiagnosable.
+                    EcsLogger.info("com.auto1.pantera.pypi")
+                        .message(String.format(
+                            "Background refresh replaced cached index for key '%s'",
+                            keyStr
+                        ))
+                        .eventCategory("database")
+                        .eventAction("stale_while_revalidate")
+                        .eventOutcome("success")
+                        .field("event.reason", "content_changed")
+                        .field("log.source", "application")
+                        .log();
+                    if (!metadataFile) {
+                        // Same contract as npm's packument-write hook: a
+                        // refreshed project page must not keep being served
+                        // through an envelope filtered from the stale page.
+                        final String project = new KeyLastPart(new KeyFromPath(path)).get();
+                        if (!project.isEmpty()) {
+                            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                                .instance().invalidateAfterProxyRefresh(
+                                    this.rtype,
+                                    new NormalizedProjectName.Simple(project).value()
+                                );
+                        }
+                    }
+                    return "refreshed";
+                })
+            );
+        });
     }
 
     /**

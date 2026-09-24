@@ -170,6 +170,64 @@ class ProxySliceTest {
     }
 
     @Test
+    void revalidateReplacesACachedIndexAndDropsItsEnvelopes() throws Exception {
+        final byte[] fresh = "<html><body><a href=\"x\">my-project-2.0.0.tar.gz</a></body></html>"
+            .getBytes(StandardCharsets.UTF_8);
+        this.storage.save(
+            new Key.From("my-project"),
+            new Content.From("<html>stale</html>".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        final com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry registry =
+            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance();
+        final Optional<com.auto1.pantera.cooldown.metadata.FilteredMetadataCache> prior =
+            registry.sharedCache();
+        final com.auto1.pantera.cooldown.metadata.FilteredMetadataCache envelopes =
+            new com.auto1.pantera.cooldown.metadata.FilteredMetadataCache(
+                100, java.time.Duration.ofMinutes(5), java.time.Duration.ofMinutes(5), null
+            );
+        envelopes.getEntry(
+            "pypi-proxy", "my-pypi-proxy", "default", "my-project",
+            () -> CompletableFuture.completedFuture(
+                com.auto1.pantera.cooldown.metadata.FilteredMetadataCache.CacheEntry
+                    .noBlockedVersions(new byte[]{1}, java.time.Duration.ofMinutes(5))
+            )
+        ).join();
+        registry.setSharedCache(envelopes);
+        try {
+            final String outcome = this.newProxySlice(
+                new SliceSimple(
+                    ResponseBuilder.ok().header(ContentType.mime("text/html")).body(fresh).build()
+                ),
+                new TestClientSlices(line -> ResponseBuilder.internalError().build()),
+                Optional.empty()
+            ).revalidate("My_Project").get(10, java.util.concurrent.TimeUnit.SECONDS);
+            MatcherAssert.assertThat(
+                "the cached HTML index was refreshed (the JSON variant was never cached)",
+                outcome, new IsEqual<>("refreshed,not_cached")
+            );
+            MatcherAssert.assertThat(
+                "the cached index now carries the upstream's new version",
+                new String(
+                    this.storage.value(new Key.From("my-project")).join().asBytes(),
+                    StandardCharsets.UTF_8
+                ),
+                Matchers.containsString("my-project-2.0.0.tar.gz")
+            );
+            MatcherAssert.assertThat(
+                "the project's filtered envelope was dropped",
+                envelopes.probe("my-pypi-proxy", "my-project").join().l1Present(),
+                new IsEqual<>(false)
+            );
+        } finally {
+            if (prior.isPresent()) {
+                registry.setSharedCache(prior.get());
+            } else {
+                registry.setSharedCache(null);
+            }
+        }
+    }
+
+    @Test
     void returnsNotFoundWhenRemoteReturnedBadRequest() {
         MatcherAssert.assertThat(
             "Status 400 returned",

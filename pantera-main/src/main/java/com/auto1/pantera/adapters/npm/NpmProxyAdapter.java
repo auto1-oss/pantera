@@ -74,6 +74,7 @@ public final class NpmProxyAdapter implements Slice {
         // absence is tolerated here; a configured-but-malformed value still
         // fails fast the same way RepoConfig#url() does.
         final Optional<URL> baseUrl = cfg.urlOpt().map(NpmProxyAdapter::toUrl);
+        final java.util.List<NpmProxy> proxies = new java.util.concurrent.CopyOnWriteArrayList<>();
         
         // Support multiple remotes with GroupResolver (similar to maven-proxy).
         // Each remote gets its own NpmProxy + NpmProxySlice, evaluated in
@@ -127,6 +128,7 @@ public final class NpmProxyAdapter implements Slice {
                         packumentWriteHook,
                         phaseRecorder
                     );
+                    proxies.add(npmProxy);
                     
                     // Wrap with NpmProxySlice
                     final Slice npmProxySlice = new NpmProxySlice(
@@ -152,6 +154,31 @@ public final class NpmProxyAdapter implements Slice {
                 }
             ).collect(Collectors.toList())
         ), com.auto1.pantera.http.rq.RqMethod.POST);
+        // Admin "refresh package": revalidate the cached packument through
+        // every remote's own conditional-refresh path.
+        com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance().register(
+            cfg.name(), pkg -> NpmProxyAdapter.revalidateAll(proxies, pkg)
+        );
+    }
+
+    /**
+     * Revalidate a package against every remote; outcomes are joined.
+     *
+     * @param proxies Per-remote proxies
+     * @param pkg Package name
+     * @return Future of the joined outcome
+     */
+    private static CompletableFuture<String> revalidateAll(
+        final java.util.List<NpmProxy> proxies, final String pkg
+    ) {
+        final java.util.List<CompletableFuture<String>> all = proxies.stream()
+            .map(proxy -> proxy.revalidate(pkg).exceptionally(err -> "failed"))
+            .collect(Collectors.toList());
+        return CompletableFuture.allOf(all.toArray(new CompletableFuture[0]))
+            .thenApply(ignored -> all.stream()
+                .map(CompletableFuture::join)
+                .distinct()
+                .collect(Collectors.joining(",")));
     }
 
     @Override
