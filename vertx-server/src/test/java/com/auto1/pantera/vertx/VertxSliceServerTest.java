@@ -350,6 +350,56 @@ public final class VertxSliceServerTest {
     }
 
     @Test
+    void sendsTheRequestedReasonPhraseAndStripsTheInternalHeader() {
+        // R34: twine prints only the status line; PyPI answers
+        // "400 File already exists" to a reused filename.
+        this.start(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.badRequest()
+                    .header(new com.auto1.pantera.http.headers.ReasonPhrase("File already exists"))
+                    .textBody("File already exists: 'a.whl'")
+                    .build()
+            )
+        );
+        final HttpResponse<Buffer> response = this.client
+            .post(this.port, VertxSliceServerTest.HOST, "/upload")
+            .rxSend()
+            .blockingGet();
+        MatcherAssert.assertThat(
+            "status line carries the reason phrase",
+            response.statusMessage(), new IsEqual<>("File already exists")
+        );
+        MatcherAssert.assertThat(
+            "the internal header is not sent",
+            response.getHeader(com.auto1.pantera.http.headers.ReasonPhrase.NAME),
+            new IsEqual<>(null)
+        );
+    }
+
+    @Test
+    void dropsAReasonPhraseThatWouldBreakTheStatusLine() {
+        this.start(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.badRequest()
+                    .header(new com.auto1.pantera.http.headers.ReasonPhrase("a\r\nX-Evil: 1"))
+                    .build()
+            )
+        );
+        final HttpResponse<Buffer> response = this.client
+            .post(this.port, VertxSliceServerTest.HOST, "/upload")
+            .rxSend()
+            .blockingGet();
+        MatcherAssert.assertThat(
+            "no header is injected",
+            response.getHeader("X-Evil"), new IsEqual<>(null)
+        );
+        MatcherAssert.assertThat(
+            "the standard reason phrase is kept",
+            response.statusMessage(), new IsEqual<>("Bad Request")
+        );
+    }
+
+    @Test
     void doesNotCompressJarFiles() throws Exception {
         final byte[] jarContent = new byte[1024];
         java.util.Arrays.fill(jarContent, (byte) 'A');

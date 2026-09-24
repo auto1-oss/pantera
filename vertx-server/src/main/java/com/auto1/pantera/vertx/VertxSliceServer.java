@@ -18,6 +18,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.ReasonPhrase;
 import com.auto1.pantera.http.server.SecurityHeadersSlice;
 import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -1472,6 +1473,28 @@ public final class VertxSliceServer implements Closeable {
     }
 
 
+    /**
+     * The reason phrase a slice asked for with {@link ReasonPhrase}, when it
+     * is safe to put in a status line: 1 to 128 printable ASCII characters
+     * (space and tab allowed, no CR/LF). Anything else is ignored and the
+     * standard phrase is kept.
+     * @param headers Response headers
+     * @return Phrase or null
+     */
+    private static String reasonPhrase(final Headers headers) {
+        String result = null;
+        for (final Header header : headers) {
+            if (ReasonPhrase.NAME.equalsIgnoreCase(header.getKey())) {
+                final String value = header.getValue();
+                if (!value.isEmpty() && value.length() <= 128
+                    && value.chars().allMatch(chr -> chr == '\t' || chr >= 0x20 && chr < 0x7f)) {
+                    result = value;
+                }
+            }
+        }
+        return result;
+    }
+
     private static CompletionStage<Void> accept(
         HttpServerResponse response, RsStatus status, Headers headers, Content body,
         boolean isHead, io.vertx.core.http.HttpVersion version,
@@ -1498,6 +1521,12 @@ public final class VertxSliceServer implements Closeable {
             return CompletableFuture.completedFuture(null);
         }
         response.setStatusCode(status.code());
+        // A slice may ask for a custom reason phrase (HTTP/1.x only; HTTP/2
+        // has none). The internal header itself is never sent.
+        final String phrase = VertxSliceServer.reasonPhrase(headers);
+        if (phrase != null && version != HttpVersion.HTTP_2) {
+            response.setStatusMessage(phrase);
+        }
 
         // Filter HTTP/2 forbidden headers per RFC 7540 Section 8.1.2
         // Connection-specific headers MUST NOT be included in HTTP/2 messages
@@ -1505,7 +1534,9 @@ public final class VertxSliceServer implements Closeable {
             ? filterHttp2ForbiddenHeaders(headers)
             : headers;
 
-        filteredHeaders.stream().forEach(h -> response.putHeader(h.getKey(), h.getValue()));
+        filteredHeaders.stream()
+            .filter(h -> !ReasonPhrase.NAME.equalsIgnoreCase(h.getKey()))
+            .forEach(h -> response.putHeader(h.getKey(), h.getValue()));
 
         // Skip compression for already-compressed binary artifacts (jar, gz, tar, rpm, etc.)
         // Setting Content-Encoding: identity tells Vert.x not to apply gzip compression,

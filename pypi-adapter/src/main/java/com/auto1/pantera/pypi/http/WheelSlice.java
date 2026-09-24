@@ -25,6 +25,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.ContentDisposition;
 import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.headers.ReasonPhrase;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.multipart.RqMultipart;
 import com.auto1.pantera.http.RsStatus;
@@ -212,6 +213,9 @@ final class WheelSlice implements Slice {
                                 .field("log.source", "application")
                                 .log();
                             response = ResponseBuilder.badRequest()
+                                // twine prints only the status line: say why there,
+                                // as PyPI does.
+                                .header(new ReasonPhrase("File already exists"))
                                 .textBody(
                                     String.format(
                                         "File already exists: '%s'. A published file cannot be"

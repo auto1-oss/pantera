@@ -246,6 +246,11 @@ class WheelSliceTest {
             new IsEqual<>(true)
         );
         MatcherAssert.assertThat(
+            "the status line says why too, as PyPI's does (twine prints only the reason)",
+            response.headers().values(com.auto1.pantera.http.headers.ReasonPhrase.NAME),
+            new IsEqual<>(java.util.List.of("File already exists"))
+        );
+        MatcherAssert.assertThat(
             "the stored file is untouched",
             this.asto.value(new Key.From("pantera-sample", "0.2", filename)).join().asBytes(),
             new IsEqual<>(original)

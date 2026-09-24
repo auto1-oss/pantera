@@ -109,9 +109,10 @@ file is stored at `<package>/<version>/<file>` in the repository.
 
 As on PyPI, a published file cannot be replaced. Uploading a file whose name
 already exists with **different** content fails with
-`400 File already exists`; publish a new version instead. Re-uploading the
-**identical** file succeeds and changes nothing, so a retried `twine upload`
-is safe.
+`400 File already exists` (twine reports `HTTPError: 400 File already exists`);
+publish a new version instead. Re-uploading the **identical** file succeeds and
+changes nothing, so a retried `twine upload` is safe; `twine upload
+--skip-existing` skips files that are already published.
 
 ---
 
