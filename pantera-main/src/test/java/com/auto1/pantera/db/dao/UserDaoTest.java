@@ -138,6 +138,13 @@ class UserDaoTest {
     }
 
     @Test
+    void removingAnUnknownUserIsNotFound() {
+        // R46: DELETE /api/v1/users/<unknown> answered 200. The handler maps
+        // IllegalStateException to 404, so the DAO must report "not found".
+        assertThrows(IllegalStateException.class, () -> this.dao.remove("nobody-here"));
+    }
+
+    @Test
     void altersPassword() {
         addTestUser("frank");
         // Must satisfy PasswordPolicy: ≥12 chars, upper, lower, digit, special,

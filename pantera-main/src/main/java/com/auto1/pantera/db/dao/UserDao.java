@@ -298,7 +298,12 @@ public final class UserDao implements CrudUsers {
                  "DELETE FROM users WHERE username = ?"
              )) {
             ps.setString(1, uname);
-            ps.executeUpdate();
+            if (ps.executeUpdate() == 0) {
+                // Callers map IllegalStateException to 404 (as for roles).
+                throw new IllegalStateException("User not found: " + uname);
+            }
+        } catch (final IllegalStateException ex) { // NOPMD AvoidRethrowingException - rethrow preserves the "not-found" marker so callers can distinguish it from the generic Exception catch wrapped below
+            throw ex;
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to remove user: " + uname, ex);
         }
