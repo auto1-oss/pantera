@@ -41,7 +41,7 @@ npm login --registry http://pantera-host:8080/npm-group/
 
 npm first tries its web login, which Pantera declines, and then prompts for your Pantera username and password (to skip the web attempt, pass `--auth-type=legacy`). Pantera checks the password and returns a Pantera API token, which npm writes to your user `.npmrc` as the `_authToken` for that registry path. The token is labelled `npm login`, expires after 30 days (or sooner, if an administrator has set a shorter maximum token lifetime), and appears in your token list in the UI, where you can revoke it. Users who sign in only through SSO have no Pantera password, so they generate an API token in the UI instead. The login request body is limited to 64 KiB (a real login is far smaller); a larger body is answered `413`.
 
-`npm logout` is not supported (Pantera does not revoke tokens through the npm registry API, so the command fails): delete the `_authToken` line from your user `.npmrc` and revoke the token in the UI.
+`npm logout` is not supported: Pantera does not revoke tokens through the npm registry API, so every repository (local, proxy or group) declines the request with `404` and `X-Pantera-Reason: not_implemented`, and the command fails (see [Unsupported Endpoints](#unsupported-endpoints)). To log out, delete the `_authToken` line from your user `.npmrc` and revoke the token in the UI.
 
 ### Alternative: Basic Auth
 
@@ -238,14 +238,15 @@ Pantera does not implement the following npm CLI surfaces:
 | Command | Area |
 |---------|------|
 | `npm token` | Registry-scoped token management -- see [Tokens & Profile](#tokens--profile) |
+| `npm logout` | Token revocation through the registry -- see [Logging in with npm login](#logging-in-with-npm-login) |
 | `npm hook` | Webhooks |
 | `npm org` | Write operations (organization membership management) |
 | `npm team` | Team management |
 | `npm star` | Package starring -- behaves differently, see below |
 
-A request to `npm token`, `npm hook`, `npm org` (write operations), or `npm team` is declined immediately with `404 Not Found`, an `X-Pantera-Reason: not_implemented` response header, and a small JSON body naming the operation -- never a `5xx`. This is deliberate, not an oversight: npm's client retries any `>= 500` response on a non-`POST` request, and that retry check is purely status-code based, so even a semantically-correct `501 Not Implemented` would still be retried for roughly a minute before the client gave up. Only a `4xx` fails fast.
+A request to `npm token`, `npm logout`, `npm hook`, `npm org` (write operations), or `npm team` is declined immediately with `404 Not Found`, an `X-Pantera-Reason: not_implemented` response header, and a small JSON body naming the operation -- never a `5xx`. This is deliberate, not an oversight: npm's client retries any `>= 500` response on a non-`POST` request, and that retry check is purely status-code based, so even a semantically-correct `501 Not Implemented` would still be retried for roughly a minute before the client gave up. Only a `4xx` fails fast.
 
-`npm star` does not get this clean decline. Unlike the other four, it has no endpoint of its own: the npm CLI sends it as `PUT /<pkg>` with a `users` key in the body -- the same route and method npm uses to publish that package. Because the request is indistinguishable from a publish at the routing layer, there is no way to add a dedicated decline route for it without also intercepting real publishes, so it falls through to the publish handler, which rejects it as a malformed publish payload instead of naming `star` as the actual operation.
+`npm star` does not get this clean decline. Unlike the others, it has no endpoint of its own: the npm CLI sends it as `PUT /<pkg>` with a `users` key in the body -- the same route and method npm uses to publish that package. Because the request is indistinguishable from a publish at the routing layer, there is no way to add a dedicated decline route for it without also intercepting real publishes, so it falls through to the publish handler, which rejects it as a malformed publish payload instead of naming `star` as the actual operation.
 
 ---
 

@@ -80,6 +80,16 @@ public final class OAuthLoginSlice implements Slice {
     );
 
     /**
+     * The {@code npm logout} request ({@code DELETE /-/user/token/<token>}).
+     * Pantera does not revoke tokens through the npm registry API: every
+     * repository mode declines it the same way (404,
+     * {@code X-Pantera-Reason: not_implemented}).
+     */
+    public static final RtRule LOGOUT = new RtRule.All(
+        MethodRule.DELETE, new RtRule.ByPath(".*/-/user/token/[^/]+$")
+    );
+
+    /**
      * Both credential-bootstrap requests; neither needs prior credentials.
      */
     public static final RtRule CREDENTIAL_BOOTSTRAP = new RtRule.Any(

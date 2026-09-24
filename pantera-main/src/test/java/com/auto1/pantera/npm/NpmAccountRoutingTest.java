@@ -164,6 +164,32 @@ final class NpmAccountRoutingTest {
     }
 
     @Test
+    void logoutIsDeclinedAlikeInEveryMode(@TempDir final Path tmp) throws Exception {
+        // R23: npm logout (DELETE /-/user/token/<token>) answered 403 on a
+        // group and a proxy but 404 on a local repository.
+        for (final String repo : List.of("npm-local", "npm-proxy", "npm-group")) {
+            final Response response = NpmAccountRoutingTest.slices(tmp).slice(
+                new Key.From(repo), 8080
+            ).response(
+                new RequestLine(
+                    RqMethod.DELETE, String.format("/%s/-/user/token/some-token", repo)
+                ),
+                Headers.from(new Authorization.Bearer(NpmAccountRoutingTest.TOKEN)),
+                Content.EMPTY
+            ).get(30, TimeUnit.SECONDS);
+            MatcherAssert.assertThat(
+                String.format("%s: npm logout answers a non-retried 404", repo),
+                response.status().code(), new IsEqual<>(404)
+            );
+            MatcherAssert.assertThat(
+                String.format("%s: npm logout is declined as not implemented", repo),
+                response.headers().values("X-Pantera-Reason"),
+                new IsEqual<>(List.of("not_implemented"))
+            );
+        }
+    }
+
+    @Test
     void publishToAProxyIsMethodNotAllowed(@TempDir final Path tmp) throws Exception {
         MatcherAssert.assertThat(
             NpmAccountRoutingTest.slices(tmp).slice(new Key.From("npm-proxy"), 8080).response(

@@ -1726,7 +1726,8 @@ public class RepositorySlices {
      * PUT validates the password in its body and returns a Pantera API
      * token; the web login is declined with a 404 (npm then falls back to
      * the legacy login); {@code npm whoami} and {@code npm profile get}
-     * answer from the authenticated identity. Any other user-management
+     * answer from the authenticated identity; {@code npm logout} is declined
+     * as on a local repository (404). Any other user-management
      * request is refused with 403.
      *
      * @param cfg Repository config
@@ -1759,6 +1760,16 @@ public class RepositorySlices {
                         new com.auto1.pantera.npm.http.DeclinedEndpointSlice(
                             "npm web login", "repositories/npm.md#logging-in-with-npm-login"
                         )
+                    )
+                ),
+                // npm logout: declined exactly as on a local repository.
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    com.auto1.pantera.npm.http.auth.OAuthLoginSlice.LOGOUT,
+                    new CombinedAuthzSliceWrap(
+                        new com.auto1.pantera.npm.http.DeclinedEndpointSlice(
+                            "npm logout", "repositories/npm.md#unsupported-endpoints"
+                        ),
+                        authentication(), tokens.auth(), read
                     )
                 ),
                 new com.auto1.pantera.http.rt.RtRulePath(

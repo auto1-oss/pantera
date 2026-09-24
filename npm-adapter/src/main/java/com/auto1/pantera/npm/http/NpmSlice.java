@@ -532,6 +532,13 @@ public final class NpmSlice implements Slice {
                 )
             ),
             new RtRulePath(
+                com.auto1.pantera.npm.http.auth.OAuthLoginSlice.LOGOUT,
+                this.declinedRoute(
+                    "npm logout", Action.Standard.READ,
+                    basicAuth, npmTokenAuth, policy, name
+                )
+            ),
+            new RtRulePath(
                 new RtRule.All(
                     new RtRule.Any(MethodRule.GET, MethodRule.POST),
                     new RtRule.ByPath(".*/-/npm/v1/tokens$")
