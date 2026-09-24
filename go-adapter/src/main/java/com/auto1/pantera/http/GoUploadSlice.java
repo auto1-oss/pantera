@@ -80,9 +80,10 @@ final class GoUploadSlice implements Slice {
 
     /**
      * Serializes publishes of the same version file and rewrites of the same
-     * {@code @v/list} across every Go repository slice in this JVM.
+     * {@code @v/list} across every Go repository slice in this JVM, and the
+     * list rewrite of a management-API delete ({@link GoListPruner}).
      */
-    private static final KeyedSerializer SERIAL = new KeyedSerializer();
+    static final KeyedSerializer SERIAL = new KeyedSerializer();
 
     /**
      * Repository storage.
