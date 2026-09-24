@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.rx.RxStorageWrapper;
 import com.auto1.pantera.helm.ChartYaml;
 import com.auto1.pantera.helm.TgzArchive;
@@ -26,6 +27,7 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqParams;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Completable;
 import io.reactivex.Flowable;
@@ -179,7 +181,15 @@ final class PushChartSlice implements Slice {
                                     com.auto1.pantera.cooldown.metadata
                                         .FilteredMetadataCacheRegistry.instance()
                                         .invalidateAfterUpload("helm", chart.name());
-                                    res = new IndexYaml(this.storage).update(tgz)
+                                    // Under the index lock a management-API
+                                    // delete prunes index.yaml under.
+                                    res = CompletableInterop.fromFuture(
+                                        new IndexUpdateLock(this.storage, IndexYaml.INDEX_YAML)
+                                            .run(
+                                                locked -> new IndexYaml(locked).update(tgz)
+                                                    .to(CompletableInterop.await())
+                                            )
+                                    )
                                         .andThen(Completable.create(emitter ->
                                             this.syncIndex.recordSync(event)
                                                 .whenComplete((v, err) -> {
