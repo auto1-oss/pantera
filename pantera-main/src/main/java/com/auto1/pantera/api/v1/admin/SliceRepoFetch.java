@@ -12,6 +12,7 @@ package com.auto1.pantera.api.v1.admin;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -96,8 +97,16 @@ public final class SliceRepoFetch implements RepoFetch {
             .field("url.path", line.uri().getPath())
             .field("log.source", "application")
             .log();
-        return this.slices.apply(repo)
-            .response(line, headers, Content.EMPTY)
+        CompletableFuture<Response> started;
+        try {
+            started = this.slices.apply(repo).response(line, headers, Content.EMPTY);
+        } catch (final RuntimeException ex) {
+            // A repository whose configuration cannot be built (e.g. a remote
+            // with a username but no password) fails this fetch only, so the
+            // caller reports that repository instead of failing as a whole.
+            started = CompletableFuture.failedFuture(ex);
+        }
+        return started
             .thenCompose(resp -> new BoundedBody(maxBody).read(resp.body())
                 .thenApply(read -> new Fetched(
                     resp.status().code(),
