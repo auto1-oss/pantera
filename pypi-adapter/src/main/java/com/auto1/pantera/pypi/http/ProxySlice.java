@@ -86,8 +86,9 @@ final class ProxySlice implements Slice {
     private static final String FORMATS = ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)";
 
     /**
-     * Cache key of the root project index. Normalised project names never
-     * contain {@code _}, so it cannot collide with a project's index.
+     * Key used for an empty last path segment (the root project index).
+     * The root index is declined in {@link #response}, so nothing is ever
+     * stored under it; normalised project names never contain {@code _}.
      */
     private static final Key ROOT_INDEX = new Key.From("_root_index");
 
@@ -363,6 +364,9 @@ final class ProxySlice implements Slice {
         // resolver view. Matches the Go adapter dispatch pattern
         // established in commit 1eb53ceb.
         final String path = line.uri().getPath();
+        if (ProxySlice.isRootIndex(path)) {
+            return this.declineRootIndex(path, body);
+        }
         if (this.jsonHandler != null && this.jsonHandler.matches(path)) {
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Dispatching /pypi/<pkg>/json to cooldown JSON handler")
@@ -406,6 +410,54 @@ final class ProxySlice implements Slice {
         // Their body is negotiated on Accept (HTML vs PEP 691 JSON).
         return this.serveNonArtifact(line, rqheaders, body, user)
             .thenApply(resp -> SimpleApiFormat.negotiated(resp, rqheaders));
+    }
+
+    /**
+     * Whether the path is the root project index. {@code /simple/} reaches
+     * this slice as {@code /} once the {@code simple} alias is stripped.
+     *
+     * @param path Request path
+     * @return True for the root project index
+     */
+    private static boolean isRootIndex(final String path) {
+        return new KeyLastPart(new KeyFromPath(path)).get().isEmpty();
+    }
+
+    /**
+     * Answer the root project index without contacting the upstream.
+     *
+     * <p>The upstream root index lists every project it hosts (pypi.org's is
+     * tens of megabytes) with host-absolute links, and pip never requests it:
+     * it always resolves {@code /simple/<project>/}. Fetching it would buffer
+     * the whole body per request, so it is declined cheaply and consistently
+     * with {@code 404} and {@code X-Pantera-Reason: not_implemented}, the
+     * same shape as other endpoints this registry does not implement.</p>
+     *
+     * @param path Request path
+     * @param body Request body, drained and never materialised
+     * @return 404 response
+     */
+    private CompletableFuture<Response> declineRootIndex(
+        final String path, final Content body
+    ) {
+        EcsLogger.debug("com.auto1.pantera.pypi")
+            .message("Root project index is not proxied; answering 404 not_implemented")
+            .eventCategory("web")
+            .eventAction("proxy_request")
+            .eventOutcome("failure")
+            .field("url.path", path)
+            .field("repository.name", this.rname)
+            .field("log.source", "application")
+            .log();
+        return body.discard().thenApply(
+            ignored -> ResponseBuilder.notFound()
+                .header("X-Pantera-Reason", "not_implemented")
+                .textBody(
+                    "The root project index is not implemented by this registry;"
+                        + " request /simple/<project>/ instead"
+                )
+                .build()
+        );
     }
 
     /**
@@ -1848,8 +1900,9 @@ final class ProxySlice implements Slice {
         final String last = new KeyLastPart(res).get();
         final boolean artifactPath = uri.toString().matches(ProxySlice.FORMATS);
         if (last.isEmpty()) {
-            // The root project index (/simple/ reaches this slice as "/"):
-            // it names no project, so there is nothing to normalise.
+            // The root project index names no project, so there is nothing
+            // to normalise. response() declines it before reaching here;
+            // this guard only keeps an empty segment from throwing a 500.
             res = ProxySlice.ROOT_INDEX;
         } else if (!artifactPath && !last.endsWith(".metadata")) {
             res = new Key.From(

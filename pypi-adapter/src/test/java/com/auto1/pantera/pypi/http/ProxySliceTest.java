@@ -38,6 +38,7 @@ import com.auto1.pantera.http.hm.RsHasStatus;
 import com.auto1.pantera.http.hm.SliceHasResponse;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.slice.PathPrefixStripSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import java.nio.charset.StandardCharsets;
@@ -49,6 +50,7 @@ import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
@@ -609,29 +611,49 @@ class ProxySliceTest {
 
     @ParameterizedTest
     @CsvSource({"/simple/", "/simple", "/"})
-    void servesTheRootProjectIndex(final String path) {
-        // The root /simple/ index lists projects, not files: it has no
-        // project name to normalise and must be proxied, not answered 500.
-        final String html = "<!DOCTYPE html><html><body>"
-            + "<a href=\"/simple/requests/\">requests</a>"
-            + "<a href=\"/simple/six/\">six</a></body></html>";
-        final Response response = this.newProxySlice(
-            new SliceSimple(
-                ResponseBuilder.ok().htmlBody(html, StandardCharsets.UTF_8).build()
+    void declinesTheRootProjectIndexWithoutFetchingUpstream(final String path) {
+        // The root /simple/ index lists every project upstream: pypi.org's
+        // is ~46 MB. It must be answered cheaply and consistently, never
+        // fetched, buffered or cached. Wired as in RepositorySlices, where
+        // the "simple" alias is stripped and the root reaches ProxySlice as "/".
+        final AtomicInteger upstream = new AtomicInteger();
+        final byte[] huge = new byte[11 * 1024 * 1024];
+        final Slice slice = new PathPrefixStripSlice(this.newProxySlice(
+            (line, headers, body) -> {
+                upstream.incrementAndGet();
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok().body(huge).build()
+                );
+            },
+            new TestClientSlices(
+                line -> {
+                    upstream.incrementAndGet();
+                    return ResponseBuilder.ok().body(huge).build();
+                }
             ),
-            new TestClientSlices(line -> ResponseBuilder.ok().build()),
             Optional.of(this.events)
-        ).response(
-            new RequestLine(RqMethod.GET, path), this.authorization, Content.EMPTY
-        ).toCompletableFuture().join();
+        ), "simple");
+        for (int attempt = 1; attempt <= 3; attempt += 1) {
+            final Response response = slice.response(
+                new RequestLine(RqMethod.GET, path), this.authorization, Content.EMPTY
+            ).toCompletableFuture().join();
+            MatcherAssert.assertThat(
+                String.format("request %d is declined with 404", attempt),
+                response.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+            );
+            MatcherAssert.assertThat(
+                String.format("request %d names the reason", attempt),
+                response.headers().values("X-Pantera-Reason"),
+                new IsEqual<>(java.util.List.of("not_implemented"))
+            );
+        }
         MatcherAssert.assertThat(
-            "the root index is served",
-            response.status(), new IsEqual<>(RsStatus.OK)
+            "the upstream is never asked for the root index",
+            upstream.get(), new IsEqual<>(0)
         );
         MatcherAssert.assertThat(
-            "the upstream project list is relayed",
-            new String(response.body().asBytes(), StandardCharsets.UTF_8),
-            Matchers.containsString("/simple/six/")
+            "nothing is cached for the root index",
+            this.storage.list(Key.ROOT).join(), new IsEqual<>(java.util.List.of())
         );
     }
 

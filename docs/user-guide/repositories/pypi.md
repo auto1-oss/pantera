@@ -63,6 +63,8 @@ pip install my-internal-package==1.0.0
 
 All package lookups are routed through Pantera, which caches packages from the configured upstream (typically `https://pypi.org/simple/`).
 
+A proxy repository does not serve the root project index (`/simple/` with no project name). It answers `404` with the header `X-Pantera-Reason: not_implemented` and does not contact the upstream. pip and uv never request the root index; they always resolve `/simple/<project>/`.
+
 ---
 
 ## Upload with twine
