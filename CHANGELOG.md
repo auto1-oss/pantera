@@ -136,6 +136,8 @@ This release contains security hardening and a broad set of bug fixes across for
   ([@aydasraf](https://github.com/aydasraf))
 - **Import, audit and settings details.** Imported artifacts are recorded under the same package name and version as a native publish; PyPI proxy access records carry the artifact size, and cache hits now write an `artifact_access` record too; a Composer stale-metadata background refresh logs under the triggering request's `trace.id`; bulkhead permit settings are validated together (`min <= initial <= max`); deleting an unknown user answers `404`; and `login_throttled` is logged when an attempt is first refused.
   ([@aydasraf](https://github.com/aydasraf))
+- **Audit records carry their own request's correlation.** Records written on pooled worker threads always carry the originating request's `trace.id`, `client.ip`, user and package fields, instead of values left over from an earlier request on the same thread (seen on php-proxy metadata listings and pypi-proxy cache misses).
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
