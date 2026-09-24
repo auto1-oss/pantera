@@ -167,7 +167,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | `SSLError` | Add `trusted-host = pantera-host` to pip.conf |
 | `No matching distribution found` | Ensure index-url ends with `/simple` |
 | Old version installed | Run with `--no-cache-dir` |
-| `400 File already exists` on upload | Published files are immutable; bump the version (an identical re-upload succeeds) |
+| `400 File already exists` on upload (twine: `HTTPError: 400 Bad Request` followed by `File already exists`) | Published files are immutable; bump the version (an identical re-upload succeeds) |
 
 ### Composer
 

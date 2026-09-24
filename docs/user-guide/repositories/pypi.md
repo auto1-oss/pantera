@@ -108,11 +108,17 @@ file is stored at `<package>/<version>/<file>` in the repository.
 ### Published files are immutable
 
 As on PyPI, a published file cannot be replaced. Uploading a file whose name
-already exists with **different** content fails with
-`400 File already exists` (twine reports `HTTPError: 400 File already exists`);
-publish a new version instead. Re-uploading the **identical** file succeeds and
-changes nothing, so a retried `twine upload` is safe; `twine upload
---skip-existing` skips files that are already published.
+already exists with **different** content is rejected with the HTTP status
+`400 File already exists`; twine prints it as
+`HTTPError: 400 Bad Request from <upload-url>` with `File already exists` on
+the next line. Publish a new version instead. Re-uploading the **identical**
+file succeeds and changes nothing, so re-running a partly failed
+`twine upload dist/*` is safe as it is.
+
+Do not add `--skip-existing`: twine supports that flag only for PyPI and TestPyPI and
+refuses it for any other repository URL before uploading anything
+(`UnsupportedConfiguration: The configured repository ... does not have support
+for the following features: --skip-existing`).
 
 ---
 
