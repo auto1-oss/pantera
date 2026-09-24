@@ -1075,8 +1075,10 @@ public final class ArtifactHandler {
      * the tree-view metadata cache, the artifact index (matched on the
      * storage path the rows were indexed from), the format's own metadata
      * of a local repository -- and an {@code artifact_delete} audit record.
-     * The cascade is best-effort: a failure is logged and the storage
-     * delete still answers 204.
+     * The cascade also runs when storage no longer holds the path, so stale
+     * index rows and metadata are cleared; only a path neither stored nor
+     * indexed answers 404. The cascade is best-effort: a failure is logged
+     * and the storage delete still answers 204.
      * @param ctx Routing context
      * @param folder Whether the path is a package folder
      */
@@ -1110,22 +1112,37 @@ public final class ArtifactHandler {
                     final CompletionStage<Boolean> deletion = folder
                         ? this.repoData.deletePackageFolder(rname, path, this.crs)
                         : this.repoData.deleteArtifact(rname, path, this.crs);
-                    return deletion.thenCompose(deleted -> {
-                        AuditLogger.delete(
-                            audit, repoType, repoName, path, null, actor,
-                            deleted ? AuditLogger.OUTCOME_SUCCESS : AuditLogger.OUTCOME_FAILURE,
-                            deleted ? null : AuditLogger.REASON_NOT_FOUND
-                        );
-                        if (!deleted) {
-                            return CompletableFuture.completedFuture(false);
-                        }
-                        return this.cascade(rname, repoType, path, folder)
-                            .thenApply(nothing -> true);
-                    });
+                    // The cascade runs whether or not storage still held
+                    // the path: index rows and format metadata can outlive
+                    // their files (the index went stale through an earlier
+                    // bug), and a delete is how an operator clears them.
+                    return deletion.thenCompose(
+                        deleted -> this.cascade(rname, repoType, path, folder).thenApply(
+                            indexed -> {
+                                final boolean found = deleted || indexed > 0;
+                                AuditLogger.delete(
+                                    audit, repoType, repoName, path, null, actor,
+                                    found ? AuditLogger.OUTCOME_SUCCESS
+                                        : AuditLogger.OUTCOME_FAILURE,
+                                    found ? null : AuditLogger.REASON_NOT_FOUND
+                                );
+                                return found;
+                            }
+                        )
+                    );
                 }
             )
             .thenAccept(
-                deleted -> ctx.response().setStatusCode(204).end()
+                found -> {
+                    if (found) {
+                        ctx.response().setStatusCode(204).end();
+                    } else {
+                        ApiResponse.sendError(
+                            ctx, 404, "NOT_FOUND",
+                            "Nothing is stored or indexed at path: " + path
+                        );
+                    }
+                }
             )
             .exceptionally(
                 err -> {
@@ -1142,9 +1159,9 @@ public final class ArtifactHandler {
      * @param repoType Repository type
      * @param path Deleted path
      * @param folder Whether a folder was deleted
-     * @return Completion
+     * @return Number of search index rows removed (0 when that step failed)
      */
-    private CompletableFuture<Void> cascade(
+    private CompletableFuture<Integer> cascade(
         final RepositoryName rname, final String repoType, final String path,
         final boolean folder
     ) {
@@ -1154,15 +1171,16 @@ public final class ArtifactHandler {
         } else {
             this.metaCache.invalidate(repoName, path);
         }
-        final CompletableFuture<Void> index = this.artifactIndex.removeByPath(repoName, path)
-            .<Void>handle((count, err) -> {
+        final CompletableFuture<Integer> index = this.artifactIndex.removeByPath(repoName, path)
+            .handle((count, err) -> {
                 if (err != null) {
                     ArtifactHandler.cascadeFailed(
                         "Deleted from storage but the search index cascade failed",
                         repoName, path, err
                     );
+                    return 0;
                 }
-                return null;
+                return count == null ? 0 : count;
             });
         final CompletableFuture<Void> format = this.repoData.repoStorage(rname, this.crs)
             .thenCompose(
@@ -1181,7 +1199,7 @@ public final class ArtifactHandler {
                 return null;
             })
             .toCompletableFuture();
-        return CompletableFuture.allOf(index, format);
+        return index.thenCombine(format, (count, nothing) -> count);
     }
 
     /**

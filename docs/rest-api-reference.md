@@ -1512,6 +1512,8 @@ Delete a specific artifact from a repository. The search index, format metadata 
 
 **Response (204):** No content on success.
 
+**Response (404):** the path is neither stored nor indexed.
+
 **curl example:**
 
 ```bash
@@ -1533,7 +1535,13 @@ Both delete endpoints keep what is derived from storage consistent, and write an
 - on a filesystem storage, directories left empty by the delete are removed (a symbolic link to a directory, e.g. a repository directory placed on another volume, is never removed);
 - in a local `maven`/`gradle` repository, versions that no longer exist are removed from the artifact's `maven-metadata.xml` (`latest`/`release` move to the highest remaining version, checksums are rewritten, a metadata file left with no version is removed);
 - in a local `php` repository, versions whose archive was deleted are removed from `p2/<vendor>/<package>.json`;
-- in a local `pypi` repository, the cached simple indexes are dropped and regenerated from storage on the next request.
+- in a local `pypi` repository, the cached simple indexes are dropped and regenerated from storage on the next request;
+- in a local `conda` repository, packages whose file was deleted are removed from their subdir's `repodata.json`;
+- in a local `gem` repository, `specs.4.8`, `latest_specs.4.8` (the highest remaining version of each gem), `prerelease_specs.4.8` and their `.gz` variants are rebuilt from the gems left, and the `quick/Marshal.4.8/<name>-<version>.gemspec.rz` of each deleted gem is removed.
+
+Conda and gem index updates are serialized with uploads to the same repository (on every node sharing the storage), so a concurrent upload is neither lost nor lists a deleted package again.
+
+The search index rows and format metadata are cleaned up even when storage no longer holds the path (for example rows left behind by an earlier failure). The delete answers `204` when it removed files or search index rows, and `404` (`NOT_FOUND`) when the path is neither stored nor indexed.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:delete`
@@ -1547,6 +1555,8 @@ Both delete endpoints keep what is derived from storage consistent, and write an
 ```
 
 **Response (204):** No content on success.
+
+**Response (404):** the path is neither stored nor indexed.
 
 **curl example:**
 

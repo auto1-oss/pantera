@@ -12,7 +12,9 @@ package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.composer.DeletedArchivePruner;
+import com.auto1.pantera.conda.asto.RepodataPruner;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry;
+import com.auto1.pantera.gem.Gem;
 import com.auto1.pantera.maven.metadata.MetadataVersionPruner;
 import com.auto1.pantera.pypi.meta.PypiIndexCleanup;
 import java.util.concurrent.CompletableFuture;
@@ -31,6 +33,12 @@ import java.util.concurrent.CompletableFuture;
  *       versions whose archive was deleted.</li>
  *   <li>pypi: the pre-generated simple indexes are dropped so they are
  *       regenerated from storage; orphan yank sidecars are removed.</li>
+ *   <li>conda: {@code <subdir>/repodata.json} drops the packages whose file
+ *       is gone (under the repodata lock the upload merges under).</li>
+ *   <li>gem: the {@code specs.4.8} family is rebuilt from the gems left
+ *       ({@code latest_specs} falls back to the highest remaining version)
+ *       and the quick specs of deleted gems are removed (under the index
+ *       lock the upload indexes under).</li>
  * </ul>
  *
  * <p>Proxy repositories cache upstream metadata as-is and are left alone.</p>
@@ -68,9 +76,53 @@ final class FormatDeleteHooks {
             case "pypi":
                 res = new PypiIndexCleanup(storage).afterDelete(path);
                 break;
+            case "conda":
+                res = new RepodataPruner(storage).afterDelete(path)
+                    .thenAccept(
+                        names -> names.forEach(
+                            name -> FilteredMetadataCacheRegistry.instance()
+                                .invalidateAfterUpload("conda", name)
+                        )
+                    );
+                break;
+            case "gem":
+                res = FormatDeleteHooks.gem(storage, path);
+                break;
             default:
                 res = CompletableFuture.completedFuture(null);
                 break;
+        }
+        return res;
+    }
+
+    /**
+     * Rebuild a gem repository's index when the delete removed gems.
+     * @param storage Repository storage
+     * @param path Deleted storage path
+     * @return Completion
+     */
+    private static CompletableFuture<Void> gem(final Storage storage, final String path) {
+        String clean = path.trim();
+        while (clean.startsWith("/")) {
+            clean = clean.substring(1);
+        }
+        while (clean.endsWith("/")) {
+            clean = clean.substring(0, clean.length() - 1);
+        }
+        final CompletableFuture<Void> res;
+        if ("gems".equals(clean) || clean.startsWith("gems/")) {
+            final String file = clean.substring(clean.lastIndexOf('/') + 1);
+            final int dash = file.lastIndexOf('-');
+            res = new Gem(storage).reindex().toCompletableFuture().thenRun(
+                () -> {
+                    if (file.endsWith(".gem") && dash > 0) {
+                        FilteredMetadataCacheRegistry.instance()
+                            .invalidateAfterUpload("gem", file.substring(0, dash));
+                    }
+                }
+            );
+        } else {
+            res = CompletableFuture.completedFuture(null);
         }
         return res;
     }
