@@ -225,9 +225,14 @@ final class ImportServiceTest {
             "the import succeeds",
             result.status(), new IsEqual<>(ImportStatus.CREATED)
         );
+        final ArtifactEvent event = this.events.poll();
         MatcherAssert.assertThat(
-            "the event falls back to the artifact path as its name",
-            this.events.poll().artifactName(), new IsEqual<>("dir/unnamed.txt")
+            "the event carries the name a native file upload records (R41)",
+            event.artifactName(), new IsEqual<>("dir.unnamed.txt")
+        );
+        MatcherAssert.assertThat(
+            "and its version, UNKNOWN when none is detected, as for a plain upload (R42)",
+            event.artifactVersion(), new IsEqual<>("UNKNOWN")
         );
     }
 

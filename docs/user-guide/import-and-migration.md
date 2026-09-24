@@ -39,8 +39,8 @@ curl -X PUT \
 
 | Header | Description |
 |--------|-------------|
-| `X-Pantera-Artifact-Name` | Logical artifact name (defaults to the artifact path) |
-| `X-Pantera-Artifact-Version` | Artifact version string |
+| `X-Pantera-Artifact-Name` | Logical artifact name. When absent, the name a native publish of the format records is derived from the artifact path (for example `groupId.artifactId` for Maven) |
+| `X-Pantera-Artifact-Version` | Artifact version. When absent, derived from the artifact path like the name; `UNKNOWN` when the path carries none |
 | `X-Pantera-Artifact-Size` | Size in bytes (falls back to Content-Length) |
 | `X-Pantera-Artifact-Owner` | Ignored. The artifact owner and the audit `user.name` are always the authenticated caller |
 | `X-Pantera-Artifact-Created` | Created timestamp (milliseconds since epoch) |

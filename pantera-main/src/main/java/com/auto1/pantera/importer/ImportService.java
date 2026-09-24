@@ -22,6 +22,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.ResponseException;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.RepositoryEvents;
 import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.settings.repo.Repositories;
 import com.amihaiemil.eoyaml.YamlMapping;
@@ -1277,30 +1278,44 @@ public final class ImportService {
      * <p>The owner is the authenticated caller ({@link ImportRequest#caller()}),
      * never the caller-controlled {@code X-Pantera-Artifact-Owner} header, and
      * the request's trace id / client IP are bound from its context headers.
-     * An import without {@code X-Pantera-Artifact-Name} is recorded under its
-     * artifact path, so every import leaves an audit record.</p>
+     * Without {@code X-Pantera-Artifact-Name} / {@code -Version} the event
+     * carries the coordinates a native publish of the same format records
+     * ({@link ImportCoordinates}), so imported and natively published
+     * artifacts share one package name and version; a companion file
+     * (checksum, signature, metadata) a native publish does not record is not
+     * recorded either.</p>
      *
      * @param request Request
      * @param size Size
      */
     private void enqueueEvent(final ImportRequest request, final long size) {
+        final Optional<String> hname = request.artifact().filter(value -> !value.isBlank());
+        final Optional<String> hversion = request.version().filter(value -> !value.isBlank());
+        final Optional<ImportCoordinates.Coordinates> derived =
+            new ImportCoordinates(request.repoType(), request.path()).value();
+        if (hname.isEmpty() && derived.isEmpty()) {
+            // A companion file (checksum, signature, metadata) that a native
+            // publish does not record as an artifact either.
+            return;
+        }
         this.events.ifPresent(queue -> {
-            final String name = request.artifact()
-                .filter(value -> !value.isBlank())
-                .orElse(request.path());
+            final String name = hname.orElseGet(() -> derived.get().name());
+            final String version = hversion.orElseGet(
+                () -> derived.map(ImportCoordinates.Coordinates::version)
+                    .orElse(RepositoryEvents.VERSION)
+            );
             final long created = request.created().orElse(System.currentTimeMillis());
-            // The import target path is the artifact's real storage key.
             queue.offer(
                 new ArtifactEvent(
                     request.repoType(),
                     request.repo(),
                     request.caller(),
                     name,
-                    request.version().orElse(""),
+                    version,
                     size,
                     created,
                     request.release().orElse(null),
-                    request.path()
+                    derived.map(ImportCoordinates.Coordinates::prefix).orElse(request.path())
                 ).withRequestContext(request.headers())
             );
         });

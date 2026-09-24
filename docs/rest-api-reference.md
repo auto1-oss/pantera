@@ -2932,8 +2932,8 @@ Import an artifact into a repository. Supports idempotent uploads with checksum 
 
 | Header                        | Description                                      |
 |-------------------------------|--------------------------------------------------|
-| `X-Pantera-Artifact-Name`    | Logical artifact name (defaults to the artifact path) |
-| `X-Pantera-Artifact-Version` | Artifact version string                          |
+| `X-Pantera-Artifact-Name`    | Logical artifact name. When absent, the name a native publish of the format records is derived from the artifact path (for example `groupId.artifactId` for Maven) |
+| `X-Pantera-Artifact-Version` | Artifact version. When absent, derived from the artifact path like the name; `UNKNOWN` when the path carries none |
 | `X-Pantera-Artifact-Size`    | Size in bytes (falls back to `Content-Length`)    |
 | `X-Pantera-Artifact-Owner`   | Ignored; the owner and audit `user.name` are the authenticated caller |
 | `X-Pantera-Artifact-Created` | Created timestamp (milliseconds since epoch)     |

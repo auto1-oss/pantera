@@ -685,7 +685,8 @@ async fn upload_file(
 }
 
 /// Import headers for one upload, named exactly as the server's
-/// `ImportHeaders` constants (`X-Pantera-*`).
+/// `ImportHeaders` constants (`X-Pantera-*`). The artifact name and version
+/// are left to the server, which derives them from the path.
 fn import_headers(
     task: &UploadTask,
     policy: &str,
@@ -696,13 +697,9 @@ fn import_headers(
     let mut headers = vec![
         ("X-Pantera-Repo-Type", task.repo_type.clone()),
         ("X-Pantera-Idempotency-Key", task.idempotency_key()),
-        (
-            "X-Pantera-Artifact-Name",
-            task.file_path
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| task.relative_path.clone()),
-        ),
+        // No X-Pantera-Artifact-Name / -Version: the server derives the
+        // package name and version from the artifact path exactly as a
+        // native publish of the format records them.
         ("X-Pantera-Artifact-Size", task.size.to_string()),
         ("X-Pantera-Artifact-Created", task.created.to_string()),
         ("X-Pantera-Checksum-Mode", policy.to_string()),
@@ -1559,7 +1556,10 @@ mod tests {
         let get = |n: &str| headers.iter().find(|(k, _)| *k == n).map(|(_, v)| v.clone());
         assert_eq!(get("X-Pantera-Repo-Type"), Some("file".to_string()));
         assert_eq!(get("X-Pantera-Idempotency-Key"), Some("repo|dir/a.txt".to_string()));
-        assert_eq!(get("X-Pantera-Artifact-Name"), Some("a.txt".to_string()));
+        // R41: the server derives the name and version a native publish of
+        // the format records from the path; a bare file name overrode that.
+        assert_eq!(get("X-Pantera-Artifact-Name"), None);
+        assert_eq!(get("X-Pantera-Artifact-Version"), None);
         assert_eq!(get("X-Pantera-Checksum-Mode"), Some("COMPUTE".to_string()));
         assert_eq!(get("X-Pantera-Checksum-Sha256"), Some("s256".to_string()));
         assert_eq!(get("X-Pantera-Artifact-Owner"), None, "owner is the authenticated caller");
