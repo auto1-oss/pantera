@@ -121,15 +121,12 @@ public final class LoginThrottle {
         final Attempt user = this.live(LoginThrottle.userKey(username), now, window);
         final OptionalLong verdict;
         if (pair.count >= pairLimit) {
-            verdict = OptionalLong.of(pair.retryAfterSeconds(now, window));
+            verdict = OptionalLong.of(pair.refuse(username, client, true, now, window));
         } else if (user.count >= userLimit) {
-            verdict = OptionalLong.of(user.retryAfterSeconds(now, window));
+            verdict = OptionalLong.of(user.refuse(username, client, false, now, window));
         } else {
             pair.count += 1;
             user.count += 1;
-            if (pair.count == pairLimit || user.count == userLimit) {
-                LoginThrottle.logLockout(username, client, pair.count == pairLimit);
-            }
             verdict = OptionalLong.empty();
         }
         return verdict;
@@ -174,8 +171,8 @@ public final class LoginThrottle {
     private static void logLockout(final String username, final String client, final boolean pair) {
         EcsLogger.warn("com.auto1.pantera.auth")
             .message(pair
-                ? "Login throttled: attempt limit reached for this user and client address"
-                : "Login throttled: attempt limit reached for this user from all addresses")
+                ? "Login refused: attempt limit reached for this user and client address; further attempts are refused until the window ends"
+                : "Login refused: attempt limit reached for this user from all addresses; further attempts are refused until the window ends")
             .eventCategory("authentication")
             .eventAction("login_throttled")
             .eventOutcome("failure")
@@ -192,8 +189,27 @@ public final class LoginThrottle {
         private final long firstNanos;
         private int count;
 
+        /**
+         * Whether this window's lockout has already been logged.
+         */
+        private boolean logged;
+
         Attempt(final long firstNanos) {
             this.firstNanos = firstNanos;
+        }
+
+        /**
+         * Refuse an attempt: log the lockout on its first refusal only (so
+         * the log records a refusal, once per lockout window, R04) and
+         * answer the seconds until retry.
+         */
+        long refuse(final String username, final String client, final boolean pair,
+            final long now, final long window) {
+            if (!this.logged) {
+                this.logged = true;
+                LoginThrottle.logLockout(username, client, pair);
+            }
+            return this.retryAfterSeconds(now, window);
         }
 
         long retryAfterSeconds(final long now, final long window) {
