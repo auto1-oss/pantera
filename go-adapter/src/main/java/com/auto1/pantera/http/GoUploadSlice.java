@@ -31,6 +31,7 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -62,6 +63,11 @@ final class GoUploadSlice implements Slice {
     private static final Pattern ARTIFACT = Pattern.compile(
         "^/?(?<module>.+)/@v/v(?<version>[^/]+)\\.(?<ext>info|mod|zip)$"
     );
+
+    /**
+     * Storage key of a module's version list.
+     */
+    private static final Pattern LIST = Pattern.compile("^(.+/)?@v/list$");
 
     /**
      * Serializes publishes of the same version file and rewrites of the same
@@ -157,6 +163,19 @@ final class GoUploadSlice implements Slice {
         }
 
         final Key key = new KeyFromPath(sanitizedPath);
+        if (LIST.matcher(key.string()).matches()) {
+            // @v/list is derived from the published zips and maintained by
+            // the server; a client write would replace it with arbitrary
+            // content until the next publish reconciled it.
+            return body.asBytesFuture().thenApply(
+                ignored -> ResponseBuilder.methodNotAllowed()
+                    .textBody(
+                        "@v/list is maintained by the registry from the published"
+                            + " module zips; upload the version's .info, .mod and .zip instead."
+                    )
+                    .build()
+            );
+        }
         final Matcher matcher = ARTIFACT.matcher(normalise(sanitizedPath));
         if (!matcher.matches()) {
             return this.storage.save(key, new ContentWithSize(body, headers))
@@ -402,7 +421,8 @@ final class GoUploadSlice implements Slice {
      * <p>The list keeps its existing entries and gains every version whose
      * {@code .zip} is in storage, so a version is listed even when an
      * earlier rewrite was lost (another cluster node, or a list written
-     * before rewrites were serialized).</p>
+     * before rewrites were serialized); the result is in Go semver
+     * order.</p>
      *
      * @param module Module path
      * @return Completion stage
@@ -441,8 +461,10 @@ final class GoUploadSlice implements Slice {
     }
 
     /**
-     * Save {@code @v/list} if stored zips add versions to it or it holds
-     * duplicate lines (the rewrite de-duplicates them).
+     * Save {@code @v/list} if stored zips add versions to it, it holds
+     * duplicate lines, or it is not in Go semver order: the rewrite
+     * de-duplicates the entries and sorts them all with
+     * {@link GoVersionOrder}, whatever order concurrent publishes landed in.
      * @param list List key
      * @param existing Current entries
      * @param keys Keys under the module's {@code @v} directory
@@ -457,12 +479,12 @@ final class GoUploadSlice implements Slice {
             .filter(name -> name.startsWith(prefix) && name.endsWith(".zip"))
             .map(name -> name.substring(prefix.length(), name.length() - ".zip".length()))
             .filter(name -> name.startsWith("v") && name.indexOf('/') < 0)
-            .sorted(new GoVersionOrder())
             .collect(Collectors.toList());
-        final LinkedHashSet<String> versions = new LinkedHashSet<>(existing);
-        final int unique = versions.size();
-        versions.addAll(stored);
-        if (versions.size() == unique && unique == existing.size()) {
+        final LinkedHashSet<String> unique = new LinkedHashSet<>(existing);
+        unique.addAll(stored);
+        final List<String> versions = new ArrayList<>(unique);
+        versions.sort(new GoVersionOrder());
+        if (versions.equals(existing)) {
             return CompletableFuture.completedFuture(null);
         }
         final String updated = String.join("\n", versions) + '\n';

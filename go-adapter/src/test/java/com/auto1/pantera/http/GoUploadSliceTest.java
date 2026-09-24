@@ -272,6 +272,78 @@ final class GoUploadSliceTest {
         );
     }
 
+    @Test
+    @Timeout(60)
+    void concurrentPublishesKeepTheListInSemverOrder() {
+        // R37: entries used to stay in arrival order after concurrent
+        // publishes (v1.0.1 v1.0.9 v1.0.3 ...).
+        final Storage storage = new AsyncStorage(new InMemoryStorage(), this.pool);
+        final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.empty());
+        final int count = 20;
+        IntStream.rangeClosed(1, count)
+            .mapToObj(
+                idx -> slice.response(
+                    new RequestLine("PUT", String.format("%s/@v/v1.0.%d.zip", MODULE, idx)),
+                    Headers.EMPTY,
+                    new Content.From(("zip-" + idx).getBytes(StandardCharsets.UTF_8))
+                )
+            ).collect(Collectors.toList())
+            .forEach(CompletableFuture::join);
+        MatcherAssert.assertThat(
+            new String(
+                storage.value(new Key.From(MODULE + "/@v/list")).join().asBytes(),
+                StandardCharsets.UTF_8
+            ),
+            new IsEqual<>(
+                IntStream.rangeClosed(1, count)
+                    .mapToObj(idx -> "v1.0." + idx + '\n')
+                    .collect(Collectors.joining())
+            )
+        );
+    }
+
+    @Test
+    void publishSortsAListThatIsOutOfOrder() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(
+            new Key.From(MODULE + "/@v/list"),
+            new Content.From("v1.0.9\nv1.0.10\nv1.0.3\n".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.empty());
+        GoUploadSliceTest.put(slice, MODULE + "/@v/v1.0.4.zip", "new");
+        MatcherAssert.assertThat(
+            new String(
+                storage.value(new Key.From(MODULE + "/@v/list")).join().asBytes(),
+                StandardCharsets.UTF_8
+            ),
+            new IsEqual<>("v1.0.3\nv1.0.4\nv1.0.9\nv1.0.10\n")
+        );
+    }
+
+    @Test
+    void refusesAClientWriteOfTheVersionList() {
+        // R38: @v/list is derived from the published zips; a client PUT
+        // replaced it with arbitrary content until the next publish.
+        final Storage storage = new InMemoryStorage();
+        final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.empty());
+        GoUploadSliceTest.put(slice, MODULE + "/@v/v1.0.0.zip", "zip");
+        final Response response = GoUploadSliceTest.put(
+            slice, MODULE + "/@v/list", "v9.9.9\n"
+        );
+        MatcherAssert.assertThat(
+            "the write is refused",
+            response.status(), new IsEqual<>(RsStatus.METHOD_NOT_ALLOWED)
+        );
+        MatcherAssert.assertThat(
+            "the list still reflects the published zips",
+            new String(
+                storage.value(new Key.From(MODULE + "/@v/list")).join().asBytes(),
+                StandardCharsets.UTF_8
+            ),
+            new IsEqual<>("v1.0.0\n")
+        );
+    }
+
     /**
      * Upload a text body.
      * @param slice Slice
