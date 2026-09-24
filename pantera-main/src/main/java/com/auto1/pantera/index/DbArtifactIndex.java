@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.index;
 
+import com.auto1.pantera.db.IndexWriteFence;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.context.ContextualExecutorService;
@@ -436,6 +437,9 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
         }
         final String slashed = "/" + clean;
         return CompletableFuture.supplyAsync(() -> {
+            // Uploads still queued for this path must not re-create rows
+            // after the purge below (waits for a batch in flight).
+            IndexWriteFence.shared().fencePath(repoName, clean);
             try (Connection conn = this.source.getConnection();
                  PreparedStatement stmt = conn.prepareStatement(REMOVE_BY_PATH_SQL)) {
                 stmt.setString(1, repoName);
@@ -462,6 +466,9 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
             );
         }
         return CompletableFuture.supplyAsync(() -> {
+            // Uploads still queued for this repository must not re-create
+            // rows after the purge below (waits for a batch in flight).
+            IndexWriteFence.shared().fenceRepository(repoName);
             try (Connection conn = this.source.getConnection();
                  PreparedStatement stmt = conn.prepareStatement(
                      "DELETE FROM artifacts WHERE repo_name = ?"

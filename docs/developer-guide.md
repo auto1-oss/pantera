@@ -316,7 +316,8 @@ Asynchronous batch event processor for artifact metadata:
 - Default: 2-second windows, 200 events per batch (env: `PANTERA_DB_BUFFER_SECONDS`, `PANTERA_DB_BATCH_SIZE`).
 - Events are sorted by `(repo_name, name, version)` before processing to ensure consistent lock ordering and prevent deadlocks.
 - Uses atomic `INSERT ... ON CONFLICT DO UPDATE` (UPSERT) for idempotent writes.
-- **Dead-letter queue:** After 3 consecutive batch failures, events are written to `.dead-letter` files under `/var/pantera/.dead-letter/` with exponential backoff (1s, 2s, 4s, max 8s).
+- **Dead-letter queue:** After 3 consecutive batch failures, events are written to `.dead-letter` files under `/var/pantera/.dead-letter/` with exponential backoff (1s, 2s, 4s, max 8s). An event that fails on its own while its batch commits is re-queued at most 3 times; a data exception (SQLSTATE class `22`, e.g. a NUL byte in a name) is dead-lettered at once (`event.action=event_dead_letter`).
+- **Delete fence:** `IndexWriteFence` keeps a repository or path delete from being undone by uploads still queued. `DbArtifactIndex.removeRepo`/`removeByPath` register a fence (waiting for batches in flight) before purging rows; the consumer drops insert events created before the fence (`ArtifactEvent.sequence()`). Fences are in-process and expire after 15 minutes.
 
 ### 5.3 DbArtifactIndex
 

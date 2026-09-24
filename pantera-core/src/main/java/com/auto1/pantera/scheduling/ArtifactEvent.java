@@ -16,6 +16,7 @@ import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.MDC;
 
 /**
@@ -27,6 +28,16 @@ public final class ArtifactEvent {
      * Default value for owner when owner is not found or irrelevant.
      */
     public static final String DEF_OWNER = "UNKNOWN";
+
+    /**
+     * Process-wide creation counter, see {@link #sequence()}.
+     */
+    private static final AtomicLong SEQUENCE = new AtomicLong();
+
+    /**
+     * Creation order of this event in this process, see {@link #sequence()}.
+     */
+    private final long sequence = ArtifactEvent.SEQUENCE.incrementAndGet();
 
     /**
      * Repository type.
@@ -334,6 +345,25 @@ public final class ArtifactEvent {
                          final String artifactName, final String version, final long size) {
         this(repoType, repoName, owner, artifactName, version, size,
             System.currentTimeMillis(), Optional.empty(), null, Type.INSERT);
+    }
+
+    /**
+     * Creation order of this event within this process: an event created
+     * before another has a lower sequence. Lets the index writer drop events
+     * that a repository or path delete has since superseded, however long
+     * they waited in the queue. Not part of equality.
+     * @return Sequence number
+     */
+    public long sequence() {
+        return this.sequence;
+    }
+
+    /**
+     * The sequence of the most recently created event.
+     * @return Latest sequence number (0 before any event)
+     */
+    public static long latestSequence() {
+        return ArtifactEvent.SEQUENCE.get();
     }
 
     /**
