@@ -24,6 +24,7 @@ import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.npm.JsonFromMeta;
 import com.auto1.pantera.npm.PerVersionLayout;
+import com.auto1.pantera.npm.misc.PackumentRevision;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import javax.json.Json;
 import org.hamcrest.MatcherAssert;
@@ -105,7 +106,7 @@ final class UnpublishPutSliceTest {
             new UnpublishPutSlice(
                 this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
             ),
-            UnpublishPutSliceTest.responseMatcher()
+            this.responseMatcher()
         );
         MatcherAssert.assertThat(
             "Meta.json is updated",
@@ -127,7 +128,7 @@ final class UnpublishPutSliceTest {
             new UnpublishPutSlice(
                 this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
             ),
-            UnpublishPutSliceTest.responseMatcher()
+            this.responseMatcher()
         );
         MatcherAssert.assertThat(
             "Meta.json `dist-tags` are updated",
@@ -174,7 +175,7 @@ final class UnpublishPutSliceTest {
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.OK),
-                new RequestLine(RqMethod.PUT, "/rc-only/-rev/undefined"),
+                new RequestLine(RqMethod.PUT, "/rc-only/-rev/" + this.rev("rc-only")),
                 Headers.from("referer", "unpublish"),
                 new Content.From(
                     Json.createObjectBuilder()
@@ -198,6 +199,71 @@ final class UnpublishPutSliceTest {
         );
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"undefined", "", "garbage"})
+    void refusesAnUnusableRevision(final String sent) {
+        // R24: the PUT leg of unpublish was accepted whatever the revision.
+        this.saveSourceMeta();
+        MatcherAssert.assertThat(
+            "an unusable revision answers 428",
+            new UnpublishPutSlice(
+                this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.PRECONDITION_REQUIRED),
+                new RequestLine(
+                    RqMethod.PUT, "/@hello%2fsimple-npm-project/-rev/" + sent
+                ),
+                Headers.from("referer", "unpublish"),
+                new Content.From(
+                    new TestResource(
+                        String.format("storage/%s/meta.json", UnpublishPutSliceTest.PROJ)
+                    ).asBytes()
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "no version is removed",
+            new JsonFromMeta(this.storage, new Key.From(UnpublishPutSliceTest.PROJ)).json()
+                .getJsonObject("versions").keySet().contains("1.0.2"),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());
+    }
+
+    @Test
+    void refusesAStaleRevision() {
+        // R24: a client holding a stale packument must not drop versions
+        // published after it read the packument.
+        this.saveSourceMeta();
+        MatcherAssert.assertThat(
+            "a stale revision answers 409",
+            new UnpublishPutSlice(
+                this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.CONFLICT),
+                new RequestLine(
+                    RqMethod.PUT,
+                    "/@hello%2fsimple-npm-project/-rev/1-deadbeefdeadbeefdeadbeefdeadbeef"
+                ),
+                Headers.from("referer", "unpublish"),
+                new Content.From(
+                    new TestResource(
+                        String.format("storage/%s/meta.json", UnpublishPutSliceTest.PROJ)
+                    ).asBytes()
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "no version is removed",
+            new JsonFromMeta(this.storage, new Key.From(UnpublishPutSliceTest.PROJ)).json()
+                .getJsonObject("versions").keySet().contains("1.0.2"),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());
+    }
+
     @Test
     void failsToDeleteMoreThanOneVersion() {
         this.saveSourceMeta();
@@ -206,7 +272,12 @@ final class UnpublishPutSliceTest {
             () -> new UnpublishPutSlice(
                 this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
             ).response(
-                RequestLine.from("PUT /@hello%2fsimple-npm-project/-rev/undefined HTTP/1.1"),
+                RequestLine.from(
+                    String.format(
+                        "PUT /@hello%%2fsimple-npm-project/-rev/%s HTTP/1.1",
+                        this.rev(UnpublishPutSliceTest.PROJ)
+                    )
+                ),
                 Headers.from("referer", "unpublish"),
                 new Content.From(new TestResource("json/dist-tags.json").asBytes())
             ).join()
@@ -243,6 +314,7 @@ final class UnpublishPutSliceTest {
         layout.mergeDistTags(
             pkg, Json.createObjectBuilder().add("latest", "1.0.2").build()
         ).toCompletableFuture().join();
+        final String current = this.rev(UnpublishPutSliceTest.PROJ);
         MatcherAssert.assertThat(
             "Response status is OK",
             new UnpublishPutSlice(
@@ -250,7 +322,7 @@ final class UnpublishPutSliceTest {
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.OK),
-                new RequestLine(RqMethod.PUT, "/@hello%2fsimple-npm-project/-rev/undefined"),
+                new RequestLine(RqMethod.PUT, "/@hello%2fsimple-npm-project/-rev/" + current),
                 Headers.from("referer", "unpublish"),
                 new Content.From(
                     Json.createObjectBuilder()
@@ -290,6 +362,15 @@ final class UnpublishPutSliceTest {
         MatcherAssert.assertThat("Events queue has one item", this.events.size() == 1);
     }
 
+    /**
+     * The package's current revision, as served in its packument's _rev.
+     * @param pkg Package name
+     * @return Revision
+     */
+    private String rev(final String pkg) {
+        return new PackumentRevision(this.storage, pkg).value().join();
+    }
+
     private void saveSourceMeta() {
         this.storage.save(
             this.meta,
@@ -299,11 +380,12 @@ final class UnpublishPutSliceTest {
         ).join();
     }
 
-    private static SliceHasResponse responseMatcher() {
+    private SliceHasResponse responseMatcher() {
         return new SliceHasResponse(
             new RsHasStatus(RsStatus.OK),
             new RequestLine(
-                RqMethod.PUT, "/@hello%2fsimple-npm-project/-rev/undefined"
+                RqMethod.PUT,
+                "/@hello%2fsimple-npm-project/-rev/" + this.rev(UnpublishPutSliceTest.PROJ)
             ),
             Headers.from("referer", "unpublish"),
             new Content.From(

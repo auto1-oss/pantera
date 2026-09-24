@@ -16,20 +16,15 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
-import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.npm.PackageNameFromUrl;
-import com.auto1.pantera.npm.misc.PackumentRevision;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Supplier;
 import java.util.regex.Pattern;
-import javax.json.Json;
-import javax.json.JsonObject;
 
 /**
  * Slice to handle `npm unpublish` command requests. Two request shapes reach it,
@@ -43,8 +38,9 @@ import javax.json.JsonObject;
  *   revision, then deletes that version's tarball with it. Only the one blob is
  *   removed here; the version's index event was already emitted by the PUT.</li>
  * </ul>
- * In both shapes the revision is validated against the package's
- * {@link PackumentRevision} before anything is deleted: a match deletes and answers
+ * In both shapes the revision is validated by the {@link RevisionGate} against the
+ * package's {@link com.auto1.pantera.npm.misc.PackumentRevision} before anything is
+ * deleted: a match deletes and answers
  * 200, a parseable-but-stale revision answers 409, and an absent, literal
  * {@code undefined}, or malformed revision answers 428 -- npm clients driven by
  * {@code libnpmpublish} always read the packument before unpublishing, so they send
@@ -152,7 +148,7 @@ final class UnpublishForceSlice implements Slice {
                 if (keys.isEmpty()) {
                     result = ResponseBuilder.notFound().completedFuture();
                 } else {
-                    result = this.whenCurrent(pkg, sent, () -> this.purge(pkg));
+                    result = new RevisionGate(this.storage).whenCurrent(pkg, sent, () -> this.purge(pkg));
                 }
                 return result;
             }
@@ -174,7 +170,7 @@ final class UnpublishForceSlice implements Slice {
             exists -> {
                 final CompletableFuture<Response> result;
                 if (exists) {
-                    result = this.whenCurrent(
+                    result = new RevisionGate(this.storage).whenCurrent(
                         pkg, sent,
                         () -> this.storage.delete(tarball)
                             .thenApply(nothing -> ResponseBuilder.ok().build())
@@ -185,52 +181,6 @@ final class UnpublishForceSlice implements Slice {
                 return result;
             }
         );
-    }
-
-    /**
-     * Run the deletion only when the supplied revision matches the package's
-     * current one; otherwise answer 428 (unusable revision) or 409 (stale).
-     * @param pkg Package name whose revision is checked
-     * @param sent Revision supplied by the client
-     * @param action Deletion to run on a match
-     * @return Response
-     */
-    private CompletableFuture<Response> whenCurrent(
-        final String pkg, final String sent, final Supplier<CompletableFuture<Response>> action
-    ) {
-        final CompletableFuture<Response> result;
-        if (sent.isEmpty() || "undefined".equals(sent) || sent.indexOf('-') < 1) {
-            result = ResponseBuilder.from(RsStatus.PRECONDITION_REQUIRED)
-                .header("X-Pantera-Reason", "revision_required")
-                .jsonBody(
-                    UnpublishForceSlice.error(
-                        "revision required: read _rev from the packument and send it as"
-                            + " /-rev/<rev>"
-                    )
-                )
-                .completedFuture();
-        } else {
-            result = new PackumentRevision(this.storage, pkg).value().thenCompose(
-                current -> {
-                    final CompletableFuture<Response> answer;
-                    if (current.equals(sent)) {
-                        answer = action.get();
-                    } else {
-                        answer = ResponseBuilder.from(RsStatus.CONFLICT)
-                            .header("X-Pantera-Reason", "revision_mismatch")
-                            .jsonBody(
-                                UnpublishForceSlice.error(
-                                    "revision mismatch: the package changed since its"
-                                        + " packument was read; read _rev again"
-                                )
-                            )
-                            .completedFuture();
-                    }
-                    return answer;
-                }
-            );
-        }
-        return result;
     }
 
     /**
@@ -250,15 +200,6 @@ final class UnpublishForceSlice implements Slice {
             );
         }
         return res.thenApply(nothing -> ResponseBuilder.ok().build());
-    }
-
-    /**
-     * npm-style error body.
-     * @param message Reason
-     * @return JSON object
-     */
-    private static JsonObject error(final String message) {
-        return Json.createObjectBuilder().add("error", message).build();
     }
 
     /**
