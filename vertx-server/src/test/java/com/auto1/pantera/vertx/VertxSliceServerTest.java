@@ -540,8 +540,15 @@ public final class VertxSliceServerTest {
                 .rxSend()
                 .blockingGet()
         );
-        // Wait for the request to reach the slice
-        requestReceived.await(5, java.util.concurrent.TimeUnit.SECONDS);
+        // Wait for the request to reach the slice. Shutdown must not start
+        // before it is in flight: with nothing to drain the server closes at
+        // once and the "new request" below gets a connection reset instead of
+        // a 503. The bound is an order-of-magnitude guard for loaded CI runners
+        // (the request arrives in milliseconds on an idle machine).
+        Assertions.assertTrue(
+            requestReceived.await(60, java.util.concurrent.TimeUnit.SECONDS),
+            "The slow request must reach the slice before shutdown starts"
+        );
         // Initiate shutdown in background (will drain for up to 30s)
         final CompletableFuture<Void> shutdownFuture = CompletableFuture.runAsync(() -> srv.stop());
         // Poll for the shuttingDown flag instead of a fixed sleep: under load
