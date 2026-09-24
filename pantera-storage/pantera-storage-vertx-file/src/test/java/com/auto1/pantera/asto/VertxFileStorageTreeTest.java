@@ -62,6 +62,28 @@ final class VertxFileStorageTreeTest {
     }
 
     @Test
+    void saveDeeperUnderAnExistingFileFailsAsPathClash() {
+        final Storage storage = new VertxFileStorage(this.temp, VERTX);
+        storage.save(new Key.From("docs/b.txt"), VertxFileStorageTreeTest.body()).join();
+        final CompletionException err = Assertions.assertThrows(
+            CompletionException.class,
+            () -> storage.save(
+                new Key.From("docs/b.txt/d/e.txt"), VertxFileStorageTreeTest.body()
+            ).join()
+        );
+        MatcherAssert.assertThat(
+            "the failure must be classified as a path clash",
+            new PathClash(err).cause().isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the existing file must be untouched",
+            Files.isRegularFile(this.temp.resolve("docs/b.txt")),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
     void deleteRemovesTheDirectoriesItLeftEmpty() {
         final Storage storage = new VertxFileStorage(this.temp, VERTX);
         storage.save(new Key.From("repo/docs/x/y.txt"), VertxFileStorageTreeTest.body()).join();

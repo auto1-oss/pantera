@@ -269,7 +269,7 @@ public final class FileStorage implements Storage {
                 final Path parent = path.getParent();
                 if (parent != null) {
                     try {
-                        Files.createDirectories(parent);
+                        new ParentDirs(parent).create();
                     } catch (final IOException iex) {
                         throw new PanteraIOException(iex);
                     }
@@ -487,7 +487,7 @@ public final class FileStorage implements Storage {
         return CompletableFuture.supplyAsync(
             () -> {
                 try {
-                    Files.createDirectories(dest.getParent());
+                    new ParentDirs(dest.getParent()).create();
                 } catch (final IOException iex) {
                     throw new PanteraIOException(iex);
                 }
@@ -500,7 +500,7 @@ public final class FileStorage implements Storage {
                 } catch (final java.nio.file.NoSuchFileException nfe) {
                     // Retry once: parent dir may have been removed by concurrent operation
                     try {
-                        Files.createDirectories(dst.getParent());
+                        new ParentDirs(dst.getParent()).create();
                         Files.move(source, dst, StandardCopyOption.REPLACE_EXISTING);
                     } catch (final IOException retry) {
                         retry.addSuppressed(nfe);

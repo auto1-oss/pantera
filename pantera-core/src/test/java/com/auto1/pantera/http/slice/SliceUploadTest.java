@@ -99,6 +99,16 @@ public final class SliceUploadTest {
     }
 
     @Test
+    void uploadDeeperUnderAnExistingFileIsConflict(@TempDir final Path tmp) {
+        final Storage storage = new FileStorage(tmp);
+        SliceUploadTest.put(storage, "dir1/a.txt").join();
+        MatcherAssert.assertThat(
+            SliceUploadTest.put(storage, "dir1/a.txt/d/e.txt").join(),
+            new RsHasStatus(RsStatus.CONFLICT)
+        );
+    }
+
+    @Test
     void uploadOntoAnExistingDirectoryIsConflict(@TempDir final Path tmp) {
         final Storage storage = new FileStorage(tmp);
         SliceUploadTest.put(storage, "dir1/a.txt").join();

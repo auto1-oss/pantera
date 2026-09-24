@@ -246,15 +246,15 @@ public final class VertxFileStorage implements Storage {
 
         return Single.fromCallable(
             () -> {
-                // Ensure target directory exists. createDirectories (not
-                // mkdirs) fails with the NIO FileAlreadyExistsException when a
-                // parent component is an existing file, which the upload slice
-                // answers with 409; mkdirs failed silently and the later move
-                // surfaced as an unmapped Vert.x FileSystemException (500).
+                // Ensure target directory exists. ParentDirs fails with an NIO
+                // path-clash exception when a file stands anywhere in the
+                // parent path, which the upload slices answer with 409;
+                // mkdirs failed silently and the later move surfaced as an
+                // unmapped Vert.x FileSystemException (500).
                 final Path target = this.path(key);
                 final Path parent = target.getParent();
                 if (parent != null) {
-                    Files.createDirectories(parent);
+                    new ParentDirs(parent).create();
                 }
                 // Create temp file in .tmp directory at storage root to avoid filename length issues
                 // Using parent directory could still exceed 255-byte limit if parent path is long
@@ -311,7 +311,7 @@ public final class VertxFileStorage implements Storage {
     private Completable moveInto(final Path tmp, final Path target) {
         return this.rawMove(tmp, target).onErrorResumeNext(
             err -> VertxFileStorage.hasCause(err, NoSuchFileException.class)
-                ? Completable.fromAction(() -> Files.createDirectories(target.getParent()))
+                ? Completable.fromAction(() -> new ParentDirs(target.getParent()).create())
                     .subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
                     .andThen(this.rawMove(tmp, target))
                 : Completable.error(err)
@@ -378,7 +378,7 @@ public final class VertxFileStorage implements Storage {
         return Single.fromCallable(
             () -> {
                 final Path dest = this.path(destination);
-                dest.getParent().toFile().mkdirs();
+                new ParentDirs(dest.getParent()).create();
                 return dest;
             })
             .subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))

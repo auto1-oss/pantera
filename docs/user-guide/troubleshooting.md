@@ -90,7 +90,7 @@ If this returns your user info, the token is valid. If it returns 401, generate 
 | `400 Bad Request` on any request | The path contains a `..` segment (also when sent percent-encoded as `%2e%2e`) | Send the artifact's real path; parent segments are never valid in a repository path |
 | `400 Bad Request` on any request | The path contains a control character, e.g. a percent-encoded NUL, CR or LF (`%00`, `%0D`, `%0A`) | Send the artifact's real path; no repository path contains control characters |
 | `400 Bad Request` on upload | The upload targets the repository root (`PUT /<repo>/`) | Include the file path after the repository name |
-| `409 Conflict` on upload | The path clashes with an existing entry: a directory already exists where the file should go, or a parent segment is an existing file | Upload to a different path, or delete the existing entry first |
+| `409 Conflict` on upload | The path clashes with an existing entry: a directory already exists where the file should go, or any parent segment (at any depth, e.g. `a.txt` in `a.txt/d/e.txt`) is an existing file | Upload to a different path, or delete the existing entry first |
 | `416 Range Not Satisfiable` | The `Range` starts past the end of the file | Request a range inside the file; an end past the last byte is clamped (`206`), and suffix ranges (`bytes=-N`) return the last N bytes |
 
 ---
