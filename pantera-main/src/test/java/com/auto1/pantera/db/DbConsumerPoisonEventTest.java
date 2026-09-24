@@ -18,13 +18,24 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Savepoint;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import javax.sql.DataSource;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Configurator;
+import org.apache.logging.log4j.core.config.Property;
+import org.apache.logging.log4j.message.MapMessage;
+import org.apache.logging.log4j.message.Message;
 import org.awaitility.Awaitility;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -42,6 +53,16 @@ import org.junit.jupiter.api.io.TempDir;
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 final class DbConsumerPoisonEventTest {
+
+    /**
+     * Audit logger name.
+     */
+    private static final String AUDIT = "artifact.audit";
+
+    /**
+     * Capturing appender name.
+     */
+    private static final String CAP = "DbConsumerPoisonEventTestAudit";
 
     /**
      * Upserts executed, per artifact name.
@@ -133,6 +154,39 @@ final class DbConsumerPoisonEventTest {
             "a sibling sharing the string prefix is indexed",
             this.count("lib-extra/b.txt"), new IsEqual<>(1)
         );
+    }
+
+    @Test
+    void fencedUploadIsStillAuditedAsPublished() {
+        final AuditCapture capture = new AuditCapture();
+        capture.start();
+        Configurator.setLevel(DbConsumerPoisonEventTest.AUDIT, Level.INFO);
+        final LoggerContext ctx = (LoggerContext) LogManager.getContext(false);
+        ctx.getConfiguration().addAppender(capture);
+        ctx.getConfiguration().getLoggerConfig(DbConsumerPoisonEventTest.AUDIT)
+            .addAppender(capture, null, null);
+        ctx.updateLoggers();
+        try {
+            final IndexWriteFence fence = new IndexWriteFence(System::currentTimeMillis);
+            final DbConsumer consumer = this.consumer(fence);
+            final ArtifactEvent before = DbConsumerPoisonEventTest.insert("gone", "fenced-up");
+            fence.fenceRepository("gone");
+            consumer.accept(before);
+            this.drain(consumer, "sentinel");
+            MatcherAssert.assertThat(
+                "the fenced upload must not be indexed",
+                this.count("fenced-up"), new IsEqual<>(0)
+            );
+            MatcherAssert.assertThat(
+                "the fenced upload happened: it still emits artifact_publish",
+                capture.published("fenced-up"), new IsEqual<>(1L)
+            );
+        } finally {
+            ctx.getConfiguration().getLoggerConfig(DbConsumerPoisonEventTest.AUDIT)
+                .removeAppender(DbConsumerPoisonEventTest.CAP);
+            capture.stop();
+            ctx.updateLoggers();
+        }
     }
 
     /**
@@ -264,5 +318,41 @@ final class DbConsumerPoisonEventTest {
                 return null;
             }
         );
+    }
+
+    /**
+     * Appender recording audit events; written from the consumer thread.
+     */
+    private static final class AuditCapture extends AbstractAppender {
+
+        /**
+         * Captured messages.
+         */
+        private final List<Message> messages = new CopyOnWriteArrayList<>();
+
+        AuditCapture() {
+            super(DbConsumerPoisonEventTest.CAP, null, null, true, Property.EMPTY_ARRAY);
+        }
+
+        @Override
+        public void append(final LogEvent event) {
+            if (DbConsumerPoisonEventTest.AUDIT.equals(event.getLoggerName())) {
+                this.messages.add(event.toImmutable().getMessage());
+            }
+        }
+
+        /**
+         * Count artifact_publish records of a package.
+         * @param name Package name
+         * @return Record count
+         */
+        long published(final String name) {
+            return this.messages.stream()
+                .filter(MapMessage.class::isInstance)
+                .map(MapMessage.class::cast)
+                .filter(msg -> "artifact_publish".equals(msg.get("event.action")))
+                .filter(msg -> name.equals(msg.get("package.name")))
+                .count();
+        }
     }
 }

@@ -396,7 +396,11 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     if (DbConsumer.this.fence.fenced(record)) {
                         // A repository or path delete ran after this upload
                         // was queued: writing it now would resurrect the row.
+                        // The upload itself did happen, so it is still audited.
                         this.attempts.remove(record);
+                        if (record.eventType() == ArtifactEvent.Type.INSERT) {
+                            logArtifactPublish(record);
+                        }
                         errors.add(record);
                         continue;
                     }
