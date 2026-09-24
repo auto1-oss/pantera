@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.Copy;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.misc.UncheckedSupplier;
 import com.auto1.pantera.gem.GemMeta.MetaInfo;
 import com.auto1.pantera.gem.ruby.RubyGemDependencies;
@@ -33,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiFunction;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.tuple.ImmutablePair;
@@ -46,6 +48,33 @@ import org.apache.commons.lang3.tuple.Pair;
  * @since 1.0
  */
 public final class Gem {
+
+    /**
+     * Key every index writer (upload, delete, import) locks while it
+     * regenerates the index. The importer has always locked this key.
+     */
+    private static final Key INDEX_LOCK = new Key.From("specs.4.8.gz");
+
+    /**
+     * Gems directory.
+     */
+    private static final String GEMS = "gems";
+
+    /**
+     * Quick specs directory.
+     */
+    private static final Key QUICK = new Key.From("quick", "Marshal.4.8");
+
+    /**
+     * Temporary key of an upload ({@code gems/<uuid without dashes>.gem}).
+     */
+    private static final Pattern UPLOAD = Pattern.compile("gems/[0-9a-f]{32}\\.gem");
+
+    /**
+     * Ruby runtime shared by every reindex after a delete, so a delete does
+     * not start a runtime of its own.
+     */
+    private static final SharedRuntime REINDEX = new SharedRuntime();
 
     /**
      * Gem repository storage.
@@ -84,9 +113,58 @@ public final class Gem {
      * @return Completable action
      */
     public CompletionStage<Pair<String, String>> update(final Key gem) {
+        return new IndexUpdateLock(this.storage, Gem.INDEX_LOCK).run(
+            locked -> this.indexed(gem)
+        );
+    }
+
+    /**
+     * Rebuild the index from the gems left in storage, after gems were
+     * removed from it (management-API delete). {@code specs.4.8},
+     * {@code latest_specs.4.8} (the highest remaining version of each gem),
+     * {@code prerelease_specs.4.8} and their {@code .gz} variants are
+     * regenerated, and the {@code quick/Marshal.4.8} spec of every gem that
+     * is gone is removed. Runs under the same index lock as {@link #update}.
+     *
+     * @return Completable action
+     */
+    public CompletionStage<Void> reindex() {
+        return new IndexUpdateLock(this.storage, Gem.INDEX_LOCK).run(
+            locked -> newTempDir().thenCompose(
+                tmp -> new Copy(this.storage, Gem::stored).copy(new FileStorage(tmp))
+                    .thenCompose(
+                        ignore -> CompletableFuture.supplyAsync(
+                            new UncheckedSupplier<>(
+                                () -> Files.createDirectories(tmp.resolve(Gem.GEMS))
+                            )
+                        )
+                    )
+                    .thenCompose(
+                        dir -> Gem.REINDEX.apply(RubyGemIndex::new).thenAccept(
+                            // The indexer only uses the directory of the
+                            // path it is given.
+                            index -> index.update(dir.resolve("reindex.gem"))
+                        )
+                    )
+                    .thenCompose(
+                        ignored -> new Copy(new FileStorage(tmp), key -> !Gem.isGem(key))
+                            .copy(this.storage)
+                    )
+                    .thenCompose(ignored -> this.dropStaleQuickSpecs(tmp))
+                    .handle(removeTempDir(tmp))
+            )
+        );
+    }
+
+    /**
+     * Index an uploaded gem; the caller holds the index lock.
+     * @param gem Uploaded gem key
+     * @return Name and version of the gem
+     */
+    private CompletionStage<Pair<String, String>> indexed(final Key gem) {
         return newTempDir().thenCompose(
             tmp -> new Copy(
-                this.storage, key -> key.string().endsWith(".gem") || key.equals(gem)
+                this.storage, key -> Gem.stored(key) || key.equals(gem)
             ).copy(new FileStorage(tmp)).thenCompose(
                 ignore -> this.shared.apply(RubyGemMeta::new)
                     .thenApply(meta -> Gem.read(meta, tmp.resolve(gem.string())))
@@ -96,6 +174,9 @@ public final class Gem {
                             final String name = Gem.fileName(info, fmt);
                             final Path dir = gem.parent()
                                 .map(key -> tmp.resolve(key.string())).orElse(tmp);
+                            final Key stored = gem.parent()
+                                .<Key>map(key -> new Key.From(key, name))
+                                .orElseGet(() -> new Key.From(name));
                             return CompletableFuture.supplyAsync(
                                 new UncheckedSupplier<>(
                                     () -> Files.move(
@@ -108,12 +189,57 @@ public final class Gem {
                                 path -> this.shared.apply(RubyGemIndex::new)
                                     .thenAccept(index -> index.update(path))
                                 ).thenCompose(
-                                    ignored -> new Copy(new FileStorage(tmp)).copy(this.storage)
+                                    // Only the new gem and the index go back:
+                                    // the other gems are unchanged, and
+                                    // writing the snapshot back would
+                                    // resurrect a gem deleted meanwhile.
+                                    ignored -> new Copy(
+                                        new FileStorage(tmp),
+                                        key -> !Gem.isGem(key) || key.equals(stored)
+                                    ).copy(this.storage)
                                 ).thenApply(ignored -> new ImmutablePair<>(fmt.name, fmt.version));
                         }
                     )
             ).handle(removeTempDir(tmp))
         );
+    }
+
+    /**
+     * Remove the quick specs of gems that are no longer in storage.
+     * @param tmp Reindexed snapshot, holding the quick specs of every gem left
+     * @return Completable action
+     */
+    private CompletableFuture<Void> dropStaleQuickSpecs(final Path tmp) {
+        final FileStorage fresh = new FileStorage(tmp);
+        return fresh.list(Gem.QUICK).thenCompose(
+            kept -> this.storage.list(Gem.QUICK).thenCompose(
+                stored -> CompletableFuture.allOf(
+                    stored.stream()
+                        .filter(key -> !kept.contains(key))
+                        .map(this.storage::delete)
+                        .toArray(CompletableFuture[]::new)
+                )
+            )
+        );
+    }
+
+    /**
+     * Whether a key is a gem file.
+     * @param key Key
+     * @return True for a {@code .gem}
+     */
+    private static boolean isGem(final Key key) {
+        return key.string().endsWith(".gem");
+    }
+
+    /**
+     * Whether a key is a stored gem that belongs in the index: a {@code .gem}
+     * that is not the temporary key of an upload still being indexed.
+     * @param key Key
+     * @return True for an indexed gem
+     */
+    private static boolean stored(final Key key) {
+        return Gem.isGem(key) && !Gem.UPLOAD.matcher(key.string()).matches();
     }
 
     /**
