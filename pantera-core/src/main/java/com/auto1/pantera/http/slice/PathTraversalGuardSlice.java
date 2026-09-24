@@ -31,6 +31,12 @@ import java.util.concurrent.CompletableFuture;
  * inflate 5xx metrics and error logs at will. The check runs on the decoded
  * path, so percent-encoded {@code %2e%2e} is caught too.</p>
  *
+ * <p>A decoded path carrying a control character (C0 range or DEL, e.g. an
+ * encoded NUL or CR/LF) is rejected with 400 as well. No artifact format
+ * names a file with one; NUL cannot be stored on a filesystem or in a
+ * PostgreSQL text column, and CR/LF broke the routing regexes, so such a
+ * request used to end in a 500 or a misleading 404 deeper in the stack.</p>
+ *
  * @since 2.2.9
  */
 public final class PathTraversalGuardSlice implements Slice {
@@ -70,10 +76,43 @@ public final class PathTraversalGuardSlice implements Slice {
                     .textBody("Bad Request: path must not contain '..' segments")
                     .build()
             );
+        } else if (path != null && PathTraversalGuardSlice.hasControlChar(path)) {
+            EcsLogger.warn("com.auto1.pantera.http")
+                .message("Rejected request path with a control character")
+                .eventCategory("web")
+                .eventAction("path_control_char_reject")
+                .eventOutcome("failure")
+                .field("http.request.method", line.method().value())
+                .field("url.path", LogSanitizer.sanitizeUrl(line.uri().getRawPath()))
+                .field("http.response.status_code", 400)
+                .field("log.source", "application")
+                .log();
+            res = body.discard().thenApply(
+                ignored -> ResponseBuilder.badRequest()
+                    .textBody("Bad Request: path must not contain control characters")
+                    .build()
+            );
         } else {
             res = this.origin.response(line, headers, body);
         }
         return res;
+    }
+
+    /**
+     * Whether a decoded path contains a C0 control character or DEL.
+     * @param path Decoded request path
+     * @return True if any character is below U+0020 or is U+007F
+     */
+    private static boolean hasControlChar(final String path) {
+        boolean found = false;
+        for (int idx = 0; idx < path.length(); idx += 1) {
+            final char chr = path.charAt(idx);
+            if (chr < ' ' || chr == 0x7f) {
+                found = true;
+                break;
+            }
+        }
+        return found;
     }
 
     /**

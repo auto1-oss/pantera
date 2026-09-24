@@ -60,6 +60,32 @@ final class PathTraversalGuardSliceTest {
     }
 
     @ParameterizedTest
+    @CsvSource({
+        "GET,/repo/a%00b",
+        "PUT,/repo/col/cr%0D%0Ax.txt",
+        "PUT,/test_prefix/api/repo/col/lf%0Ax.txt",
+        "GET,/repo/tab%09x",
+        "GET,/repo/del%7Fx"
+    })
+    void rejectsControlCharacters(final String method, final String path) {
+        final AtomicBoolean reached = new AtomicBoolean();
+        final Response rsp = new PathTraversalGuardSlice(
+            (line, headers, body) -> {
+                reached.set(true);
+                return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+            }
+        ).response(new RequestLine(method, path), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "a control character in the path is a client error",
+            rsp.status(), new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "the origin is never reached",
+            reached.get(), new IsEqual<>(false)
+        );
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {
         "/repo/com/acme/1.0/acme-1.0.jar",
         "/repo/file..txt",
@@ -67,6 +93,8 @@ final class PathTraversalGuardSliceTest {
         "/repo/a/.../b",
         "/repo/%252e%252e/x",
         "/repo/a/./b",
+        "/repo/caf%C3%A9/x.txt",
+        "/repo/a%20b.txt",
         "/"
     })
     void passesOrdinaryPaths(final String path) {
