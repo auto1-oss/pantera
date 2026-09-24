@@ -151,7 +151,7 @@ final class SliceIndex implements Slice {
                     listKey, prefix, packageName, format, indexKey
                 );
             }
-        ).thenApply(SimpleApiFormat::varyOnAccept).toCompletableFuture();
+        ).thenApply(resp -> SimpleApiFormat.negotiated(resp, headers)).toCompletableFuture();
     }
 
 

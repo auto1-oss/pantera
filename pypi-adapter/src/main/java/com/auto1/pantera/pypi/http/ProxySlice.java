@@ -381,7 +381,7 @@ final class ProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return this.simpleHandler.handle(line, clientWantsJson, user, rqheaders)
-                .thenApply(SimpleApiFormat::varyOnAccept);
+                .thenApply(resp -> SimpleApiFormat.negotiated(resp, rqheaders));
         }
 
         // For artifacts: CRITICAL FIX - Check cache FIRST before any network calls
@@ -399,7 +399,7 @@ final class ProxySlice implements Slice {
         // Non-artifacts (index pages, metadata): serve directly from cache/upstream.
         // Their body is negotiated on Accept (HTML vs PEP 691 JSON).
         return this.serveNonArtifact(line, rqheaders, body, user)
-            .thenApply(SimpleApiFormat::varyOnAccept);
+            .thenApply(resp -> SimpleApiFormat.negotiated(resp, rqheaders));
     }
 
     /**

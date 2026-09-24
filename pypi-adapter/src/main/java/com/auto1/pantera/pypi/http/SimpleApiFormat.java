@@ -13,6 +13,8 @@ package com.auto1.pantera.pypi.http;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.headers.Header;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -41,15 +43,28 @@ public enum SimpleApiFormat {
     );
 
     /**
-     * Media types (including wildcards) that select the HTML serialization.
+     * Media types (including wildcards) that select the HTML serialization
+     * under its legacy {@code text/html} type.
      */
     private static final Set<String> HTML_TYPES = Set.of(
         "text/html",
-        "application/vnd.pypi.simple.v1+html",
-        "application/vnd.pypi.simple.latest+html",
         "text/*",
         "*/*"
     );
+
+    /**
+     * Media types that select the HTML serialization under its versioned
+     * PEP 691 type.
+     */
+    private static final Set<String> VERSIONED_HTML_TYPES = Set.of(
+        "application/vnd.pypi.simple.v1+html",
+        "application/vnd.pypi.simple.latest+html"
+    );
+
+    /**
+     * The versioned PEP 691 HTML media type.
+     */
+    private static final String VERSIONED_HTML = "application/vnd.pypi.simple.v1+html";
 
     private final String contentType;
 
@@ -73,27 +88,112 @@ public enum SimpleApiFormat {
      * @return Negotiated format
      */
     public static SimpleApiFormat fromHeaders(final Headers headers) {
-        double json = 0.0;
-        double html = 0.0;
-        for (final var header : headers) {
-            if ("accept".equalsIgnoreCase(header.getKey())) {
-                for (final String range : header.getValue().split(",")) {
-                    final String[] parts = range.split(";");
-                    final String type = parts[0].trim().toLowerCase(Locale.ROOT);
-                    final double quality = SimpleApiFormat.quality(parts);
-                    if (JSON_TYPES.contains(type)) {
-                        json = Math.max(json, quality);
-                    } else if (HTML_TYPES.contains(type)) {
-                        html = Math.max(html, quality);
-                    }
-                }
-            }
-        }
+        final double[] quality = SimpleApiFormat.qualities(headers);
+        final double json = quality[0];
+        final double html = Math.max(quality[1], quality[2]);
         final SimpleApiFormat result;
         if (json > 0.0 && json >= html) {
             result = JSON;
         } else {
             result = HTML;
+        }
+        return result;
+    }
+
+    /**
+     * Finish a negotiated index response: mark it as varying on
+     * {@code Accept} and, when it is HTML and the client asked for the
+     * versioned HTML serialization ({@code v1+html} or the {@code latest}
+     * alias) at least as much as for {@code text/html}, announce it as
+     * {@code application/vnd.pypi.simple.v1+html} like PyPI does (PEP 691).
+     *
+     * @param response Index response
+     * @param request Request headers
+     * @return Finished response
+     */
+    static Response negotiated(final Response response, final Headers request) {
+        final Response varied = SimpleApiFormat.varyOnAccept(response);
+        final double[] quality = SimpleApiFormat.qualities(request);
+        final Response result;
+        if (quality[2] > 0.0 && quality[2] >= quality[1] && quality[2] > quality[0]) {
+            result = SimpleApiFormat.versionedHtml(varied);
+        } else {
+            result = varied;
+        }
+        return result;
+    }
+
+    /**
+     * Retype a {@code text/html} response as the versioned HTML type,
+     * keeping its parameters (charset). Other responses are unchanged.
+     * @param response Response
+     * @return Retyped response
+     */
+    private static Response versionedHtml(final Response response) {
+        final List<Header> headers = new ArrayList<>();
+        boolean html = false;
+        for (final Header header : response.headers()) {
+            final String value = header.getValue();
+            if ("content-type".equalsIgnoreCase(header.getKey())
+                && value.toLowerCase(Locale.ROOT).startsWith("text/html")) {
+                headers.add(
+                    new Header(
+                        "Content-Type",
+                        SimpleApiFormat.VERSIONED_HTML + value.substring("text/html".length())
+                    )
+                );
+                html = true;
+            } else {
+                headers.add(header);
+            }
+        }
+        final Response result;
+        if (html) {
+            result = new Response(response.status(), new Headers(headers), response.body());
+        } else {
+            result = response;
+        }
+        return result;
+    }
+
+    /**
+     * Highest acceptable quality of each serialization in the request's
+     * {@code Accept} ranges.
+     * @param headers Request headers
+     * @return Qualities: [JSON, text/html incl. wildcards, versioned HTML]
+     */
+    private static double[] qualities(final Headers headers) {
+        final double[] result = new double[3];
+        for (final var header : headers) {
+            if ("accept".equalsIgnoreCase(header.getKey())) {
+                for (final String range : header.getValue().split(",")) {
+                    final String[] parts = range.split(";");
+                    final String type = parts[0].trim().toLowerCase(Locale.ROOT);
+                    final int slot = SimpleApiFormat.slot(type);
+                    if (slot >= 0) {
+                        result[slot] = Math.max(result[slot], SimpleApiFormat.quality(parts));
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Quality slot of a media type.
+     * @param type Lower-cased media type
+     * @return Slot index, -1 for types that select no serialization
+     */
+    private static int slot(final String type) {
+        final int result;
+        if (JSON_TYPES.contains(type)) {
+            result = 0;
+        } else if (HTML_TYPES.contains(type)) {
+            result = 1;
+        } else if (VERSIONED_HTML_TYPES.contains(type)) {
+            result = 2;
+        } else {
+            result = -1;
         }
         return result;
     }
@@ -105,7 +205,7 @@ public enum SimpleApiFormat {
      * @param response Index response
      * @return Response with {@code Vary: Accept}
      */
-    static Response varyOnAccept(final Response response) {
+    private static Response varyOnAccept(final Response response) {
         return new Response(
             response.status(),
             response.headers().copy().add(new Header("Vary", SimpleApiFormat.VARY)),

@@ -492,6 +492,50 @@ class SliceIndexTest {
     }
 
     @Test
+    void versionedHtmlRequestIsAnsweredWithTheVersionedHtmlType() {
+        // R35: PEP 691 -- a client asking for the versioned HTML
+        // serialization (v1 or the latest alias) gets the versioned type,
+        // not the legacy text/html.
+        this.storage.save(
+            new Key.From("hello", "0.2.0", "hello-0.2.0-py3-none-any.whl"),
+            new Content.From("content".getBytes())
+        ).join();
+        for (final String accept : new String[] {
+            "application/vnd.pypi.simple.latest+html",
+            "application/vnd.pypi.simple.v1+html",
+        }) {
+            final Response resp = new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/hello/"),
+                Headers.from("Accept", accept),
+                Content.EMPTY
+            ).join();
+            org.hamcrest.MatcherAssert.assertThat(
+                accept,
+                resp.headers().values("Content-Type"),
+                new org.hamcrest.core.IsEqual<>(
+                    java.util.List.of("application/vnd.pypi.simple.v1+html; charset=utf-8")
+                )
+            );
+        }
+    }
+
+    @Test
+    void plainHtmlRequestKeepsTextHtml() {
+        this.storage.save(
+            new Key.From("hello", "0.2.0", "hello-0.2.0-py3-none-any.whl"),
+            new Content.From("content".getBytes())
+        ).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/hello/"),
+                Headers.from("Accept", "text/html"),
+                Content.EMPTY
+            ).join().headers().values("Content-Type"),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("text/html; charset=utf-8"))
+        );
+    }
+
+    @Test
     void jsonRequestWithoutCacheGeneratesDynamically() {
         // No persisted HTML, only raw files. The JSON generator path
         // must still produce valid JSON for the hosted package.
