@@ -1537,9 +1537,16 @@ Both delete endpoints keep what is derived from storage consistent, and write an
 - in a local `php` repository, versions whose archive was deleted are removed from `p2/<vendor>/<package>.json`;
 - in a local `pypi` repository, the cached simple indexes are dropped and regenerated from storage on the next request;
 - in a local `conda` repository, packages whose file was deleted are removed from their subdir's `repodata.json`;
-- in a local `gem` repository, `specs.4.8`, `latest_specs.4.8` (the highest remaining version of each gem), `prerelease_specs.4.8` and their `.gz` variants are rebuilt from the gems left, and the `quick/Marshal.4.8/<name>-<version>.gemspec.rz` of each deleted gem is removed.
+- in a local `gem` repository, `specs.4.8`, `latest_specs.4.8` (the highest remaining version of each gem), `prerelease_specs.4.8` and their `.gz` variants are rebuilt from the gems left, and the `quick/Marshal.4.8/<name>-<version>.gemspec.rz` of each deleted gem is removed;
+- in a local `npm` repository, a version whose tarball (`<pkg>/-/<pkg>-<version>.tgz`, or the whole `<pkg>/-` folder) was deleted is unpublished: it leaves the packument and the dist-tags pointing at it are dropped (`latest` falls back to the highest remaining version);
+- in a local `helm` repository, chart versions whose archive was deleted are removed from `index.yaml` (a chart left with no version is removed);
+- in a local `nuget` repository, versions whose `.nupkg` or `.nuspec` was deleted are removed from `<id>/index.json` (removed when no version is left);
+- in a local `go` repository, `<module>/@v/list` is rewritten to the versions whose `.zip` is still stored (removed when none is left);
+- in a local `hexpm` repository, releases whose `tarballs/<name>-<version>.tar` was deleted are removed from `packages/<name>` (removed when no release is left).
 
-Conda and gem index updates are serialized with uploads to the same repository (on every node sharing the storage), so a concurrent upload is neither lost nor lists a deleted package again.
+`deb` and `rpm` indexes (`Packages.gz`/`Release`/`InRelease`, `repodata/`) are not updated by these endpoints. Remove Debian and RPM packages with an HTTP `DELETE` of the package path on the repository itself (`/<repo>/<path>`), which updates those indexes (for RPM in the default `update: on: upload` mode).
+
+Index updates for conda, gem, helm, nuget and hexpm are serialized with uploads to the same package or index (on every node sharing the storage); the go list rewrite is serialized with uploads on the same node. A concurrent upload is neither lost nor lists a deleted package again.
 
 The search index rows and format metadata are cleaned up even when storage no longer holds the path (for example rows left behind by an earlier failure). The delete answers `204` when it removed files or search index rows, and `404` (`NOT_FOUND`) when the path is neither stored nor indexed.
 

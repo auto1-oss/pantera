@@ -193,6 +193,113 @@ final class ArtifactDeleteCascadeTest extends AsyncApiTestBase {
         ctx.completeNow();
     }
 
+    @Test
+    void deletingAnNpmTarballUnpublishesItsVersion(@TempDir final Path root,
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        final String repo = this.repo(vertx, root, "npm");
+        final Path pkg = root.resolve(repo).resolve("qa-pkg");
+        Files.createDirectories(pkg.resolve(".versions"));
+        Files.createDirectories(pkg.resolve("-"));
+        for (final String ver : new String[] {"1.0.0", "2.0.0"}) {
+            Files.writeString(
+                pkg.resolve(".versions").resolve(ver + ".json"),
+                "{\"name\":\"qa-pkg\",\"version\":\"" + ver + "\"}"
+            );
+            Files.write(pkg.resolve("-").resolve("qa-pkg-" + ver + ".tgz"), new byte[] {1});
+        }
+        Assertions.assertEquals(
+            204,
+            this.delete(vertx, repo, "artifacts", "qa-pkg/-/qa-pkg-2.0.0.tgz").statusCode(),
+            "delete must succeed"
+        );
+        Assertions.assertFalse(
+            Files.exists(pkg.resolve(".versions").resolve("2.0.0.json")),
+            "the deleted version must be unpublished"
+        );
+        Assertions.assertTrue(
+            Files.exists(pkg.resolve(".versions").resolve("1.0.0.json")),
+            "the other version must stay"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
+    void deletingAHelmChartRemovesItFromTheIndex(@TempDir final Path root,
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        final String repo = this.repo(vertx, root, "helm");
+        final Path base = root.resolve(repo);
+        Files.createDirectories(base.resolve("qa"));
+        Files.write(base.resolve("qa").resolve("qa-1.0.0.tgz"), new byte[] {1});
+        Files.write(base.resolve("qa").resolve("qa-2.0.0.tgz"), new byte[] {1});
+        Files.writeString(
+            base.resolve("index.yaml"),
+            String.join(
+                "\n",
+                "apiVersion: v1",
+                "entries:",
+                "  qa:",
+                "  - {name: qa, version: 1.0.0, urls: [qa/qa-1.0.0.tgz]}",
+                "  - {name: qa, version: 2.0.0, urls: [qa/qa-2.0.0.tgz]}",
+                ""
+            )
+        );
+        Assertions.assertEquals(
+            204,
+            this.delete(vertx, repo, "artifacts", "qa/qa-2.0.0.tgz").statusCode(),
+            "delete must succeed"
+        );
+        final String index = Files.readString(base.resolve("index.yaml"));
+        Assertions.assertFalse(index.contains("2.0.0"), "the deleted version must go: " + index);
+        Assertions.assertTrue(index.contains("1.0.0"), "the other version must stay: " + index);
+        ctx.completeNow();
+    }
+
+    @Test
+    void deletingANugetVersionRemovesItFromTheVersionList(@TempDir final Path root,
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        final String repo = this.repo(vertx, root, "nuget");
+        final Path pkg = root.resolve(repo).resolve("qa.pkg");
+        for (final String ver : new String[] {"1.0.0", "2.0.0"}) {
+            Files.createDirectories(pkg.resolve(ver));
+            Files.write(pkg.resolve(ver).resolve("qa.pkg." + ver + ".nupkg"), new byte[] {1});
+            Files.write(pkg.resolve(ver).resolve("qa.pkg.nuspec"), new byte[] {1});
+        }
+        Files.writeString(pkg.resolve("index.json"), "{\"versions\":[\"1.0.0\",\"2.0.0\"]}");
+        Assertions.assertEquals(
+            204,
+            this.delete(vertx, repo, "packages", "qa.pkg/2.0.0").statusCode(),
+            "delete must succeed"
+        );
+        Assertions.assertEquals(
+            "{\"versions\":[\"1.0.0\"]}", Files.readString(pkg.resolve("index.json")),
+            "only the remaining version is listed"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
+    void deletingAGoVersionRemovesItFromTheList(@TempDir final Path root,
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        final String repo = this.repo(vertx, root, "go");
+        final Path dir = root.resolve(repo).resolve("example.com").resolve("qa").resolve("@v");
+        Files.createDirectories(dir);
+        for (final String ver : new String[] {"v1.0.0", "v1.1.0"}) {
+            Files.write(dir.resolve(ver + ".zip"), new byte[] {1});
+            Files.write(dir.resolve(ver + ".mod"), new byte[] {1});
+        }
+        Files.writeString(dir.resolve("list"), "v1.0.0\nv1.1.0\n");
+        Assertions.assertEquals(
+            204,
+            this.delete(vertx, repo, "artifacts", "example.com/qa/@v/v1.1.0.zip").statusCode(),
+            "delete must succeed"
+        );
+        Assertions.assertEquals(
+            "v1.0.0\n", Files.readString(dir.resolve("list")),
+            "only the remaining version is listed"
+        );
+        ctx.completeNow();
+    }
+
     /**
      * Create a repository on a filesystem storage.
      * @param vertx Vertx

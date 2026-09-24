@@ -1185,7 +1185,7 @@ public final class ArtifactHandler {
         final CompletableFuture<Void> format = this.repoData.repoStorage(rname, this.crs)
             .thenCompose(
                 asto -> new FormatDeleteHooks().afterDelete(
-                    repoType, new SubStorage(new Key.From(repoName), asto), path
+                    repoType, new SubStorage(new Key.From(repoName), asto), repoName, path
                 )
             )
             .<Void>handle((nothing, err) -> {
