@@ -95,6 +95,50 @@ final class FileStorageEmptyDirectoriesTest {
         );
     }
 
+    @Test
+    void neverUnlinksASymlinkedDirectoryWhoseTargetHoldsFiles() throws Exception {
+        final Path root = Files.createDirectories(this.temp.resolve("root"));
+        final Path volume = Files.createDirectories(this.temp.resolve("volume/repo"));
+        Files.write(volume.resolve("kept.txt"), "x".getBytes(StandardCharsets.UTF_8));
+        Files.createSymbolicLink(root.resolve("repo"), volume);
+        final Storage storage = new FileStorage(root);
+        storage.save(new Key.From("repo/sub/a.txt"), FileStorageEmptyDirectoriesTest.body()).join();
+        storage.delete(new Key.From("repo/sub/a.txt")).join();
+        storage.deleteEmptyDirectories(new Key.From("repo")).join();
+        storage.deleteEmptyDirectories(Key.ROOT).join();
+        MatcherAssert.assertThat(
+            "the symlinked repository directory must stay",
+            Files.isSymbolicLink(root.resolve("repo")), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the target's files must stay reachable through the storage",
+            storage.exists(new Key.From("repo/kept.txt")).join(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void neverUnlinksASymlinkedDirectoryInsideThePrunedSubtree() throws Exception {
+        final Path root = Files.createDirectories(this.temp.resolve("root"));
+        final Path volume = Files.createDirectories(this.temp.resolve("volume/big"));
+        Files.write(volume.resolve("kept.txt"), "x".getBytes(StandardCharsets.UTF_8));
+        Files.createDirectories(root.resolve("repo/.add"));
+        Files.createSymbolicLink(root.resolve("repo/big"), volume);
+        final Storage storage = new FileStorage(root);
+        storage.deleteEmptyDirectories(new Key.From("repo")).join();
+        MatcherAssert.assertThat(
+            "the symlink inside the subtree must stay",
+            Files.isSymbolicLink(root.resolve("repo/big")), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the empty directory beside it must be gone",
+            Files.exists(root.resolve("repo/.add")), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the target's files must stay reachable through the storage",
+            storage.exists(new Key.From("repo/big/kept.txt")).join(), new IsEqual<>(true)
+        );
+    }
+
     private static Content body() {
         return new Content.From("x".getBytes(StandardCharsets.UTF_8));
     }

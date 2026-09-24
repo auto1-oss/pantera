@@ -117,6 +117,30 @@ final class VertxFileStorageTreeTest {
         }
     }
 
+    @Test
+    void deleteNeverUnlinksASymlinkedRepositoryDirectory() throws Exception {
+        final Path root = Files.createDirectories(this.temp.resolve("root"));
+        final Path volume = Files.createDirectories(this.temp.resolve("volume/repo"));
+        Files.write(volume.resolve("kept.txt"), "x".getBytes(StandardCharsets.UTF_8));
+        Files.createSymbolicLink(root.resolve("repo"), volume);
+        final Storage storage = new VertxFileStorage(root, VERTX);
+        storage.save(new Key.From("repo/sub/a.txt"), VertxFileStorageTreeTest.body()).join();
+        storage.delete(new Key.From("repo/sub/a.txt")).join();
+        MatcherAssert.assertThat(
+            "the symlinked repository directory must survive a sibling delete",
+            Files.isSymbolicLink(root.resolve("repo")), new IsEqual<>(true)
+        );
+        storage.deleteEmptyDirectories(new Key.From("repo")).join();
+        MatcherAssert.assertThat(
+            "the symlinked repository directory must survive a prune",
+            Files.isSymbolicLink(root.resolve("repo")), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the target's files must stay reachable through the storage",
+            storage.exists(new Key.From("repo/kept.txt")).join(), new IsEqual<>(true)
+        );
+    }
+
     private static Content body() {
         return new Content.From("x".getBytes(StandardCharsets.UTF_8));
     }

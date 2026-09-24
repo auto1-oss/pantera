@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.PanteraIOException;
 import java.io.IOException;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -22,8 +23,13 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Removes empty directories of a filesystem storage, never files and never
- * the storage root itself.
+ * Removes empty directories of a filesystem storage, never files, never
+ * symbolic links and never the storage root itself.
+ *
+ * <p>A symlinked directory (e.g. a repository directory placed on another
+ * volume) is always kept, whatever its target holds: {@code Files.delete}
+ * unlinks a symlink without checking the target, so it is never passed one,
+ * and an upward prune stops at the link.</p>
  *
  * <p>Blocking: callers run it off the event loop, on the storage's own
  * blocking executor.</p>
@@ -64,10 +70,10 @@ public final class EmptyDirs {
                 String.format("Entry path is out of storage: %s", start)
             );
         }
-        if (Files.isDirectory(top)) {
+        if (EmptyDirs.isRealDirectory(top)) {
             final List<Path> dirs;
             try (Stream<Path> walk = Files.walk(top)) {
-                dirs = walk.filter(Files::isDirectory)
+                dirs = walk.filter(EmptyDirs::isRealDirectory)
                     .sorted(Comparator.comparingInt(Path::getNameCount).reversed())
                     .collect(Collectors.toList());
             } catch (final NoSuchFileException gone) {
@@ -100,15 +106,16 @@ public final class EmptyDirs {
     }
 
     /**
-     * Delete a directory if it exists and is empty.
+     * Delete a directory if it exists, is empty and is not a symlink.
      * @param dir Directory
-     * @return True if the directory is gone (deleted now or already absent)
+     * @return True if the directory is gone (deleted now or already absent);
+     *  false if it holds entries, is a symlink or is not a directory
      */
     private static boolean deleteIfEmpty(final Path dir) {
         boolean gone;
-        if (!Files.exists(dir)) {
+        if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
             gone = true;
-        } else if (Files.isDirectory(dir)) {
+        } else if (EmptyDirs.isRealDirectory(dir)) {
             try {
                 Files.delete(dir);
                 gone = true;
@@ -123,5 +130,14 @@ public final class EmptyDirs {
             gone = false;
         }
         return gone;
+    }
+
+    /**
+     * A directory that is not itself a symbolic link.
+     * @param path Path
+     * @return True for a real directory
+     */
+    private static boolean isRealDirectory(final Path path) {
+        return Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS);
     }
 }

@@ -549,7 +549,7 @@ curl -X PUT http://localhost:8086/api/v1/repositories/maven-central \
 
 Delete a repository and its data.
 
-The repository's own data (everything under `<storage root>/<name>/`, including directories left empty on a filesystem storage) is removed first, then its rows in the search index, then its configuration; uploads still waiting to be indexed when the delete runs are not indexed afterwards; other repositories that share the same storage root are not touched. The storage is found the same way requests are served, including a storage given as an alias name (global or repository-scoped, from the database or `_storages.yaml`). A group repository has no data of its own, so only its configuration is removed. Re-creating a repository with the same name starts empty.
+The repository's own data (everything under `<storage root>/<name>/`, including directories left empty on a filesystem storage; a symbolic link to a directory is kept) is removed first, then its rows in the search index, then its configuration; uploads still waiting to be indexed when the delete runs are not indexed afterwards; other repositories that share the same storage root are not touched. The storage is found the same way requests are served, including a storage given as an alias name (global or repository-scoped, from the database or `_storages.yaml`). A group repository has no data of its own, so only its configuration is removed. Re-creating a repository with the same name starts empty.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:delete`
@@ -1530,7 +1530,7 @@ Delete an entire package folder (directory and all contents) from a repository. 
 Both delete endpoints keep what is derived from storage consistent, and write an `artifact_delete` audit record:
 
 - the search index rows indexed from the deleted path are removed (search and locate stop returning them), including rows of uploads to that path still waiting to be indexed when the delete ran;
-- on a filesystem storage, directories left empty by the delete are removed;
+- on a filesystem storage, directories left empty by the delete are removed (a symbolic link to a directory, e.g. a repository directory placed on another volume, is never removed);
 - in a local `maven`/`gradle` repository, versions that no longer exist are removed from the artifact's `maven-metadata.xml` (`latest`/`release` move to the highest remaining version, checksums are rewritten, a metadata file left with no version is removed);
 - in a local `php` repository, versions whose archive was deleted are removed from `p2/<vendor>/<package>.json`;
 - in a local `pypi` repository, the cached simple indexes are dropped and regenerated from storage on the next request.
