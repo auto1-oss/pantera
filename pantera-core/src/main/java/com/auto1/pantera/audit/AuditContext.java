@@ -10,6 +10,9 @@
  */
 package com.auto1.pantera.audit;
 
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
+
 /**
  * Correlation context threaded explicitly into every {@link AuditLogger} call.
  *
@@ -41,4 +44,23 @@ public record AuditContext(String traceId, String clientIp) {
      * there genuinely is none.
      */
     public static final AuditContext NONE = new AuditContext(null, null);
+
+    /**
+     * This context as the internal {@code X-Pantera-Ctx-*} request headers, for
+     * a slice that re-enters another slice on the same request's behalf: the
+     * callee restores the request's trace id / client IP from these headers on
+     * its worker threads instead of inheriting a pooled thread's stale MDC.
+     *
+     * @return Fresh headers carrying the non-empty fields of this context
+     */
+    public Headers requestHeaders() {
+        final Headers out = new Headers();
+        if (this.traceId != null && !this.traceId.isEmpty()) {
+            out.add(EcsLoggingSlice.CTX_TRACE_ID_HEADER, this.traceId);
+        }
+        if (this.clientIp != null && !this.clientIp.isEmpty()) {
+            out.add(EcsLoggingSlice.CTX_CLIENT_IP_HEADER, this.clientIp);
+        }
+        return out;
+    }
 }

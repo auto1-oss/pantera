@@ -18,7 +18,6 @@ import com.auto1.pantera.composer.MinifiedMetadata;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
-import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -192,7 +191,7 @@ public final class ComposerPackageMetadataHandler {
         final String pkg = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a Composer metadata path: " + path)
         );
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+        return this.upstream.response(line, auditCtx.requestHeaders(), Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->

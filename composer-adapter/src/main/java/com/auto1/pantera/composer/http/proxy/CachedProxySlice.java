@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.asto.cache.Cache;
@@ -63,6 +64,7 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
+import org.slf4j.MDC;
 
 /**
  * Composer proxy slice — pure cache + URL-rewrite + primary-artifact
@@ -214,7 +216,13 @@ final class CachedProxySlice implements Slice {
     }
 
     @Override
-    public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
+    public CompletableFuture<Response> response(
+        final RequestLine line, final Headers rqheaders, final Content body
+    ) {
+        // Captured synchronously on the caller's thread, before any async
+        // hop: continuations (and the stale-while-revalidate refresh) run on
+        // pooled threads that may still hold an earlier request's MDC.
+        final Headers headers = CachedProxySlice.withRequestContext(rqheaders);
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         // GET requests should have empty body, but we must consume it to complete the request
         return body.asBytesFuture().thenCompose(ignored -> {
@@ -340,56 +348,113 @@ final class CachedProxySlice implements Slice {
         final String name
     ) {
         if (this.refreshing.add(name)) {
+            // The headers carry the request context captured in response();
+            // the pool worker that runs the refresh may still hold an
+            // earlier, unrelated request's MDC, so that is cleared first.
+            final String trace = CachedProxySlice.traceId(headers);
             CompletableFuture.runAsync(() -> {
+                MDC.remove(EcsMdc.TRACE_ID);
+                MDC.remove(EcsMdc.CLIENT_IP);
                 RequestContextHeaders.bindToMdc(headers);
                 try {
-                    final Response refreshed =
-                        this.fetchThroughCache(line, headers, name, false).join();
-                    refreshed.body().discard().join();
-                    if (refreshed.status().success()) {
-                        EcsLogger.debug("com.auto1.pantera.composer")
-                            .message("Background refresh completed")
-                            .eventCategory("database")
-                            .eventAction("stale_while_revalidate")
-                            .eventOutcome("success")
-                            .field("repository.name", this.rname)
-                            .field("package.name", name)
-                            .field("trace.id", CachedProxySlice.traceId(headers))
-                            .field("log.source", "application")
-                            .log();
-                    } else {
-                        EcsLogger.warn("com.auto1.pantera.composer")
-                            .message(
-                                "Background refresh of stale metadata failed (status "
-                                    + refreshed.status().code()
-                                    + "); the cached copy stays served"
-                            )
-                            .eventCategory("database")
-                            .eventAction("stale_while_revalidate")
-                            .eventOutcome("failure")
-                            .field("event.reason", "upstream_unavailable")
-                            .field("repository.name", this.rname)
-                            .field("package.name", name)
-                            .field("trace.id", CachedProxySlice.traceId(headers))
-                            .field("log.source", "application")
-                            .log();
-                    }
-                } catch (final Exception err) {
-                    EcsLogger.warn("com.auto1.pantera.composer")
-                        .message("Background refresh of stale metadata failed; the cached copy stays served")
-                        .eventCategory("database")
-                        .eventAction("stale_while_revalidate")
-                        .eventOutcome("failure")
-                        .field("repository.name", this.rname)
-                        .field("package.name", name)
-                        .field("trace.id", CachedProxySlice.traceId(headers))
-                        .error(err)
-                        .field("log.source", "application")
-                        .log();
+                    this.refresh(line, headers, name, trace);
                 } finally {
                     this.refreshing.remove(name);
+                    MDC.remove(EcsMdc.TRACE_ID);
+                    MDC.remove(EcsMdc.CLIENT_IP);
                 }
             });
+        }
+    }
+
+    /**
+     * Run one stale-while-revalidate refresh and log its outcome.
+     *
+     * @param line Request line
+     * @param headers Request headers carrying the request context
+     * @param name Package name
+     * @param trace Trace id of the originating request, or null
+     */
+    private void refresh(
+        final RequestLine line,
+        final Headers headers,
+        final String name,
+        final String trace
+    ) {
+        try {
+            final Response refreshed =
+                this.fetchThroughCache(line, headers, name, false).join();
+            refreshed.body().discard().join();
+            RequestContextHeaders.bindToMdc(headers);
+            if (refreshed.status().success()) {
+                EcsLogger.debug("com.auto1.pantera.composer")
+                    .message("Background refresh completed")
+                    .eventCategory("database")
+                    .eventAction("stale_while_revalidate")
+                    .eventOutcome("success")
+                    .field("repository.name", this.rname)
+                    .field("package.name", name)
+                    .field("trace.id", trace)
+                    .field("log.source", "application")
+                    .log();
+            } else {
+                EcsLogger.warn("com.auto1.pantera.composer")
+                    .message(
+                        "Background refresh of stale metadata failed (status "
+                            + refreshed.status().code()
+                            + "); the cached copy stays served"
+                    )
+                    .eventCategory("database")
+                    .eventAction("stale_while_revalidate")
+                    .eventOutcome("failure")
+                    .field("event.reason", "upstream_unavailable")
+                    .field("repository.name", this.rname)
+                    .field("package.name", name)
+                    .field("trace.id", trace)
+                    .field("log.source", "application")
+                    .log();
+            }
+        } catch (final Exception err) {
+            RequestContextHeaders.bindToMdc(headers);
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("Background refresh of stale metadata failed; the cached copy stays served")
+                .eventCategory("database")
+                .eventAction("stale_while_revalidate")
+                .eventOutcome("failure")
+                .field("repository.name", this.rname)
+                .field("package.name", name)
+                .field("trace.id", trace)
+                .error(err)
+                .field("log.source", "application")
+                .log();
+        }
+    }
+
+    /**
+     * Request headers with the internal request-context headers filled in
+     * from the calling thread's MDC when the caller did not supply them.
+     *
+     * @param headers Request headers
+     * @return Copy of the headers carrying the request context when known
+     */
+    private static Headers withRequestContext(final Headers headers) {
+        final Headers out = headers.copy();
+        CachedProxySlice.fill(out, EcsLoggingSlice.CTX_TRACE_ID_HEADER, EcsMdc.TRACE_ID);
+        CachedProxySlice.fill(out, EcsLoggingSlice.CTX_CLIENT_IP_HEADER, EcsMdc.CLIENT_IP);
+        return out;
+    }
+
+    /**
+     * Add a context header from the MDC when the headers lack it.
+     *
+     * @param headers Headers to fill
+     * @param header Context header name
+     * @param key MDC key
+     */
+    private static void fill(final Headers headers, final String header, final String key) {
+        final String mdc = MDC.get(key);
+        if (headers.find(header).isEmpty() && mdc != null && !mdc.isEmpty()) {
+            headers.add(header, mdc);
         }
     }
 
@@ -821,6 +886,7 @@ final class CachedProxySlice implements Slice {
                     return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
                         .thenCompose(response -> {
                             final long duration = System.currentTimeMillis() - startTime;
+                            RequestContextHeaders.bindToMdc(headers);
                             EcsLogger.debug("com.auto1.pantera.composer")
                                 .message("Remote response received")
                                 .eventCategory("web")
