@@ -132,6 +132,34 @@ final class EcsLoggingSliceCredentialRedactionTest {
         );
     }
 
+    @Test
+    @DisplayName("JWT payload+signature split off by conda after the repo name is never logged")
+    void condaSplitJwtFragmentNeverLogged() {
+        final String fragment = JWT.substring(JWT.indexOf('.'));
+        final String header = JWT.substring(0, JWT.indexOf('.'));
+        this.send(
+            "GET",
+            "/t/" + header + "/test_prefix/api/conda" + fragment + "/noarch/repodata.json",
+            404
+        );
+        EcsLogger.info("com.auto1.pantera.settings")
+            .message("Repository not found in configuration")
+            .field("repository.name", "conda" + fragment)
+            .log();
+        MatcherAssert.assertThat(
+            "some record must have been captured",
+            this.capture.count() > 0, new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "no record may contain the JWT payload",
+            this.capture.anyContains(JWT.split("\\.")[1]), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "no record may contain the JWT signature",
+            this.capture.anyContains(JWT.split("\\.")[2]), new IsEqual<>(false)
+        );
+    }
+
     private void send(final String method, final String path, final int status) {
         final Slice origin = (line, headers, body) -> {
             EcsLogger.error("com.auto1.pantera.test")

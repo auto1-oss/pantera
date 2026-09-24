@@ -100,6 +100,38 @@ final class LogSanitizerPathCredentialsTest {
     }
 
     @Test
+    void redactsJwtFragmentsSplitAcrossThePath() {
+        final int dot = JWT.indexOf('.');
+        MatcherAssert.assertThat(
+            LogSanitizer.sanitizeUrl(
+                "/t/" + JWT.substring(0, dot) + "/test_prefix/api/conda"
+                    + JWT.substring(dot) + "/noarch/repodata.json"
+            ),
+            new IsEqual<>(
+                "/t/***REDACTED***/test_prefix/api/conda.***REDACTED***/noarch/repodata.json"
+            )
+        );
+    }
+
+    @Test
+    void redactsLoneJwtPayloadSegment() {
+        final String payload = JWT.split("\\.")[1];
+        MatcherAssert.assertThat(
+            LogSanitizer.sanitizeText("repository conda." + payload + " not found"),
+            new IsEqual<>("repository conda.***REDACTED*** not found")
+        );
+    }
+
+    @Test
+    void keepsWordsThatMerelyContainEyj() {
+        final String path = "/maven/com/monkeyJumperLibraries/1.0/monkeyJumperLibraries-1.0.jar";
+        MatcherAssert.assertThat(
+            LogSanitizer.sanitizeUrl(path),
+            new IsEqual<>(path)
+        );
+    }
+
+    @Test
     void redactsUserinfo() {
         final String out = LogSanitizer.sanitizeUrl(
             "https://alice:s3cr3t@repo.example.com/path/a.jar"

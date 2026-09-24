@@ -247,6 +247,11 @@ public final class EcsLogger {
     public EcsLogger field(final String key, final Object value) {
         if (value instanceof String str && URL_FIELDS.contains(key)) {
             this.fields.put(key, LogSanitizer.sanitizeUrl(str));
+        } else if (value instanceof String str) {
+            // Any string field can echo request-derived text (a repository
+            // name parsed from the path, an upstream message), so credentials
+            // a URL may carry are masked whichever field they land in.
+            this.fields.put(key, LogSanitizer.sanitizeText(str));
         } else if (value != null) {
             this.fields.put(key, value);
         }

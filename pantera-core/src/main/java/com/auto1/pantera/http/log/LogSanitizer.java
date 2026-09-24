@@ -90,11 +90,17 @@ public final class LogSanitizer {
     );
 
     /**
-     * A JWT anywhere in the text (header.payload.signature; header and
-     * payload are base64url JSON objects, so they start with {@code eyJ}).
+     * A JWT, or any fragment of one, anywhere in the text. JWT header and
+     * payload are base64url JSON objects, so each starts with {@code eyJ}; a
+     * match is such a segment plus up to two dot-joined segments after it.
+     * This also catches the payload.signature tail left behind when a client
+     * splits a raw token at its first dot (conda moves it after the repository
+     * name, next to a {@code /t/} segment holding only the constant header).
+     * The segment must start at a token boundary so ordinary words that merely
+     * contain {@code eyJ} stay readable.
      */
     private static final Pattern JWT_PATTERN = Pattern.compile(
-        "eyJ[A-Za-z0-9_-]{4,}\\.eyJ[A-Za-z0-9_-]{2,}\\.[A-Za-z0-9_-]*"
+        "(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{16,}(?:\\.[A-Za-z0-9_-]+){0,2}"
     );
 
     /**
