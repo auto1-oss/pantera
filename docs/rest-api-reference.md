@@ -2273,10 +2273,93 @@ while a member lists it, or when it is `blocked` yet still listed by the
 repository holding the block. `metadata.status` is `0` with `metadata.error`
 when the in-process request failed.
 
+When nothing is known under the exact name -- no version and no repository
+answering `200` for its metadata -- the response also carries `didYouMean`:
+up to 5 suggestions in the shape of
+[`GET /api/v1/cooldown/inspect/suggest`](#get-apiv1cooldowninspectsuggest),
+found by searching for the name (then, if that finds nothing, for its parts
+split at `- _ . / : @`). The typed name itself is never suggested.
+
+```json
+{
+  "package": "jackson-databind",
+  "repoType": "maven",
+  "repos": [],
+  "versions": [],
+  "didYouMean": [
+    {"package": "com.fasterxml.jackson.core:jackson-databind", "display": "com.fasterxml.jackson.core:jackson-databind", "repoType": "maven", "sources": ["index"], "repos": ["maven_proxy"]}
+  ]
+}
+```
+
 **curl example:**
 
 ```bash
 curl "http://localhost:8086/api/v1/cooldown/inspect?repoType=npm&package=openai" \
+  -H "Authorization: Bearer eyJhbGciOi..."
+```
+
+---
+
+### GET /api/v1/cooldown/inspect/suggest
+
+Type-ahead for the package inspector: package names that contain what the
+operator typed, in the form `GET /api/v1/cooldown/inspect` accepts. Names come
+from the artifacts index and from the live and archived cooldown records.
+
+The text is split on whitespace into words; a package matches when every word
+is a case-insensitive substring of its stored name or of its inspector form
+(`jackson databind`, `http5`, `@types node`, `core:jackson`). A single word is
+the same substring match (`ILIKE '%word%'`) the cooldown list `search` and
+the package search use, so every package they return for that text is
+suggested too. Results are ranked exact name, exact last segment (maven
+artifactId, npm name after the scope), prefix, word at the start of a name
+part, then any substring; ties alphabetically. One entry per package, merged
+over repositories and sources.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin` (admin only)
+
+**Query Parameters:**
+
+| Parameter  | Type    | Required | Description |
+|------------|---------|----------|-------------|
+| `q`        | string  | yes      | Text to search for (at most 200 characters) |
+| `repoType` | string  | no       | Format family or repository type (`npm`, `npm-proxy`, `pypi`, ...); `maven` and `gradle` both cover every maven-layout repository. Omit to search every format |
+| `limit`    | integer | no       | Maximum suggestions, default `20`, capped at `50` |
+
+**Response (200):**
+
+```json
+{
+  "suggestions": [
+    {
+      "package": "com.fasterxml.jackson.core:jackson-databind",
+      "display": "com.fasterxml.jackson.core:jackson-databind",
+      "repoType": "maven",
+      "sources": ["index", "cooldown"],
+      "repos": ["maven_group", "maven_proxy"]
+    }
+  ],
+  "node": "pantera-1"
+}
+```
+
+| Field      | Description |
+|------------|-------------|
+| `package`  | Name to pass to `inspect`: maven/gradle `groupId:artifactId` (derived from the index path), pypi PEP 503 normalised, docker the image name as stored (`library/ubuntu`), others as stored. A maven name known only in the dotted form with no index path stays dotted |
+| `display`  | Human form; for an unresolved maven name it adds `(groupId:artifactId not in the index)` |
+| `repoType` | Format family of the repositories it was found in |
+| `sources`  | `index` (artifacts index) and/or `cooldown` (live or archived cooldown records) |
+| `repos`    | Repositories it was found in, sorted |
+
+Returns `400` for a missing or over-long `q` or a non-numeric or non-positive
+`limit`. Without a database the list is empty.
+
+**curl example:**
+
+```bash
+curl "http://localhost:8086/api/v1/cooldown/inspect/suggest?repoType=maven&q=jackson%20databind" \
   -H "Authorization: Bearer eyJhbGciOi..."
 ```
 

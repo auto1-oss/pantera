@@ -100,6 +100,15 @@ public final class PackageInspector {
     }
 
     /**
+     * Node answering.
+     *
+     * @return Node name
+     */
+    public String node() {
+        return this.diag.node();
+    }
+
+    /**
      * Repositories an inspection covers.
      *
      * @param family Format family

@@ -234,6 +234,81 @@ final class CacheToolsRoutesTest {
     }
 
     @Test
+    void suggestAnswersPackagesInTheInspectorForm() throws Exception {
+        final HttpResponse<Buffer> resp = this.call(
+            HttpMethod.GET, "/api/v1/cooldown/inspect/suggest?repoType=npm&q=LODA", null
+        );
+        final JsonObject body = resp.bodyAsJsonObject();
+        MatcherAssert.assertThat(
+            "status, node and the matching package",
+            resp.statusCode() + ":" + body.getString("node") + ":"
+                + body.getJsonArray("suggestions").getJsonObject(0).getString("package"),
+            new IsEqual<>("200:node-t:lodash")
+        );
+        MatcherAssert.assertThat(
+            "every field the UI renders",
+            body.getJsonArray("suggestions").getJsonObject(0).fieldNames(),
+            new IsEqual<>(java.util.Set.of("package", "display", "repoType", "sources", "repos"))
+        );
+    }
+
+    @Test
+    void suggestSearchesEveryTypeWithoutARepoType() throws Exception {
+        MatcherAssert.assertThat(
+            this.call(HttpMethod.GET, "/api/v1/cooldown/inspect/suggest?q=dash", null)
+                .bodyAsJsonObject().getJsonArray("suggestions").size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void suggestValidatesItsParameters() throws Exception {
+        MatcherAssert.assertThat(
+            "missing q",
+            this.call(HttpMethod.GET, "/api/v1/cooldown/inspect/suggest?repoType=npm", null)
+                .statusCode(),
+            new IsEqual<>(400)
+        );
+        MatcherAssert.assertThat(
+            "bad limit",
+            this.call(HttpMethod.GET, "/api/v1/cooldown/inspect/suggest?q=lo&limit=x", null)
+                .statusCode(),
+            new IsEqual<>(400)
+        );
+    }
+
+    @Test
+    void inspectOfAnUnknownNameOffersDidYouMean() throws Exception {
+        final JsonObject body = this.call(
+            HttpMethod.GET, "/api/v1/cooldown/inspect?repoType=npm&package=loda", null
+        ).bodyAsJsonObject();
+        MatcherAssert.assertThat(
+            body.getJsonArray("didYouMean").getJsonObject(0).getString("package"),
+            new IsEqual<>("lodash")
+        );
+    }
+
+    @Test
+    void nonAdminsCannotSuggest(final Vertx vertx) throws Exception {
+        final Policy<PermissionCollection> none = user -> new Permissions();
+        final HttpServer denied = CacheToolsRoutesTest.serve(vertx, this.topology, none);
+        try {
+            MatcherAssert.assertThat(
+                WebClient.create(vertx)
+                    .request(
+                        HttpMethod.GET, denied.actualPort(), "localhost",
+                        "/api/v1/cooldown/inspect/suggest?repoType=npm&q=lo"
+                    )
+                    .send().toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS)
+                    .statusCode(),
+                new IsEqual<>(403)
+            );
+        } finally {
+            denied.close();
+        }
+    }
+
+    @Test
     void nonAdminsAreRefused(final Vertx vertx) throws Exception {
         final Policy<PermissionCollection> none = user -> new Permissions();
         final HttpServer denied = CacheToolsRoutesTest.serve(vertx, this.topology, none);
@@ -298,11 +373,40 @@ final class CacheToolsRoutesTest {
             new PackageRefresher(
                 inspector, negative, Optional::empty,
                 com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance()
-            )
+            ),
+            new PackageSuggester(new NpmNames())
         ).register(router);
         new TroubleshootResource(policy, new Troubleshooter(diag, negative, inspector))
             .register(router);
         return vertx.createHttpServer().requestHandler(router).listen(0)
             .toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Suggestion source knowing one npm package.
+     *
+     * @since 2.2.9
+     */
+    private static final class NpmNames implements SuggestLookup {
+
+        @Override
+        public java.util.List<SuggestRow> rows(
+            final java.util.Collection<String> families, final SuggestQuery query, final int limit
+        ) {
+            final SuggestRow row = new SuggestRow(SuggestRow.INDEX, "npm-proxy", "npm_proxy", "lodash", null);
+            final java.util.List<SuggestRow> out;
+            if (query.matches(java.util.List.of(row.name()))
+                && (families.isEmpty() || families.contains("npm"))) {
+                out = java.util.List.of(row);
+            } else {
+                out = java.util.List.of();
+            }
+            return out;
+        }
+
+        @Override
+        public java.util.Map<String, String> mavenPaths(final java.util.Collection<String> names) {
+            return java.util.Map.of();
+        }
     }
 }

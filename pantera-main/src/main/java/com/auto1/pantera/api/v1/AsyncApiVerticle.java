@@ -659,11 +659,14 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry envelopes =
             com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance();
         final com.auto1.pantera.api.v1.admin.CooldownLookup lookup;
+        final com.auto1.pantera.api.v1.admin.SuggestLookup names;
         if (this.dataSource == null) {
             lookup = com.auto1.pantera.api.v1.admin.CooldownLookup.NONE;
+            names = com.auto1.pantera.api.v1.admin.SuggestLookup.NONE;
         } else {
             lookup = new com.auto1.pantera.cooldown.CooldownRepository(this.dataSource)
                 ::findForPackage;
+            names = new com.auto1.pantera.api.v1.admin.JdbcSuggestLookup(this.dataSource);
         }
         final com.auto1.pantera.api.v1.admin.PackageInspector inspector =
             new com.auto1.pantera.api.v1.admin.PackageInspector(
@@ -677,7 +680,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             new com.auto1.pantera.api.v1.admin.PackageRefresher(
                 inspector, negative, envelopes::sharedCache,
                 com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance()
-            )
+            ),
+            new com.auto1.pantera.api.v1.admin.PackageSuggester(names)
         ).register(router);
         new com.auto1.pantera.api.v1.admin.TroubleshootResource(
             this.security.policy(),
