@@ -40,6 +40,8 @@ This release contains security hardening and a broad set of bug fixes across for
   ([@aydasraf](https://github.com/aydasraf))
 - **Set Me Up replaces Quick Setup** — ready-to-paste client configuration for every supported format, from the sidebar (`/setup`), a repository's detail page or the repository list. Pick the repository to resolve from and a local repository to publish to; generate a short-lived API token inline (or paste your own) and it is filled into every snippet without being stored in the browser. Most formats offer several clients (for example npm, pnpm and Yarn; pip, uv and Poetry; Docker and Podman), each with Configure / Resolve / Publish / Verify steps, copy and download buttons, and shareable deep links.
   ([@aydasraf](https://github.com/aydasraf))
+- **Cache troubleshooting tools.** The Negative Cache page is rebuilt on a cluster-wide view: entries from the shared Valkey tier and this node, free-text package search that matches any spelling, per-entry and per-package clear on every node, a URL check that lists every key a request can be shadowed by, and exact counts. The Cooldown page gains an **Inspect package** tab that compares each version's cooldown state with what every proxy and group actually serves, flags versions that are released but still hidden, and can refresh a package's cached metadata on every node. A new **Troubleshoot** page explains why a repository URL fails or is stale (group member walk, negative cache, cooldown, metadata visibility, circuit breakers) with one-click fixes.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔧 Bug fixes
 
@@ -141,6 +143,8 @@ This release contains security hardening and a broad set of bug fixes across for
 - **REST deletes keep every format index consistent.** Deleting an artifact or package through the REST API now removes it from the format index of local conda, gem, npm, helm, NuGet, Go and Hex repositories (for gems, `latest_specs` falls back to the highest remaining version), and conda, gem, helm and Hex index updates no longer race with concurrent uploads. Deleting a path whose files are already gone removes its search rows; a path that is neither stored nor indexed answers `404`. Delete Debian and RPM packages with an HTTP `DELETE` on the repository so their indexes are updated.
   ([@aydasraf](https://github.com/aydasraf))
 - **Search reindex does real work.** `POST /api/v1/search/reindex` now removes index rows of deleted repositories and rebuilds file-system repositories from storage, dropping rows for files that are gone; a concurrent request answers `409`, and the new `GET /api/v1/search/reindex` reports progress. The backfill CLI jar is now `pantera-backfill-<version>-cli.jar`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Negative-cache and PyPI metadata staleness across nodes.** Uploading an artifact on one node now clears matching negative-cache entries another node wrote to Valkey instead of leaving the 404 until its TTL, and a refreshed PyPI simple index now invalidates the project's cooldown-filtered metadata so newly visible versions appear right away.
   ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
