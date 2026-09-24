@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.auth.JwtTokens;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.MainSlice;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.auth.AuthUser;
@@ -45,6 +46,8 @@ import org.hamcrest.core.IsNot;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Client requests through the real {@link RepositorySlices} wiring on the
@@ -102,6 +105,75 @@ final class FormatClientWiringTest {
         MatcherAssert.assertThat(
             "status", rsp.status(), new IsEqual<>(RsStatus.OK)
         );
+        MatcherAssert.assertThat(
+            "body", rsp.body().asString(), new IsEqual<>("package bytes")
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/my-conda", "/my-conda/"})
+    void condaBaseUrlHeadAnswersWithoutCredentials(final String path) throws Exception {
+        // anaconda-client's check_server HEADs the base URL before
+        // `anaconda login`, i.e. without credentials, even on a private repo.
+        MatcherAssert.assertThat(
+            this.slices(
+                "my-conda", this.repo("conda").add("url", "http://localhost/my-conda")
+            ).slice(new Key.From("my-conda"), 8080).response(
+                new RequestLine(RqMethod.HEAD, path), Headers.EMPTY, Content.EMPTY
+            ).get(30, TimeUnit.SECONDS).status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+    }
+
+    @Test
+    void condaPrivateRepoStillRefusesAnonymousReads() throws Exception {
+        final RepositorySlices slices = this.slices(
+            "my-conda", this.repo("conda").add("url", "http://localhost/my-conda")
+        );
+        MatcherAssert.assertThat(
+            "anonymous HEAD of a file",
+            slices.slice(new Key.From("my-conda"), 8080).response(
+                new RequestLine(RqMethod.HEAD, "/my-conda/noarch/repodata.json"),
+                Headers.EMPTY, Content.EMPTY
+            ).get(30, TimeUnit.SECONDS).status(),
+            new IsEqual<>(RsStatus.UNAUTHORIZED)
+        );
+        MatcherAssert.assertThat(
+            "anonymous GET of the base URL",
+            slices.slice(new Key.From("my-conda"), 8080).response(
+                new RequestLine(RqMethod.GET, "/my-conda"), Headers.EMPTY, Content.EMPTY
+            ).get(30, TimeUnit.SECONDS).status(),
+            new IsEqual<>(RsStatus.UNAUTHORIZED)
+        );
+    }
+
+    @Test
+    void condaCliTokenInFrontOfThePathServesPackage() throws Exception {
+        // The conda CLI turns the channel <base>/t/<token> into requests for
+        // /t/<token>/<base path>/...; it keeps only [A-Za-z0-9-] of the
+        // token, so the JWT is given to it hex-encoded.
+        new FileStorage(this.tmp).save(
+            new Key.From("my-conda", "linux-64", "pkg-1.0-0.tar.bz2"),
+            new Content.From("package bytes".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        final Response rsp = new MainSlice(
+            new TestSettings(),
+            this.slices(
+                "my-conda", this.repo("conda").add("url", "http://localhost/my-conda")
+            )
+        ).response(
+            new RequestLine(
+                RqMethod.GET,
+                String.format(
+                    "/t/%s/api/my-conda/linux-64/pkg-1.0-0.tar.bz2",
+                    java.util.HexFormat.of().formatHex(
+                        this.jwt.getBytes(StandardCharsets.US_ASCII)
+                    )
+                )
+            ),
+            Headers.EMPTY, Content.EMPTY
+        ).get(30, TimeUnit.SECONDS);
+        MatcherAssert.assertThat("status", rsp.status(), new IsEqual<>(RsStatus.OK));
         MatcherAssert.assertThat(
             "body", rsp.body().asString(), new IsEqual<>("package bytes")
         );

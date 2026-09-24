@@ -58,6 +58,8 @@ Or upload with curl (answers `201`):
 curl -f -u 'your-username:your-api-token' --data-binary @my-gem-0.1.0.gem http://pantera-host:8080/my-gem/api/v1/gems
 ```
 
+A file that cannot be read as a gem (for example a truncated upload) answers `400` with the reason in the body.
+
 <details>
 <summary>Server-Side Repository Configuration</summary>
 
@@ -195,7 +197,7 @@ curl -f -u 'your-username:your-api-token' \
   http://pantera-host:8080/my-debian/pool/main/
 ```
 
-The package's `Architecture` must be one of the repository's `Architectures`, otherwise the server answers `400`. The upload path must end with the `.deb` file name (and must not be under `dists/`); a bare directory such as `/main` answers `400`.
+The package's `Architecture` must be one of the repository's `Architectures`, otherwise the server answers `400` and names both. An architecture-independent package (`Architecture: all`) needs `all` in the repository's `Architectures`. A file that is not a Debian package answers `400` with the reason. The upload path must end with the `.deb` file name (and must not be under `dists/`); a bare directory such as `/main` answers `400`.
 
 <details>
 <summary>Server-Side Repository Configuration</summary>
@@ -337,6 +339,13 @@ chmod 600 ~/.netrc
 conda config --prepend channels http://pantera-host:8080/my-conda
 ```
 
+To keep the credential in the channel URL instead, give conda the token hex-encoded: conda keeps only the letters, digits and `-` of a `/t/<token>` channel token, and a Pantera token contains `.` and `_`. Pantera decodes a hex-encoded token:
+
+```bash
+conda config --prepend channels \
+  "http://pantera-host:8080/my-conda/t/$(printf %s 'your-api-token' | xxd -p | tr -d '\n')"
+```
+
 ### Install a Package
 
 ```bash
@@ -355,6 +364,8 @@ curl -fsS -H 'Authorization: token your-api-token' \
   "http://pantera-host:8080/my-conda/$SUBDIR/$(basename "$PKG")"
 ```
 
+A file that is not a conda package answers `400` with the reason.
+
 `anaconda upload` works too. Point anaconda-client at the repository and log in with your Pantera credentials:
 
 ```bash
@@ -363,7 +374,7 @@ anaconda login --username your-username --password your-api-token
 anaconda upload conda-bld/noarch/my-package-1.0.0-0.tar.bz2
 ```
 
-anaconda-client posts the package file without credentials, so the authenticated stage step hands it a single-use upload URL. That URL is valid for 10 minutes, for that one file only, and needs WRITE permission on the repository. It is built from the repository's configured `url`, so `url` must be the address clients use.
+`anaconda login` and `anaconda upload` first check the server with a `HEAD` of the repository URL; that request needs no credentials and answers `200`. anaconda-client posts the package file without credentials, so the authenticated stage step hands it a single-use upload URL. That URL is valid for 10 minutes, for that one file only, and needs WRITE permission on the repository. It is built from the repository's configured `url`, so `url` must be the address clients use.
 
 The URL is single-use across the whole cluster when Pantera runs with Valkey. Without Valkey it is single-use per Pantera instance, which is enough for a single-instance deployment. The URL is a credential until it is used or expires: Pantera masks the `/t/<token>/` segment in its own logs, but a reverse proxy in front of Pantera logs it in full unless you configure it not to.
 
@@ -414,7 +425,7 @@ conan create .
 conan upload my_package/1.0@ -r pantera --all --confirm
 ```
 
-Uploading needs write permission on the repository. The upload URLs Pantera returns are signed for that one repository and expire after one hour, and Conan sends your token with each file it uploads to them. If an upload answers 401, check that the remote URL uses the same scheme, host and port as the URLs in the `upload_urls` response: Conan only sends the token to URLs under the remote's URL.
+Uploading needs write permission on the repository. Conan does not send your token with the files it uploads to a signed URL, so each upload URL Pantera returns is signed for you, for that one file in that one repository and for the host it was requested through, and expires after one hour. Treat it as a credential until then. The file upload is accepted only while you still have write permission. If a file upload answers 401, check that the remote URL uses the same host and port as the URLs in the `upload_urls` response.
 
 <details>
 <summary>Server-Side Repository Configuration</summary>
@@ -478,7 +489,15 @@ curl -fsS -u 'your-username:your-api-token' \
   'http://pantera-host:8080/my-hex/publish?replace=false'
 ```
 
-The release endpoint `POST /my-hex/packages/<name>/releases` (used by `mix hex.publish`) accepts the same tarball.
+`mix hex.publish package` works too; point Hex at the repository with the same Basic credential:
+
+```bash
+HEX_API_URL=http://pantera-host:8080/my-hex \
+HEX_API_KEY="Basic $(printf %s 'your-username:your-api-token' | base64 | tr -d '\n')" \
+  mix hex.publish package --yes
+```
+
+It uses the release endpoint `POST /my-hex/packages/<name>/releases`, which accepts the same tarball and answers in the format the client asked for (an Erlang term for Hex, JSON for `Accept: application/json`). Publishing a version that already exists without `replace=true` (`--replace`) answers `422`; a body that is not a Hex tarball answers `400`.
 
 <details>
 <summary>Server-Side Repository Configuration</summary>

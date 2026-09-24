@@ -15,11 +15,14 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.conda.http.auth.TokenAuth;
 import com.auto1.pantera.conda.http.auth.TokenAuthScheme;
 import com.auto1.pantera.conda.http.auth.TokenAuthSlice;
+import com.auto1.pantera.conda.http.auth.TokenOrBasicAuthScheme;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthScheme;
 import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.AuthzSlice;
 import com.auto1.pantera.http.auth.BasicAuthzSlice;
 import com.auto1.pantera.http.auth.OperationControl;
 import com.auto1.pantera.http.auth.Tokens;
@@ -61,6 +64,18 @@ public final class CondaSlice extends Slice.Wrap {
      */
     private static final Pattern PTRN =
         Pattern.compile(".*/([^/]+/[^/]+(\\.tar\\.bz2|\\.conda))$");
+
+    /**
+     * Repository base URL: the repository root, with or without a slash.
+     * On the main port the anonymous-access gate sees it as {@code /<repo>}.
+     */
+    public static final Pattern ROOT = Pattern.compile("^/?$");
+
+    /**
+     * The same base URL as the anonymous-access gate sees it on the main
+     * port, where the repository name is still part of the path.
+     */
+    public static final Pattern PREFIXED_ROOT = Pattern.compile("^/[^/]+/?$");
 
     /**
      * Ctor.
@@ -109,11 +124,27 @@ public final class CondaSlice extends Slice.Wrap {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final UploadTickets tickets) {
         super(
-            new HeadAsGetSlice(
-                CondaSlice.routes(
-                    new Setup(storage, policy, users, tokens, repo),
-                    new PostStageCommitSlice(url, tickets, repo),
-                    new UploadSlices(new UpdateSlice(storage, events, repo, syncIndex), tickets)
+            new SliceRoute(
+                // anaconda-client's check_server HEADs the repository base URL
+                // (before `anaconda login` without credentials, so the
+                // anonymous-access gate lets exactly this request through) and
+                // refuses to go on unless it answers 2xx. It reveals nothing
+                // about the repository's content.
+                new RtRulePath(
+                    new RtRule.All(MethodRule.HEAD, new RtRule.ByPath(CondaSlice.ROOT)),
+                    new SliceSimple(ResponseBuilder.ok().build())
+                ),
+                new RtRulePath(
+                    RtRule.FALLBACK,
+                    new HeadAsGetSlice(
+                        CondaSlice.routes(
+                            new Setup(storage, policy, users, tokens, repo),
+                            new PostStageCommitSlice(url, tickets, repo),
+                            new UploadSlices(
+                                new UpdateSlice(storage, events, repo, syncIndex), tickets
+                            )
+                        )
+                    )
                 )
             )
         );
@@ -137,7 +168,7 @@ public final class CondaSlice extends Slice.Wrap {
             ),
             new RtRulePath(
                 new RtRule.All(new RtRule.ByPath(".*repodata\\.json$"), MethodRule.GET),
-                new BasicAuthzSlice(new DownloadRepodataSlice(setup.storage), setup.users, read)
+                new AuthzSlice(new DownloadRepodataSlice(setup.storage), setup.readScheme(), read)
             ),
             new RtRulePath(
                 new RtRule.All(
@@ -155,7 +186,7 @@ public final class CondaSlice extends Slice.Wrap {
                 new RtRule.All(
                     new RtRule.ByPath(".*(\\.tar\\.bz2|\\.conda)$"), MethodRule.GET
                 ),
-                new BasicAuthzSlice(new StorageArtifactSlice(setup.storage), setup.users, read)
+                new AuthzSlice(new StorageArtifactSlice(setup.storage), setup.readScheme(), read)
             ),
             new RtRulePath(
                 new RtRule.All(
@@ -266,6 +297,15 @@ public final class CondaSlice extends Slice.Wrap {
             this.users = users;
             this.tokens = tokens;
             this.repo = repo;
+        }
+
+        /**
+         * Authentication of package and repodata downloads without a URL
+         * token: the anaconda token header or HTTP Basic.
+         * @return Auth scheme
+         */
+        AuthScheme readScheme() {
+            return new TokenOrBasicAuthScheme(this.users, this.tokens.auth());
         }
 
         /**

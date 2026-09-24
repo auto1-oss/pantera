@@ -80,7 +80,9 @@ public final class CondaUrlTokenSlice implements Slice {
         if (matcher.matches() && headers.values(Authorization.NAME).isEmpty()) {
             effective = headers.copy().add(
                 Authorization.NAME,
-                String.format("%s %s", TokenAuthScheme.NAME, matcher.group(1))
+                String.format(
+                    "%s %s", TokenAuthScheme.NAME, new CondaUrlToken(matcher.group(1)).value()
+                )
             );
         } else {
             effective = headers;

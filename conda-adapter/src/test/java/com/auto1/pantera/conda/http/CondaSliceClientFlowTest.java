@@ -108,6 +108,78 @@ final class CondaSliceClientFlowTest {
     }
 
     @Test
+    void headOfRepositoryRootAnswersOkWithAndWithoutCredentials() {
+        // anaconda-client's check_server HEADs the configured base URL before
+        // `anaconda login` (no credentials yet) and before every upload.
+        final CondaSlice slice = CondaSliceClientFlowTest.slice(
+            new InMemoryStorage(), Policy.FREE
+        );
+        MatcherAssert.assertThat(
+            "HEAD / with a token",
+            slice.response(
+                new RequestLine(RqMethod.HEAD, "/"),
+                Headers.from(
+                    new Header(
+                        Authorization.NAME,
+                        String.format("token %s", CondaSliceClientFlowTest.TOKEN)
+                    )
+                ),
+                Content.EMPTY
+            ).join().status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "HEAD / without credentials",
+            slice.response(
+                new RequestLine(RqMethod.HEAD, "/"), Headers.EMPTY, Content.EMPTY
+            ).join().status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+    }
+
+    @Test
+    void getOfRepositoryRootIsStillNotFound() {
+        MatcherAssert.assertThat(
+            CondaSliceClientFlowTest.slice(new InMemoryStorage(), Policy.FREE).response(
+                new RequestLine(RqMethod.GET, "/"),
+                Headers.from(new Authorization.Basic("alice", "pw")), Content.EMPTY
+            ).join().status(),
+            new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+    }
+
+    @Test
+    void downloadsPackageWithTokenHeader() {
+        final Response rsp = CondaSliceClientFlowTest.slice(
+            CondaSliceClientFlowTest.stored(), Policy.FREE
+        ).response(
+            new RequestLine(RqMethod.GET, "/linux-64/pkg-1.0-0.tar.bz2"),
+            Headers.from(
+                new Header(
+                    Authorization.NAME, String.format("token %s", CondaSliceClientFlowTest.TOKEN)
+                )
+            ),
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            rsp.body().asString(), new IsEqual<>("package bytes")
+        );
+    }
+
+    @Test
+    void refusesForgedTokenHeaderOnDownload() {
+        MatcherAssert.assertThat(
+            CondaSliceClientFlowTest.slice(CondaSliceClientFlowTest.stored(), Policy.FREE)
+                .response(
+                    new RequestLine(RqMethod.GET, "/linux-64/pkg-1.0-0.tar.bz2"),
+                    Headers.from(new Header(Authorization.NAME, "token forged")),
+                    Content.EMPTY
+                ).join().status(),
+            new IsEqual<>(RsStatus.UNAUTHORIZED)
+        );
+    }
+
+    @Test
     void headOfMissingFileIsNotFound() {
         MatcherAssert.assertThat(
             CondaSliceClientFlowTest.slice(new InMemoryStorage(), Policy.FREE).response(

@@ -14,6 +14,7 @@ import com.auto1.pantera.RepositorySlices;
 import com.auto1.pantera.importer.ImportService;
 import com.auto1.pantera.importer.ImportSessionStore;
 import com.auto1.pantera.importer.http.ImportSlice;
+import com.auto1.pantera.conda.http.CondaRootTokenSlice;
 import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtPath;
 import com.auto1.pantera.http.rt.RtRule;
@@ -117,12 +118,16 @@ public final class MainSlice extends Slice.Wrap {
             ),
             new RtRulePath(
                 RtRule.FALLBACK,
-                new DockerRoutingSlice(
-                    settings,
-                    slices.tokenAuth(),
-                    new ApiRoutingSlice(
-                        new SliceByPath(slices, settings.prefixes()),
-                        slices.repositories()
+                // The conda CLI sends a channel's /t/<token> in front of the
+                // whole path (/t/<token>/<prefix>/api/<repo>/...).
+                new CondaRootTokenSlice(
+                    new DockerRoutingSlice(
+                        settings,
+                        slices.tokenAuth(),
+                        new ApiRoutingSlice(
+                            new SliceByPath(slices, settings.prefixes()),
+                            slices.repositories()
+                        )
                     )
                 )
             )

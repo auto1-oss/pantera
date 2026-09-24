@@ -160,6 +160,34 @@ class UpdateSliceTest {
         );
     }
 
+    @ParameterizedTest
+    @CsvSource({"linux-64/pkg-1.0-0.tar.bz2", "noarch/pkg-1.0-0.conda"})
+    void rejectsBodyThatIsNotACondaPackage(final String key) throws IOException {
+        final com.auto1.pantera.http.Response rsp = new UpdateSlice(
+            this.asto, Optional.of(this.events), UpdateSliceTest.RNAME
+        ).response(
+            new RequestLine(RqMethod.POST, String.format("/%s", key)),
+            UpdateSliceTest.HEADERS,
+            new Content.From(this.body("junk, not a package".getBytes(StandardCharsets.UTF_8)))
+        ).join();
+        MatcherAssert.assertThat(
+            "an invalid package is a client error",
+            rsp.status(), new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "the client is told why",
+            rsp.body().asString(),
+            new org.hamcrest.core.StringContains("not a valid conda package")
+        );
+        MatcherAssert.assertThat(
+            "nothing is left in storage, not even the temporary upload",
+            this.asto.list(Key.ROOT).join().isEmpty(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "no publish event", this.events.isEmpty(), new IsEqual<>(true)
+        );
+    }
+
     @Test
     @Disabled("Upload synchronization behaviour should be discussed further")
     void returnsBadRequestIfPackageAlreadyExists() {

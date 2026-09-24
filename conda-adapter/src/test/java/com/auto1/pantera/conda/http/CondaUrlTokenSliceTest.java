@@ -46,6 +46,31 @@ final class CondaUrlTokenSliceTest {
     }
 
     @Test
+    void decodesHexEncodedJwt() {
+        // The conda CLI keeps only [A-Za-z0-9-] of a /t/ token, so a JWT is
+        // given to it hex-encoded.
+        MatcherAssert.assertThat(
+            CondaUrlTokenSliceTest.seen(
+                true,
+                String.format(
+                    "/my-conda/t/%s/noarch/repodata.json",
+                    CondaUrlTokenSliceTest.hex("eyJh.eyJz.c2ln")
+                ),
+                Headers.EMPTY
+            ),
+            new IsEqual<>(List.of("token eyJh.eyJz.c2ln"))
+        );
+    }
+
+    @Test
+    void keepsHexTokenThatIsNotAnEncodedJwt() {
+        MatcherAssert.assertThat(
+            CondaUrlTokenSliceTest.seen(true, "/my-conda/t/abcdef/noarch/repodata.json", Headers.EMPTY),
+            new IsEqual<>(List.of("token abcdef"))
+        );
+    }
+
+    @Test
     void leavesPathsWithoutTokenAlone() {
         MatcherAssert.assertThat(
             CondaUrlTokenSliceTest.seen(true, "/my-conda/noarch/repodata.json", Headers.EMPTY),
@@ -62,6 +87,19 @@ final class CondaUrlTokenSliceTest {
             ),
             new IsEqual<>(List.of(new Authorization.Basic("alice", "pw").getValue()))
         );
+    }
+
+    /**
+     * Lower-case hex of an ASCII string.
+     * @param value Value
+     * @return Hex
+     */
+    private static String hex(final String value) {
+        final StringBuilder res = new StringBuilder();
+        for (final byte chr : value.getBytes(java.nio.charset.StandardCharsets.US_ASCII)) {
+            res.append(String.format("%02x", chr));
+        }
+        return res.toString();
     }
 
     /**
