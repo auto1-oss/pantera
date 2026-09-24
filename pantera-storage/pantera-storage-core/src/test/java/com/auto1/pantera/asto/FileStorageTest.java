@@ -306,6 +306,27 @@ final class FileStorageTest {
     }
 
     @Test
+    void deleteKeepsASymlinkedDirectoryWhoseTargetBecomesEmpty() throws IOException {
+        final Path root = Files.createDirectories(this.tmp.resolve("root"));
+        final Path volume = Files.createDirectories(this.tmp.resolve("vol/repo"));
+        Files.createSymbolicLink(root.resolve("repo"), volume);
+        final FileStorage sto = new FileStorage(root);
+        final Key.From file = new Key.From("repo/pkg/a.txt");
+        sto.save(file, Content.EMPTY).join();
+        sto.delete(file).join();
+        MatcherAssert.assertThat(
+            "the symlinked repository directory must stay",
+            Files.isSymbolicLink(root.resolve("repo")),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the empty directory inside the target must be pruned",
+            Files.exists(volume.resolve("pkg")),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
     void returnsIdentifier() {
         MatcherAssert.assertThat(
             this.storage.identifier(),

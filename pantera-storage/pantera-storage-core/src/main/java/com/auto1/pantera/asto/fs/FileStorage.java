@@ -45,7 +45,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.cqfn.rio.file.File;
 
@@ -355,7 +354,7 @@ public final class FileStorage implements Storage {
                 if (Files.exists(path) && !Files.isDirectory(path)) {
                     try {
                         Files.delete(path);
-                        this.deleteEmptyParts(path.getParent());
+                        new EmptyDirs(this.dir).pruneUp(path.getParent());
                     } catch (final IOException iex) {
                         throw new PanteraIOException(iex);
                     }
@@ -475,56 +474,6 @@ public final class FileStorage implements Storage {
     @Override
     public Optional<Path> pathFor(final Key key) {
         return Optional.of(this.dir.resolve(key.string()));
-    }
-
-    /**
-     * Removes empty key parts (directories).
-     * Also cleans up the .tmp directory if it's empty.
-     * @param target Directory path
-     */
-    private void deleteEmptyParts(final Path target) {
-        final Path dirabs = this.dir.normalize().toAbsolutePath();
-        final Path path = target.normalize().toAbsolutePath();
-        if (!path.toString().startsWith(dirabs.toString()) || dirabs.equals(path)) {
-            // Clean up .tmp directory if it's empty
-            this.cleanupTmpDir();
-            return;
-        }
-        if (Files.isDirectory(path)) {
-            boolean again = false;
-            try {
-                try (Stream<Path> files = Files.list(path)) {
-                    if (!files.findFirst().isPresent()) {
-                        Files.deleteIfExists(path);
-                        again = true;
-                    }
-                }
-                if (again) {
-                    this.deleteEmptyParts(path.getParent());
-                }
-            } catch (final NoSuchFileException ex) {
-                this.deleteEmptyParts(path.getParent());
-            }
-            catch (final IOException err) {
-                throw new PanteraIOException(err);
-            }
-        }
-    }
-
-    /**
-     * Cleans up the .tmp directory if it exists and is empty.
-     */
-    private void cleanupTmpDir() {
-        final Path tmpDir = this.dir.resolve(".tmp");
-        if (Files.exists(tmpDir) && Files.isDirectory(tmpDir)) {
-            try (Stream<Path> files = Files.list(tmpDir)) {
-                if (!files.findFirst().isPresent()) {
-                    Files.deleteIfExists(tmpDir);
-                }
-            } catch (final IOException ignore) { // NOPMD EmptyCatchBlock - best-effort cleanup; any IO error is benign and recovered on next storage operation
-                // Ignore cleanup errors
-            }
-        }
     }
 
     /**
