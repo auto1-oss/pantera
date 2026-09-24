@@ -17,7 +17,6 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.OneTimePublisher;
 import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.hex.http.headers.HexContentType;
 import com.auto1.pantera.hex.proto.generated.PackageOuterClass;
 import com.auto1.pantera.hex.proto.generated.SignedOuterClass;
 import com.auto1.pantera.hex.tarball.MetadataConfig;
@@ -27,7 +26,8 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -43,7 +43,9 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
@@ -205,21 +207,22 @@ public final class UploadSlice implements Slice {
                             .invalidateAfterUpload("hexpm", name.get());
                         // Block on the index UPSERT before returning 201 so
                         // the next group lookup sees the artifact.
-                        return this.syncIndex.recordSync(event).thenApply(ignored ->
-                            ResponseBuilder.created()
-                                .headers(new HexContentType(headers).fill())
-                                // todo https://github.com/pantera/pantera/issues/1435
-                                .header(new ContentLength(0))
-                                .build()
+                        return this.syncIndex.recordSync(event).thenApply(
+                            ignored -> UploadSlice.published(
+                                headers, name.get(), version.get(), outerchcksum.get()
+                            )
                         );
                     }
                 ).exceptionally(throwable -> {
                     final Throwable cause = throwable instanceof java.util.concurrent.CompletionException
                         && throwable.getCause() != null ? throwable.getCause() : throwable;
                     if (cause instanceof IllegalArgumentException) {
-                        return ResponseBuilder.badRequest()
-                            .textBody(cause.getMessage())
-                            .build();
+                        return UploadSlice.error(headers, RsStatus.BAD_REQUEST, cause.getMessage());
+                    }
+                    if (cause instanceof ReleaseExistsException) {
+                        return UploadSlice.error(
+                            headers, RsStatus.UNPROCESSABLE_ENTITY, cause.getMessage()
+                        );
                     }
                     com.auto1.pantera.http.log.EcsLogger.error("com.auto1.pantera.hex")
                         .message("Failed to upload package")
@@ -229,9 +232,9 @@ public final class UploadSlice implements Slice {
                         .error(throwable)
                         .field("log.source", "application")
                         .log();
-                    return ResponseBuilder.internalError()
-                        .textBody("Failed to upload package")
-                        .build();
+                    return UploadSlice.error(
+                        headers, RsStatus.INTERNAL_ERROR, "Failed to upload package"
+                    );
                 }).toCompletableFuture();
         } else {
             res = ResponseBuilder.badRequest().completedFuture();
@@ -266,7 +269,12 @@ public final class UploadSlice implements Slice {
             }
         }
         if (versionexist && !replace) {
-            throw new PanteraException(String.format("Version %s already exists.", version.get()));
+            throw new ReleaseExistsException(
+                String.format(
+                    "Version %s already exists; publish with --replace to overwrite it",
+                    version.get()
+                )
+            );
         }
         if (replace) {
             releases.set(filtered);
@@ -441,5 +449,66 @@ public final class UploadSlice implements Slice {
             .to(SingleInterop.get())
             .thenApply(Remaining::new)
             .thenApply(Remaining::bytes);
+    }
+
+    /**
+     * Answer to a stored release: the release as the Hex client reads it
+     * ({@code mix hex.publish} prints {@code html_url}).
+     * @param headers Request headers
+     * @param name Package name
+     * @param version Release version
+     * @param checksum Outer checksum of the tarball
+     * @return Response
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private static Response published(final Headers headers, final String name,
+        final String version, final String checksum) {
+        final Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("name", name);
+        fields.put("version", version);
+        fields.put("checksum", checksum);
+        new ClientBaseUrl(headers).stamped().ifPresent(
+            base -> {
+                final String url = String.format(
+                    "%s/%s/%s-%s.tar",
+                    base.replaceAll("/+$", ""), DownloadSlice.TARBALLS, name, version
+                );
+                fields.put("url", url);
+                fields.put("html_url", url);
+            }
+        );
+        return new HexResponseBody(headers, fields).response(RsStatus.CREATED);
+    }
+
+    /**
+     * Error answer the Hex client prints ({@code message}).
+     * @param headers Request headers
+     * @param status Status
+     * @param message Message
+     * @return Response
+     */
+    private static Response error(final Headers headers, final RsStatus status,
+        final String message) {
+        final Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("status", status.code());
+        fields.put("message", message);
+        return new HexResponseBody(headers, fields).response(status);
+    }
+
+    /**
+     * The release exists and the upload does not replace it.
+     * @since 2.2.9
+     */
+    private static final class ReleaseExistsException extends PanteraException {
+
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Ctor.
+         * @param msg Message for the client
+         */
+        ReleaseExistsException(final String msg) {
+            super(msg);
+        }
     }
 }
