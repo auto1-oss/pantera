@@ -100,6 +100,11 @@ public final class DispatchedStorage implements Storage {
     }
 
     @Override
+    public CompletableFuture<Void> deleteEmptyDirectories(final Key prefix) {
+        return dispatch(this.delegate.deleteEmptyDirectories(prefix), StorageExecutors.WRITE);
+    }
+
+    @Override
     public <T> CompletionStage<T> exclusively(
         final Key key,
         final Function<Storage, CompletionStage<T>> operation

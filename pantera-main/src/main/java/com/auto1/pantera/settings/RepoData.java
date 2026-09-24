@@ -185,7 +185,13 @@ public final class RepoData {
                 if (asto.isEmpty()) {
                     return CompletableFuture.completedFuture(null);
                 }
-                return RepoData.deleteTree(asto.get(), root).thenAccept(
+                // Then the directories the files left behind: filesystem
+                // storages keep (hidden) working directories that hold no
+                // keys, e.g. an adapter's upload staging directory.
+                return RepoData.deleteTree(asto.get(), root).thenCompose(
+                    removed -> asto.get().deleteEmptyDirectories(root)
+                        .thenApply(nothing -> removed)
+                ).thenAccept(
                     removed -> EcsLogger.info(RepoData.LOGGER)
                         .message("Removed data from repository (" + removed + " keys)")
                         .eventCategory("file")
@@ -297,7 +303,12 @@ public final class RepoData {
         final String repo = rname.toString();
         final Key folder = new Key.From(repo, packagePath);
         return this.repoStorage(rname, crs)
-            .thenCompose(asto -> RepoData.deleteTree(asto, folder))
+            .thenCompose(
+                asto -> RepoData.deleteTree(asto, folder).thenCompose(
+                    removed -> asto.deleteEmptyDirectories(folder)
+                        .thenApply(nothing -> removed)
+                )
+            )
             .thenApply(removed -> {
                 if (removed == 0) {
                     return false;

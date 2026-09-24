@@ -139,6 +139,11 @@ public final class SubStorage implements Storage {
     }
 
     @Override
+    public CompletableFuture<Void> deleteEmptyDirectories(final Key key) {
+        return this.origin.deleteEmptyDirectories(new PrefixedKed(this.prefix, key));
+    }
+
+    @Override
     public <T> CompletionStage<T> exclusively(
         final Key key,
         final Function<Storage, CompletionStage<T>> operation

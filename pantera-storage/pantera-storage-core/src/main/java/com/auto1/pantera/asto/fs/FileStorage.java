@@ -341,6 +341,13 @@ public final class FileStorage implements Storage {
     }
 
     @Override
+    public CompletableFuture<Void> deleteEmptyDirectories(final Key prefix) {
+        return this.keyPath(prefix).thenAcceptAsync(
+            path -> new EmptyDirs(this.dir).pruneTree(path)
+        );
+    }
+
+    @Override
     public CompletableFuture<Void> delete(final Key key) {
         final long startNs = System.nanoTime();
         return this.keyPath(key).thenAcceptAsync(

@@ -178,6 +178,34 @@ class RepoDataTest {
     }
 
     @Test
+    void removeLeavesNoEmptyDirectoriesOnDisk() throws Exception {
+        // R17/R54: the files went, the (hidden) working directories an
+        // adapter created stayed on disk, e.g. conda's .upload/noarch.
+        final Storage disk = new FileStorage(this.temp);
+        final BlockingStorage blocking = new BlockingStorage(disk);
+        blocking.save(new Key.From(RepoDataTest.REPO, "docs", "a.txt"), new byte[]{1});
+        blocking.save(new Key.From("my-repo-2", "keep.txt"), new byte[]{1});
+        java.nio.file.Files.createDirectories(
+            this.temp.resolve(RepoDataTest.REPO).resolve(".upload").resolve("noarch")
+        );
+        new RepoData(this.storage, new FixedStoragesCache(disk))
+            .remove(
+                new RepositoryName.Simple(RepoDataTest.REPO),
+                new SingleRepoSettings(RepoDataTest.REPO, RepoDataTest.inlineStorage())
+            ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "the repository directory must be gone",
+            java.nio.file.Files.exists(this.temp.resolve(RepoDataTest.REPO)),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "a sibling repository must be untouched",
+            java.nio.file.Files.exists(this.temp.resolve("my-repo-2").resolve("keep.txt")),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
     void removesDataOfDbOnlyRepositoryAndLeavesSiblingsAlone() {
         // B06: a repository created through the API exists only in the DB
         // (no YAML file); its data used to survive DELETE and come back

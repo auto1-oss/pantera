@@ -246,20 +246,19 @@ public final class VertxFileStorage implements Storage {
 
         return Single.fromCallable(
             () -> {
-                // Create temp file in .tmp directory at storage root to avoid filename length issues
-                // Using parent directory could still exceed 255-byte limit if parent path is long
-                final Path tmpDir = this.dir.resolve(".tmp");
-                tmpDir.toFile().mkdirs();
-                final Path tmp = tmpDir.resolve(UUID.randomUUID().toString());
-
-                // Ensure target directory exists
+                // Ensure target directory exists. createDirectories (not
+                // mkdirs) fails with the NIO FileAlreadyExistsException when a
+                // parent component is an existing file, which the upload slice
+                // answers with 409; mkdirs failed silently and the later move
+                // surfaced as an unmapped Vert.x FileSystemException (500).
                 final Path target = this.path(key);
                 final Path parent = target.getParent();
                 if (parent != null) {
-                    parent.toFile().mkdirs();
+                    Files.createDirectories(parent);
                 }
-
-                return tmp;
+                // Create temp file in .tmp directory at storage root to avoid filename length issues
+                // Using parent directory could still exceed 255-byte limit if parent path is long
+                return VertxFileStorage.reserveTmp(this.dir.resolve(".tmp"));
             })
             .subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
             .flatMapCompletable(
@@ -267,17 +266,11 @@ public final class VertxFileStorage implements Storage {
                     tmp,
                     this.vertx
                 ).save(Flowable.fromPublisher(content))
-                    .andThen(
-                        this.vertx.fileSystem()
-                            .rxMove(
-                                tmp.toString(),
-                                this.path(key).toString(),
-                                new CopyOptions().setReplaceExisting(true)
-                            )
-                    )
+                    .andThen(this.moveInto(tmp, this.path(key)))
                     .onErrorResumeNext(
                         throwable -> new VertxRxFile(tmp, this.vertx)
                             .delete()
+                            .onErrorComplete()
                             .andThen(Completable.error(throwable))
                     )
             )
@@ -304,6 +297,79 @@ public final class VertxFileStorage implements Storage {
                     );
                 }
             });
+    }
+
+    /**
+     * Move a fully written temp file onto its key. A concurrent delete may
+     * have removed the (then empty) target directory since the save created
+     * it; the move is then retried once after re-creating it, like
+     * {@link FileStorage} does.
+     * @param tmp Temp file
+     * @param target Target path
+     * @return Completion
+     */
+    private Completable moveInto(final Path tmp, final Path target) {
+        return this.rawMove(tmp, target).onErrorResumeNext(
+            err -> VertxFileStorage.hasCause(err, NoSuchFileException.class)
+                ? Completable.fromAction(() -> Files.createDirectories(target.getParent()))
+                    .subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
+                    .andThen(this.rawMove(tmp, target))
+                : Completable.error(err)
+        );
+    }
+
+    /**
+     * Vert.x move, replacing an existing file.
+     * @param tmp Source
+     * @param target Destination
+     * @return Completion
+     */
+    private Completable rawMove(final Path tmp, final Path target) {
+        return this.vertx.fileSystem().rxMove(
+            tmp.toString(), target.toString(), new CopyOptions().setReplaceExisting(true)
+        );
+    }
+
+    /**
+     * Create a fresh, empty temp file under {@code tmpDir}. Once the file
+     * exists the directory is not empty, so a concurrent empty-directory
+     * cleanup cannot remove it under the upload; the brief window between
+     * creating the directory and the file is retried.
+     * @param tmpDir Temp directory
+     * @return The temp file
+     * @throws IOException On a file-system error
+     */
+    private static Path reserveTmp(final Path tmpDir) throws IOException {
+        final Path tmp = tmpDir.resolve(UUID.randomUUID().toString());
+        int attempt = 0;
+        while (true) {
+            Files.createDirectories(tmpDir);
+            try {
+                Files.createFile(tmp);
+                return tmp;
+            } catch (final NoSuchFileException raced) {
+                attempt += 1;
+                if (attempt >= 3) {
+                    throw raced;
+                }
+            }
+        }
+    }
+
+    /**
+     * Whether a failure has a cause of the given type.
+     * @param err Failure
+     * @param type Cause type
+     * @return True if found in the cause chain
+     */
+    private static boolean hasCause(final Throwable err, final Class<?> type) {
+        Throwable cur = err;
+        boolean found = false;
+        while (cur != null && !found) {
+            found = type.isInstance(cur);
+            cur = cur.getCause();
+        }
+        return found;
     }
 
     @Override
@@ -336,8 +402,15 @@ public final class VertxFileStorage implements Storage {
     @Override
     public CompletableFuture<Void> delete(final Key key) {
         final long startNs = System.nanoTime();
-        return new VertxRxFile(this.path(key), this.vertx)
+        final Path target = this.path(key);
+        return new VertxRxFile(target, this.vertx)
             .delete()
+            // Like FileStorage: drop the directories the delete left empty,
+            // so a removed repository or package leaves no empty tree behind.
+            .andThen(
+                Completable.fromAction(() -> new EmptyDirs(this.dir).pruneUp(target.getParent()))
+                    .subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
+            )
             .to(CompletableInterop.await())
             .toCompletableFuture()
             .thenCompose(ignored -> CompletableFuture.allOf())
@@ -350,6 +423,16 @@ public final class VertxFileStorage implements Storage {
                     this.id
                 );
             });
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteEmptyDirectories(final Key prefix) {
+        return Completable.fromAction(
+            () -> new EmptyDirs(this.dir).pruneTree(this.path(prefix))
+        ).subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
+            .to(CompletableInterop.await())
+            .<Void>thenApply(ignored -> null)
+            .toCompletableFuture();
     }
 
     @Override
