@@ -30,6 +30,7 @@ Repository-facing endpoints (health, version, import, artifact serving) are on p
 16. [Import](#16-import)
 17. [Error Format](#17-error-format)
 18. [Pagination](#18-pagination)
+19. [Admin: Cache Tools](#19-admin-cache-tools)
 
 ---
 
@@ -2206,6 +2207,133 @@ curl -X POST http://localhost:8086/api/v1/repositories/maven-central/cooldown/un
 
 ---
 
+### GET /api/v1/cooldown/inspect
+
+Explain, per version of one package, what the cooldown state and every cache
+layer say, and flag where they disagree. For every proxy and group repository
+of the format (or only `repo` and everything a group `repo` reaches) the
+version listing is fetched in-process through the repository's own slice with
+the caller's credentials -- exactly what a client of that repository is served
+right now -- next to the cooldown-filtered envelope (this node's L1 and the
+shared L2), the negative-cache entries and the package's live and archived
+cooldown records.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin` (admin only)
+
+**Query Parameters:**
+
+| Parameter  | Type   | Required | Description |
+|------------|--------|----------|-------------|
+| `repoType` | string | yes      | Format family: `npm`, `pypi`, `maven`, `gradle`, `go`, `php`, `docker`, ... |
+| `package`  | string | yes      | Package as a client names it (`lodash`, `@scope/pkg`, `requests`, `com.example:lib`, `vendor/pkg`, module path) |
+| `repo`     | string | no       | Limit to one repository (404 when not configured) |
+
+Version listings are read for npm (packument `versions`), pypi (simple-index
+file links), maven/gradle (`maven-metadata.xml`), go (`@v/list`) and composer
+(`p2`); other formats answer `metadata.unsupported: true`.
+
+**Response (200):**
+
+```json
+{
+  "package": "openai",
+  "repoType": "npm",
+  "node": "pantera-1",
+  "repos": [
+    {
+      "name": "npm_proxy",
+      "type": "npm-proxy",
+      "mode": "proxy",
+      "metadata": {"status": 200, "fetchedVia": "in-process", "path": "/openai", "visibleVersions": ["4.0.0"]},
+      "envelope": {"l1": {"present": true, "ageMs": 5120}, "l2": {"present": true, "ttlRemainingMs": 43100000}},
+      "negativeCache": [
+        {"key": {"scope": "npm_proxy", "repoType": "npm-proxy", "artifactName": "openai", "artifactVersion": "4.1.0"}, "l1": false, "l2": true}
+      ]
+    },
+    {"name": "npm_group", "type": "npm-group", "mode": "group", "members": ["npm_proxy"], "metadata": {"status": 200, "fetchedVia": "in-process", "path": "/openai", "visibleVersions": ["4.0.0"]}, "envelope": {"l1": {"present": false, "ageMs": null}, "l2": {"present": false, "ttlRemainingMs": null}}, "negativeCache": []}
+  ],
+  "versions": [
+    {
+      "version": "4.1.0",
+      "cooldown": {"state": "released", "blockedUntil": "2026-09-25T10:00:00Z", "reason": "FRESH_RELEASE", "repo": "npm_proxy", "source": "live"},
+      "visibleIn": [],
+      "hiddenIn": ["npm_proxy", "npm_group"],
+      "mismatch": true,
+      "mismatchReason": "released but hidden in npm_proxy"
+    }
+  ]
+}
+```
+
+`cooldown.state` is `blocked`, `released` (manually unblocked), `expired` or
+`none`. A version is a `mismatch` when it is `released`/`expired` yet missing
+from the listing of the repository it was blocked in, when a group hides it
+while a member lists it, or when it is `blocked` yet still listed by the
+repository holding the block. `metadata.status` is `0` with `metadata.error`
+when the in-process request failed.
+
+**curl example:**
+
+```bash
+curl "http://localhost:8086/api/v1/cooldown/inspect?repoType=npm&package=openai" \
+  -H "Authorization: Bearer eyJhbGciOi..."
+```
+
+---
+
+### POST /api/v1/cooldown/refresh-package
+
+Clear every cache layer that can hide or stale-serve one package, on every
+node, then inspect it again. In order: each proxy in scope revalidates its
+cached raw upstream metadata through the adapter's own refresh path (npm:
+conditional packument refresh; pypi: cached simple-index pages; maven: the
+artifact's `maven-metadata.xml` cache entries -- other formats report
+`unsupported`); the cooldown-filtered envelopes are dropped from this node's
+L1, from L2 and from peers' L1; the package's negative-cache entries are
+dropped in every scope and tier. Audit-logged as `COOLDOWN_REFRESH_PACKAGE`.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin` (admin only)
+
+**Request Body:**
+
+```json
+{"repoType": "npm", "package": "openai", "repo": "npm_group"}
+```
+
+`repo` is optional; the scope is the same as for `GET /api/v1/cooldown/inspect`.
+
+**Response (200):**
+
+```json
+{
+  "package": "openai",
+  "repoType": "npm",
+  "node": "pantera-1",
+  "revalidated": [{"repo": "npm_proxy", "outcome": "revalidated"}],
+  "cleared": {"envelopes": {"l1": 2, "l2": 2}, "negativeCache": {"l1": 0, "l2": 1}},
+  "before": { "...": "inspect document" },
+  "after": { "...": "inspect document" }
+}
+```
+
+Revalidation outcomes: `revalidated`, `refreshed`, `not_modified`,
+`not_cached`, `invalidated`, `upstream_gone`, `not_found`,
+`upstream_status_<code>`, `unsupported`, `failed: <reason>` (several are
+joined with `,` when a repository has more than one remote or index variant).
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/cooldown/refresh-package \
+  -H "Authorization: Bearer eyJhbGciOi..." \
+  -H "Content-Type: application/json" \
+  -d '{"repoType": "npm", "package": "openai"}'
+```
+
+---
+
 ## 11. Settings
 
 ### GET /api/v1/settings
@@ -3187,3 +3315,181 @@ All list endpoints use a consistent pagination format:
 | `hasMore` | boolean | Whether more pages exist after the current one  |
 
 Default page size is 20. Maximum page size is 100. Requesting a page beyond the total returns an empty `items` array with `hasMore: false`.
+
+---
+
+## 19. Admin: Cache Tools
+
+Diagnostics and invalidation for the negative (404) cache, plus the request
+troubleshooter. All endpoints are admin only (`api_admin_permissions:admin`), and
+every response names the answering `node`. With Valkey configured the
+negative cache is cluster-wide: listings, probes and invalidations read and
+write the shared L2 tier (cursor `SCAN` of `negative:*`, bounded at 100,000
+keys) merged with the answering node's L1, and peers drop their L1 entries
+over pub/sub. Without Valkey everything is the answering node's L1
+(`"source": "L1-only"`). Mutations are audit-logged (`CACHE_CLEAR`).
+
+A negative-cache key is `{scope, repoType, artifactName, artifactVersion}`:
+the repository that cached the 404, its type, and the artifact as that
+producer names it -- group repositories use the dotted/normalised
+artifact name and a `<version>/<file>` version, proxies the URL form
+(`com/example/lib`) and the bare version. An empty `artifactVersion` is a
+metadata (version-less) key.
+
+### GET /api/v1/admin/neg-cache
+
+Paginated entries.
+
+**Query Parameters:** `q` (case-insensitive substring over artifact name,
+version and scope; `com.example:lib` also finds `com/example/lib`), `scope`
+and `repoType` (exact), `page` (default 0), `pageSize` (default 20, max 100).
+
+**Response (200):**
+
+```json
+{
+  "items": [
+    {
+      "key": {"scope": "npm_group", "repoType": "npm-group", "artifactName": "lodash", "artifactVersion": "4.17.21/lodash-4.17.21.tgz"},
+      "tiers": ["L1", "L2"],
+      "tier": "L1",
+      "ttlRemainingMs": 86012345
+    }
+  ],
+  "page": 0, "size": 20, "pageSize": 20, "total": 1, "hasMore": false,
+  "source": "L2+L1", "truncated": false, "node": "pantera-1"
+}
+```
+
+`ttlRemainingMs` is the L2 TTL, `null` for an entry only in this node's L1.
+`truncated` is `true` when the L2 scan hit its bound.
+
+### GET /api/v1/admin/neg-cache/probe
+
+Presence of every negative-cache key a request could be shadowed by. Forms:
+
+| Parameters | Keys probed |
+|------------|-------------|
+| `url` = full client URL (host, optional global prefix and `api/` segment) or `/<repo>/<path>` | every key the serving path derives for it: the group resolver's key for each group on the walk and each leaf repository's proxy key |
+| `key` = flat key `scope:repoType:artifactName:version` (`:` inside a field URL-encoded as `%3A`) | that key |
+| `scope`, `repoType`, `artifactName`, optional `version` | that key |
+
+An unknown repository in `url` answers 404; none of the forms answers 400.
+
+**Response (200):**
+
+```json
+{
+  "keys": [
+    {"key": {"scope": "npm_group", "repoType": "npm-group", "artifactName": "lodash", "artifactVersion": "4.17.21/lodash-4.17.21.tgz"}, "flat": "npm_group:npm-group:lodash:4.17.21/lodash-4.17.21.tgz", "producer": "group", "l1": false, "l2": true, "ttlRemainingMs": 86000000},
+    {"key": {"scope": "npm_proxy", "repoType": "npm-proxy", "artifactName": "lodash", "artifactVersion": "4.17.21"}, "flat": "npm_proxy:npm-proxy:lodash:4.17.21", "producer": "proxy", "l1": false, "l2": false, "ttlRemainingMs": null}
+  ],
+  "shadowed": true,
+  "present": true,
+  "repo": "npm_group", "repoType": "npm-group", "path": "/lodash/-/lodash-4.17.21.tgz",
+  "node": "pantera-1"
+}
+```
+
+The single-key forms also return `tiers` (`["L1","L2"]` subset).
+
+### POST /api/v1/admin/neg-cache/invalidate
+
+Invalidate one key on every node. Counts are honest: `l1` is what this node
+removed, `l2` the Valkey `DEL` reply.
+
+**Request Body:** `{"scope": "npm_group", "repoType": "npm-group", "artifactName": "lodash", "version": "4.17.21/lodash-4.17.21.tgz"}` -- `version` `""` (or omitted) is the metadata key; `scope`, `repoType`, `artifactName` are required.
+
+**Response (200):**
+
+```json
+{"l1": 0, "l2": 1, "node": "pantera-1", "invalidated": {"l1": 0, "l2": 1}}
+```
+
+### POST /api/v1/admin/neg-cache/invalidate-package
+
+Invalidate every entry of a package -- under any producer's spelling, in
+every scope, in both tiers, on every node.
+
+**Request Body:** `{"artifactName": "com.example:lib", "repoType": "maven"}` -- `repoType` (a family or a repository type) is optional and restricts the match to that format.
+
+**Response (200):** same shape as `invalidate`.
+
+### POST /api/v1/admin/neg-cache/invalidate-pattern
+
+Invalidate by pattern across L2 and every node. Each of `scope`, `repoType`,
+`artifactName`, `version` is optional: absent matches everything, a value
+with `*` is a glob, anything else is exact. Rate-limited to 10 requests per
+minute per admin (429 beyond).
+
+**Request Body:** `{"scope": "npm_group", "artifactName": "@types/*"}`
+
+**Response (200):** same shape as `invalidate`.
+
+### GET /api/v1/admin/neg-cache/stats
+
+**Response (200):**
+
+```json
+{
+  "enabled": true, "l1Size": 1204, "l2Size": 5310, "l2SizeTruncated": false,
+  "hitCount": 91231, "missCount": 1201, "hitRate": 0.987,
+  "evictionCount": 0, "requestCount": 92432, "source": "L2+L1", "node": "pantera-1"
+}
+```
+
+`l1Size` and the counters are the answering node's; `l2Size` counts the
+shared L2 (`null` without Valkey). `hitRate` is a 0-1 fraction.
+
+### GET /api/v1/admin/troubleshoot
+
+Explain why a repository request fails or serves stale content. The request
+is replayed in-process through the addressed repository's slice with the
+caller's credentials (it answers what an authorized admin client would get),
+then each layer is checked.
+
+**Query Parameters:** `url` (required) -- a full client URL (host, optional
+global prefix and `api/` segment) or a repository-relative path such as
+`/npm_group/lodash`, `/pypi_group/simple/requests/`,
+`/go_proxy/github.com/foo/bar/@v/list`,
+`/maven_group/com/example/lib/maven-metadata.xml` or
+`/php_proxy/p2/vendor/pkg.json`.
+
+**Response (200):**
+
+```json
+{
+  "url": "/npm_group/lodash/-/lodash-4.17.21.tgz",
+  "node": "pantera-1",
+  "repo": {"name": "npm_group", "type": "npm-group", "mode": "group", "members": ["npm_local", "npm_proxy"]},
+  "parsed": {"package": "lodash", "version": "4.17.21", "kind": "artifact", "path": "/lodash/-/lodash-4.17.21.tgz"},
+  "request": {"status": 404, "headers": {"content-length": "0"}, "bodySnippet": "", "bodyBytes": 0},
+  "checks": [
+    {"id": "repository", "layer": "repository", "status": "ok", "message": "Repository npm_group exists (npm-group, group)"},
+    {"id": "request", "layer": "repository", "status": "problem", "message": "Request answers 404"},
+    {"id": "group-walk", "layer": "group", "status": "problem", "message": "Member walk npm_local:404 → npm_proxy:404 — no member serves this path", "members": [{"name": "npm_local", "status": 404}, {"name": "npm_proxy", "status": 404}]},
+    {"id": "negative-cache:npm_group", "layer": "negative-cache", "status": "problem", "message": "Cached 404 in npm_group for lodash 4.17.21/lodash-4.17.21.tgz (L2) — requests are answered 404 without asking the upstream",
+     "fix": {"action": "invalidate", "endpoint": "/api/v1/admin/neg-cache/invalidate", "body": {"scope": "npm_group", "repoType": "npm-group", "artifactName": "lodash", "version": "4.17.21/lodash-4.17.21.tgz"}}},
+    {"id": "cooldown", "layer": "cooldown", "status": "ok", "message": "Cooldown state of 4.17.21: none"},
+    {"id": "metadata", "layer": "metadata", "status": "ok", "message": "4.17.21 is listed by npm_group"},
+    {"id": "upstream-breaker:npm_proxy:https://registry.npmjs.org:443", "layer": "upstream", "status": "ok", "message": "Upstream breaker https://registry.npmjs.org:443 is closed"}
+  ]
+}
+```
+
+`checks[].status` is `ok`, `problem` or `info`; `layer` is one of
+`repository`, `group`, `negative-cache`, `cooldown`, `metadata`, `upstream`.
+A problem may carry a `fix` -- a relative API call (`action`, `endpoint`,
+`body`) the UI runs as-is: `invalidate` (negative cache key), `unblock`
+(`/api/v1/repositories/<repo>/cooldown/unblock`) or `refresh-package`.
+When no configured repository is addressed, `repo`, `parsed` and `request`
+are `null` and the only check is a `repository` problem. A missing `url`
+answers 400.
+
+**curl example:**
+
+```bash
+curl -G http://localhost:8086/api/v1/admin/troubleshoot \
+  --data-urlencode "url=https://pantera.example.com/api/npm_group/lodash/-/lodash-4.17.21.tgz" \
+  -H "Authorization: Bearer eyJhbGciOi..."
+```

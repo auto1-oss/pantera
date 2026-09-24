@@ -194,6 +194,38 @@ moment -- its manifest digest and, for a multi-arch image, the per-platform
 child manifests -- so the pull succeeds end to end. Other digests of the same
 image are not released.
 
+### Inspect a Package
+
+When a version is unblocked but clients still cannot see it (or a blocked
+version still shows), inspect the package. For every proxy and group
+repository of the format it shows, per version, the cooldown state next to
+what each repository actually serves (fetched in-process, as a client would
+get it), plus the filtered-metadata envelope and negative-cache entries per
+repository, and flags each inconsistent version as a `mismatch`:
+
+```bash
+curl "http://pantera-host:8086/api/v1/cooldown/inspect?repoType=npm&package=lodash" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Refresh a Package
+
+Clears every layer that can keep a package stale, cluster-wide: the proxies'
+cached upstream metadata is revalidated (npm, pypi, maven; other formats are
+reported `unsupported`), the filtered-metadata envelopes and the package's
+negative-cache entries are dropped on every node. The response carries the
+inspection before and after:
+
+```bash
+curl -X POST http://pantera-host:8086/api/v1/cooldown/refresh-package \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"repoType":"npm","package":"lodash"}'
+```
+
+Both endpoints are admin only. In the UI they are the Cooldown page's
+**Inspect package** tab.
+
 ### View Cooldown Overview
 
 Shows per-repository block counts:
