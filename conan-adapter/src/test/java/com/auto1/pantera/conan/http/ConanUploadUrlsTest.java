@@ -45,7 +45,7 @@ public class ConanUploadUrlsTest {
         final String path = "/test/path/to/file";
         final String host = "test_hostname.com";
         final ItemTokenizer tokenizer = new ItemTokenizer(Vertx.vertx(), com.auto1.pantera.conan.TestRsaKeys.publicKey(), com.auto1.pantera.conan.TestRsaKeys.privateKey());
-        final String token = tokenizer.generateToken(path, host, "my-conan");
+        final String token = tokenizer.generateToken(path, host, "my-conan", "alice");
         final ItemInfo item = tokenizer.authenticateToken(token).toCompletableFuture().join().orElseThrow();
         MatcherAssert.assertThat("Decoded path must match", item.getPath().equals(path));
         MatcherAssert.assertThat("Decoded host must match", item.getHostname().equals(host));

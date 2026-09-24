@@ -1565,23 +1565,60 @@ public class RepositorySlices {
         // any per-adapter logic runs. Policy defaults: proxies allow
         // anon read (curlable maven/npm clients); hosted repos require
         // auth for both directions.
-        // npm login / adduser carry the credentials in the request body
-        // (they are how a client without credentials obtains a token) and
-        // validate them downstream, so they pass the gate without an
-        // Authorization header; npm's web login is declined downstream.
-        final com.auto1.pantera.http.rt.RtRule bootstrap;
-        if (cfg.type().startsWith("npm")) {
-            bootstrap = com.auto1.pantera.npm.http.auth.OAuthLoginSlice.CREDENTIAL_BOOTSTRAP;
-        } else {
-            bootstrap = (line, headers) -> false;
-        }
+        // A few client requests cannot carry an Authorization header and
+        // are validated downstream instead (see credentialBootstrap).
         final Slice gated = new AnonymousAccessSlice(
-            withContentLength, anonymousPolicy(cfg), cfg.name(), bootstrap
+            withContentLength, anonymousPolicy(cfg), cfg.name(), credentialBootstrap(cfg)
         );
         // Docker clients parse OCI error bodies and the adapter advertises
         // a Basic+Bearer challenge: give the body-less 401/413 produced by
         // the generic gates above the same shape.
         return cfg.type().startsWith("docker") ? new OciErrorsSlice(gated) : gated;
+    }
+
+    /**
+     * Requests that pass the anonymous-access gate without an
+     * {@code Authorization} header because the client cannot send one and
+     * the adapter validates what they carry instead:
+     * <ul>
+     *   <li>npm login / adduser carry the credentials in the request body
+     *   (they are how a client without credentials obtains a token); npm's
+     *   web login is declined downstream.</li>
+     *   <li>anaconda-client HEADs the conda repository's base URL before
+     *   {@code anaconda login}, with no credentials yet, and gives up unless
+     *   it gets a 2xx; the adapter answers exactly that HEAD with an empty
+     *   200 and nothing else.</li>
+     *   <li>Conan 1.x sends no {@code Authorization} to an upload URL that
+     *   carries a {@code signature}; the adapter authorises the PUT by that
+     *   signature (issued to an authenticated writer of this repository).</li>
+     * </ul>
+     *
+     * @param cfg Repo config
+     * @return Credential-bootstrap rule
+     */
+    private static com.auto1.pantera.http.rt.RtRule credentialBootstrap(final RepoConfig cfg) {
+        final com.auto1.pantera.http.rt.RtRule res;
+        if (cfg.type().startsWith("npm")) {
+            res = com.auto1.pantera.npm.http.auth.OAuthLoginSlice.CREDENTIAL_BOOTSTRAP;
+        } else if ("conda".equals(cfg.type())) {
+            final java.util.regex.Pattern root;
+            if (cfg.port().isPresent()) {
+                root = CondaSlice.ROOT;
+            } else {
+                root = CondaSlice.PREFIXED_ROOT;
+            }
+            res = new com.auto1.pantera.http.rt.RtRule.All(
+                com.auto1.pantera.http.rt.MethodRule.HEAD,
+                new com.auto1.pantera.http.rt.RtRule.ByPath(root)
+            );
+        } else if ("conan".equals(cfg.type())) {
+            res = (line, headers) -> line.method() == com.auto1.pantera.http.rq.RqMethod.PUT
+                && new com.auto1.pantera.http.rq.RqParams(line.uri()).value("signature")
+                    .isPresent();
+        } else {
+            res = (line, headers) -> false;
+        }
+        return res;
     }
 
     /**

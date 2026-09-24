@@ -356,23 +356,42 @@ public final class ConanSlice extends Slice.Wrap {
                         )
                     )
                 ),
-                // The signed URL alone is not authority to write: the PUT
-                // also needs an authenticated user with WRITE here. Conan
-                // sends its token to every URL under the remote's URL.
+                // Conan 1.x sends no credentials to a signed URL: the PUT is
+                // authorised as the user the URL was signed for, who must
+                // still hold WRITE here; a PUT with credentials is
+                // authorised by them.
                 new RtRulePath(
                     MethodRule.PUT,
-                    new BearerAuthzSlice(
+                    ConanSlice.upload(
                         new ConanUpload.PutFile(
                             storage, tokenizer, name,
                             events.map(queue -> new RepositoryEvents("conan", name, queue))
                         ),
-                        tokens.auth(),
+                        tokens, tokenizer,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
-                        )
+                        ),
+                        name
                     )
                 )
             )
+        );
+    }
+
+    /**
+     * File PUT authorised by a signed upload URL or by credentials.
+     * @param put File upload
+     * @param tokens User tokens
+     * @param tokenizer Upload URL signatures
+     * @param write WRITE permission check
+     * @param name Repository name
+     * @return Slice
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private static Slice upload(final Slice put, final Tokens tokens,
+        final ItemTokenizer tokenizer, final OperationControl write, final String name) {
+        return new SignedPutSlice(
+            put, new BearerAuthzSlice(put, tokens.auth(), write), tokenizer, write, name
         );
     }
 }

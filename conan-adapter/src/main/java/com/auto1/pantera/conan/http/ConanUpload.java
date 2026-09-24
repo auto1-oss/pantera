@@ -19,6 +19,9 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.AuthzSlice;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
 import com.auto1.pantera.http.rq.RqParams;
@@ -151,11 +154,14 @@ public final class ConanUpload {
         public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
             final Matcher matcher = matchRequest(line);
             final String path = matcher.group(ConanUpload.URI_PATH);
-            final String hostname = new RqHeaders.Single(headers, ConanUpload.HOST).asString();
+            final Signer signer = new Signer(
+                new RqHeaders.Single(headers, ConanUpload.HOST).asString(),
+                ConanUpload.verifiedUser(headers)
+            );
             return this.storage.exists(new Key.From(path))
                 .thenCompose(
                     exist -> exist ? generateError(path)
-                        : generateUrls(body, path, hostname, new RepoFileUrl(headers))
+                        : generateUrls(body, path, signer, new RepoFileUrl(headers))
                 );
         }
 
@@ -163,12 +169,12 @@ public final class ConanUpload {
          * Implements uploading from the client to server repository storage.
          * @param body Request body with file data.
          * @param path Target path for the package.
-         * @param hostname Server host name the upload URL's signature is bound to.
+         * @param signer Host and user the upload URL's signature is bound to.
          * @param urls Client-facing URLs of repository files.
          * @return Respose result of this operation.
          */
         private CompletableFuture<Response> generateUrls(final Publisher<ByteBuffer> body,
-            final String path, final String hostname, final RepoFileUrl urls) {
+            final String path, final Signer signer, final RepoFileUrl urls) {
             return new Content.From(body).asStringFuture()
                 .thenApply(
                     str -> {
@@ -193,7 +199,7 @@ public final class ConanUpload {
                             final String url = String.join(
                                 "", urls.of(filepath), "?signature=",
                                 this.tokenizer.generateToken(
-                                    filepath, hostname, this.repository
+                                    filepath, signer.hostname, this.repository, signer.user
                                 )
                             );
                             result.add(key, url);
@@ -204,6 +210,47 @@ public final class ConanUpload {
                             .build();
                     }
                 ).toCompletableFuture();
+        }
+    }
+
+    /**
+     * User the authorization layer verified for this request: only the
+     * login header {@code AuthzSlice} sets (it drops any client-sent one).
+     * @param headers Request headers
+     * @return User name, empty when the request was not authenticated
+     */
+    private static String verifiedUser(final Headers headers) {
+        return headers.find(AuthzSlice.LOGIN_HDR).stream()
+            .findFirst()
+            .map(Header::getValue)
+            .filter(val -> !val.isBlank() && !AuthUser.ANONYMOUS.name().equals(val))
+            .orElse("");
+    }
+
+    /**
+     * Host and authenticated user an upload URL is signed for.
+     * @since 2.2.9
+     */
+    private static final class Signer {
+
+        /**
+         * Host name.
+         */
+        private final String hostname;
+
+        /**
+         * Authenticated user.
+         */
+        private final String user;
+
+        /**
+         * Ctor.
+         * @param hostname Host name
+         * @param user Authenticated user
+         */
+        Signer(final String hostname, final String user) {
+            this.hostname = hostname;
+            this.user = user;
         }
     }
 

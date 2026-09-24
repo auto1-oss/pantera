@@ -106,7 +106,10 @@ final class ConanSignedUploadTest {
     }
 
     @Test
-    void signedUploadWithoutCredentialsIsRefused() throws Exception {
+    void signedUploadWithoutCredentialsIsStoredForTheIssuingWriter() throws Exception {
+        // Conan 1.x never sends its token to a URL carrying ?signature=:
+        // the signed URL itself, issued to an authenticated writer, is the
+        // credential of the PUT.
         final Storage asto = new InMemoryStorage();
         final Slice slice = ConanSignedUploadTest.slice(
             asto, "repo-a", Map.of("repo-a", Action.Standard.WRITE)
@@ -114,6 +117,98 @@ final class ConanSignedUploadTest {
         MatcherAssert.assertThat(
             "status",
             ConanSignedUploadTest.put(slice, ConanSignedUploadTest.uploadUrl(slice), false),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "file written", asto.exists(ConanSignedUploadTest.FILE).join(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void signedUploadWithoutCredentialsIsRefusedAfterTheWriterLostWrite() throws Exception {
+        final Storage asto = new InMemoryStorage();
+        final URI url = ConanSignedUploadTest.uploadUrl(
+            ConanSignedUploadTest.slice(asto, "repo-a", Map.of("repo-a", Action.Standard.WRITE))
+        );
+        MatcherAssert.assertThat(
+            "status",
+            ConanSignedUploadTest.put(
+                ConanSignedUploadTest.slice(
+                    asto, "repo-a", Map.of("repo-a", Action.Standard.READ)
+                ),
+                url, false
+            ),
+            new IsEqual<>(RsStatus.FORBIDDEN)
+        );
+        MatcherAssert.assertThat(
+            "nothing written", asto.exists(ConanSignedUploadTest.FILE).join(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void signedUploadWithoutCredentialsCannotWriteIntoAnotherRepository() throws Exception {
+        final Storage target = new InMemoryStorage();
+        final Map<String, Action> grants = Map.of(
+            "repo-a", Action.Standard.WRITE, "repo-b", Action.Standard.WRITE
+        );
+        final URI url = ConanSignedUploadTest.uploadUrl(
+            ConanSignedUploadTest.slice(new InMemoryStorage(), "repo-a", grants)
+        );
+        MatcherAssert.assertThat(
+            "status",
+            ConanSignedUploadTest.put(
+                ConanSignedUploadTest.slice(target, "repo-b", grants), url, false
+            ),
+            new IsEqual<>(RsStatus.UNAUTHORIZED)
+        );
+        MatcherAssert.assertThat(
+            "nothing written", target.exists(ConanSignedUploadTest.FILE).join(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void tamperedPathOfSignedUploadIsRefused() throws Exception {
+        final Storage asto = new InMemoryStorage();
+        final Slice slice = ConanSignedUploadTest.slice(
+            asto, "repo-a", Map.of("repo-a", Action.Standard.WRITE)
+        );
+        final URI url = ConanSignedUploadTest.uploadUrl(slice);
+        MatcherAssert.assertThat(
+            "status",
+            slice.response(
+                new RequestLine(
+                    RqMethod.PUT,
+                    String.format(
+                        "%s?%s", url.getRawPath().replace("conanfile.py", "evil.py"),
+                        url.getRawQuery()
+                    )
+                ),
+                ConanSignedUploadTest.headers(false),
+                new Content.From("evil".getBytes(StandardCharsets.UTF_8))
+            ).join().status(),
+            new IsEqual<>(RsStatus.UNAUTHORIZED)
+        );
+        MatcherAssert.assertThat(
+            "nothing written", asto.list(com.auto1.pantera.asto.Key.ROOT).join().isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void putWithoutSignatureOrCredentialsIsRefused() {
+        final Storage asto = new InMemoryStorage();
+        MatcherAssert.assertThat(
+            "status",
+            ConanSignedUploadTest.slice(
+                asto, "repo-a", Map.of("repo-a", Action.Standard.WRITE)
+            ).response(
+                new RequestLine(RqMethod.PUT, "/zlib/1.2.13/_/_/0/export/conanfile.py"),
+                ConanSignedUploadTest.headers(false),
+                new Content.From("recipe".getBytes(StandardCharsets.UTF_8))
+            ).join().status(),
             new IsEqual<>(RsStatus.UNAUTHORIZED)
         );
         MatcherAssert.assertThat(

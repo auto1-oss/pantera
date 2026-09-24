@@ -241,6 +241,56 @@ final class ConanMainPortUrlsTest {
         );
     }
 
+    @Test
+    void conanClientUploadsThroughSignedUrlWithoutCredentials() throws Exception {
+        // Conan 1.x sends no Authorization header to a URL carrying
+        // ?signature=, so the PUT must pass the anonymous-access gate and be
+        // authorised by the signature (issued to alice, who holds WRITE).
+        final URI uri = this.uploadUrl();
+        final Response put = this.pipeline.response(
+            new RequestLine(
+                RqMethod.PUT, String.format("%s?%s", uri.getRawPath(), uri.getRawQuery())
+            ),
+            Headers.from("Host", "reg.example.com"),
+            new Content.From("recipe".getBytes(StandardCharsets.UTF_8))
+        ).get(30, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "credential-less signed PUT accepted", put.status(), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "file stored under the repository",
+            new FileStorage(this.tmp).value(
+                new Key.From("my-conan", ConanMainPortUrlsTest.RECIPE, "0/export/conanfile.py")
+            ).join().asString(),
+            new IsEqual<>("recipe")
+        );
+    }
+
+    @Test
+    void credentialLessPutWithoutSignatureIsRefused() throws Exception {
+        final Response put = this.pipeline.response(
+            new RequestLine(
+                RqMethod.PUT,
+                String.format(
+                    "/test_prefix/api/my-conan/%s/0/export/conanfile.py",
+                    ConanMainPortUrlsTest.RECIPE
+                )
+            ),
+            Headers.from("Host", "reg.example.com"),
+            new Content.From("evil".getBytes(StandardCharsets.UTF_8))
+        ).get(30, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "refused", put.status(), new IsEqual<>(RsStatus.UNAUTHORIZED)
+        );
+        MatcherAssert.assertThat(
+            "nothing written",
+            new FileStorage(this.tmp).exists(
+                new Key.From("my-conan", ConanMainPortUrlsTest.RECIPE, "0/export/conanfile.py")
+            ).join(),
+            new IsEqual<>(false)
+        );
+    }
+
     private URI uploadUrl() throws Exception {
         final Response urls = this.send(
             RqMethod.POST,

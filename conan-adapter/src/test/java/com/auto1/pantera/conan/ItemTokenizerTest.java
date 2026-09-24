@@ -47,15 +47,29 @@ final class ItemTokenizerTest {
     @Test
     void tokenNamesItsRepositoryAndExpires() {
         final JsonObject claims = ItemTokenizerTest.claims(
-            ItemTokenizerTest.tokenizer().generateToken("/a/b", "host", "repo-a")
+            ItemTokenizerTest.tokenizer().generateToken("/a/b", "host", "repo-a", "alice")
         );
         MatcherAssert.assertThat(
             "repository claim", claims.getString("repo"), new IsEqual<>("repo-a")
         );
         MatcherAssert.assertThat(
+            "user claim", claims.getString("user"), new IsEqual<>("alice")
+        );
+        MatcherAssert.assertThat(
             "lifetime",
             claims.getLong("exp") - claims.getLong("iat"),
             new IsEqual<>((long) ItemTokenizer.TTL_SECONDS)
+        );
+    }
+
+    @Test
+    void tokenNamesTheUserItWasIssuedTo() {
+        final ItemTokenizer tokenizer = ItemTokenizerTest.tokenizer();
+        MatcherAssert.assertThat(
+            tokenizer.authenticateToken(
+                tokenizer.generateToken("/a/b", "host", "repo-a", "alice")
+            ).toCompletableFuture().join().orElseThrow().user(),
+            new IsEqual<>(java.util.Optional.of("alice"))
         );
     }
 
