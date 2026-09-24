@@ -6,15 +6,17 @@ import Aura from '@primeuix/themes/aura'
 import { createRouter, createMemoryHistory, type Router } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import CooldownView from '../CooldownView.vue'
-import type { CooldownInspectResponse } from '@/api/cooldown'
+import type { CooldownInspectResponse, InspectSuggestion } from '@/api/cooldown'
 
 const inspectMock = vi.fn()
 const refreshMock = vi.fn()
+const suggestMock = vi.fn()
 
 vi.mock('@/api/cooldown', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/cooldown')>()),
   inspectCooldownPackage: (...a: unknown[]) => inspectMock(...a),
   refreshCooldownPackage: (...a: unknown[]) => refreshMock(...a),
+  suggestCooldownPackages: (...a: unknown[]) => suggestMock(...a),
 }))
 
 vi.mock('@/api/settings', () => ({
@@ -82,6 +84,26 @@ function inspectResponse(hiddenLatest: boolean): CooldownInspectResponse {
   }
 }
 
+const JACKSON: InspectSuggestion = {
+  package: 'com.fasterxml.jackson.core:jackson-databind',
+  display: 'com.fasterxml.jackson.core:jackson-databind',
+  repoType: 'maven',
+  sources: ['index', 'cooldown'],
+  repos: ['maven_group', 'maven_proxy'],
+}
+
+function emptyResponse(pkg: string, didYouMean: InspectSuggestion[]): CooldownInspectResponse {
+  return { package: pkg, repoType: 'npm', node: 'pantera-b', repos: [], versions: [], didYouMean }
+}
+
+/** Type into the package search and wait out the AutoComplete debounce. */
+async function typePackage(w: VueWrapper, text: string) {
+  const input = w.get('#inspect-package')
+  await input.setValue(text)
+  await new Promise(resolve => setTimeout(resolve, 350))
+  await flushPromises()
+}
+
 let wrapper: VueWrapper | null = null
 
 async function mountAt(url: string, admin = true): Promise<{ w: VueWrapper; router: Router }> {
@@ -119,6 +141,8 @@ describe('CooldownView — Inspect package tab', () => {
     setActivePinia(createPinia())
     inspectMock.mockReset()
     refreshMock.mockReset()
+    suggestMock.mockReset()
+    suggestMock.mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -196,5 +220,92 @@ describe('CooldownView — Inspect package tab', () => {
     await flushPromises()
     expect(inspectMock).toHaveBeenCalledTimes(1)
     expect(router.currentRoute.value.query).toMatchObject({ tab: 'inspect', repoType: 'npm', package: 'lodash' })
+  })
+
+  it('suggests packages from any part of the name as the user types', async () => {
+    suggestMock.mockResolvedValue([JACKSON])
+    const { w } = await mountAt('/cooldown?tab=inspect')
+    await typePackage(w, 'databind')
+
+    expect(suggestMock).toHaveBeenCalledWith({ q: 'databind', repoType: 'npm', limit: 20 })
+    const option = document.body.querySelector('[data-testid="inspect-suggestion"]')
+    expect(option).not.toBeNull()
+    const text = option!.textContent ?? ''
+    expect(text).toContain('com.fasterxml.jackson.core:jackson-databind')
+    expect(text).toContain('maven')
+    expect(text).toContain('indexed')
+    expect(text).toContain('cooldown')
+    expect(text).toContain('maven_group, maven_proxy')
+  })
+
+  it('searches every format when no type is chosen', async () => {
+    const { w } = await mountAt('/cooldown?tab=inspect&repoType=npm')
+    // "Any type" — the Select's empty value — through the state it is bound to.
+    const inspector = w.findComponent({ name: 'CooldownInspector' })
+    ;(inspector.vm as unknown as { repoType: string }).repoType = ''
+    await flushPromises()
+    await typePackage(w, 'http5')
+    expect(suggestMock).toHaveBeenCalledWith({ q: 'http5', repoType: undefined, limit: 20 })
+  })
+
+  it('does not search below two characters', async () => {
+    const { w } = await mountAt('/cooldown?tab=inspect')
+    await typePackage(w, 'd')
+    expect(suggestMock).not.toHaveBeenCalled()
+  })
+
+  it('shows an empty state when nothing matches', async () => {
+    const { w } = await mountAt('/cooldown?tab=inspect')
+    await typePackage(w, 'zzqq')
+    expect(document.body.textContent).toContain('No matching packages')
+  })
+
+  it('selecting a suggestion switches the type and inspects it', async () => {
+    suggestMock.mockResolvedValue([JACKSON])
+    inspectMock.mockResolvedValue(inspectResponse(false))
+    const { w, router } = await mountAt('/cooldown?tab=inspect')
+    await typePackage(w, 'jackson databind')
+
+    const option = document.body.querySelector('[data-testid="inspect-suggestion"]')
+    ;(option!.closest('li') as HTMLElement).click()
+    await flushPromises()
+
+    expect(inspectMock).toHaveBeenCalledWith({
+      repoType: 'maven',
+      package: 'com.fasterxml.jackson.core:jackson-databind',
+      repo: undefined,
+    })
+    expect(router.currentRoute.value.query).toMatchObject({
+      tab: 'inspect',
+      repoType: 'maven',
+      package: 'com.fasterxml.jackson.core:jackson-databind',
+    })
+  })
+
+  it('Enter inspects free text as typed', async () => {
+    inspectMock.mockResolvedValue(inspectResponse(false))
+    const { w } = await mountAt('/cooldown?tab=inspect')
+    await typePackage(w, 'lodash')
+    await w.get('#inspect-package').trigger('keydown', { key: 'Enter', code: 'Enter' })
+    await flushPromises()
+    expect(inspectMock).toHaveBeenCalledWith({ repoType: 'npm', package: 'lodash', repo: undefined })
+  })
+
+  it('offers did-you-mean suggestions when the exact name is unknown', async () => {
+    inspectMock.mockResolvedValueOnce(emptyResponse('jackson-databind', [JACKSON]))
+    inspectMock.mockResolvedValueOnce(inspectResponse(false))
+    const { w } = await mountAt('/cooldown?tab=inspect&repoType=npm&package=jackson-databind')
+
+    const box = w.get('[data-testid="inspect-did-you-mean"]')
+    expect(box.text()).toContain('No exact match for jackson-databind')
+    expect(box.text()).toContain('com.fasterxml.jackson.core:jackson-databind')
+
+    await w.get('[data-testid="inspect-did-you-mean-option"]').trigger('click')
+    await flushPromises()
+    expect(inspectMock).toHaveBeenLastCalledWith({
+      repoType: 'maven',
+      package: 'com.fasterxml.jackson.core:jackson-databind',
+      repo: undefined,
+    })
   })
 })

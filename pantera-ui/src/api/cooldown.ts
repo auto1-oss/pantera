@@ -48,12 +48,34 @@ export interface InspectVersion {
   mismatch: boolean
 }
 
+/** A package name the inspector accepts, found by the type-ahead search. */
+export interface InspectSuggestion {
+  /** Name in the form the inspector accepts (maven groupId:artifactId, ...). */
+  package: string
+  /** Human form; notes when a maven coordinate could not be resolved. */
+  display: string
+  /** Format family (npm, pypi, maven, gradle, ...). */
+  repoType: string
+  /** Where the name was found: the artifacts index and/or cooldown records. */
+  sources: Array<'index' | 'cooldown'>
+  repos: string[]
+}
+
 export interface CooldownInspectResponse {
   package: string
   repoType: string
   node: string
   repos: InspectRepo[]
   versions: InspectVersion[]
+  /** Present when nothing is known under the exact name. */
+  didYouMean?: InspectSuggestion[]
+}
+
+export interface InspectSuggestParams {
+  /** Format family or type; omit to search every format. */
+  repoType?: string
+  q: string
+  limit?: number
 }
 
 export interface CooldownInspectParams {
@@ -77,6 +99,17 @@ export async function inspectCooldownPackage(
     timeout: INSPECT_TIMEOUT_MS,
   })
   return data
+}
+
+/** Type-ahead: package names containing every word of `q` (admin-only). */
+export async function suggestCooldownPackages(
+  params: InspectSuggestParams,
+): Promise<InspectSuggestion[]> {
+  const query: Record<string, string | number> = { q: params.q }
+  if (params.repoType) query.repoType = params.repoType
+  if (params.limit) query.limit = params.limit
+  const { data } = await getApiClient().get('/cooldown/inspect/suggest', { params: query })
+  return data.suggestions ?? []
 }
 
 export async function refreshCooldownPackage(

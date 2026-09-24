@@ -3,10 +3,12 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   inspectCooldownPackage,
   refreshCooldownPackage,
+  suggestCooldownPackages,
   INSPECT_REPO_TYPES,
   type CooldownInspectResponse,
   type CooldownState,
   type InspectNegCacheEntry,
+  type InspectSuggestion,
 } from '@/api/cooldown'
 import { listRepos } from '@/api/repos'
 import { useNotificationStore } from '@/stores/notifications'
@@ -17,7 +19,7 @@ import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Tag from 'primevue/tag'
-import InputText from 'primevue/inputtext'
+import AutoComplete from 'primevue/autocomplete'
 import Select from 'primevue/select'
 
 export interface InspectQuery {
@@ -37,7 +39,11 @@ const emit = defineEmits<{ (e: 'query', q: InspectQuery): void }>()
 const notify = useNotificationStore()
 
 const repoType = ref<string>(props.initialRepoType || 'npm')
-const pkg = ref(props.initialPackage ?? '')
+// Bound to the AutoComplete: a string while typing, the option object for an
+// instant after a suggestion is picked (onSuggestionSelect turns it back).
+const pkg = ref<string | InspectSuggestion>(props.initialPackage ?? '')
+const suggestions = ref<InspectSuggestion[]>([])
+let suggestSeq = 0
 const repo = ref<string | null>(props.initialRepo || null)
 const repoNames = ref<string[]>([])
 const loading = ref(false)
@@ -56,6 +62,14 @@ const refreshDiff = ref<{
   mismatchesAfter: number
 } | null>(null)
 
+const typeOptions = [{ label: 'Any type', value: '' }, ...INSPECT_REPO_TYPES]
+
+const SOURCE_LABELS: Record<string, string> = { index: 'indexed', cooldown: 'cooldown' }
+
+function packageText(): string {
+  return typeof pkg.value === 'string' ? pkg.value : pkg.value.package
+}
+
 const repoOptions = computed(() => {
   const names = new Set(repoNames.value)
   if (repo.value) names.add(repo.value)
@@ -68,6 +82,10 @@ const repoOptions = computed(() => {
 const mismatchCount = computed(() => result.value?.versions.filter(v => v.mismatch).length ?? 0)
 
 async function loadRepoNames() {
+  if (!repoType.value) {
+    repoNames.value = []
+    return
+  }
   try {
     const resp = await listRepos({ type: repoType.value, size: 500 })
     repoNames.value = resp.items
@@ -85,14 +103,54 @@ watch(repoType, () => {
 })
 
 function currentQuery(): InspectQuery | null {
-  const name = pkg.value.trim()
+  const name = packageText().trim()
   if (!name || !repoType.value) return null
   return { repoType: repoType.value, package: name, repo: repo.value ?? undefined }
 }
 
+/** AutoComplete completeMethod; the component debounces (delay) and gates on minLength. */
+async function searchPackages(event: { query: string }) {
+  const seq = ++suggestSeq
+  try {
+    const found = await suggestCooldownPackages({
+      q: event.query,
+      repoType: repoType.value || undefined,
+      limit: 20,
+    })
+    if (seq === suggestSeq) suggestions.value = found
+  } catch {
+    if (seq === suggestSeq) suggestions.value = []
+  }
+}
+
+/** Inspect a suggested package, switching to its repo type when it differs. */
+function pickSuggestion(s: InspectSuggestion) {
+  if (s.repoType && s.repoType !== repoType.value) {
+    repoType.value = s.repoType
+    repo.value = null
+  }
+  pkg.value = s.package
+  inspect()
+}
+
+function onSuggestionSelect(event: { value: InspectSuggestion }) {
+  pickSuggestion(event.value)
+}
+
+/** Enter inspects the text as typed, unless it just picked a highlighted suggestion. */
+function onPackageEnter(event: KeyboardEvent) {
+  if (event.defaultPrevented) return
+  inspect()
+}
+
 async function inspect() {
   const q = currentQuery()
-  if (!q) return
+  if (!q) {
+    if (packageText().trim() && !repoType.value) {
+      error.value = 'Choose a repo type, or pick one of the suggestions'
+    }
+    return
+  }
   emit('query', q)
   loading.value = true
   error.value = ''
@@ -202,7 +260,7 @@ function metadataPath(repoName: string): string | null {
 
 onMounted(() => {
   loadRepoNames()
-  if (pkg.value.trim()) inspect()
+  if (packageText().trim()) inspect()
 })
 
 defineExpose({ inspect, refreshPackage, result, refreshDiff })
@@ -218,7 +276,7 @@ defineExpose({ inspect, refreshPackage, result, refreshDiff })
             <Select
               id="inspect-repo-type"
               v-model="repoType"
-              :options="[...INSPECT_REPO_TYPES]"
+              :options="typeOptions"
               option-label="label"
               option-value="value"
               class="w-44"
@@ -226,13 +284,36 @@ defineExpose({ inspect, refreshPackage, result, refreshDiff })
           </div>
           <div class="flex flex-col gap-1 flex-1 min-w-[14rem]">
             <label class="text-sm text-gray-500" for="inspect-package">Package</label>
-            <InputText
-              id="inspect-package"
+            <AutoComplete
               v-model="pkg"
-              placeholder="lodash, @scope/name, requests, com.example:foo..."
+              input-id="inspect-package"
+              :suggestions="suggestions"
+              option-label="package"
+              :delay="250"
+              :min-length="2"
+              empty-search-message="No matching packages"
+              placeholder="Any part of the name: http5, jackson databind, @types node..."
               class="w-full"
-              @keyup.enter="inspect"
-            />
+              input-class="w-full"
+              data-testid="inspect-package"
+              @complete="searchPackages"
+              @item-select="onSuggestionSelect"
+              @keydown.enter="onPackageEnter"
+            >
+              <template #option="{ option }">
+                <div class="flex flex-wrap items-center gap-2" data-testid="inspect-suggestion">
+                  <span class="font-mono">{{ option.display }}</span>
+                  <Tag :value="option.repoType" severity="secondary" />
+                  <Tag
+                    v-for="src in option.sources"
+                    :key="src"
+                    :value="SOURCE_LABELS[src] ?? src"
+                    :severity="src === 'cooldown' ? 'warn' : 'info'"
+                  />
+                  <span class="text-xs text-gray-400">{{ option.repos.join(', ') }}</span>
+                </div>
+              </template>
+            </AutoComplete>
           </div>
           <div class="flex flex-col gap-1">
             <label class="text-sm text-gray-500" for="inspect-repo">Repository (optional)</label>
@@ -243,6 +324,7 @@ defineExpose({ inspect, refreshPackage, result, refreshDiff })
               option-label="label"
               option-value="value"
               placeholder="All repositories of this type"
+              :disabled="!repoType"
               filter
               class="w-60"
             />
@@ -268,6 +350,26 @@ defineExpose({ inspect, refreshPackage, result, refreshDiff })
       class="p-3 rounded-lg border border-red-300 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300"
     >
       {{ error }}
+    </div>
+
+    <div
+      v-if="result?.didYouMean?.length"
+      class="p-3 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+      data-testid="inspect-did-you-mean"
+    >
+      No exact match for <span class="font-mono">{{ result.package }}</span> — did you mean:
+      <span class="inline-flex flex-wrap gap-2 ml-1">
+        <Button
+          v-for="s in result.didYouMean"
+          :key="`${s.repoType}:${s.package}`"
+          :label="s.display"
+          size="small"
+          link
+          class="font-mono !p-0"
+          data-testid="inspect-did-you-mean-option"
+          @click="pickSuggestion(s)"
+        />
+      </span>
     </div>
 
     <Card v-if="refreshDiff" class="shadow-sm" data-testid="inspect-refresh-diff">
