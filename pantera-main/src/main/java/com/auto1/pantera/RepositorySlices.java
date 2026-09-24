@@ -439,6 +439,9 @@ public class RepositorySlices {
         this.slices.asMap().keySet().stream()
             .filter(k -> stale.contains(k.name().string()))
             .forEach(this.slices::invalidate);
+        // The rebuilt slice re-registers its raw-metadata revalidation hook;
+        // until then the admin refresh must not drive the stale instance.
+        com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance().remove(name);
         if (!groups.isEmpty()) {
             EcsLogger.info("com.auto1.pantera")
                 .message(
@@ -722,6 +725,55 @@ public class RepositorySlices {
      */
     public NegativeCache negativeCache() {
         return this.sharedNegativeCache;
+    }
+
+    /**
+     * Group-member circuit-breaker status of a repository, read without
+     * creating breaker state (admin diagnostics).
+     *
+     * @param name Repository name
+     * @return {@code online}, {@code blocked} or {@code probing}
+     */
+    public String memberBreakerStatus(final String name) {
+        final AutoBlockRegistry registry = this.memberRegistries.get(name);
+        return registry == null ? "online" : registry.status(name);
+    }
+
+    /**
+     * Upstream HTTP circuit breakers of a proxy's remotes that already have
+     * state, read without creating any (admin diagnostics).
+     *
+     * @param name Repository name
+     * @return Breaker states
+     */
+    public java.util.List<com.auto1.pantera.api.v1.admin.BreakerProbe.Upstream> upstreamBreakers(
+        final String name
+    ) {
+        final Optional<RepoConfig> cfg = this.repos.config(name);
+        if (cfg.isEmpty() || !cfg.get().type().endsWith("-proxy")) {
+            return java.util.List.of();
+        }
+        final Optional<JettyClientSlices> client = this.sharedClients.peek(
+            cfg.get().httpClientSettings().orElseGet(this.settings::httpClientSettings)
+        );
+        if (client.isEmpty()) {
+            return java.util.List.of();
+        }
+        final java.util.List<com.auto1.pantera.api.v1.admin.BreakerProbe.Upstream> out =
+            new java.util.ArrayList<>();
+        for (final com.auto1.pantera.http.client.RemoteConfig remote : cfg.get().remotes()) {
+            final java.net.URI uri = remote.uri();
+            final boolean secure = "https".equalsIgnoreCase(uri.getScheme());
+            final int port = uri.getPort() > 0 ? uri.getPort() : (secure ? 443 : 80);
+            final String key = (secure ? "https://" : "http://") + uri.getHost() + ':' + port;
+            client.get().circuitBreakerRegistry().find(key).ifPresent(
+                breaker -> out.add(new com.auto1.pantera.api.v1.admin.BreakerProbe.Upstream(
+                    key, breaker.isOpen(),
+                    breaker.isOpen() ? Math.max(0L, breaker.timeRemaining().toSeconds()) : 0L
+                ))
+            );
+        }
+        return out;
     }
 
     /**
@@ -2204,6 +2256,18 @@ public class RepositorySlices {
          */
         int cachedClientCount() {
             return this.clients.size();
+        }
+
+        /**
+         * The cached client for these settings, if one exists; never
+         * creates or retains one.
+         *
+         * @param settings HTTP client settings
+         * @return Client
+         */
+        Optional<JettyClientSlices> peek(final HttpClientSettings settings) {
+            return Optional.ofNullable(this.clients.get(HttpClientSettingsKey.from(settings)))
+                .map(holder -> holder.client);
         }
 
         Lease acquire(final HttpClientSettings settings) {

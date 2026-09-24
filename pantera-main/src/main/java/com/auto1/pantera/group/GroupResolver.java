@@ -844,7 +844,7 @@ public final class GroupResolver implements Slice {
      * @param path Request path
      * @return {@code "<version>/<file>"}, or empty for version-less paths
      */
-    private static String negativeCacheVersion(final String parsedVersion, final String path) {
+    static String negativeCacheVersion(final String parsedVersion, final String path) {
         if (parsedVersion.isEmpty()) {
             return "";
         }

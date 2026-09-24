@@ -135,6 +135,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     private final JwtTokens jwtTokens;
 
     /**
+     * Serving-side access for the admin cache tools (repository topology,
+     * in-process repository requests, breaker state, node identity).
+     */
+    private final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics;
+
+    /**
      * Primary constructor.
      * @param caches Pantera settings caches
      * @param configsStorage Pantera settings storage
@@ -160,7 +166,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final int port,
         final PanteraSecurity security,
         final Optional<KeyStore> keystore,
-        final JWTAuth jwt, // NOPMD UnusedFormalParameter - public API; JWTAuth is reserved for upcoming route-protection wiring
+        final JWTAuth jwt,
         final Optional<MetadataEventQueues> events,
         final CooldownService cooldown,
         final CooldownMetadataService cooldownMetadata,
@@ -169,6 +175,48 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final DataSource dataSource,
         final JwtTokens jwtTokens
     ) {
+        this(
+            caches, configsStorage, port, security, keystore, jwt, events, cooldown,
+            cooldownMetadata, settings, artifactIndex, dataSource, jwtTokens,
+            new com.auto1.pantera.api.v1.admin.AdminDiagnostics()
+        );
+    }
+
+    /**
+     * Primary constructor with the admin cache tools' serving-side access.
+     * @param caches Pantera settings caches
+     * @param configsStorage Pantera settings storage
+     * @param port Port to run API on
+     * @param security Pantera security
+     * @param keystore KeyStore
+     * @param jwt JWT authentication provider (Vert.x, for route protection)
+     * @param events Artifact metadata events queue
+     * @param cooldown Cooldown service shared with the repository slices
+     * @param cooldownMetadata Cooldown metadata service shared with the slices
+     * @param settings Pantera settings
+     * @param artifactIndex Artifact index for search
+     * @param dataSource Database data source, nullable
+     * @param jwtTokens RS256 tokens provider for token issuance
+     * @param diagnostics Serving-side access for the admin cache tools
+     * @checkstyle ParameterNumberCheck (20 lines)
+     */
+    public AsyncApiVerticle(
+        final PanteraCaches caches,
+        final Storage configsStorage,
+        final int port,
+        final PanteraSecurity security,
+        final Optional<KeyStore> keystore,
+        final JWTAuth jwt, // NOPMD UnusedFormalParameter - public API; JWTAuth is reserved for upcoming route-protection wiring
+        final Optional<MetadataEventQueues> events,
+        final CooldownService cooldown,
+        final CooldownMetadataService cooldownMetadata,
+        final Settings settings,
+        final ArtifactIndex artifactIndex,
+        final DataSource dataSource,
+        final JwtTokens jwtTokens,
+        final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics
+    ) {
+        this.diagnostics = diagnostics;
         this.caches = caches;
         this.configsStorage = configsStorage;
         this.port = port;
@@ -197,12 +245,14 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * @param jwtTokens RS256 tokens provider for token issuance, nullable
      * @param cooldown Serving cooldown service (shared with the slices)
      * @param cooldownMetadata Serving cooldown metadata service (shared)
+     * @param diagnostics Serving-side access for the admin cache tools
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public AsyncApiVerticle(final Settings settings, final int port,
         final JWTAuth jwt, final DataSource dataSource,
         final JwtTokens jwtTokens, final CooldownService cooldown,
-        final CooldownMetadataService cooldownMetadata) {
+        final CooldownMetadataService cooldownMetadata,
+        final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics) {
         this(
             settings.caches(), settings.configStorage(),
             port, settings.authz(), settings.keyStore(), jwt,
@@ -212,7 +262,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             settings,
             settings.artifactIndex(),
             dataSource,
-            jwtTokens
+            jwtTokens,
+            diagnostics
         );
     }
 
@@ -537,9 +588,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 )
             ).register(router);
         }
-        new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(
-            this.security.policy()
-        ).register(router);
+        this.cacheTools(router);
         // Start server
         final HttpServer server;
         final String schema;
@@ -597,6 +646,43 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     .field("log.source", "application")
                     .log()
             );
+    }
+
+    /**
+     * Admin cache tools: negative cache, cooldown package inspector and
+     * refresh, troubleshooter. All admin-only.
+     * @param router Router
+     */
+    private void cacheTools(final Router router) {
+        final com.auto1.pantera.http.cache.NegativeCache negative =
+            com.auto1.pantera.http.cache.NegativeCacheRegistry.instance().sharedCache();
+        final com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry envelopes =
+            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance();
+        final com.auto1.pantera.api.v1.admin.CooldownLookup lookup;
+        if (this.dataSource == null) {
+            lookup = com.auto1.pantera.api.v1.admin.CooldownLookup.NONE;
+        } else {
+            lookup = new com.auto1.pantera.cooldown.CooldownRepository(this.dataSource)
+                ::findForPackage;
+        }
+        final com.auto1.pantera.api.v1.admin.PackageInspector inspector =
+            new com.auto1.pantera.api.v1.admin.PackageInspector(
+                this.diagnostics, negative, envelopes::sharedCache, lookup
+            );
+        new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(
+            this.security.policy(), this.diagnostics
+        ).register(router);
+        new com.auto1.pantera.api.v1.admin.CooldownInspectResource(
+            this.security.policy(), inspector,
+            new com.auto1.pantera.api.v1.admin.PackageRefresher(
+                inspector, negative, envelopes::sharedCache,
+                com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance()
+            )
+        ).register(router);
+        new com.auto1.pantera.api.v1.admin.TroubleshootResource(
+            this.security.policy(),
+            new com.auto1.pantera.api.v1.admin.Troubleshooter(this.diagnostics, negative, inspector)
+        ).register(router);
     }
 
     /**

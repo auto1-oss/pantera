@@ -35,6 +35,100 @@ public final class CooldownRepository {
         this.dataSource = Objects.requireNonNull(dataSource);
     }
 
+    /**
+     * Every cooldown record — live rows and archived history — of a package
+     * in a set of repositories, newest history first. Live rows map to
+     * {@code blocked} (active, window open), {@code expired} (active, window
+     * over, not yet archived) or {@code released} (manually unblocked);
+     * history rows to {@code released} (manual unblock / admin purge) or
+     * {@code expired}. Admin package inspector only; blocking JDBC.
+     *
+     * @param repoNames Repository names
+     * @param artifacts Artifact name spellings
+     * @return Records
+     */
+    public List<CooldownPackageRow> findForPackage(
+        final java.util.Collection<String> repoNames,
+        final java.util.Collection<String> artifacts
+    ) {
+        if (repoNames.isEmpty() || artifacts.isEmpty()) {
+            return List.of();
+        }
+        final List<CooldownPackageRow> out = new ArrayList<>();
+        final long now = System.currentTimeMillis();
+        final String live =
+            "SELECT repo_type, repo_name, artifact, version, status, reason, "
+                + "blocked_until, unblocked_at FROM artifact_cooldowns "
+                + "WHERE repo_name = ANY(?) AND artifact = ANY(?)";
+        final String history =
+            "SELECT repo_type, repo_name, artifact, version, reason, blocked_until, "
+                + "archive_reason, archived_at FROM artifact_cooldowns_history "
+                + "WHERE repo_name = ANY(?) AND artifact = ANY(?) "
+                + "ORDER BY archived_at DESC LIMIT 5000";
+        try (Connection conn = this.dataSource.getConnection()) {
+            final Array repos = conn.createArrayOf("varchar", repoNames.toArray());
+            final Array names = conn.createArrayOf("varchar", artifacts.toArray());
+            try (PreparedStatement stmt = conn.prepareStatement(live)) {
+                stmt.setArray(1, repos);
+                stmt.setArray(2, names);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        out.add(CooldownRepository.liveRow(rs, now));
+                    }
+                }
+            }
+            try (PreparedStatement stmt = conn.prepareStatement(history)) {
+                stmt.setArray(1, repos);
+                stmt.setArray(2, names);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        final String archive = rs.getString("archive_reason");
+                        out.add(new CooldownPackageRow(
+                            rs.getString("repo_type"), rs.getString("repo_name"),
+                            rs.getString("artifact"), rs.getString("version"),
+                            ArchiveReason.EXPIRED.name().equals(archive) ? "expired" : "released",
+                            Instant.ofEpochMilli(rs.getLong("blocked_until")),
+                            rs.getString("reason"), false,
+                            Instant.ofEpochMilli(rs.getLong("archived_at"))
+                        ));
+                    }
+                }
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to query cooldown records of a package", err);
+        }
+        return out;
+    }
+
+    /**
+     * Map a live cooldown row.
+     *
+     * @param rs Result set positioned on the row
+     * @param now Current epoch millis
+     * @return Record
+     * @throws SQLException On read failure
+     */
+    private static CooldownPackageRow liveRow(final ResultSet rs, final long now)
+        throws SQLException {
+        final BlockStatus status = BlockStatus.fromDatabase(rs.getString("status"));
+        final long until = rs.getLong("blocked_until");
+        final long unblocked = rs.getLong("unblocked_at");
+        final Instant at = rs.wasNull() ? null : Instant.ofEpochMilli(unblocked);
+        final String state;
+        if (status == BlockStatus.ACTIVE) {
+            state = until > now ? "blocked" : "expired";
+        } else if (status == BlockStatus.EXPIRED) {
+            state = "expired";
+        } else {
+            state = "released";
+        }
+        return new CooldownPackageRow(
+            rs.getString("repo_type"), rs.getString("repo_name"),
+            rs.getString("artifact"), rs.getString("version"), state,
+            Instant.ofEpochMilli(until), rs.getString("reason"), true, at
+        );
+    }
+
     Optional<DbBlockRecord> find(
         final String repoType,
         final String repoName,

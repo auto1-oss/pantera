@@ -826,6 +826,29 @@ public final class VertxMain {
         // Deploy AsyncApiVerticle with multiple instances for CPU scaling
         // Use 2x CPU cores to handle concurrent API requests efficiently
         final int apiInstances = Runtime.getRuntime().availableProcessors() * 2;
+        // Admin cache tools reach the serving side through one shared bundle:
+        // repository topology, in-process requests through the live slices
+        // (the caller's own credentials, below the client entry point), and
+        // read-only breaker state. The hostname is resolved once, here.
+        final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics =
+            new com.auto1.pantera.api.v1.admin.AdminDiagnostics(
+                new com.auto1.pantera.api.v1.admin.RepoTopology.FromRepositories(repos),
+                new com.auto1.pantera.api.v1.admin.SliceRepoFetch(
+                    name -> slices.slice(new Key.From(name), this.port)
+                ),
+                new com.auto1.pantera.api.v1.admin.BreakerProbe() {
+                    @Override
+                    public String memberStatus(final String repo) {
+                        return slices.memberBreakerStatus(repo);
+                    }
+
+                    @Override
+                    public java.util.List<Upstream> upstreams(final String repo) {
+                        return slices.upstreamBreakers(repo);
+                    }
+                },
+                new com.auto1.pantera.api.v1.admin.AdminDiagnostics().node()
+            );
         final DeploymentOptions deployOpts = new DeploymentOptions()
             .setInstances(apiInstances);
         this.vertx.deployVerticle(
@@ -833,7 +856,7 @@ public final class VertxMain {
             // per-verticle stack made unblocks invisible to the serving path.
             () -> new AsyncApiVerticle(
                 settings, apiPort, null, sharedDs.orElse(null), jwtTokens,
-                slices.cooldownService(), slices.cooldownMetadataService()
+                slices.cooldownService(), slices.cooldownMetadataService(), diagnostics
             ),
             deployOpts,
             result -> {
