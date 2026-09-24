@@ -122,6 +122,21 @@ This release contains security hardening and a broad set of bug fixes across for
 - **Client guides match the product.** The Gradle guide and Set Me Up route plugins through Pantera via `pluginManagement`; the cooldown guides list the real Maven/Gradle `403` symptom, reason codes and Docker `/v2/<repo>/<image>/...` commands, and `meta.cooldown` is described as the release-age gate; the Go guides no longer suggest `GOINSECURE`, and the Go sample builds zips that pass `go mod verify`.
   ([@aydasraf](https://github.com/aydasraf))
 
+- **Groups follow their members and report outages correctly.** Re-pointing, editing or deleting a member takes effect in every group that contains it without re-saving the group. A proxy member whose upstream circuit is open keeps the circuit-open marker, so its groups answer `503` with `Retry-After` and do not count the fast-fail against the member; a proxy member's upstream failure answers `502` instead of `500 storage-unavailable`. `HEAD` of a PyPI project page works through proxies and groups, `405` answers carry an `Allow` header, the upstream breaker closes when its recovery probe gets `501`, and the member breaker trips on schedule after an idle period.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Indexing and repository deletes stay consistent.** An artifact event that cannot be indexed (for example one carrying a NUL byte) is dead-lettered after a bounded number of attempts instead of being retried forever. Uploads still being indexed when a repository or package is deleted no longer leave index rows behind, while keeping their publish audit record. Deletes on filesystem storage also remove the directories they leave empty, never removing a symlinked directory, and the repository-delete audit record carries the client IP.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Bad requests and invalid uploads are client errors.** A request path containing an encoded control character (NUL, CR, LF) answers `400`; an upload under an existing file on `vertx-file` storage answers `409`; a file that is not a valid conda, gem or Debian package answers `400` with the reason, and a Debian package for an architecture the repository does not serve names both architectures.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Conan, conda and Hex clients work end to end.** `conan upload` works on repositories served on the main port, with upload URLs signed for the requesting user. `anaconda upload` and conda `/t/<token>/` channels work with the real clients, and conda downloads accept the `Authorization: token` header. `mix hex.publish` reports success, and publishing an existing Hex version without `--replace` answers `422`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Docker catalogs and paging.** `/v2/<repo>/_catalog` lists full nested image names; a group's catalog is the union of all its members, proxies included, named under the group. Full catalog and proxy/group tag pages carry `Link: rel="next"`, and an out-of-range `last` or invalid `n` answers `400` instead of `500`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm, PyPI, Maven and Go client details.** `npm logout` answers the same `404 not_implemented` on every npm repository, and single-version unpublish checks the packument revision on every step. A PyPI re-upload with different content answers `400 File already exists` in the status line (so `twine upload --skip-existing` skips it), and `latest+html` index requests get the `v1+html` media type. Maven proxies answer the same `Content-Type` from upstream and from cache. Go `@v/list` stays in semver order and cannot be overwritten by an upload.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Import, audit and settings details.** Imported artifacts are recorded under the same package name and version as a native publish; PyPI proxy cache-miss access records carry the artifact size; bulkhead permit settings are validated together (`min <= initial <= max`); deleting an unknown user answers `404`; and `login_throttled` is logged when an attempt is first refused.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔒 Security
 
 - **Hardening across authentication, authorization, input validation, request-egress, resource limits, and output encoding**, addressing issues raised in an external review. Each fix ships with a regression test. Deployments should upgrade; details are withheld pending broad adoption.
@@ -141,6 +156,8 @@ This release contains security hardening and a broad set of bug fixes across for
 - **php-group dependency confusion prevented.** A php-group no longer looks up package names owned by a local member on its proxy members, so an upstream cannot inject `dev-*` versions into a private package and private names are not sent upstream.
   ([@aydasraf](https://github.com/aydasraf))
 - **Composer archive integrity.** Uploaded archives are listed with `dist.shasum`, so Composer detects a dist that changed after locking, and the re-upload comparison streams both archives with bounded work so a highly compressible archive cannot exhaust server memory.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Credentials in request URLs are masked in logs.** The token in `npm logout`'s `/-/user/token/<token>`, conda `/t/<token>/` segments, `user:password@` userinfo and JWTs anywhere in a path are masked in access and application logs.
   ([@aydasraf](https://github.com/aydasraf))
 
 ## Version 2.2.8
