@@ -402,6 +402,8 @@ The following keys live in the `settings` table and are editable from the admin 
 | `http_client.bulkhead.ramp_up_step` | int | `1` | Permits added per up-step. |
 | `http_client.bulkhead.ramp_down_factor` | float | `0.5` | Fraction the controller multiplies the current permit count by on a down-step (e.g. `0.5` halves). |
 
+The three permit keys must satisfy `min_permits <= initial_permits <= max_permits`. A `PATCH` (or a `DELETE` back to the default) that would break this is refused with `400` and nothing is written; to move the range, change the keys in an order that keeps it valid (raise `max_permits` before `min_permits`, lower `min_permits` before `max_permits`). The admin UI saves them in that order.
+
 ---
 
 ### 1.8 meta.http_server

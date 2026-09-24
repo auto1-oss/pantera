@@ -24,6 +24,7 @@ import com.auto1.pantera.settings.JwtSettings;
 import com.auto1.pantera.settings.MetricsContext;
 import com.auto1.pantera.settings.PrefixesPersistence;
 import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.runtime.BulkheadPermitBounds;
 import com.auto1.pantera.settings.runtime.SettingsKey;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -35,6 +36,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.sql.DataSource;
@@ -815,15 +817,30 @@ public final class SettingsHandler {
             ? ctx.user().principal().getString("sub", "unknown")
             : "unknown";
         final String patchIp = SettingsHandler.clientIp(ctx);
-        final String oldRuntimeJson = this.readSettingsValueAsJson(key);
         final String newRuntimeJson = body.encode();
-        CompletableFuture.runAsync(() -> {
-            final javax.json.JsonObject jakarta = Json.createReader(
-                new StringReader(body.encode())
-            ).readObject();
-            this.settingsDao.put(key, jakarta, actor);
+        final java.util.concurrent.atomic.AtomicReference<String> oldRef =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        final Optional<Number> number = value instanceof Number num
+            ? Optional.of(num) : Optional.empty();
+        // All DB reads and the write run on the worker pool, never on the
+        // event loop. The permit keys are also checked together (R45).
+        CompletableFuture.supplyAsync(() -> {
+            final Optional<String> violation = this.boundsViolation(key, number);
+            if (violation.isEmpty()) {
+                oldRef.set(this.readSettingsValueAsJson(key));
+                final javax.json.JsonObject jakarta = Json.createReader(
+                    new StringReader(body.encode())
+                ).readObject();
+                this.settingsDao.put(key, jakarta, actor);
+            }
+            return violation;
         }, HandlerExecutor.get())
-            .whenComplete((ignored, err) -> {
+            .whenComplete((violation, err) -> {
+                if (err == null && violation.isPresent()) {
+                    ApiResponse.sendError(ctx, 400, "BAD_REQUEST", violation.get());
+                    return;
+                }
+                final String oldRuntimeJson = oldRef.get();
                 // T-S04 audit log: per-key runtime tunable mutations
                 // are SOC2-significant (cooldown duration, bulkhead
                 // controller knobs, etc.). The before/after value diff
@@ -880,11 +897,25 @@ public final class SettingsHandler {
         final String deleteIp = SettingsHandler.clientIp(ctx);
         // Capture the row being deleted so audit_log.old_value preserves
         // the prior state. new_value is null — deletion has no post-image
-        // beyond "fell back to spec default".
-        final String oldDeleteJson = this.readSettingsValueAsJson(key);
-        CompletableFuture.runAsync(() -> this.settingsDao.delete(key),
-            HandlerExecutor.get())
-            .whenComplete((ignored, err) -> {
+        // beyond "fell back to spec default". Read on the worker pool.
+        final java.util.concurrent.atomic.AtomicReference<String> oldRef =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        CompletableFuture.supplyAsync(() -> {
+            // Falling back to the default must also keep the permit keys
+            // consistent (R45).
+            final Optional<String> violation = this.boundsViolation(key, Optional.empty());
+            if (violation.isEmpty()) {
+                oldRef.set(this.readSettingsValueAsJson(key));
+                this.settingsDao.delete(key);
+            }
+            return violation;
+        }, HandlerExecutor.get())
+            .whenComplete((violation, err) -> {
+                if (err == null && violation.isPresent()) {
+                    ApiResponse.sendError(ctx, 400, "BAD_REQUEST", violation.get());
+                    return;
+                }
+                final String oldDeleteJson = oldRef.get();
                 // T-S04 audit log: reverting a runtime tunable back to
                 // the spec default is a deliberate operator action and
                 // SOC2-significant — it implicitly changes production
@@ -985,6 +1016,18 @@ public final class SettingsHandler {
         } catch (final RuntimeException ex) {
             return null;
         }
+    }
+
+    /**
+     * The bulkhead permit violation a change of {@code key} would cause
+     * ({@code min_permits <= initial_permits <= max_permits}). Blocking
+     * (reads the stored settings): call on the worker pool only.
+     * @param key Changed key
+     * @param value New value, empty for a reset to the default
+     * @return Error message, empty when valid or not a permit key
+     */
+    private Optional<String> boundsViolation(final String key, final Optional<Number> value) {
+        return new BulkheadPermitBounds(this.settingsDao::listAll).violationAfter(key, value);
     }
 
     /**
