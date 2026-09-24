@@ -24,6 +24,8 @@ import java.util.concurrent.TimeUnit;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * {@link PackageInspector}: per-version cooldown state against what each
@@ -126,6 +128,54 @@ final class PackageInspectorTest {
         MatcherAssert.assertThat(
             "the node is named",
             doc.getString("node"), new IsEqual<>("node-1")
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "ubuntu",
+        "library/ubuntu",
+        "ubuntu:latest",
+        "docker_group/ubuntu",
+        "localhost:8081/docker_group/ubuntu",
+        "localhost:8081/test_prefix/api/docker_group/ubuntu:24.04",
+        "http://localhost:8081/docker_group/library/ubuntu@sha256:da6fc2be5478",
+    })
+    void findsDockerBlocksWhateverTheImageSpelling(final String typed) throws Exception {
+        final FakeTopology docker = new FakeTopology()
+            .proxy("docker_proxy", "docker-proxy")
+            .group("docker_group", "docker-group", "docker_proxy");
+        final List<String> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final CooldownLookup rows = (repos, names) -> {
+            asked.addAll(names);
+            return List.of();
+        };
+        new PackageInspector(
+            new AdminDiagnostics(docker, new FakeFetch(), BreakerProbe.NONE, "n"),
+            new NegativeCache(new NegativeCacheConfig()), Optional::empty, rows
+        ).inspect("docker", typed, null, null).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(asked.contains("library/ubuntu"), new IsEqual<>(true));
+    }
+
+    @Test
+    void keepsANamespacedDockerImageOutOfLibrary() throws Exception {
+        final FakeTopology docker = new FakeTopology().proxy("docker_proxy", "docker-proxy");
+        final List<String> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
+        new PackageInspector(
+            new AdminDiagnostics(docker, new FakeFetch(), BreakerProbe.NONE, "n"),
+            new NegativeCache(new NegativeCacheConfig()), Optional::empty,
+            (repos, names) -> {
+                asked.addAll(names);
+                return List.of();
+            }
+        ).inspect("docker", "docker_proxy/myorg/app:1.0", null, null).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "the namespaced image is looked up as typed",
+            asked.contains("myorg/app"), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "a namespaced image never becomes an official library image",
+            asked.contains("library/app"), new IsEqual<>(false)
         );
     }
 

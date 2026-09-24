@@ -146,8 +146,8 @@ public final class PackageInspector {
     public CompletableFuture<JsonObject> inspect(
         final String family, final String raw, final String repo, final String authorization
     ) {
-        final PackageName pkg = new PackageName(family, raw);
         final List<RepoTopology.RepoInfo> repos = this.scope(family, repo);
+        final PackageName pkg = this.packageName(family, raw, repos);
         final Map<String, CompletableFuture<JsonObject>> metadata = new LinkedHashMap<>();
         for (final RepoTopology.RepoInfo info : repos) {
             metadata.put(info.name(), this.metadata(info, pkg, authorization));
@@ -172,6 +172,31 @@ public final class PackageInspector {
             .thenApply(ignored -> this.document(
                 pkg, repos, metadata, envelope, negatives.join(), rows.join()
             ));
+    }
+
+    /**
+     * Package as the cooldown tables and caches store it. A docker
+     * reference is reduced to its image name the way the docker client
+     * would ({@code localhost:8081/docker_group/ubuntu:24.04} to
+     * {@code library/ubuntu}); other formats keep the typed name.
+     *
+     * @param family Format family
+     * @param raw Name as typed
+     * @param repos Repositories in scope
+     * @return Package name
+     */
+    PackageName packageName(
+        final String family, final String raw, final List<RepoTopology.RepoInfo> repos
+    ) {
+        final String name;
+        if ("docker".equals(new PackageName(family, "").family())) {
+            name = new DockerImageName(
+                raw, repos.stream().map(RepoTopology.RepoInfo::name).collect(Collectors.toList())
+            ).name();
+        } else {
+            name = raw;
+        }
+        return new PackageName(family, name);
     }
 
     /**

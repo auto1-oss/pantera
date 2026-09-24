@@ -91,8 +91,8 @@ public final class PackageRefresher {
     public CompletableFuture<JsonObject> refresh(
         final String family, final String raw, final String repo, final String authorization
     ) {
-        final PackageName pkg = new PackageName(family, raw);
         final List<RepoTopology.RepoInfo> scope = this.inspector.scope(family, repo);
+        final PackageName pkg = this.inspector.packageName(family, raw, scope);
         return this.inspector.inspect(family, raw, repo, authorization)
             .thenCompose(before -> this.revalidate(scope, pkg)
                 .thenCompose(revalidated -> this.dropEnvelopes(pkg)
