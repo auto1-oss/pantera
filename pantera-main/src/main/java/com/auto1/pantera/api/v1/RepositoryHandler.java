@@ -446,6 +446,7 @@ public final class RepositoryHandler {
             return;
         }
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String clientIp = RepositoryHandler.clientIp(ctx);
         final String auditAction = exists ? "REPO_UPDATE" : "REPO_CREATE";
         CompletableFuture.runAsync(
             () -> {
@@ -480,7 +481,7 @@ public final class RepositoryHandler {
                     ctx, 400, "BAD_REQUEST", RepositoryHandler.rootCause(err).getMessage()
                 );
             } else if (err != null) {
-                RepositoryHandler.audit(actor, auditAction, name,
+                RepositoryHandler.audit(actor, clientIp, auditAction, name,
                     java.util.Map.of(
                         "repository.type", repoType,
                         "error", String.valueOf(err.getMessage())
@@ -489,7 +490,7 @@ public final class RepositoryHandler {
             } else {
                 this.filtersCache.invalidate(rname.toString());
                 this.eventBus.publish(RepositoryEvents.upsert(name));
-                RepositoryHandler.audit(actor, auditAction, name,
+                RepositoryHandler.audit(actor, clientIp, auditAction, name,
                     java.util.Map.of("repository.type", repoType), true);
                 ctx.response().setStatusCode(200).end();
             }
@@ -622,6 +623,9 @@ public final class RepositoryHandler {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        // Captured here, on the request thread: the outcome is audited from
+        // the removal's completion stage on a worker, where the MDC is empty.
+        final String clientIp = RepositoryHandler.clientIp(ctx);
         if (RepositoryHandler.REMOVALS.inProgress(name)) {
             RepositoryHandler.sendDeleteInProgress(ctx, name);
             return;
@@ -631,14 +635,14 @@ public final class RepositoryHandler {
             HandlerExecutor.get()
         ).whenComplete((exists, err) -> {
             if (err != null) {
-                RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                RepositoryHandler.audit(actor, clientIp, "REPO_DELETE", name,
                     java.util.Map.of("error", String.valueOf(err.getMessage())),
                     false);
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 return;
             }
             if (!Boolean.TRUE.equals(exists)) {
-                RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                RepositoryHandler.audit(actor, clientIp, "REPO_DELETE", name,
                     java.util.Map.of("error", "not_found"), false);
                 ApiResponse.sendError(
                     ctx, 404, "NOT_FOUND",
@@ -647,7 +651,7 @@ public final class RepositoryHandler {
                 return;
             }
             final Optional<CompletableFuture<Void>> removal = RepositoryHandler.REMOVALS.start(
-                name, () -> this.removeRepository(rname, actor)
+                name, () -> this.removeRepository(rname, actor, clientIp)
             );
             if (removal.isEmpty()) {
                 RepositoryHandler.sendDeleteInProgress(ctx, name);
@@ -674,10 +678,11 @@ public final class RepositoryHandler {
      * sent before the removal ended.
      * @param rname Repository name
      * @param actor User deleting the repository
+     * @param clientIp Client IP captured on the request thread, nullable
      * @return Completion of the whole removal
      */
     private CompletionStage<Void> removeRepository(
-        final RepositoryName rname, final String actor
+        final RepositoryName rname, final String actor, final String clientIp
     ) {
         final String name = rname.toString();
         return this.repoData.remove(rname, this.crs)
@@ -696,7 +701,7 @@ public final class RepositoryHandler {
                         .field("repository.name", name)
                         .field("log.source", "application")
                         .log();
-                    RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                    RepositoryHandler.audit(actor, clientIp, "REPO_DELETE", name,
                         java.util.Map.of(), true);
                 } else {
                     final Throwable cause = RepositoryHandler.rootCause(failure);
@@ -709,7 +714,7 @@ public final class RepositoryHandler {
                         .error(cause)
                         .field("log.source", "application")
                         .log();
-                    RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                    RepositoryHandler.audit(actor, clientIp, "REPO_DELETE", name,
                         java.util.Map.of("error", String.valueOf(cause.getMessage())),
                         false);
                 }
@@ -884,21 +889,20 @@ public final class RepositoryHandler {
      * T-S04: emit an audit event for an admin mutation. Looks up the shared
      * {@link com.auto1.pantera.audit.AuditService} via the registry — when no
      * service is installed (tests / DB-less boot) this is a no-op. Reads
-     * the client IP from the MDC slot populated by the trace-context
-     * handler at the start of every API request.
+     * the client IP as captured on the request thread by the caller: the
+     * record may be written from a worker-thread completion stage, where
+     * the MDC slot set by the trace-context handler is empty.
      *
      * @param actor Authenticated principal
+     * @param clientIp Client IP captured before any async hop, nullable
      * @param action Action verb (SCREAMING_SNAKE_CASE)
      * @param target Repository name
      * @param details Structured payload for the {@code details} JSON column
      * @param success {@code true} on completed mutation
      */
-    private static void audit(final String actor,
+    private static void audit(final String actor, final String clientIp,
         final String action, final String target,
         final java.util.Map<String, Object> details, final boolean success) {
-        final String clientIp = org.slf4j.MDC.get(
-            com.auto1.pantera.http.log.EcsMdc.CLIENT_IP
-        );
         final com.auto1.pantera.audit.AuditEvent event =
             new com.auto1.pantera.audit.AuditEvent(
                 java.time.Instant.now(), actor, action, target,
@@ -906,5 +910,22 @@ public final class RepositoryHandler {
             );
         com.auto1.pantera.audit.AuditServiceRegistry.instance()
             .sharedService().record(event);
+    }
+
+    /**
+     * The client IP of an API request, as bound by the trace-context handler
+     * on the routing context (it survives async hops, unlike the MDC).
+     * @param ctx Routing context
+     * @return Client IP, or null when unknown
+     */
+    private static String clientIp(final RoutingContext ctx) {
+        final String bound = new ApiAuditContext(ctx).value().clientIp();
+        final String res;
+        if (bound == null) {
+            res = org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP);
+        } else {
+            res = bound;
+        }
+        return res;
     }
 }

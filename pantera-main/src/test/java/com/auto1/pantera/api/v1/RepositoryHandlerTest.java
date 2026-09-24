@@ -340,6 +340,56 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void deleteAuditCarriesTheClientIp(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // R19: the delete is audited from the removal's completion stage on
+        // a worker thread; the client IP was read from the (empty) MDC there.
+        final java.util.List<com.auto1.pantera.audit.AuditEvent> events =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+        final com.auto1.pantera.audit.AuditServiceRegistry reg =
+            com.auto1.pantera.audit.AuditServiceRegistry.instance();
+        reg.setSharedService(event -> {
+            events.add(event);
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        });
+        try {
+            final WebClient client = WebClient.create(vertx);
+            final HttpResponse<Buffer> put = client
+                .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/audit-ip")
+                .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+                .sendJsonObject(VALID_BODY)
+                .toCompletionStage().toCompletableFuture()
+                .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+            Assertions.assertEquals(200, put.statusCode(), "repository must be created");
+            final HttpResponse<Buffer> del = client
+                .delete(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/audit-ip")
+                .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+                .send()
+                .toCompletionStage().toCompletableFuture()
+                .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+            Assertions.assertEquals(200, del.statusCode(), "delete must succeed");
+            org.awaitility.Awaitility.await()
+                .atMost(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS)
+                .until(() -> events.stream().anyMatch(
+                    evt -> "REPO_DELETE".equals(evt.action())
+                        && "audit-ip".equals(evt.target())
+                ));
+            final com.auto1.pantera.audit.AuditEvent deleted = events.stream()
+                .filter(
+                    evt -> "REPO_DELETE".equals(evt.action())
+                        && "audit-ip".equals(evt.target())
+                )
+                .findFirst().orElseThrow();
+            Assertions.assertNotNull(
+                deleted.ipAddress(), "the delete audit must carry the client IP"
+            );
+        } finally {
+            reg.clear();
+        }
+        ctx.completeNow();
+    }
+
+    @Test
     void deleteRepoRemovesItsDataOnly(final Vertx vertx, final VertxTestContext ctx,
         @org.junit.jupiter.api.io.TempDir final java.nio.file.Path root) throws Exception {
         // B06: a repository created through the API has no YAML file; its
