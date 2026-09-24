@@ -607,6 +607,34 @@ class ProxySliceTest {
         );
     }
 
+    @ParameterizedTest
+    @CsvSource({"/simple/", "/simple", "/"})
+    void servesTheRootProjectIndex(final String path) {
+        // The root /simple/ index lists projects, not files: it has no
+        // project name to normalise and must be proxied, not answered 500.
+        final String html = "<!DOCTYPE html><html><body>"
+            + "<a href=\"/simple/requests/\">requests</a>"
+            + "<a href=\"/simple/six/\">six</a></body></html>";
+        final Response response = this.newProxySlice(
+            new SliceSimple(
+                ResponseBuilder.ok().htmlBody(html, StandardCharsets.UTF_8).build()
+            ),
+            new TestClientSlices(line -> ResponseBuilder.ok().build()),
+            Optional.of(this.events)
+        ).response(
+            new RequestLine(RqMethod.GET, path), this.authorization, Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "the root index is served",
+            response.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the upstream project list is relayed",
+            new String(response.body().asBytes(), StandardCharsets.UTF_8),
+            Matchers.containsString("/simple/six/")
+        );
+    }
+
     @Test
     void proxiesPerVersionJsonApiToJsonUpstream() {
         // /pypi/<pkg>/<ver>/json must be served by the PyPI JSON API

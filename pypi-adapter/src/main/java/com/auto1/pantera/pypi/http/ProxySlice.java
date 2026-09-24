@@ -86,6 +86,12 @@ final class ProxySlice implements Slice {
     private static final String FORMATS = ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)";
 
     /**
+     * Cache key of the root project index. Normalised project names never
+     * contain {@code _}, so it cannot collide with a project's index.
+     */
+    private static final Key ROOT_INDEX = new Key.From("_root_index");
+
+    /**
      * Wheel filename pattern.
      */
     private static final Pattern WHEEL_PATTERN =
@@ -1841,7 +1847,11 @@ final class ProxySlice implements Slice {
         Key res = new KeyFromPath(uri.getPath());
         final String last = new KeyLastPart(res).get();
         final boolean artifactPath = uri.toString().matches(ProxySlice.FORMATS);
-        if (!artifactPath && !last.endsWith(".metadata")) {
+        if (last.isEmpty()) {
+            // The root project index (/simple/ reaches this slice as "/"):
+            // it names no project, so there is nothing to normalise.
+            res = ProxySlice.ROOT_INDEX;
+        } else if (!artifactPath && !last.endsWith(".metadata")) {
             res = new Key.From(
                 res.string().replaceAll(
                     String.format("%s$", last), new NormalizedProjectName.Simple(last).value()
