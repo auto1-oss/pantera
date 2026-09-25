@@ -21,8 +21,16 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.hamcrest.MatcherAssert;
@@ -509,5 +517,89 @@ final class FileStorageTest {
             Files.exists(path.get()),
             new IsEqual<>(false)
         );
+    }
+
+    /**
+     * Concurrent writers replacing the same key while readers stream it must
+     * never expose a half-written or briefly-absent file: every read returns
+     * the whole blob. The temp-then-rename write with
+     * {@link java.nio.file.StandardCopyOption#ATOMIC_MOVE} guarantees a reader
+     * observes either the whole previous blob or the whole new one — closing
+     * the {@code value()} size-then-open window that a plain replace could
+     * expose as {@code NoSuchFileException}. On a filesystem whose replace is
+     * already atomic this is a regression guard (and confirms the atomic move
+     * is honoured, i.e. no {@code AtomicMoveNotSupportedException}); it
+     * reproduces the failure only where {@code REPLACE_EXISTING} degrades to
+     * copy-then-delete.
+     *
+     * @throws Exception On thread-join failure
+     */
+    @Test
+    @Timeout(60L)
+    void concurrentSameKeyWritesNeverExposeAPartialOrMissingFileToReaders()
+        throws Exception {
+        final Key key = new Key.From("repo", "pkg", "1.0", "artifact-1.0.jar");
+        final byte[] content = new byte[256 * 1024];
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(content);
+        // Seed the key so every writer iteration is a REPLACE, not a first write.
+        this.storage.save(key, new Content.From(content.clone())).get();
+
+        final int writers = 4;
+        final int readers = 8;
+        final int iterations = 40;
+        final ExecutorService pool = Executors.newFixedThreadPool(writers + readers);
+        final CountDownLatch start = new CountDownLatch(1);
+        final AtomicReference<String> firstError = new AtomicReference<>();
+        final List<Future<?>> tasks = new ArrayList<>();
+        for (int idx = 0; idx < writers; idx = idx + 1) {
+            tasks.add(pool.submit(() -> {
+                awaitStart(start);
+                for (int i = 0; i < iterations && firstError.get() == null; i = i + 1) {
+                    try {
+                        this.storage.save(key, new Content.From(content.clone())).get();
+                    } catch (final Exception ex) {
+                        firstError.compareAndSet(null, "writer: " + describe(ex));
+                    }
+                }
+            }));
+        }
+        for (int idx = 0; idx < readers; idx = idx + 1) {
+            tasks.add(pool.submit(() -> {
+                awaitStart(start);
+                final BlockingStorage blocking = new BlockingStorage(this.storage);
+                for (int i = 0; i < iterations && firstError.get() == null; i = i + 1) {
+                    try {
+                        final byte[] read = blocking.value(key);
+                        if (!Arrays.equals(content, read)) {
+                            firstError.compareAndSet(null,
+                                "reader observed an incomplete blob: " + read.length
+                                + " bytes, expected " + content.length);
+                        }
+                    } catch (final Exception ex) {
+                        firstError.compareAndSet(null, "reader: " + describe(ex));
+                    }
+                }
+            }));
+        }
+        start.countDown();
+        for (final Future<?> task : tasks) {
+            task.get(30L, TimeUnit.SECONDS);
+        }
+        pool.shutdownNow();
+
+        MatcherAssert.assertThat(firstError.get(), new IsEqual<>(null));
+    }
+
+    private static void awaitStart(final CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (final InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private static String describe(final Throwable err) {
+        return ExceptionUtils.getStackTrace(err);
     }
 }

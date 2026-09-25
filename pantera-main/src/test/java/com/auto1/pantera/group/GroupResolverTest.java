@@ -34,8 +34,10 @@ import org.reactivestreams.Subscriber;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -44,6 +46,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -1366,6 +1369,74 @@ final class GroupResolverTest {
         );
     }
 
+    @Test
+    void groupGetStreamsWinningMemberBodyWithoutBuffering() {
+        // A group GET must relay the winning member's body straight through,
+        // never materialise it into a byte[]. Buffering here (the pre-fix
+        // requestDedup path) read a whole artifact — a multi-hundred-MB Docker
+        // layer included — into heap before a byte reached the client, causing
+        // memory pressure and upstream-stall 502s on large pulls.
+        final TrackingResponseBody memberBody =
+            new TrackingResponseBody("streamed-artifact".getBytes(StandardCharsets.UTF_8));
+        final Slice member = (line, headers, requestBody) ->
+            CompletableFuture.completedFuture(ResponseBuilder.ok().body(memberBody).build());
+        final Response resp = buildResolver(
+            null, List.of(HOSTED), Collections.emptySet(),
+            buildNegativeCache(), Map.of(HOSTED, member)
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+
+        MatcherAssert.assertThat(
+            "the group serves the member's 200", resp.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the group must stream the member body through, never buffer it via asBytesFuture()",
+            memberBody.materialised.get(), new IsEqual<>(false)
+        );
+        // The relayed body is still the member's own, fully consumable downstream.
+        MatcherAssert.assertThat(
+            "the streamed body is delivered intact when the client consumes it",
+            resp.body().asBytesFuture().join(),
+            new IsEqual<>("streamed-artifact".getBytes(StandardCharsets.UTF_8))
+        );
+    }
+
+    @Test
+    @Timeout(30)
+    void concurrentGroupGetsEachReceiveTheirOwnStreamedBody() throws Exception {
+        // With entrypoint buffering removed, concurrent same-path GETs no
+        // longer share one buffered byte[]; each resolves independently and
+        // must receive its own complete, subscribable body — no shared
+        // single-subscriber publisher, no deadlock, no 502.
+        final int callers = 32;
+        final byte[] payload = "streamed-artifact-bytes".getBytes(StandardCharsets.UTF_8);
+        final Slice member = (line, headers, requestBody) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(new TrackingResponseBody(payload.clone())).build()
+            );
+        final GroupResolver resolver = buildResolver(
+            null, List.of(HOSTED), Collections.emptySet(),
+            buildNegativeCache(), Map.of(HOSTED, member)
+        );
+        final List<CompletableFuture<Response>> futures = new ArrayList<>(callers);
+        for (int i = 0; i < callers; i++) {
+            futures.add(resolver.response(
+                new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+            ));
+        }
+        for (final CompletableFuture<Response> future : futures) {
+            final Response resp = future.get(10, TimeUnit.SECONDS);
+            MatcherAssert.assertThat(
+                "every concurrent group GET succeeds",
+                resp.status().code(), new IsEqual<>(200)
+            );
+            MatcherAssert.assertThat(
+                "every caller can read its own complete body",
+                resp.body().asBytesFuture().get(10, TimeUnit.SECONDS),
+                new IsEqual<>(payload)
+            );
+        }
+    }
+
     /**
      * Request body that declares ~2 GB but carries a few bytes, and records
      * whether it was materialised with {@code asBytesFuture()} (which
@@ -1394,6 +1465,42 @@ final class GroupResolverTest {
             Flowable.just(
                 ByteBuffer.wrap("ten  bytes".getBytes(StandardCharsets.UTF_8))
             ).subscribe(subscriber);
+        }
+    }
+
+    /**
+     * Response body that carries a real (small) payload and records whether it
+     * was materialised via {@code asBytesFuture()} (buffered) or merely
+     * subscribed to (streamed). Used to prove {@link GroupResolver} relays a
+     * member's body straight through instead of reading it into a byte[].
+     */
+    private static final class TrackingResponseBody implements Content {
+
+        private final byte[] payload;
+
+        private final AtomicBoolean materialised = new AtomicBoolean();
+
+        private final AtomicBoolean subscribed = new AtomicBoolean();
+
+        TrackingResponseBody(final byte[] payload) {
+            this.payload = payload.clone();
+        }
+
+        @Override
+        public Optional<Long> size() {
+            return Optional.of((long) this.payload.length);
+        }
+
+        @Override
+        public CompletableFuture<byte[]> asBytesFuture() {
+            this.materialised.set(true);
+            return CompletableFuture.completedFuture(this.payload.clone());
+        }
+
+        @Override
+        public void subscribe(final Subscriber<? super ByteBuffer> subscriber) {
+            this.subscribed.set(true);
+            Flowable.just(ByteBuffer.wrap(this.payload.clone())).subscribe(subscriber);
         }
     }
 }

@@ -26,6 +26,7 @@ import com.auto1.pantera.asto.log.EcsLogger;
 import com.auto1.pantera.asto.metrics.StorageMetricsCollector;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileSystemException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
@@ -496,12 +497,12 @@ public final class FileStorage implements Storage {
         ).thenAcceptAsync(
             dst -> {
                 try {
-                    Files.move(source, dst, StandardCopyOption.REPLACE_EXISTING);
-                } catch (final java.nio.file.NoSuchFileException nfe) {
+                    FileStorage.atomicReplace(source, dst);
+                } catch (final NoSuchFileException nfe) {
                     // Retry once: parent dir may have been removed by concurrent operation
                     try {
                         new ParentDirs(dst.getParent()).create();
-                        Files.move(source, dst, StandardCopyOption.REPLACE_EXISTING);
+                        FileStorage.atomicReplace(source, dst);
                     } catch (final IOException retry) {
                         retry.addSuppressed(nfe);
                         throw new PanteraIOException(retry);
@@ -511,6 +512,46 @@ public final class FileStorage implements Storage {
                 }
             }
         );
+    }
+
+    /**
+     * Rename a completed temp file onto its final key, replacing any existing
+     * blob. The rename is ATOMIC, so a concurrent reader always observes
+     * either the whole previous blob or the whole new one — never a
+     * half-written or briefly-absent file. A plain {@code REPLACE_EXISTING}
+     * lets the JDK degrade a same-key replace to copy-then-delete on some
+     * filesystems, opening a window where {@code value()} sizes the file and
+     * then fails at {@code FileChannel.open} with {@code NoSuchFileException};
+     * requesting {@code ATOMIC_MOVE} closes that window (mirrors the S3
+     * disk-cache write path). The temp file always shares the storage root
+     * with its destination, so an atomic move is expected; a filesystem that
+     * cannot honour it (some network mounts) falls back to a plain replace —
+     * no worse than before this hardening.
+     *
+     * @param source Completed temp file
+     * @param dst Final destination key path
+     * @throws IOException On a move failure other than unsupported atomicity
+     */
+    private static void atomicReplace(final Path source, final Path dst) throws IOException {
+        try {
+            Files.move(
+                source, dst,
+                StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE
+            );
+        } catch (final FileSystemException recoverable) {
+            // Fall back to a plain replace when the atomic move cannot apply:
+            // the filesystem may not support ATOMIC_MOVE, or the destination is
+            // a directory — which an atomic rename reports as a bare
+            // FileSystemException ("Is a directory"), losing the
+            // DirectoryNotEmptyException / NotDirectoryException that the upload
+            // path-clash classifier turns into a 409. A plain replace restores
+            // that classifiable exception and, where atomicity is merely
+            // unsupported, is no worse than before this hardening; a missing
+            // parent re-surfaces here as NoSuchFileException for the caller's
+            // recreate-and-retry. The success path (a normal same-key replace,
+            // where the reader race matters) still moves atomically.
+            Files.move(source, dst, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     /**

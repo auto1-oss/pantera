@@ -151,6 +151,8 @@ This release contains security hardening and a broad set of bug fixes across for
   ([@aydasraf](https://github.com/aydasraf))
 - **Saving a storage alias without re-entering its masked secret keeps the stored credential.** Editing an alias (global or per-repository) from the UI no longer overwrites the backend credential with the mask placeholder.
   ([@aydasraf](https://github.com/aydasraf))
+- **Group repositories stream large artifacts straight through instead of buffering them in memory.** A group used to read a whole response into memory before sending it, causing high memory use and gateway timeouts (`502`) when pulling large artifacts — most visibly multi-hundred-megabyte Docker layers through a `docker-group`. Group responses are now relayed to the client as they arrive; concurrent pulls of the same artifact are still de-duplicated at the proxy layer, and cached files are renamed atomically so a concurrent reader never observes a half-written file.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 

@@ -18,7 +18,6 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.auth.AuthzSlice;
 import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.cache.NegativeCacheKey;
 import com.auto1.pantera.http.context.ContextualExecutor;
@@ -138,32 +137,8 @@ public final class GroupResolver implements Slice {
     private final String repoType;
     private final NegativeCache negativeCache;
     private final SingleFlight<String, Void> inFlightFanouts;
-    /**
-     * Request-level coalescer keyed by {@code method + ' ' + path}. Pre-fix
-     * (2026-06-16): a concurrent burst of same-path GETs against a group
-     * with cold members raced past each other inside the per-member
-     * {@code coalesceUpstream}: each request independently fanned out,
-     * each member's stream-through committed the same file, and the
-     * resulting atomic-rename overlap left readers with NoSuchFileException
-     * at {@code FileStorage.metadata}/{@code FileChannel.open}. 8-way Gradle
-     * classpath bursts produced 8/8 502s on a fresh cache. Coalescing at
-     * the group entrypoint — before any member fanout — means exactly one
-     * resolve runs upstream per (method, path) burst; followers receive
-     * a fresh {@link Response} built from a byte[] snapshot of the leader's
-     * body. Memory pressure is a function of concurrent-burst size ×
-     * body size, bounded by the 2-minute in-flight TTL on {@link SingleFlight}.
-     */
-    private final SingleFlight<String, BufferedResponse> requestDedup;
     private final java.util.concurrent.Executor drainExecutor;
 
-    /**
-     * Snapshot of a resolved group response, safe to fan out to N
-     * followers. Holds the response status, headers, and the fully
-     * buffered body bytes so each follower can build its own
-     * {@link Response} without re-running the resolve or sharing the
-     * leader's single-subscriber publisher.
-     */
-    private record BufferedResponse(RsStatus status, Headers headers, byte[] body) { }
     /**
      * Per-coordinate sibling-member pin, keyed by artifact name + version.
      * When a request for version {@code V} of artifact {@code X} is served
@@ -215,11 +190,6 @@ public final class GroupResolver implements Slice {
         this.inFlightFanouts = new SingleFlight<>(
             Duration.ofMinutes(5),
             10_000,
-            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
-        );
-        this.requestDedup = new SingleFlight<>(
-            Duration.ofMinutes(2),
-            4_096,
             ContextualExecutor.contextualize(ForkJoinPool.commonPool())
         );
         this.memberPin = Caffeine.newBuilder()
@@ -418,52 +388,25 @@ public final class GroupResolver implements Slice {
         recordRequestStart();
         final long requestStartTime = System.currentTimeMillis();
 
-        // Coalesce concurrent same-path GET requests at the group entrypoint.
-        // Without this, an N-way mvn/gradle/uv parallel resolve all hit the
-        // per-member coalesceUpstream independently, multiple stream-throughs
-        // atomic-rename the same file, and readers race with NoSuchFileException
-        // at FileStorage.metadata / FileChannel.open (RCA-1, 2026-06-16).
+        // Stream the winning member's response straight through to the client.
+        // GET, HEAD and the npm-audit POST all relay the member body untouched,
+        // never materialising it into a byte[]. Buffering here (the pre-2.2.9
+        // requestDedup coalescer) read the whole artifact into heap before a
+        // byte reached the client — a multi-hundred-MB Docker layer included —
+        // causing memory pressure and upstream-stall 502s on large pulls.
         //
-        // HEAD is intentionally NOT deduped:
-        //   * HEAD does not trigger storage.save, so there is no body-race
-        //     to coalesce.
-        //   * HEAD responses must carry the same Content-Length the matching
-        //     GET would have set (RFC 7231), with an EMPTY body. Our
-        //     bufferResponse drains resp.body() into a byte[] and rebuilds
-        //     the response via ResponseBuilder.body(byte[]), which
-        //     unconditionally overwrites Content-Length with bytes.length.
-        //     For HEAD that means Content-Length: 0 — Docker's daemon then
-        //     errors out with "unable to fetch descriptor (sha256:…) which
-        //     reports content size of zero: invalid argument" when probing
-        //     a manifest by digest. Skipping dedup keeps the upstream-set
-        //     Content-Length intact.
-        // POST (npm-audit) also bypasses dedup — request bodies matter
-        // per-caller.
-        final boolean coalesce = "GET".equals(method);
-        if (!coalesce) {
-            return resolve(line, headers, body, path)
-                .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
-        }
-        // SECURITY: bind the coalescing key to the caller's authenticated
-        // principal, not just method+path. The group's authz slice stamped
-        // pantera_login above this resolver, but each member re-authorizes the
-        // caller BELOW this point (every member slice carries its own READ
-        // permission). Sharing one buffered response across callers with
-        // different identities could hand a follower who has group-read but
-        // NOT member-read the content another caller was authorized to fetch.
-        // Keying on the login confines sharing to callers with the same
-        // effective authorization; anonymous callers share one bucket.
-        final String login = headers.values(AuthzSlice.LOGIN_HDR)
-            .stream().findFirst().orElse("");
-        final String dedupKey = login + "\n" + method + " " + path;
-        return this.requestDedup.load(
-            dedupKey,
-            () -> resolve(line, headers, body, path).thenCompose(this::bufferResponse)
-        ).thenApply(buf -> ResponseBuilder.from(buf.status())
-            .headers(buf.headers())
-            .body(buf.body())
-            .build()
-        ).whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+        // Its RCA-1 rationale (a concurrent burst of same-path GETs whose
+        // member stream-throughs raced on the same cache file) is now handled
+        // where the race actually is, not by serialising through a group-level
+        // buffer: (a) the proxy member's own commit-spanning single-flight
+        // (BaseCachedProxySlice#coalesceUpstream) collapses concurrent same-key
+        // fills to a single upstream fetch and a single cache write, holding
+        // followers until the commit is durable; (b) FileStorage renames the
+        // cache file atomically. The Docker proxy never writes a cache at all
+        // (ProxyBlob streams the upstream body straight through), so it had no
+        // write to race in the first place.
+        return resolve(line, headers, body, path)
+            .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
     }
 
     /**
@@ -534,17 +477,6 @@ public final class GroupResolver implements Slice {
             }
         }
         return false;
-    }
-
-    /**
-     * Drain the leader's response body into a byte[] snapshot followers
-     * can rebuild fresh {@link Response}s from. The leader's body is a
-     * single-subscriber publisher; only one subscriber can consume it, so
-     * the leader buffers once and shares the bytes.
-     */
-    private CompletableFuture<BufferedResponse> bufferResponse(final Response resp) {
-        return resp.body().asBytesFuture()
-            .thenApply(bytes -> new BufferedResponse(resp.status(), resp.headers(), bytes));
     }
 
     /**
