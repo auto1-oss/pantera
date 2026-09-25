@@ -139,6 +139,63 @@ class DbArtifactIndexTest {
     }
 
     @Test
+    void getStatsScopesDocumentCountToAllowedRepos() throws Exception {
+        this.index.index(new ArtifactDocument(
+            "maven", "repo-a", "com/example/a1", "a1", "1.0", 10L, Instant.now(), "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo-a", "com/example/a2", "a2", "1.0", 10L, Instant.now(), "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo-b", "com/example/b1", "b1", "1.0", 10L, Instant.now(), "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo-c", "com/example/c1", "c1", "1.0", 10L, Instant.now(), "u"
+        )).join();
+        MatcherAssert.assertThat(
+            "a null scope counts every repository (global total)",
+            DbArtifactIndexTest.documents(this.index.getStats(null).join()),
+            new IsEqual<>(4L)
+        );
+        MatcherAssert.assertThat(
+            "the no-arg getStats stays the global total",
+            DbArtifactIndexTest.documents(this.index.getStats().join()),
+            new IsEqual<>(4L)
+        );
+        MatcherAssert.assertThat(
+            "a two-repo scope counts only those repositories",
+            DbArtifactIndexTest.documents(this.index.getStats(List.of("repo-a", "repo-b")).join()),
+            new IsEqual<>(3L)
+        );
+        MatcherAssert.assertThat(
+            "a single-repo scope counts only that repository",
+            DbArtifactIndexTest.documents(this.index.getStats(List.of("repo-a")).join()),
+            new IsEqual<>(2L)
+        );
+        MatcherAssert.assertThat(
+            "an empty scope is a genuine deny-all",
+            DbArtifactIndexTest.documents(this.index.getStats(List.of()).join()),
+            new IsEqual<>(0L)
+        );
+        MatcherAssert.assertThat(
+            "an unknown repository contributes zero",
+            DbArtifactIndexTest.documents(this.index.getStats(List.of("does-not-exist")).join()),
+            new IsEqual<>(0L)
+        );
+        MatcherAssert.assertThat(
+            "a known + unknown mix counts only the known repository",
+            DbArtifactIndexTest.documents(
+                this.index.getStats(List.of("repo-b", "does-not-exist")).join()
+            ),
+            new IsEqual<>(1L)
+        );
+    }
+
+    private static long documents(final Map<String, Object> stats) {
+        return ((Number) stats.get("documents")).longValue();
+    }
+
+    @Test
     void indexUpsert() throws Exception {
         final Instant now = Instant.now();
         this.index.index(new ArtifactDocument(

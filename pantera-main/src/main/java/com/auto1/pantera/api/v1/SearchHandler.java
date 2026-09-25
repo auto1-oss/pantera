@@ -569,7 +569,18 @@ public final class SearchHandler {
      * @param ctx Routing context
      */
     private void stats(final RoutingContext ctx) {
-        this.index.getStats().whenComplete((map, error) -> {
+        // Scope the totals to the caller's readable repositories, exactly as
+        // search does — otherwise the global count leaks how many artifacts
+        // exist in repositories the caller cannot read. null = unrestricted
+        // (admin / wildcard read), empty = deny-all (zero).
+        final PermissionCollection perms = this.policy.getPermissions(
+            new AuthUser(
+                ctx.user().principal().getString(AuthTokenRest.SUB),
+                ctx.user().principal().getString(AuthTokenRest.CONTEXT)
+            )
+        );
+        final List<String> allowedRepos = this.resolveAllowedRepos(perms);
+        this.index.getStats(allowedRepos).whenComplete((map, error) -> {
             if (error != null) {
                 ctx.response()
                     .setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)

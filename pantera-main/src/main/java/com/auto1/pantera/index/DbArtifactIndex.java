@@ -178,6 +178,13 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
     private static final String TOTAL_COUNT_SQL = "SELECT COUNT(*) FROM artifacts";
 
     /**
+     * Repo-scoped document count. Cannot use the materialized view (it has no
+     * repository dimension); an empty array matches nothing (deny-all → 0).
+     */
+    private static final String SCOPED_COUNT_SQL =
+        "SELECT COUNT(*) FROM artifacts WHERE repo_name = ANY(?)";
+
+    /**
      * Bounded queue capacity for the default executor.
      * When the queue is full, {@link ThreadPoolExecutor.AbortPolicy} rejects further
      * submissions with {@link java.util.concurrent.RejectedExecutionException}, which
@@ -1868,53 +1875,103 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
 
     @Override
     public CompletableFuture<Map<String, Object>> getStats() {
+        return this.getStats(null);
+    }
+
+    @Override
+    public CompletableFuture<Map<String, Object>> getStats(final List<String> allowedRepos) {
         return CompletableFuture.supplyAsync(() -> {
             final Map<String, Object> stats = new HashMap<>(3);
-            long count = -1L;
-            // Bonus: try materialized view first (O(1)), fall back to COUNT(*) if empty
-            try (Connection conn = this.source.getConnection()) {
-                try (PreparedStatement stmt = conn.prepareStatement(MV_TOTAL_COUNT_SQL);
-                     ResultSet rs = stmt.executeQuery()) {
-                    if (rs.next()) {
-                        final long mvCount = rs.getLong(1);
-                        if (mvCount > 0) {
-                            count = mvCount;
-                        }
-                    }
-                } catch (final SQLException ex) {
-                    // View may not exist — fall through to COUNT(*)
-                    EcsLogger.warn("com.auto1.pantera.index")
-                        .message("mv_artifact_totals unavailable, falling back to COUNT(*)")
-                        .eventCategory("database")
-                        .eventAction("db_stats_mv_fallback")
-                        .error(ex)
-                        .field("log.source", "application")
-                        .log();
-                }
-                if (count < 0) {
-                    try (PreparedStatement stmt = conn.prepareStatement(TOTAL_COUNT_SQL);
-                         ResultSet rs = stmt.executeQuery()) {
-                        if (rs.next()) {
-                            count = rs.getLong(1);
-                        }
-                    }
-                }
-            } catch (final SQLException ex) {
-                EcsLogger.error("com.auto1.pantera.index")
-                    .message("Failed to get index stats")
-                    .eventCategory("database")
-                    .eventAction("db_stats")
-                    .eventOutcome("failure")
-                    .error(ex)
-                    .field("log.source", "application")
-                    .log();
-            }
-            stats.put("documents", count);
+            stats.put("documents", this.documentCount(allowedRepos));
             stats.put("warmedUp", true);
             stats.put("type", "postgresql");
             stats.put("searchEngine", "tsvector/GIN");
             return stats;
         }, this.executor);
+    }
+
+    /**
+     * Count indexed documents. A {@code null} scope returns the global total
+     * (O(1) materialized view, falling back to {@code COUNT(*)}); a non-null
+     * scope counts only the named repositories, and an empty scope is a
+     * genuine deny-all that returns {@code 0}.
+     * @param allowedRepos Readable repo names, or {@code null} for the total
+     * @return document count, or {@code -1} when it could not be read
+     */
+    private long documentCount(final List<String> allowedRepos) {
+        final long count;
+        if (allowedRepos == null) {
+            count = this.globalDocumentCount();
+        } else {
+            count = this.scopedDocumentCount(allowedRepos);
+        }
+        return count;
+    }
+
+    private long globalDocumentCount() {
+        long count = -1L;
+        // Bonus: try materialized view first (O(1)), fall back to COUNT(*) if empty
+        try (Connection conn = this.source.getConnection()) {
+            try (PreparedStatement stmt = conn.prepareStatement(MV_TOTAL_COUNT_SQL);
+                 ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    final long mvCount = rs.getLong(1);
+                    if (mvCount > 0) {
+                        count = mvCount;
+                    }
+                }
+            } catch (final SQLException ex) {
+                // View may not exist — fall through to COUNT(*)
+                EcsLogger.warn("com.auto1.pantera.index")
+                    .message("mv_artifact_totals unavailable, falling back to COUNT(*)")
+                    .eventCategory("database")
+                    .eventAction("db_stats_mv_fallback")
+                    .error(ex)
+                    .field("log.source", "application")
+                    .log();
+            }
+            if (count < 0) {
+                try (PreparedStatement stmt = conn.prepareStatement(TOTAL_COUNT_SQL);
+                     ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) {
+                        count = rs.getLong(1);
+                    }
+                }
+            }
+        } catch (final SQLException ex) {
+            EcsLogger.error("com.auto1.pantera.index")
+                .message("Failed to get index stats")
+                .eventCategory("database")
+                .eventAction("db_stats")
+                .eventOutcome("failure")
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+        }
+        return count;
+    }
+
+    private long scopedDocumentCount(final List<String> allowedRepos) {
+        long count = -1L;
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(SCOPED_COUNT_SQL)) {
+            stmt.setArray(1, conn.createArrayOf("text", allowedRepos.toArray(new String[0])));
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    count = rs.getLong(1);
+                }
+            }
+        } catch (final SQLException ex) {
+            EcsLogger.error("com.auto1.pantera.index")
+                .message("Failed to get scoped index stats")
+                .eventCategory("database")
+                .eventAction("db_stats")
+                .eventOutcome("failure")
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+        }
+        return count;
     }
 
     @Override

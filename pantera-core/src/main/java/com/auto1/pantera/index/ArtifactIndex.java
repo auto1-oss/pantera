@@ -226,6 +226,19 @@ public interface ArtifactIndex extends Closeable {
     }
 
     /**
+     * Get index statistics scoped to the caller's readable repositories.
+     * @param allowedRepos Repository names the caller may read; {@code null}
+     *  means no restriction (the global total), an empty list means deny-all
+     *  (a total of zero).
+     * @return map of stat name to value
+     */
+    default CompletableFuture<Map<String, Object>> getStats(
+        final java.util.List<String> allowedRepos
+    ) {
+        return this.getStats();
+    }
+
+    /**
      * Index a batch of documents efficiently (single commit).
      * Default implementation falls back to individual index() calls.
      *

@@ -643,6 +643,13 @@ public final class ArtifactIndexCache implements ArtifactIndex, ScopedSearchInde
     }
 
     @Override
+    public CompletableFuture<java.util.Map<String, Object>> getStats(
+        final java.util.List<String> allowedRepos
+    ) {
+        return this.delegate.getStats(allowedRepos);
+    }
+
+    @Override
     public CompletableFuture<Void> indexBatch(final java.util.Collection<ArtifactDocument> docs) {
         return this.delegate.indexBatch(docs);
     }
