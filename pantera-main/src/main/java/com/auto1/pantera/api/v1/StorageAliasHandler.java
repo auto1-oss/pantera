@@ -12,6 +12,7 @@ package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepoAuthzHandler;
+import com.auto1.pantera.api.SecretRebindException;
 import com.auto1.pantera.api.SecretRedactor;
 import com.auto1.pantera.api.ManageStorageAliases;
 import com.auto1.pantera.api.perms.ApiAliasPermission;
@@ -252,20 +253,25 @@ public final class StorageAliasHandler {
                 throw new EndpointRejected(reason);
             });
             this.checkRoots(name, null, body);
+            // SECURITY (2.2.9): keep the stored secret when the client
+            // round-trips the "***" mask, but refuse restoring it against a
+            // changed endpoint/host (would exfiltrate the secret). Also fixes
+            // saving the literal mask over real backend credentials.
+            final JsonObject merged =
+                new SecretRedactor().restoreMasked(body, this.saved(name, null).orElse(null));
             if (this.aliasDao != null) {
-                this.aliasDao.put(name, null, body);
+                this.aliasDao.put(name, null, merged);
             }
             try {
-                new ManageStorageAliases(this.asto).add(name, body);
+                new ManageStorageAliases(this.asto).add(name, merged);
             } catch (final Exception ignored) {
                 // YAML write is best-effort when DB is primary
             }
             this.storagesCache.invalidateAll();
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
-            if (err != null && StorageAliasHandler.rootCause(err) instanceof EndpointRejected) {
-                ApiResponse.sendError(
-                    ctx, 400, "BAD_REQUEST", StorageAliasHandler.rootCause(err).getMessage()
-                );
+            final Throwable cause = err == null ? null : StorageAliasHandler.rootCause(err);
+            if (cause instanceof EndpointRejected || cause instanceof SecretRebindException) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST", cause.getMessage());
             } else if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
@@ -365,21 +371,26 @@ public final class StorageAliasHandler {
                 throw new EndpointRejected(reason);
             });
             this.checkRoots(aliasName, repoName, body);
+            // SECURITY (2.2.9): keep the stored secret when the client
+            // round-trips the "***" mask, but refuse restoring it against a
+            // changed endpoint/host (would exfiltrate the secret). Also fixes
+            // saving the literal mask over real backend credentials.
+            final JsonObject merged = new SecretRedactor()
+                .restoreMasked(body, this.saved(aliasName, repoName).orElse(null));
             if (this.aliasDao != null) {
-                this.aliasDao.put(aliasName, repoName, body);
+                this.aliasDao.put(aliasName, repoName, merged);
             }
             try {
                 new ManageStorageAliases(new Key.From(repoName), this.asto)
-                    .add(aliasName, body);
+                    .add(aliasName, merged);
             } catch (final Exception ignored) {
                 // YAML write is best-effort when DB is primary
             }
             this.storagesCache.invalidateAll();
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
-            if (err != null && StorageAliasHandler.rootCause(err) instanceof EndpointRejected) {
-                ApiResponse.sendError(
-                    ctx, 400, "BAD_REQUEST", StorageAliasHandler.rootCause(err).getMessage()
-                );
+            final Throwable cause = err == null ? null : StorageAliasHandler.rootCause(err);
+            if (cause instanceof EndpointRejected || cause instanceof SecretRebindException) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST", cause.getMessage());
             } else if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {

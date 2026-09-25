@@ -59,6 +59,15 @@ public final class SecretRedactor {
     };
 
     /**
+     * Lower-cased key fragments that name the connection target a secret in
+     * the same object is sent to. Changing one of these while keeping a secret
+     * masked is refused (see {@link SecretRebindException}).
+     */
+    private static final String[] TARGET_MARKERS = {
+        "url", "uri", "endpoint", "host",
+    };
+
+    /**
      * Whether a JSON key names a secret-bearing value.
      * @param key JSON object key
      * @return {@code true} when the value under this key must be masked
@@ -115,7 +124,7 @@ public final class SecretRedactor {
         final JsonValue result;
         switch (value.getValueType()) {
             case OBJECT:
-                result = this.redactObject((JsonObject) value);
+                result = this.redactObject((JsonObject) value, underSecretKey);
                 break;
             case ARRAY:
                 result = this.redactArray((JsonArray) value, underSecretKey);
@@ -130,10 +139,10 @@ public final class SecretRedactor {
         return result;
     }
 
-    private JsonObject redactObject(final JsonObject obj) {
+    private JsonObject redactObject(final JsonObject obj, final boolean underSecretKey) {
         final JsonObjectBuilder out = Json.createObjectBuilder();
         for (final Map.Entry<String, JsonValue> entry : obj.entrySet()) {
-            final boolean secret = this.isSecretKey(entry.getKey());
+            final boolean secret = underSecretKey || this.isSecretKey(entry.getKey());
             final JsonValue child = entry.getValue();
             if (secret && child.getValueType() == JsonValue.ValueType.STRING) {
                 out.add(entry.getKey(), MASK);
@@ -176,18 +185,55 @@ public final class SecretRedactor {
     }
 
     private JsonObject mergeObject(final JsonObject incoming, final JsonObject stored) {
+        final boolean rebind = this.connectionTargetChanged(incoming, stored);
         final JsonObjectBuilder out = Json.createObjectBuilder();
         for (final Map.Entry<String, JsonValue> entry : incoming.entrySet()) {
             final String key = entry.getKey();
             final JsonValue value = entry.getValue();
             final JsonValue previous = stored.get(key);
             if (this.isSecretKey(key) && SecretRedactor.isMask(value) && previous != null) {
+                if (rebind) {
+                    throw new SecretRebindException(key);
+                }
                 out.add(key, previous);
             } else {
                 out.add(key, this.mergeValue(value, previous));
             }
         }
         return out.build();
+    }
+
+    /**
+     * Whether the incoming object changes a connection-target field
+     * ({@code url}/{@code uri}/{@code endpoint}/{@code host}) relative to the
+     * stored one. Only fields the caller actually submitted are considered, so
+     * a partial update that omits the target is not treated as a change.
+     * @param incoming Incoming object
+     * @param stored Stored object at the same path
+     * @return {@code true} when a submitted target differs from what is stored
+     */
+    private boolean connectionTargetChanged(final JsonObject incoming, final JsonObject stored) {
+        boolean changed = false;
+        for (final Map.Entry<String, JsonValue> entry : incoming.entrySet()) {
+            if (this.isTargetKey(entry.getKey())
+                && !entry.getValue().equals(stored.get(entry.getKey()))) {
+                changed = true;
+                break;
+            }
+        }
+        return changed;
+    }
+
+    private boolean isTargetKey(final String key) {
+        final String lower = key.toLowerCase(Locale.ROOT);
+        boolean target = false;
+        for (final String marker : TARGET_MARKERS) {
+            if (lower.contains(marker)) {
+                target = true;
+                break;
+            }
+        }
+        return target;
     }
 
     private JsonArray mergeArray(final JsonArray incoming, final JsonArray stored) {
