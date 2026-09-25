@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import javax.json.JsonObject;
 import javax.json.JsonValue;
@@ -139,6 +140,51 @@ public final class FsStorageRootPolicy {
         return Optional.of(
             "fs storage path must be under an approved root (" + ENV + ")"
         );
+    }
+
+    /**
+     * Reject a repository whose fs storage location strictly nests within — or
+     * strictly contains — another repository's fs storage location.
+     *
+     * <p>SECURITY (2.2.9): every repository is namespaced under its own name
+     * inside its configured storage, so two repositories that share the exact
+     * same location (the default shared-root model) or sit in sibling
+     * directories never collide. But if one repository's path is a
+     * sub-directory of another's, its whole tree lives inside the other's
+     * backing storage — a repository named after a sub-directory of the
+     * victim's root would then read or write the victim's artifacts. Equal and
+     * sibling locations are allowed; only a genuine parent/child nesting is
+     * refused. Comparison is element-wise (so {@code /data} is not treated as a
+     * parent of {@code /database}) and symlink-resolved.</p>
+     *
+     * @param path This repository's submitted fs storage path (already checked
+     *  to sit under an approved root)
+     * @param others Other repositories' fs storage paths, keyed by repository
+     *  name
+     * @return the rejection reason naming the conflicting repository, or empty
+     */
+    public Optional<String> rejectOverlap(final String path, final Map<String, String> others) {
+        final Path self;
+        try {
+            self = FsStorageRootPolicy.realLocation(Path.of(path).normalize());
+        } catch (final InvalidPathException bad) {
+            return Optional.empty();
+        }
+        for (final Map.Entry<String, String> entry : others.entrySet()) {
+            final Path other;
+            try {
+                other = FsStorageRootPolicy.realLocation(Path.of(entry.getValue()).normalize());
+            } catch (final InvalidPathException bad) {
+                continue;
+            }
+            if (!self.equals(other) && (self.startsWith(other) || other.startsWith(self))) {
+                return Optional.of(
+                    "fs storage path overlaps the storage of repository '" + entry.getKey()
+                    + "'; it must be neither inside nor a parent of another repository's storage"
+                );
+            }
+        }
+        return Optional.empty();
     }
 
     /**

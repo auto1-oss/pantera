@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import javax.json.Json;
 import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
@@ -187,6 +188,115 @@ final class FsStorageRootPolicyTest {
             "a genuine (possibly not yet created) child of the root is fine",
             policy.reject(root.resolve("npm-local").toString()).isPresent(),
             new IsEqual<>(false)
+        );
+    }
+
+    // ─── rejectOverlap (2.2.9 storage-path overlap, finding #17) ───
+
+    @Test
+    void overlapAllowsRepositoriesSharingTheExactSameRoot() {
+        // The default shared-root model: every repository points at the same
+        // approved root and is namespaced by its own name — never a collision.
+        MatcherAssert.assertThat(
+            "equal storage paths (shared root, namespaced by name) do not overlap",
+            POLICY.rejectOverlap(
+                "/var/pantera/data",
+                Map.of("maven", "/var/pantera/data", "npm", "/var/pantera/data")
+            ).isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void overlapAllowsSiblingDirectories() {
+        MatcherAssert.assertThat(
+            "sibling storage directories do not overlap",
+            POLICY.rejectOverlap(
+                "/var/pantera/data",
+                Map.of("sec", "/var/pantera/security", "repo", "/var/pantera/repo")
+            ).isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void overlapRejectsAPathNestedInsideAnotherRepositorysStorage() {
+        // The attack: repo "com" points inside repo "victim"'s root, so its
+        // tree lands under the victim's namespace.
+        final var clash = POLICY.rejectOverlap(
+            "/var/pantera/data/victim", Map.of("victim", "/var/pantera/data")
+        );
+        MatcherAssert.assertThat(
+            "a path nested inside another repository's storage is rejected",
+            clash.isPresent(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the rejection names the conflicting repository",
+            clash.get().contains("victim"), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void overlapRejectsAPathContainingAnotherRepositorysStorage() {
+        MatcherAssert.assertThat(
+            "a path that contains another repository's storage is rejected",
+            POLICY.rejectOverlap(
+                "/var/pantera/data", Map.of("child", "/var/pantera/data/child")
+            ).isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void overlapTreatsPathBoundariesElementWise() {
+        // /var/pantera/data must NOT be treated as a parent of
+        // /var/pantera/database (string-prefix, not a path-element parent).
+        MatcherAssert.assertThat(
+            "a shared string prefix that is not a path-element parent does not overlap",
+            POLICY.rejectOverlap(
+                "/var/pantera/data", Map.of("db", "/var/pantera/database")
+            ).isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void overlapNormalisesTrailingSlashesToEqual() {
+        MatcherAssert.assertThat(
+            "a trailing slash does not make an equal path look nested",
+            POLICY.rejectOverlap(
+                "/var/pantera/data/", Map.of("other", "/var/pantera/data")
+            ).isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void overlapWithNoOtherRepositoriesIsAllowed() {
+        MatcherAssert.assertThat(
+            "the first repository has nothing to overlap",
+            POLICY.rejectOverlap("/var/pantera/data", Map.of()).isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void overlapFindsTheConflictAmongManyRepositories() {
+        final var clash = POLICY.rejectOverlap(
+            "/var/pantera/data/x",
+            Map.of(
+                "ok-a", "/srv/other-root",
+                "ok-b", "/var/pantera/security",
+                "victim", "/var/pantera/data"
+            )
+        );
+        MatcherAssert.assertThat(
+            "the one nesting conflict among several repositories is found",
+            clash.isPresent(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "and it names the conflicting repository",
+            clash.get().contains("victim"), new IsEqual<>(true)
         );
     }
 }

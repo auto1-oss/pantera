@@ -41,6 +41,8 @@ import java.io.StringReader;
 import java.security.PermissionCollection;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -48,6 +50,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import javax.json.Json;
 import javax.json.JsonStructure;
+import javax.json.JsonValue;
 
 /**
  * Repository handler for /api/v1/repositories/* endpoints.
@@ -476,6 +479,24 @@ public final class RepositoryHandler {
                     if (badRoot.isPresent()) {
                         throw new ConfigRejected(badRoot.get());
                     }
+                    // SECURITY (2.2.9): an inline fs/vertx-file path must not
+                    // nest inside — or contain — another repository's storage,
+                    // which would let this repository read or write the other's
+                    // artifacts. Equal (shared-root) and sibling paths are fine.
+                    final JsonValue storageVal = repo.get("storage");
+                    if (storageVal != null
+                        && storageVal.getValueType() == JsonValue.ValueType.OBJECT) {
+                        final Optional<String> self =
+                            this.fsRoots.get().localPath(storageVal.asJsonObject());
+                        if (self.isPresent()) {
+                            final Optional<String> clash = this.fsRoots.get().rejectOverlap(
+                                self.get(), this.otherRepoFsPaths(name)
+                            );
+                            if (clash.isPresent()) {
+                                throw new ConfigRejected(clash.get());
+                            }
+                        }
+                    }
                 }
                 final javax.json.JsonObject merged;
                 try {
@@ -610,6 +631,46 @@ public final class RepositoryHandler {
         return RepositoryHandler.LOCAL_PATHS.localPath(block)
             .map(path -> block.getString("type") + ":" + path)
             .orElse(null);
+    }
+
+    /**
+     * The inline fs/vertx-file storage paths of every repository except the
+     * named one, keyed by repository name — the input to
+     * {@link FsStorageRootPolicy#rejectOverlap}. Alias- and non-fs-backed
+     * repositories have no comparable inline path and are skipped, as is a
+     * sibling whose config cannot be parsed (it could not itself have been
+     * saved with an overlapping path).
+     * @param exclude Repository being created or updated (never compared
+     *  against itself)
+     * @return fs storage paths by repository name
+     */
+    private Map<String, String> otherRepoFsPaths(final String exclude) {
+        final Map<String, String> paths = new HashMap<>();
+        final FsStorageRootPolicy policy = this.fsRoots.get();
+        for (final String other : this.crs.listAll()) {
+            if (other.equals(exclude)) {
+                continue;
+            }
+            try {
+                final javax.json.JsonObject cfg =
+                    RepositoryHandler.asObject(this.crs.value(new RepositoryName.Simple(other)));
+                if (cfg == null) {
+                    continue;
+                }
+                final javax.json.JsonObject orepo = cfg.containsKey("repo")
+                    && cfg.get("repo").getValueType() == JsonValue.ValueType.OBJECT
+                    ? cfg.getJsonObject("repo") : cfg;
+                final JsonValue storage = orepo.get("storage");
+                if (storage != null && storage.getValueType() == JsonValue.ValueType.OBJECT) {
+                    policy.localPath(storage.asJsonObject())
+                        .ifPresent(path -> paths.put(other, path));
+                }
+            } catch (final RuntimeException ignored) {
+                // A malformed sibling config cannot be compared; skip it.
+                continue;
+            }
+        }
+        return paths;
     }
 
     /**
