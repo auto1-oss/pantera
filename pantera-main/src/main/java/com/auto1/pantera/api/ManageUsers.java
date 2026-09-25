@@ -84,9 +84,20 @@ public final class ManageUsers implements CrudUsers {
 
     @Override
     public void addOrUpdate(final JsonObject info, final String uname) {
+        // SECURITY (2.2.9, api_user_permissions self-escalation): in DB-less
+        // YAML-policy mode CachedYamlPolicy loads a top-level inline
+        // "permissions" mapping straight off the user file, so a caller holding
+        // only api_user_permissions:create/update could mint a superuser by
+        // inlining permissions on a user body. DB mode already ignores inline
+        // user permissions (authority comes from roles); strip them here so the
+        // YAML backend behaves identically. Roles and every other field are
+        // preserved.
+        final JsonObjectBuilder sanitized = Json.createObjectBuilder(info);
+        sanitized.remove("permissions");
         this.blsto.save(
             ManageUsers.fileKey(ManageUsers.keys(uname), this.blsto),
-            new Json2Yaml().apply(info.toString()).toString().getBytes(StandardCharsets.UTF_8)
+            new Json2Yaml().apply(sanitized.build().toString())
+                .toString().getBytes(StandardCharsets.UTF_8)
         );
     }
 

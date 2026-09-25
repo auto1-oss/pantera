@@ -451,7 +451,12 @@ final class CooldownHandlerFilterTest {
         coll.add(ApiCooldownPermission.READ);
         coll.add(ApiCooldownPermission.WRITE);
         for (final String repo : allowed) {
-            coll.add(new AdapterBasicPermission(repo, "read"));
+            // 2.2.9: cooldown unblock / unblock-all now require per-repository
+            // write in addition to the global ApiCooldownPermission. Grant read
+            // and write as ONE permission — the permission collection is keyed by
+            // name (last-write-wins), so two separate entries would clobber each
+            // other and drop the repo from the readable scope.
+            coll.add(new AdapterBasicPermission(repo, Set.of("read", "write")));
         }
         return coll;
     }

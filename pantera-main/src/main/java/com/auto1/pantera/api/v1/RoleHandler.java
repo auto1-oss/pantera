@@ -312,6 +312,17 @@ public final class RoleHandler {
      */
     private void deleteRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
+        // SECURITY (2.2.9, privesc-role): the built-in admin role is protected —
+        // the same notion escalationRefusal() uses for PUT. Deleting it would let
+        // a delegated role manager (delete grant, no AllPermission) tear down the
+        // bootstrap administrator role.
+        if (RoleHandler.PROTECTED_ROLE.equals(rname)) {
+            ApiResponse.sendError(
+                ctx, 403, "FORBIDDEN",
+                "The built-in administrator role cannot be deleted"
+            );
+            return;
+        }
         CompletableFuture.runAsync(
             () -> this.roles.remove(rname),
             HandlerExecutor.get()
@@ -366,6 +377,16 @@ public final class RoleHandler {
      */
     private void disableRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
+        // SECURITY (2.2.9, privesc-role): the built-in admin role is protected —
+        // the same notion escalationRefusal() uses for PUT. Disabling it strips
+        // every permission from its members and could lock all administrators out.
+        if (RoleHandler.PROTECTED_ROLE.equals(rname)) {
+            ApiResponse.sendError(
+                ctx, 403, "FORBIDDEN",
+                "The built-in administrator role cannot be disabled"
+            );
+            return;
+        }
         CompletableFuture.runAsync(
             () -> this.roles.disable(rname),
             HandlerExecutor.get()
