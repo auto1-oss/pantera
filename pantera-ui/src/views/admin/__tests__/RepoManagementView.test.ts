@@ -31,6 +31,15 @@ vi.mock('@/composables/useConfirmDelete', () => ({
   }),
 }))
 
+// Auth store stub — hasAction() returns true for every call. Declared at the
+// module top level: a vi.mock is hoisted before everything else, so vitest
+// (v5+) rejects one nested in a hook.
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({
+    hasAction: () => true,
+  }),
+}))
+
 // Auth store stub — the bulk button is gated by
 // auth.hasAction('api_repository_permissions', 'update'). Default these
 // tests as full-admin; individual tests can override.
@@ -62,12 +71,6 @@ function mountView() {
 describe('RepoManagementView — bulk access policy', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    // Spoof the auth store to return true for every hasAction call.
-    vi.mock('@/stores/auth', () => ({
-      useAuthStore: () => ({
-        hasAction: () => true,
-      }),
-    }))
     listReposMock.mockReset()
     bulkUpdateAccessPolicyMock.mockReset()
     listReposMock.mockResolvedValue({
