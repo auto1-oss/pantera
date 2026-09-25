@@ -156,6 +156,10 @@ This release contains security hardening and a broad set of bug fixes across for
 
 - **Hardening across authentication, authorization, input validation, request-egress, resource limits, and output encoding**, addressing issues raised in an external review. Each fix ships with a regression test. Deployments should upgrade; details are withheld pending broad adoption.
   ([@aydasraf](https://github.com/aydasraf))
+- **Search statistics are scoped to the caller.** `GET /api/v1/search/stats` counts only the artifacts in repositories the caller may read (an admin or wildcard-read caller still sees the global total), matching the scoping already applied to search results.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Repository storage paths cannot overlap.** Creating or moving an `fs`/`vertx-file` repository whose path nests inside — or contains — another repository's storage path is refused; repositories sharing the same approved root (namespaced by name) and sibling directories are unaffected.
+  ([@aydasraf](https://github.com/aydasraf))
 - **Password and token handling.** A self-service password change needs the real current password (a session token is no longer accepted in its place), and no longer needs the `change_password` grant. Tokens carry a millisecond issue time, so a session issued just before a password change or revoke is rejected while the re-login right after it works. Revocations survive restarts and rolling upgrades: nodes reload them from Valkey and the database at startup and peers keep each for its full lifetime.
   ([@aydasraf](https://github.com/aydasraf))
 - **User management has a privilege ceiling.** A caller without `all_permission` can no longer reset, edit, strip the roles of, or change the identity provider of an administrator or of a user holding roles the caller lacks; `sso_subject` and `auth_provider` are ignored in request bodies. A weak password on update gets `400` before anything is written, conflicting `pass`/`password` values are refused, and a reset applies in one transaction.
