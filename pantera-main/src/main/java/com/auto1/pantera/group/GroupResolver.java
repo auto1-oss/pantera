@@ -18,6 +18,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthzSlice;
 import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.cache.NegativeCacheKey;
 import com.auto1.pantera.http.context.ContextualExecutor;
@@ -443,7 +444,18 @@ public final class GroupResolver implements Slice {
             return resolve(line, headers, body, path)
                 .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
         }
-        final String dedupKey = method + " " + path;
+        // SECURITY: bind the coalescing key to the caller's authenticated
+        // principal, not just method+path. The group's authz slice stamped
+        // pantera_login above this resolver, but each member re-authorizes the
+        // caller BELOW this point (every member slice carries its own READ
+        // permission). Sharing one buffered response across callers with
+        // different identities could hand a follower who has group-read but
+        // NOT member-read the content another caller was authorized to fetch.
+        // Keying on the login confines sharing to callers with the same
+        // effective authorization; anonymous callers share one bucket.
+        final String login = headers.values(AuthzSlice.LOGIN_HDR)
+            .stream().findFirst().orElse("");
+        final String dedupKey = login + "\n" + method + " " + path;
         return this.requestDedup.load(
             dedupKey,
             () -> resolve(line, headers, body, path).thenCompose(this::bufferResponse)
@@ -1650,7 +1662,7 @@ public final class GroupResolver implements Slice {
             ? new Content.From(requestBytes)
             : Content.EMPTY;
         final RequestLine rewritten = member.rewritePath(line);
-        final Headers memberHeaders = dropFullPathHeader(headers)
+        final Headers memberHeaders = sanitizeMemberHeaders(headers)
             .copy()
             .add(new Header(EcsLoggingSlice.INTERNAL_ROUTING_HEADER, "true"))
             .add(new Header(
@@ -1848,7 +1860,7 @@ public final class GroupResolver implements Slice {
             ? new Content.From(requestBytes)
             : Content.EMPTY;
         final RequestLine rewritten = member.rewritePath(line);
-        final Headers memberHeaders = dropFullPathHeader(headers)
+        final Headers memberHeaders = sanitizeMemberHeaders(headers)
             .copy()
             .add(new Header(EcsLoggingSlice.INTERNAL_ROUTING_HEADER, "true"));
         return member.slice().response(rewritten, memberHeaders, memberBody);
@@ -1883,10 +1895,26 @@ public final class GroupResolver implements Slice {
         );
     }
 
-    private static Headers dropFullPathHeader(final Headers headers) {
+    /**
+     * Strip request headers that must never survive a client's request into a
+     * member dispatch: the {@code X-FullPath} routing hint, and a
+     * CLIENT-supplied {@link com.auto1.pantera.http.cache.BaseCachedProxySlice#CACHE_ONLY_HEADER}.
+     * GroupResolver adds the internal-routing marker itself on every member
+     * call, and {@code BaseCachedProxySlice} honours cache-only ONLY alongside
+     * that marker — so a client that sent its own {@code X-Pantera-Cache-Only}
+     * (which entry stripping does not remove) would otherwise force a group's
+     * proxy members offline. Only the resolver's own internally-set cache-only
+     * header (see {@link #queryMemberCacheOnly}) may reach a member.
+     *
+     * @param headers Inbound (caller) request headers
+     * @return Copy safe to hand a member slice
+     */
+    private static Headers sanitizeMemberHeaders(final Headers headers) {
         return new Headers(
             headers.asList().stream()
                 .filter(h -> !"X-FullPath".equalsIgnoreCase(h.getKey()))
+                .filter(h -> !com.auto1.pantera.http.cache.BaseCachedProxySlice
+                    .CACHE_ONLY_HEADER.equalsIgnoreCase(h.getKey()))
                 .toList()
         );
     }

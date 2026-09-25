@@ -17,6 +17,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.AuthzSlice;
+import com.auto1.pantera.http.cache.BaseCachedProxySlice;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsMdc;
@@ -209,7 +210,8 @@ public final class EcsLoggingSlice implements Slice {
         // Vert.x worker hop. Skipped when clientIp / span.traceId is unset.
         final Headers downstreamHeaders = EcsLoggingSlice.without(
             headers, INTERNAL_ROUTING_HEADER, AuthzSlice.LOGIN_HDR,
-            CTX_TRACE_ID_HEADER, CTX_CLIENT_IP_HEADER
+            CTX_TRACE_ID_HEADER, CTX_CLIENT_IP_HEADER,
+            BaseCachedProxySlice.CACHE_ONLY_HEADER
         );
         if (span.traceId() != null && !span.traceId().isEmpty()) {
             downstreamHeaders.add(new Header(CTX_TRACE_ID_HEADER, span.traceId()));

@@ -24,6 +24,7 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.misc.RepoNameMeterFilter;
 import com.auto1.pantera.http.misc.StorageExecutors;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.jetty.http3.Http3Server;
 import com.auto1.pantera.jetty.http3.SslFactoryFromYaml;
@@ -1339,8 +1340,15 @@ public final class VertxMain {
                         if (repo.startOnHttp3()) {
                             this.http3.computeIfAbsent(
                                 prt, key -> {
+                                    // EcsLoggingSlice is the client-facing entry
+                                    // wrapper: it drops client-sent internal headers
+                                    // (X-Pantera-Internal, pantera_login, X-Pantera-Ctx-*)
+                                    // and re-stamps the server-derived request context,
+                                    // exactly as the HTTP/1.1/2 listeners do via
+                                    // VertxSliceServer. Without it the dedicated HTTP/3
+                                    // listener would honour those forged headers.
                                     final Http3Server server = new Http3Server(
-                                        new LoggingSlice(slice), prt,
+                                        new EcsLoggingSlice(new LoggingSlice(slice)), prt,
                                         new SslFactoryFromYaml(repo.repoYaml()).build()
                                     );
                                     server.start();
@@ -1430,8 +1438,11 @@ public final class VertxMain {
                 if (cfg.startOnHttp3()) {
                     this.http3.computeIfAbsent(
                         prt, key -> {
+                            // See startRepos: EcsLoggingSlice is the client-entry
+                            // wrapper that strips client-sent internal headers and
+                            // re-stamps request context, matching the HTTP/1.1/2 path.
                             final Http3Server server = new Http3Server(
-                                new LoggingSlice(slice), prt,
+                                new EcsLoggingSlice(new LoggingSlice(slice)), prt,
                                 new SslFactoryFromYaml(cfg.repoYaml()).build()
                             );
                             server.start();
