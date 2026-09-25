@@ -153,6 +153,8 @@ This release contains security hardening and a broad set of bug fixes across for
   ([@aydasraf](https://github.com/aydasraf))
 - **Group repositories stream large artifacts straight through instead of buffering them in memory.** A group used to read a whole response into memory before sending it, causing high memory use and gateway timeouts (`502`) when pulling large artifacts — most visibly multi-hundred-megabyte Docker layers through a `docker-group`. Group responses are now relayed to the client as they arrive; concurrent pulls of the same artifact are still de-duplicated at the proxy layer, and cached files are renamed atomically so a concurrent reader never observes a half-written file.
   ([@aydasraf](https://github.com/aydasraf))
+- **Large upstream artifacts no longer time out mid-download.** The connection-acquire timeout (default 120 s) was applied as a *total* request deadline, so any upstream fetch that took longer than it was aborted mid-stream — a multi-hundred-megabyte Docker layer pulled through a proxy or group would stall and fail partway (`Total timeout … elapsed`). It now bounds only connection acquisition; once a connection is established the body streams for as long as it keeps making progress, and a genuinely stalled stream is still aborted by the idle timeout.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
