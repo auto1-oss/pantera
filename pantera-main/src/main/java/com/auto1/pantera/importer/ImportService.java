@@ -15,11 +15,13 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.importer.DigestingContent.DigestResult;
 import com.auto1.pantera.importer.api.ChecksumPolicy;
 import com.auto1.pantera.importer.api.DigestType;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.ResponseException;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.RepositoryEvents;
@@ -228,6 +230,32 @@ public final class ImportService {
                     .textBody(String.format("Repository '%s' not found", declared.repo()))
                     .build()
             ));
+        // SECURITY (2.2.9): proxy repositories are read-only caches and group
+        // repositories are virtual member unions; importing into either would
+        // poison a cache or forge member authority. Only local/hosted
+        // repositories are legitimate import targets — refuse before any write.
+        if (importForbidden(config)) {
+            EcsLogger.warn("com.auto1.pantera.importer")
+                .message("Import refused: target is a proxy or group repository")
+                .eventCategory("web")
+                .eventAction("import_artifact")
+                .eventOutcome("failure")
+                .field("repository.name", declared.repo())
+                .field("event.reason", "repository_not_importable")
+                .field("log.source", "application")
+                .log();
+            throw new ResponseException(
+                ResponseBuilder.badRequest()
+                    .textBody(
+                        String.format(
+                            "Repository '%s' is a proxy or group repository ('%s'); "
+                                + "imports may only target local repositories",
+                            declared.repo(), config.type()
+                        )
+                    )
+                    .build()
+            );
+        }
         // SECURITY (2.2.9): the repository's configured type is authoritative.
         // A caller-declared type is only ever a consistency check, never the
         // value that selects path rewriting, digests, shards or regeneration.
@@ -428,6 +456,51 @@ public final class ImportService {
                 });
         }
 
+        // SECURITY (2.2.9): published artifacts are immutable. An import must
+        // never replace an existing artifact — a WRITE holder could otherwise
+        // swap out a supposedly-immutable release. Identical bytes are an
+        // idempotent no-op; different bytes are refused with 409 Conflict.
+        return storage.exists(target).thenCompose(
+            exists -> {
+                if (exists) {
+                    return this.refuseOrAcceptExisting(
+                        request, session, storage, staging, target, size, toPersist
+                    );
+                }
+                return this.landImport(
+                    request, session, storage, staging, target, size, toPersist, baseUrl, config
+                );
+            }
+        );
+    }
+
+    /**
+     * Land a first-time import: move the staged bytes onto their target key,
+     * clean up staging and (when enabled) regenerate or shard the format
+     * metadata. Only reached when {@code target} does not already exist.
+     *
+     * @param request Request
+     * @param session Session
+     * @param storage Storage
+     * @param staging Staging key
+     * @param target Target key
+     * @param size Artifact size
+     * @param toPersist Digests to persist
+     * @param baseUrl Repository base URL
+     * @param config Repo configuration
+     * @return Completion stage with result
+     */
+    private CompletionStage<ImportResult> landImport(
+        final ImportRequest request,
+        final ImportSession session,
+        final Storage storage,
+        final Key staging,
+        final Key target,
+        final long size,
+        final EnumMap<DigestType, String> toPersist,
+        final Optional<String> baseUrl,
+        final RepoConfig config
+    ) {
         return storage.move(staging, target)
             .whenComplete((ignored, moveErr) -> {
                 // Always attempt cleanup regardless of move success/failure
@@ -535,6 +608,167 @@ public final class ImportService {
                     }
                 }
             );
+    }
+
+    /**
+     * Whether the target repository forbids direct imports.
+     *
+     * <p>SECURITY (2.2.9): proxy repositories are read-only caches and group
+     * repositories are virtual member unions; importing into either poisons a
+     * cache or forges member authority. Only local/hosted repositories are
+     * legitimate import targets. Mirrors the {@code -proxy}/{@code -group} type
+     * convention that repository wiring uses, with a remotes/members fallback
+     * for defence in depth.</p>
+     *
+     * @param config Target repository configuration
+     * @return True when the configured repository is a proxy or group
+     */
+    private static boolean importForbidden(final RepoConfig config) {
+        final String type = config.type() == null
+            ? "" : config.type().toLowerCase(Locale.ROOT).trim();
+        return type.endsWith("-proxy") || type.endsWith("-group")
+            || !config.remotes().isEmpty() || !config.members().isEmpty();
+    }
+
+    /**
+     * Handle an import whose target key already exists. Identical bytes are an
+     * idempotent no-op (the staged copy is discarded and
+     * {@link ImportStatus#ALREADY_PRESENT} returned); different bytes are
+     * refused with 409 Conflict. Either way the staged file is drained so no
+     * orphan is left behind.
+     *
+     * @param request Request
+     * @param session Session
+     * @param storage Storage
+     * @param staging Staging key
+     * @param target Existing target key
+     * @param size Staged artifact size
+     * @param toPersist Digests to persist
+     * @return Completion stage with result, or a failed stage carrying a 409
+     */
+    private CompletionStage<ImportResult> refuseOrAcceptExisting(
+        final ImportRequest request,
+        final ImportSession session,
+        final Storage storage,
+        final Key staging,
+        final Key target,
+        final long size,
+        final EnumMap<DigestType, String> toPersist
+    ) {
+        return sameBytes(storage, staging, target).thenCompose(
+            identical -> discardStaging(storage, staging).thenApply(
+                ignored -> this.existingResult(
+                    request, session, target, size, toPersist, identical
+                )
+            )
+        );
+    }
+
+    /**
+     * Build the result for an already-present target, or refuse it.
+     *
+     * @param request Request
+     * @param session Session
+     * @param target Existing target key
+     * @param size Staged artifact size
+     * @param toPersist Digests to persist
+     * @param identical Whether the staged bytes equal the stored bytes
+     * @return Idempotent {@link ImportStatus#ALREADY_PRESENT} result
+     * @throws ResponseException 409 Conflict when the bytes differ
+     */
+    private ImportResult existingResult(
+        final ImportRequest request,
+        final ImportSession session,
+        final Key target,
+        final long size,
+        final EnumMap<DigestType, String> toPersist,
+        final boolean identical
+    ) {
+        if (identical) {
+            this.sessions.ifPresent(store -> store.markCompleted(session, size, toPersist));
+            EcsLogger.info("com.auto1.pantera.importer")
+                .message("Import is a no-op: identical artifact already present")
+                .eventCategory("web")
+                .eventAction("import_artifact")
+                .eventOutcome("success")
+                .field("repository.name", request.repo())
+                .field("url.path", request.path())
+                .field("event.reason", "already_present")
+                .field("log.source", "application")
+                .log();
+            return new ImportResult(
+                ImportStatus.ALREADY_PRESENT,
+                "Artifact already present with identical content",
+                toPersist,
+                size,
+                null
+            );
+        }
+        EcsLogger.warn("com.auto1.pantera.importer")
+            .message("Import refused: artifact already exists with different content")
+            .eventCategory("web")
+            .eventAction("import_artifact")
+            .eventOutcome("failure")
+            .field("repository.name", request.repo())
+            .field("url.path", request.path())
+            .field("event.reason", "artifact_immutable")
+            .field("log.source", "application")
+            .log();
+        throw new ResponseException(
+            ResponseBuilder.from(RsStatus.CONFLICT)
+                .textBody(
+                    "Artifact /" + target.string() + " already exists with different "
+                        + "content. Published artifacts are immutable: import a new "
+                        + "version, or delete the existing one first."
+                )
+                .build()
+        );
+    }
+
+    /**
+     * Whether the staged bytes are byte-for-byte identical to the bytes
+     * already stored at the target key, compared by SHA-256 of the actual
+     * content (never caller-supplied digest headers).
+     *
+     * @param storage Storage
+     * @param staging Staging key
+     * @param target Existing target key
+     * @return Completion stage resolving true when the content matches
+     */
+    private static CompletionStage<Boolean> sameBytes(
+        final Storage storage, final Key staging, final Key target
+    ) {
+        return digestOf(storage, staging).thenCompose(
+            left -> digestOf(storage, target).thenApply(left::equals)
+        );
+    }
+
+    /**
+     * Lower-case hex SHA-256 of the content stored under {@code key}.
+     *
+     * @param storage Storage
+     * @param key Content key
+     * @return Completion stage with the hex digest
+     */
+    private static CompletionStage<String> digestOf(final Storage storage, final Key key) {
+        return storage.value(key).thenCompose(
+            content -> new ContentDigest(content, DigestType.SHA256::newDigest).hex()
+        );
+    }
+
+    /**
+     * Drain a staged file that will not be landed: delete the staged blob and
+     * then remove the staging directories left empty. Failures are swallowed —
+     * cleanup is best-effort and must not mask the outcome that triggered it.
+     *
+     * @param storage Storage
+     * @param staging Staging key
+     * @return Completion stage
+     */
+    private static CompletionStage<Void> discardStaging(final Storage storage, final Key staging) {
+        return storage.delete(staging)
+            .exceptionally(err -> null)
+            .thenCompose(ignored -> cleanupStagingDir(storage, staging));
     }
 
     /**
