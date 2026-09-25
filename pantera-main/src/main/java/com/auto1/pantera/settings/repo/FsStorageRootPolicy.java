@@ -157,27 +157,31 @@ public final class FsStorageRootPolicy {
      * refused. Comparison is element-wise (so {@code /data} is not treated as a
      * parent of {@code /database}) and symlink-resolved.</p>
      *
+     * <p>Each repository's data lives under its own name inside its configured
+     * storage, so the comparison is between name-namespaced roots
+     * ({@code path/name}), not bare paths: two repositories under the same
+     * parent directory but different names (e.g. {@code /tmp} and a
+     * {@code /tmp/junitNNN} temp dir) do not collide, while a repository whose
+     * path is {@code <root>/<victim-name>} lands inside the victim's tree.</p>
+     *
+     * @param name This repository's name
      * @param path This repository's submitted fs storage path (already checked
      *  to sit under an approved root)
      * @param others Other repositories' fs storage paths, keyed by repository
      *  name
      * @return the rejection reason naming the conflicting repository, or empty
      */
-    public Optional<String> rejectOverlap(final String path, final Map<String, String> others) {
-        final Path self;
-        try {
-            self = FsStorageRootPolicy.realLocation(Path.of(path).normalize());
-        } catch (final InvalidPathException bad) {
+    public Optional<String> rejectOverlap(
+        final String name, final String path, final Map<String, String> others
+    ) {
+        final Path self = FsStorageRootPolicy.repoBase(name, path);
+        if (self == null) {
             return Optional.empty();
         }
         for (final Map.Entry<String, String> entry : others.entrySet()) {
-            final Path other;
-            try {
-                other = FsStorageRootPolicy.realLocation(Path.of(entry.getValue()).normalize());
-            } catch (final InvalidPathException bad) {
-                continue;
-            }
-            if (!self.equals(other) && (self.startsWith(other) || other.startsWith(self))) {
+            final Path other = FsStorageRootPolicy.repoBase(entry.getKey(), entry.getValue());
+            if (other != null && !self.equals(other)
+                && (self.startsWith(other) || other.startsWith(self))) {
                 return Optional.of(
                     "fs storage path overlaps the storage of repository '" + entry.getKey()
                     + "'; it must be neither inside nor a parent of another repository's storage"
@@ -185,6 +189,24 @@ public final class FsStorageRootPolicy {
             }
         }
         return Optional.empty();
+    }
+
+    /**
+     * A repository's real, name-namespaced storage root: its configured path
+     * with the repository name appended (that is where the repository's data
+     * actually lives), symlink-resolved. {@code null} for an unparseable path.
+     * @param name Repository name
+     * @param path Configured fs storage path
+     * @return The storage base, or {@code null}
+     */
+    private static Path repoBase(final String name, final String path) {
+        try {
+            return FsStorageRootPolicy.realLocation(
+                Path.of(path).normalize().resolve(name).normalize()
+            );
+        } catch (final InvalidPathException bad) {
+            return null;
+        }
     }
 
     /**

@@ -192,16 +192,18 @@ final class FsStorageRootPolicyTest {
     }
 
     // ─── rejectOverlap (2.2.9 storage-path overlap, finding #17) ───
+    // Overlap is between name-namespaced roots (path/name), because each
+    // repository's data lives under its own name inside its configured storage.
 
     @Test
     void overlapAllowsRepositoriesSharingTheExactSameRoot() {
         // The default shared-root model: every repository points at the same
         // approved root and is namespaced by its own name — never a collision.
         MatcherAssert.assertThat(
-            "equal storage paths (shared root, namespaced by name) do not overlap",
+            "repositories sharing a root (namespaced by name) do not overlap",
             POLICY.rejectOverlap(
-                "/var/pantera/data",
-                Map.of("maven", "/var/pantera/data", "npm", "/var/pantera/data")
+                "maven", "/var/pantera/data",
+                Map.of("npm", "/var/pantera/data", "pypi", "/var/pantera/data")
             ).isPresent(),
             new IsEqual<>(false)
         );
@@ -212,7 +214,7 @@ final class FsStorageRootPolicyTest {
         MatcherAssert.assertThat(
             "sibling storage directories do not overlap",
             POLICY.rejectOverlap(
-                "/var/pantera/data",
+                "data-repo", "/var/pantera/data",
                 Map.of("sec", "/var/pantera/security", "repo", "/var/pantera/repo")
             ).isPresent(),
             new IsEqual<>(false)
@@ -220,11 +222,25 @@ final class FsStorageRootPolicyTest {
     }
 
     @Test
+    void overlapAllowsDifferentNamespacesUnderACommonParent() {
+        // Regression: a repository at /tmp and another under a /tmp temp dir
+        // (as the API tests use) land in /tmp/<name> and /tmp/junitNNN/<name> —
+        // different subtrees, so they must NOT be flagged.
+        MatcherAssert.assertThat(
+            "different name-namespaces under a shared parent do not overlap",
+            POLICY.rejectOverlap(
+                "size-order", "/tmp/junit-12345", Map.of("myrepo", "/tmp")
+            ).isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
     void overlapRejectsAPathNestedInsideAnotherRepositorysStorage() {
-        // The attack: repo "com" points inside repo "victim"'s root, so its
-        // tree lands under the victim's namespace.
+        // The attack: repo "com" points at <root>/<victim-name>, so its tree
+        // (/var/pantera/data/victim/com/...) lands inside the victim's.
         final var clash = POLICY.rejectOverlap(
-            "/var/pantera/data/victim", Map.of("victim", "/var/pantera/data")
+            "com", "/var/pantera/data/victim", Map.of("victim", "/var/pantera/data")
         );
         MatcherAssert.assertThat(
             "a path nested inside another repository's storage is rejected",
@@ -241,7 +257,7 @@ final class FsStorageRootPolicyTest {
         MatcherAssert.assertThat(
             "a path that contains another repository's storage is rejected",
             POLICY.rejectOverlap(
-                "/var/pantera/data", Map.of("child", "/var/pantera/data/child")
+                "victim", "/var/pantera/data", Map.of("com", "/var/pantera/data/victim")
             ).isPresent(),
             new IsEqual<>(true)
         );
@@ -254,20 +270,21 @@ final class FsStorageRootPolicyTest {
         MatcherAssert.assertThat(
             "a shared string prefix that is not a path-element parent does not overlap",
             POLICY.rejectOverlap(
-                "/var/pantera/data", Map.of("db", "/var/pantera/database")
+                "a", "/var/pantera/data", Map.of("b", "/var/pantera/database")
             ).isPresent(),
             new IsEqual<>(false)
         );
     }
 
     @Test
-    void overlapNormalisesTrailingSlashesToEqual() {
+    void overlapNormalisesTrailingSlashes() {
+        // A trailing slash on the attacker's path must not hide the nesting.
         MatcherAssert.assertThat(
-            "a trailing slash does not make an equal path look nested",
+            "a trailing slash does not defeat the nesting check",
             POLICY.rejectOverlap(
-                "/var/pantera/data/", Map.of("other", "/var/pantera/data")
+                "com", "/var/pantera/data/victim/", Map.of("victim", "/var/pantera/data")
             ).isPresent(),
-            new IsEqual<>(false)
+            new IsEqual<>(true)
         );
     }
 
@@ -275,7 +292,7 @@ final class FsStorageRootPolicyTest {
     void overlapWithNoOtherRepositoriesIsAllowed() {
         MatcherAssert.assertThat(
             "the first repository has nothing to overlap",
-            POLICY.rejectOverlap("/var/pantera/data", Map.of()).isPresent(),
+            POLICY.rejectOverlap("maven", "/var/pantera/data", Map.of()).isPresent(),
             new IsEqual<>(false)
         );
     }
@@ -283,7 +300,7 @@ final class FsStorageRootPolicyTest {
     @Test
     void overlapFindsTheConflictAmongManyRepositories() {
         final var clash = POLICY.rejectOverlap(
-            "/var/pantera/data/x",
+            "x", "/var/pantera/data/victim",
             Map.of(
                 "ok-a", "/srv/other-root",
                 "ok-b", "/var/pantera/security",

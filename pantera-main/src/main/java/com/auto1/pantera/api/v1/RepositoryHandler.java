@@ -490,7 +490,7 @@ public final class RepositoryHandler {
                             this.fsRoots.get().localPath(storageVal.asJsonObject());
                         if (self.isPresent()) {
                             final Optional<String> clash = this.fsRoots.get().rejectOverlap(
-                                self.get(), this.otherRepoFsPaths(name)
+                                name, self.get(), this.otherRepoFsPaths(name)
                             );
                             if (clash.isPresent()) {
                                 throw new ConfigRejected(clash.get());
