@@ -8,7 +8,11 @@ import {
   type TroubleshootFix,
   type TroubleshootResponse,
 } from '@/api/troubleshoot'
-import { INSPECT_REPO_TYPES } from '@/api/cooldown'
+import {
+  INSPECT_REPO_TYPES,
+  suggestCooldownPackages,
+  type InspectSuggestion,
+} from '@/api/cooldown'
 import { useNotificationStore } from '@/stores/notifications'
 import { repoTypeBase } from '@/utils/repoTypes'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -17,6 +21,7 @@ import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Tag from 'primevue/tag'
 import InputText from 'primevue/inputtext'
+import AutoComplete from 'primevue/autocomplete'
 import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 
@@ -29,7 +34,12 @@ const notify = useNotificationStore()
 const mode = ref<Mode>('url')
 const url = ref('')
 const pkgRepoType = ref<string>('npm')
-const pkgName = ref('')
+// Bound to the AutoComplete: a string while typing, the suggestion object for
+// an instant after one is picked (pkgText() reads either).
+const pkgName = ref<string | InspectSuggestion>('')
+const pkgSuggestions = ref<InspectSuggestion[]>([])
+let pkgSuggestSeq = 0
+const SOURCE_LABELS: Record<string, string> = { index: 'indexed', cooldown: 'cooldown' }
 const loading = ref(false)
 const result = ref<TroubleshootResponse | null>(null)
 const error = ref('')
@@ -76,10 +86,50 @@ watch(() => route.query.url, (v) => {
   }
 })
 
+function pkgText(): string {
+  return typeof pkgName.value === 'string' ? pkgName.value : pkgName.value.package
+}
+
+/** AutoComplete completeMethod; the component debounces (delay) and gates on minLength. */
+async function searchPackages(event: { query: string }) {
+  const seq = ++pkgSuggestSeq
+  try {
+    const found = await suggestCooldownPackages({
+      q: event.query,
+      repoType: pkgRepoType.value || undefined,
+      limit: 20,
+    })
+    if (seq === pkgSuggestSeq) pkgSuggestions.value = found
+  } catch {
+    if (seq === pkgSuggestSeq) pkgSuggestions.value = []
+  }
+}
+
 function openInspector() {
-  const name = pkgName.value.trim()
+  const name = pkgText().trim()
   if (!name) return
   router.push({ path: '/cooldown', query: { tab: 'inspect', repoType: pkgRepoType.value, package: name } })
+}
+
+/** Picking a suggestion adopts its repo type and opens the inspector for it. */
+function onPkgSelect(event: { value: InspectSuggestion }) {
+  const s = event.value
+  if (s.repoType) pkgRepoType.value = s.repoType
+  router.push({
+    path: '/cooldown',
+    query: {
+      tab: 'inspect',
+      repoType: s.repoType || pkgRepoType.value,
+      package: s.package,
+      ...(s.repos.length === 1 ? { repo: s.repos[0] } : {}),
+    },
+  })
+}
+
+/** Enter opens the inspector for the typed text, unless a suggestion was just picked. */
+function onPkgEnter(event: KeyboardEvent) {
+  if (event.defaultPrevented) return
+  openInspector()
 }
 
 const inspectorLink = computed(() => {
@@ -191,13 +241,36 @@ onMounted(() => {
             </div>
             <div class="flex flex-col gap-1 flex-1 min-w-[14rem]">
               <label class="text-sm text-gray-500" for="troubleshoot-pkg-name">Package</label>
-              <InputText
-                id="troubleshoot-pkg-name"
+              <AutoComplete
                 v-model="pkgName"
-                placeholder="lodash, requests, com.example:foo..."
+                input-id="troubleshoot-pkg-name"
+                :suggestions="pkgSuggestions"
+                option-label="package"
+                :delay="250"
+                :min-length="2"
+                empty-search-message="No matching packages"
+                placeholder="Any part of the name: lodash, requests, com.example:foo..."
                 class="w-full"
-                @keyup.enter="openInspector"
-              />
+                input-class="w-full"
+                data-testid="troubleshoot-pkg-name"
+                @complete="searchPackages"
+                @item-select="onPkgSelect"
+                @keydown.enter="onPkgEnter"
+              >
+                <template #option="{ option }">
+                  <div class="flex flex-wrap items-center gap-2" data-testid="troubleshoot-suggestion">
+                    <span class="font-mono">{{ option.display }}</span>
+                    <Tag :value="option.repoType" severity="secondary" />
+                    <Tag
+                      v-for="src in option.sources"
+                      :key="src"
+                      :value="SOURCE_LABELS[src] ?? src"
+                      :severity="src === 'cooldown' ? 'warn' : 'info'"
+                    />
+                    <span class="text-xs text-gray-400">{{ option.repos.join(', ') }}</span>
+                  </div>
+                </template>
+              </AutoComplete>
             </div>
             <Button label="Open in cooldown inspector" icon="pi pi-arrow-right" @click="openInspector" />
           </div>
