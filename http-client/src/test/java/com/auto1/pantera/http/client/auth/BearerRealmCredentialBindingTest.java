@@ -31,10 +31,11 @@ import org.junit.jupiter.api.Test;
  * upstream could harvest them by pointing the realm at itself.
  *
  * <p>The fix binds credentials to the configured upstream: the token
- * request carries them only when the realm is the same host, lives under
- * the upstream's parent domain (Docker Hub: {@code registry-1.docker.io}
- * → {@code auth.docker.io}), or is explicitly allowlisted; any other realm
- * gets an anonymous token request.</p>
+ * request carries them only when the realm is the exact same host or is
+ * explicitly allowlisted (via {@code PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS});
+ * any other realm — including a sibling subdomain of the upstream — gets an
+ * anonymous token request. There is deliberately no parent-domain heuristic:
+ * on multi-tenant suffix domains a sibling subdomain is a different tenant.</p>
  *
  * @since 2.2.9
  */
@@ -73,7 +74,7 @@ final class BearerRealmCredentialBindingTest {
     }
 
     @Test
-    void dockerHubStyleSiblingRealmStillReceivesCredentials() {
+    void siblingRealmUnderTheUpstreamParentDomainIsNotTrusted() {
         final AtomicReference<Headers> seen = new AtomicReference<>();
         final Authenticator auth = GenericAuthenticator.create(
             recording(seen), URI.create("https://registry-1.docker.io"), "bob", "12345"
@@ -82,8 +83,8 @@ final class BearerRealmCredentialBindingTest {
             Headers.from(new WwwAuthenticate("Bearer realm=\"https://auth.docker.io/token\""))
         ).toCompletableFuture().join();
         MatcherAssert.assertThat(
-            "a realm under the upstream's parent domain (auth.docker.io for registry-1.docker.io) must still get the credentials",
-            seen.get().values(Authorization.NAME).isEmpty(), new IsEqual<>(false)
+            "a sibling subdomain of the upstream (a different tenant on shared suffixes) must NOT receive the credentials unless explicitly allowlisted",
+            seen.get().values(Authorization.NAME).isEmpty(), new IsEqual<>(true)
         );
     }
 

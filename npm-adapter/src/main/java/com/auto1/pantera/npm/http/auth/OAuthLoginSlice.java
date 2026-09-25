@@ -28,6 +28,7 @@ import com.auto1.pantera.http.rt.RtRule;
 import java.io.StringReader;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Pattern;
 import javax.json.Json;
 import javax.json.JsonException;
 import javax.json.JsonObject;
@@ -112,6 +113,14 @@ public final class OAuthLoginSlice implements Slice {
     private static final String ERROR = "error";
 
     /**
+     * Shape of a bearer token supplied as a login password: three base64url
+     * segments separated by dots. A password matching this is a JWT, not a
+     * password, and is refused instead of being exchanged for a token.
+     */
+    private static final Pattern JWT_SHAPE =
+        Pattern.compile("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$");
+
+    /**
      * Authentication that validates the password.
      */
     private final Authentication auth;
@@ -175,6 +184,22 @@ public final class OAuthLoginSlice implements Slice {
      * @return Response
      */
     private Response login(final String name, final String password) {
+        if (OAuthLoginSlice.looksLikeJwt(password)) {
+            // A bearer token supplied as the password would authenticate via
+            // the jwt-password provider and be exchanged for a freshly minted
+            // API token that outlives revocation of the original — refuse it.
+            EcsLogger.warn(OAuthLoginSlice.LOGGER)
+                .message("npm login refused: a bearer token is not a login password")
+                .eventCategory("authentication")
+                .eventAction("npm_login")
+                .eventOutcome("failure")
+                .field("user.name", name)
+                .field("log.source", "application")
+                .log();
+            return ResponseBuilder.unauthorized()
+                .jsonBody(OAuthLoginSlice.error("invalid credentials"))
+                .build();
+        }
         final Optional<AuthUser> user = this.auth.user(name, password);
         final Response response;
         if (user.isEmpty()) {
@@ -282,5 +307,17 @@ public final class OAuthLoginSlice implements Slice {
      */
     private static JsonObject error(final String message) {
         return Json.createObjectBuilder().add(OAuthLoginSlice.ERROR, message).build();
+    }
+
+    /**
+     * Whether a supplied secret is shaped like a JWT: three base64url segments
+     * separated by dots. Such a value is a bearer token, never a login
+     * password — minting a fresh API token from it would outlive revocation of
+     * the original, so it is refused before any token is issued.
+     * @param value Candidate password
+     * @return {@code true} when it has the three-segment JWT shape
+     */
+    private static boolean looksLikeJwt(final String value) {
+        return value != null && OAuthLoginSlice.JWT_SHAPE.matcher(value).matches();
     }
 }

@@ -33,8 +33,8 @@ public final class GenericAuthenticator implements Authenticator {
     /**
      * Authenticator for a configured upstream. The Basic credentials are
      * bound to that upstream: on a Bearer challenge they are released only
-     * to a realm {@link RealmTrust} accepts for it (same host, its parent
-     * domain, or the allowlist) — a foreign realm gets an anonymous token
+     * to a realm {@link RealmTrust} accepts for it (the same host or the
+     * allowlist) — a foreign realm gets an anonymous token
      * request, never the upstream's credentials (2.2.9). Callers that
      * cannot name the upstream get {@link RealmTrust#none()}: credentials
      * are then never forwarded to any Bearer realm.

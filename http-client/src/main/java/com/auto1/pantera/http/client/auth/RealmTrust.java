@@ -23,16 +23,20 @@ import java.util.function.Supplier;
  * links alike.
  *
  * <p>A {@code WWW-Authenticate: Bearer realm=...} challenge is upstream-
- * controlled, so before 2.2.9 a malicious or compromised upstream could name
- * any host as its realm and Pantera would send the configured Basic
- * credentials there. Credentials are now released only to a realm that is:
- * the upstream host itself; a host under the upstream's parent domain when
- * that parent has at least two labels (Docker Hub answers for
- * {@code registry-1.docker.io} with realm {@code auth.docker.io}; a bare
- * {@code ghcr.io} does NOT thereby trust every {@code *.io}); or a host in
- * the {@code PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS} allowlist. Every other realm
- * gets an anonymous token request — most registries grant pull tokens
- * anonymously, and a denied anonymous request fails safely.</p>
+ * controlled, so a malicious or compromised upstream could name any host as
+ * its realm and try to make Pantera send the configured Basic credentials
+ * there. Credentials are released only to a realm that is the upstream host
+ * itself, or a host in the {@code PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS}
+ * allowlist. There is deliberately no parent-domain heuristic: on multi-tenant
+ * suffix domains ({@code azurecr.io}, {@code s3.amazonaws.com},
+ * {@code dkr.ecr.*.amazonaws.com}, {@code storage.googleapis.com},
+ * {@code blob.core.windows.net}) a sibling subdomain belongs to a different
+ * tenant, so trusting by shared parent domain would leak the credentials to an
+ * attacker-controlled sibling host. A cross-subdomain realm that is genuinely
+ * required (e.g. Docker Hub's {@code auth.docker.io} for
+ * {@code registry-1.docker.io}) must be added to the allowlist explicitly.
+ * Every other realm gets an anonymous token request — most registries grant
+ * pull tokens anonymously, and a denied anonymous request fails safely.</p>
  *
  * @since 2.2.9
  */
@@ -99,6 +103,14 @@ public final class RealmTrust {
     /**
      * Whether the configured credentials may be sent to this realm.
      *
+     * <p>Credentials are released only to a realm host that exactly equals the
+     * configured upstream host, or that is present in the explicit
+     * credential-host allowlist. There is no parent-domain matching: a sibling
+     * subdomain on a multi-tenant suffix domain belongs to a different tenant,
+     * so releasing credentials to it would leak them. An operator who needs a
+     * redirect/realm host trusted adds it to
+     * {@code PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS}.</p>
+     *
      * @param realm Realm URI from the challenge
      * @return {@code true} if credentials may be released
      */
@@ -108,21 +120,8 @@ public final class RealmTrust {
             return false;
         }
         final String lower = host.toLowerCase(Locale.ROOT);
-        if (RealmTrust.listed(this.allowed.get(), lower)) {
-            return true;
-        }
-        if (this.upstream == null) {
-            return false;
-        }
-        if (this.upstream.equals(lower)) {
-            return true;
-        }
-        final int dot = this.upstream.indexOf('.');
-        if (dot < 0) {
-            return false;
-        }
-        final String parent = this.upstream.substring(dot + 1);
-        return parent.indexOf('.') >= 0 && lower.endsWith("." + parent);
+        return RealmTrust.listed(this.allowed.get(), lower)
+            || (this.upstream != null && this.upstream.equals(lower));
     }
 
     /**
