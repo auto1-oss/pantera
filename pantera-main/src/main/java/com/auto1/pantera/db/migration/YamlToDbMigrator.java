@@ -23,9 +23,11 @@ import com.auto1.pantera.db.dao.SettingsDao;
 import com.auto1.pantera.db.dao.StorageAliasDao;
 import com.auto1.pantera.db.dao.UserDao;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -479,6 +481,52 @@ public final class YamlToDbMigrator {
         return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(rnd);
     }
 
+    /**
+     * Where a generated bootstrap admin password is written:
+     * {@code <pantera.home>/bootstrap-admin-password}, where
+     * {@code pantera.home} is the system property the server already uses
+     * for its data directory (default {@code /var/pantera}).
+     *
+     * @return Password file path
+     */
+    Path bootstrapPasswordFile() {
+        return Path.of(System.getProperty("pantera.home", "/var/pantera"))
+            .resolve("bootstrap-admin-password");
+    }
+
+    /**
+     * Write a generated bootstrap password to a file only its owner can read
+     * or write (0600). Any existing file is replaced, never appended to or
+     * reused with its old permissions.
+     *
+     * @param file Target file
+     * @param password Generated password
+     * @throws IOException When the file cannot be written
+     */
+    void writeBootstrapPassword(final Path file, final String password) throws IOException {
+        final Path parent = file.toAbsolutePath().getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Files.deleteIfExists(file);
+        try {
+            Files.createFile(
+                file,
+                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+            );
+        } catch (final UnsupportedOperationException nonPosix) {
+            Files.createFile(file);
+            final java.io.File plain = file.toFile();
+            if (!(plain.setReadable(false, false) && plain.setReadable(true, true)
+                && plain.setWritable(false, false) && plain.setWritable(true, true))) {
+                throw new IOException(
+                    String.format("Cannot restrict permissions of %s", file), nonPosix
+                );
+            }
+        }
+        Files.writeString(file, password + System.lineSeparator(), StandardCharsets.UTF_8);
+    }
+
     private void bootstrapDefaultAdmin() {
         try (Connection conn = this.source.getConnection()) {
             // 1a. Bail out if a user named 'admin' already exists.
@@ -516,11 +564,24 @@ public final class YamlToDbMigrator {
             // 3. Insert the admin user. SECURITY (2.2.9, SecOps bootstrap-admin):
             //    never seed the source-known password 'admin' — take
             //    PANTERA_BOOTSTRAP_ADMIN_PASSWORD when set, else generate a
-            //    random one and surface it once in the logs. must_change_password
-            //    is still TRUE so the operator is prompted to rotate it.
+            //    random one and write it to an owner-only (0600) file, never to
+            //    the log (which is shipped and retained centrally).
+            //    must_change_password is still TRUE so the operator rotates it.
             final String configured = System.getenv("PANTERA_BOOTSTRAP_ADMIN_PASSWORD");
             final boolean generated = configured == null || configured.isBlank();
             final String bootstrapPassword = this.resolveBootstrapPassword(configured);
+            final Path passwordFile = this.bootstrapPasswordFile();
+            if (generated) {
+                try {
+                    this.writeBootstrapPassword(passwordFile, bootstrapPassword);
+                } catch (final IOException ex) {
+                    LOG.error("Default admin user NOT created: cannot write the generated "
+                        + "password to {}. Make that directory writable (or set the "
+                        + "pantera.home system property), or set "
+                        + "PANTERA_BOOTSTRAP_ADMIN_PASSWORD, and restart", passwordFile, ex);
+                    return;
+                }
+            }
             final String bcryptHash = org.mindrot.jbcrypt.BCrypt.hashpw(
                 bootstrapPassword, org.mindrot.jbcrypt.BCrypt.gensalt()
             );
@@ -549,10 +610,10 @@ public final class YamlToDbMigrator {
                 assign.executeUpdate();
             }
             if (generated) {
-                LOG.warn("Bootstrapped admin user 'admin' with a GENERATED password: {} "
-                    + "(must_change_password=TRUE). Log in and change it immediately, or set "
-                    + "PANTERA_BOOTSTRAP_ADMIN_PASSWORD to control it. This is printed once.",
-                    bootstrapPassword);
+                LOG.warn("Bootstrapped admin user 'admin' with a generated password, written "
+                    + "to {} (readable by the server user only; must_change_password=TRUE). "
+                    + "Log in, change it, then delete the file. Set "
+                    + "PANTERA_BOOTSTRAP_ADMIN_PASSWORD to choose it instead.", passwordFile);
             } else {
                 LOG.warn("Bootstrapped admin user 'admin' from PANTERA_BOOTSTRAP_ADMIN_PASSWORD "
                     + "(must_change_password=TRUE). Change it after first login.");

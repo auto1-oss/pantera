@@ -14,8 +14,9 @@ import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.auto1.pantera.asto.SubStorage;
 import com.auto1.pantera.scheduling.QuartzService;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.security.perms.EmptyPermissions;
 import com.auto1.pantera.security.policy.CachedYamlPolicy;
-import com.auto1.pantera.security.policy.Policy;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.stream.Stream;
@@ -94,10 +95,10 @@ class YamlSettingsTest {
             authz.authz().authentication().toString(),
             new StringContains("AuthFromEnv")
         );
-        MatcherAssert.assertThat(
-            "Policy is free",
-            authz.authz().policy(),
-            new IsInstanceOf(Policy.FREE.getClass())
+        Assertions.assertInstanceOf(
+            EmptyPermissions.class,
+            authz.authz().policy().getPermissions(AuthUser.ANONYMOUS),
+            "an absent policy section denies by default"
         );
         MatcherAssert.assertThat(
             "Policy storage is absent",
@@ -116,10 +117,10 @@ class YamlSettingsTest {
             authz.authz().authentication().toString(),
             new StringContains("GithubAuth")
         );
-        MatcherAssert.assertThat(
-            "Policy is free",
-            authz.authz().policy(),
-            new IsInstanceOf(Policy.FREE.getClass())
+        Assertions.assertInstanceOf(
+            EmptyPermissions.class,
+            authz.authz().policy().getPermissions(AuthUser.ANONYMOUS),
+            "an absent policy section denies by default"
         );
         MatcherAssert.assertThat(
             "Policy storage is absent",
@@ -138,10 +139,10 @@ class YamlSettingsTest {
             authz.authz().authentication().toString(),
             new StringContains("AuthFromKeycloak")
         );
-        MatcherAssert.assertThat(
-            "Policy is free",
-            authz.authz().policy(),
-            new IsInstanceOf(Policy.FREE.getClass())
+        Assertions.assertInstanceOf(
+            EmptyPermissions.class,
+            authz.authz().policy().getPermissions(AuthUser.ANONYMOUS),
+            "an absent policy section denies by default"
         );
         MatcherAssert.assertThat(
             "Policy storage is absent",
@@ -160,10 +161,10 @@ class YamlSettingsTest {
             authz.authz().authentication().toString(),
             new StringContains("AuthFromStorage")
         );
-        MatcherAssert.assertThat(
-            "Policy is free",
-            authz.authz().policy(),
-            new IsInstanceOf(Policy.FREE.getClass())
+        Assertions.assertInstanceOf(
+            EmptyPermissions.class,
+            authz.authz().policy().getPermissions(AuthUser.ANONYMOUS),
+            "an absent policy section denies by default"
         );
         MatcherAssert.assertThat(
             "Policy storage is present",
@@ -209,10 +210,10 @@ class YamlSettingsTest {
                 new StringContains("AuthFromEnv")
             )
         );
-        MatcherAssert.assertThat(
-            "Empty policy created",
-            authz.authz().policy(),
-            new IsInstanceOf(Policy.FREE.getClass())
+        Assertions.assertInstanceOf(
+            EmptyPermissions.class,
+            authz.authz().policy().getPermissions(AuthUser.ANONYMOUS),
+            "an absent policy section denies by default"
         );
         MatcherAssert.assertThat(
             "Policy storage is present",

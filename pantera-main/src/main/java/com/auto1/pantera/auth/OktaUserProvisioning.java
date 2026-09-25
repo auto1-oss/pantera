@@ -67,7 +67,13 @@ public final class OktaUserProvisioning {
                     builder = builder.add(k, existing.value(k));
                 }
             }
-            builder = builder.add("enabled", "true");
+            // SECURITY (ROPC): enable only on first creation. For a user that
+            // already exists, preserve the stored enabled state so that
+            // re-provisioning through the password grant never silently
+            // re-enables a disabled account. A missing value (brand-new user
+            // or a legacy file without the field) defaults to enabled.
+            final String enabled = existing.string("enabled");
+            builder = builder.add("enabled", enabled == null ? "true" : enabled);
             if (email != null && !email.isEmpty()) {
                 builder = builder.add("email", email);
             }
