@@ -20,6 +20,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.html.HtmlEscape;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RequestLinePrefix;
 import com.auto1.pantera.pypi.NormalizedProjectName;
@@ -345,12 +346,18 @@ final class SliceIndex implements Slice {
                                                         final String attrs = meta
                                                             .map(SliceIndex::buildHtmlAttributes)
                                                             .orElse("");
+                                                        // SECURITY: href (prefix+key) and the
+                                                        // filename text are untrusted; escape at
+                                                        // render. attrs is already escaped by
+                                                        // PypiHtmlAttributes — do not re-escape.
                                                         return String.format(
                                                             "<a href=\"%s#sha256=%s\"%s>%s</a><br/>",
-                                                            String.format("%s/%s", prefix, key.string()),
-                                                            hex,
+                                                            HtmlEscape.escape(
+                                                                String.format("%s/%s", prefix, key.string())
+                                                            ),
+                                                            HtmlEscape.escape(hex),
                                                             attrs,
-                                                            new KeyLastPart(key).get()
+                                                            HtmlEscape.escape(new KeyLastPart(key).get())
                                                         );
                                                     }
                                                 )
@@ -370,12 +377,18 @@ final class SliceIndex implements Slice {
                                                                     final String attrs = meta
                                                                         .map(SliceIndex::buildHtmlAttributes)
                                                                         .orElse("");
+                                                                    // SECURITY: href (prefix+key) and the
+                                                                    // filename text are untrusted; escape at
+                                                                    // render. attrs is already escaped by
+                                                                    // PypiHtmlAttributes — do not re-escape.
                                                                     return String.format(
                                                                         "<a href=\"%s#sha256=%s\"%s>%s</a><br/>",
-                                                                        String.format("%s/%s", prefix, subKey.string()),
-                                                                        hex,
+                                                                        HtmlEscape.escape(
+                                                                            String.format("%s/%s", prefix, subKey.string())
+                                                                        ),
+                                                                        HtmlEscape.escape(hex),
                                                                         attrs,
-                                                                        new KeyLastPart(subKey).get()
+                                                                        HtmlEscape.escape(new KeyLastPart(subKey).get())
                                                                     );
                                                                 }
                                                             )

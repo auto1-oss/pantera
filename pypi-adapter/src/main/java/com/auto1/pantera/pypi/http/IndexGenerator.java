@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.asto.rx.RxFuture;
+import com.auto1.pantera.http.html.HtmlEscape;
 import com.auto1.pantera.pypi.meta.PypiSidecar;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
@@ -238,9 +239,15 @@ public final class IndexGenerator {
         for (final Entry entry : entries) {
             final String attrs = entry.meta
                 .map(IndexGenerator::buildHtmlAttributes).orElse("");
+            // SECURITY: href and filename are untrusted (upload/upstream);
+            // entity-escape them at render. attrs is already escaped by
+            // PypiHtmlAttributes — do not double-escape it.
             body.append(String.format(
                 "<a href=\"%s#sha256=%s\"%s>%s</a><br/>",
-                entry.relativeHref, entry.sha256, attrs, entry.filename
+                HtmlEscape.escape(entry.relativeHref),
+                HtmlEscape.escape(entry.sha256),
+                attrs,
+                HtmlEscape.escape(entry.filename)
             ));
         }
         return String.format(

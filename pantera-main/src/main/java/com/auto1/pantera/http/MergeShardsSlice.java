@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.composer.ComposerImportMerge;
 import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.html.HtmlEscape;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.maven.metadata.MavenMetadata;
@@ -146,11 +147,23 @@ public final class MergeShardsSlice implements Slice {
                                 final String sha256 = obj.getString("sha256", null);
                                 if (version != null && filename != null) {
                                     files.incrementAndGet();
-                                    final String href = String.format("%s/%s", version, filename);
+                                    // SECURITY: version/filename/sha256 come from
+                                    // attacker-controllable shard JSON; entity-escape
+                                    // every value rendered into the HTML index.
+                                    final String href = String.format(
+                                        "%s/%s",
+                                        HtmlEscape.escape(version),
+                                        HtmlEscape.escape(filename)
+                                    );
                                     if (sha256 != null && !sha256.isBlank()) {
-                                        return String.format("<a href=\"%s#sha256=%s\">%s</a><br/>", href, sha256, filename);
+                                        return String.format(
+                                            "<a href=\"%s#sha256=%s\">%s</a><br/>",
+                                            href, HtmlEscape.escape(sha256), HtmlEscape.escape(filename)
+                                        );
                                     } else {
-                                        return String.format("<a href=\"%s\">%s</a><br/>", href, filename);
+                                        return String.format(
+                                            "<a href=\"%s\">%s</a><br/>", href, HtmlEscape.escape(filename)
+                                        );
                                     }
                                 }
                                 return "";
@@ -175,7 +188,12 @@ public final class MergeShardsSlice implements Slice {
             chain = chain.thenCompose(nothing -> storage.exclusively(simple, st -> {
                 final String body = byPackage.keySet().stream()
                     .sorted()
-                    .map(name -> String.format("<a href=\"%s/\">%s</a><br/>", name, name))
+                    // SECURITY: package names derive from shard storage paths;
+                    // entity-escape before rendering into href and link text.
+                    .map(name -> String.format(
+                        "<a href=\"%s/\">%s</a><br/>",
+                        HtmlEscape.escape(name), HtmlEscape.escape(name)
+                    ))
                     .reduce(new StringBuilder(), StringBuilder::append, StringBuilder::append)
                     .toString();
                 final String html = String.format("<!DOCTYPE html>\n<html>\n  <body>\n%s\n</body>\n</html>", body);
