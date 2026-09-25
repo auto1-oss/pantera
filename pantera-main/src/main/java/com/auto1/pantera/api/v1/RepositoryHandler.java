@@ -13,6 +13,7 @@ package com.auto1.pantera.api.v1;
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepoAuthzHandler;
+import com.auto1.pantera.api.SecretRebindException;
 import com.auto1.pantera.api.SecretRedactor;
 import com.auto1.pantera.api.RepositoryEventBroadcaster;
 import com.auto1.pantera.api.RepositoryEvents;
@@ -347,6 +348,10 @@ public final class RepositoryHandler {
         if (RepositoryHandler.refusedWhileDeleting(ctx, name)) {
             return;
         }
+        if (!RepositoryHandler.validRepoName(name)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid repository name");
+            return;
+        }
         final RepositoryName rname = new RepositoryName.Simple(name);
         final String bodyStr = ctx.body().asString();
         if (bodyStr == null || bodyStr.isBlank()) {
@@ -472,7 +477,13 @@ public final class RepositoryHandler {
                         throw new ConfigRejected(badRoot.get());
                     }
                 }
-                this.crs.save(rname, new SecretRedactor().restoreMasked(body, stored), actor);
+                final javax.json.JsonObject merged;
+                try {
+                    merged = new SecretRedactor().restoreMasked(body, stored);
+                } catch (final SecretRebindException ex) {
+                    throw new ConfigRejected(ex.getMessage(), ex);
+                }
+                this.crs.save(rname, merged, actor);
             },
             HandlerExecutor.get()
         ).whenComplete((ignored, err) -> {
@@ -520,6 +531,48 @@ public final class RepositoryHandler {
         ConfigRejected(final String message) {
             super(message);
         }
+
+        ConfigRejected(final String message, final Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    /**
+     * A move refused on the worker (missing source, or a target that already
+     * exists); answered with the carried HTTP status.
+     */
+    private static final class MoveRejected extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * HTTP status to answer with.
+         */
+        private final int status;
+
+        MoveRejected(final int status, final String message) {
+            super(message);
+            this.status = status;
+        }
+
+        int status() {
+            return this.status;
+        }
+    }
+
+    /**
+     * Whether a repository name is safe to persist. A repository name is used
+     * as a storage path prefix, a URL path segment and (in the UI's Set Me Up
+     * snippets) rendered into HTML, so it is restricted to an unambiguous,
+     * path- and markup-safe character set. This rejects HTML metacharacters
+     * and whitespace (closing the Set Me Up stored-XSS vector at its source),
+     * path traversal ({@code ..}) and a trailing slash.
+     * @param name Candidate repository name
+     * @return True when the name may be created or moved to
+     */
+    private static boolean validRepoName(final String name) {
+        return name != null && !name.isBlank() && name.length() <= 200
+            && name.matches("[A-Za-z0-9][A-Za-z0-9._/-]*")
+            && !name.contains("..") && !name.endsWith("/");
     }
 
     /**
@@ -788,30 +841,58 @@ public final class RepositoryHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "new_name is required");
             return;
         }
+        if (!RepositoryHandler.validRepoName(newName)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid repository name");
+            return;
+        }
         if (RepositoryHandler.refusedWhileDeleting(ctx, newName)) {
             return;
         }
+        final RepositoryName newrname = new RepositoryName.Simple(newName);
+        final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String clientIp = RepositoryHandler.clientIp(ctx);
+        // SECURITY (2.2.9): reject a move onto an existing repository. The data
+        // move copies the source subtree over the target's storage and then
+        // deletes the source, so renaming onto a live repository would destroy
+        // its artifacts. Await the whole move before answering, and audit it.
         CompletableFuture.supplyAsync(
-            () -> this.crs.exists(rname),
+            () -> {
+                if (!this.crs.exists(rname)) {
+                    throw new MoveRejected(404, String.format("Repository '%s' not found", name));
+                }
+                if (this.crs.exists(newrname)) {
+                    throw new MoveRejected(
+                        409, String.format("Repository '%s' already exists", newName)
+                    );
+                }
+                return null;
+            },
             HandlerExecutor.get()
-        ).whenComplete((exists, err) -> {
+        ).thenCompose(
+            ignored -> this.repoData.move(rname, newrname, this.crs)
+        ).thenRunAsync(
+            () -> this.crs.move(rname, newrname), HandlerExecutor.get()
+        ).whenComplete((ignored, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                final Throwable cause = RepositoryHandler.rootCause(err);
+                if (cause instanceof MoveRejected rejected) {
+                    ApiResponse.sendError(
+                        ctx, rejected.status(),
+                        rejected.status() == 409 ? "CONFLICT" : "NOT_FOUND",
+                        cause.getMessage()
+                    );
+                } else {
+                    RepositoryHandler.audit(actor, clientIp, "REPO_MOVE", name,
+                        java.util.Map.of("new_name", newName,
+                            "error", String.valueOf(err.getMessage())), false);
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                }
                 return;
             }
-            if (!Boolean.TRUE.equals(exists)) {
-                ApiResponse.sendError(
-                    ctx, 404, "NOT_FOUND",
-                    String.format("Repository '%s' not found", name)
-                );
-                return;
-            }
-            final RepositoryName newrname = new RepositoryName.Simple(newName);
-            this.repoData.move(rname, newrname, this.crs)
-                .thenRun(() -> this.crs.move(rname, newrname));
             this.filtersCache.invalidate(rname.toString());
-            this.eventBus.publish(RepositoryEvents.move(name, newName)
-            );
+            this.eventBus.publish(RepositoryEvents.move(name, newName));
+            RepositoryHandler.audit(actor, clientIp, "REPO_MOVE", name,
+                java.util.Map.of("new_name", newName), true);
             ctx.response().setStatusCode(200).end();
         });
     }
