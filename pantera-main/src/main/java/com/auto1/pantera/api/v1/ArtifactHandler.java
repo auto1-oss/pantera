@@ -259,6 +259,10 @@ public final class ArtifactHandler {
         final String repoName = ctx.pathParam("name");
         final String path = ctx.queryParam("path").stream()
             .findFirst().orElse("/");
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final String sortBy = normalizeTreeSort(
             ctx.queryParam("sort").stream().findFirst().orElse("name")
         );
@@ -660,6 +664,10 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final String repoName = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(repoName);
         final String filename = path.contains("/")
@@ -775,6 +783,10 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final String repoName = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(repoName);
         final String filename = path.contains("/")
@@ -848,6 +860,10 @@ public final class ArtifactHandler {
         final String path = ctx.queryParam("path").stream().findFirst().orElse(null);
         if (path == null || path.isBlank()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
+            return;
+        }
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
         final String repoName = ctx.pathParam("name");
@@ -940,6 +956,10 @@ public final class ArtifactHandler {
     private void streamArtifact(
         final RoutingContext ctx, final String repoName, final String path
     ) {
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final String filename = path.contains("/")
             ? path.substring(path.lastIndexOf('/') + 1)
             : path;
@@ -1009,6 +1029,10 @@ public final class ArtifactHandler {
         final String path = ctx.queryParam("path").stream().findFirst().orElse(null);
         if (path == null || path.isBlank()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
+            return;
+        }
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
         final String name = ctx.pathParam("name");
@@ -1098,6 +1122,10 @@ public final class ArtifactHandler {
         final String path = body.getString("path", "").trim();
         if (path.isEmpty()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Field 'path' is required");
+            return;
+        }
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
@@ -1319,6 +1347,34 @@ public final class ArtifactHandler {
             );
         }
         return instructions;
+    }
+
+    /**
+     * Whether a client-supplied artifact path escapes its repository namespace.
+     *
+     * <p>SECURITY (2.2.9): the REST artifact routes build
+     * {@code Key.From(repo, path)} directly and do not pass through the
+     * package-listener {@code PathTraversalGuardSlice}. On root-contained
+     * storage (vertx-file, S3) a {@code ../otherRepo/x} path would resolve into
+     * a sibling repository, sidestepping the per-repository authorization on
+     * {@code :name}. Legitimate artifact paths never contain {@code .}/{@code ..}
+     * segments, control characters or backslashes, so any such input is
+     * rejected.</p>
+     *
+     * @param path Client-supplied path
+     * @return {@code true} when the path is unsafe and must be refused
+     */
+    private static boolean traversedPath(final String path) {
+        boolean bad = path.indexOf('\0') >= 0 || path.indexOf('\\') >= 0;
+        if (!bad) {
+            for (final String seg : path.split("/")) {
+                if ("..".equals(seg) || ".".equals(seg)) {
+                    bad = true;
+                    break;
+                }
+            }
+        }
+        return bad;
     }
 
     /**
