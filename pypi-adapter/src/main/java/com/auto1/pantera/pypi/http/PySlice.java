@@ -197,7 +197,7 @@ public final class PySlice extends Slice.Wrap {
                         tokenAuth,
                         new OperationControl(
                                 policy,
-                                new AdapterBasicPermission(name, Action.Standard.WRITE)
+                                new AdapterBasicPermission(name, Action.Standard.DELETE)
                         )
                     )
                 ),
