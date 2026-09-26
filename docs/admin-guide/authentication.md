@@ -6,14 +6,14 @@ Pantera supports multiple authentication providers that can be combined in a pri
 
 ---
 
-## ⚠ Default Admin Credentials (Fresh Install)
+## ⚠ Bootstrap Administrator (Fresh Install)
 
-On a fresh install with an empty `users` table, Pantera bootstraps a single default user so you can log in and complete setup:
+On a database-backed start where no `admin` user and no holder of the `admin` role yet exists, Pantera bootstraps a single administrator so you can log in and complete setup:
 
 | Field | Value |
 |---|---|
 | **Username** | `admin` |
-| **Password** | `admin` |
+| **Password** | From `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` if set; otherwise a random password written to `<pantera.home>/bootstrap-admin-password` (default `/var/pantera/bootstrap-admin-password`, mode 0600). Never a fixed default. |
 | **Role** | `admin` (all permissions) |
 | **Must change password** | `true` |
 
@@ -27,7 +27,7 @@ On a fresh install with an empty `users` table, Pantera bootstraps a single defa
 - **Not** equal to the username
 - **Not** in the well-known weak-password list (`password`, `admin`, `changeme`, ...)
 
-The initial password is the value of `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` when it is set; otherwise a random password that is printed once, at WARN level, in the startup log of the start that creates the admin user (with the bundled docker-compose stack: `docker logs pantera 2>&1 | grep 'GENERATED password'`).
+When `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` is set (non-blank) that value is used. Otherwise Pantera generates a random password and writes it to an owner-only file `<pantera.home>/bootstrap-admin-password` (default `/var/pantera/bootstrap-admin-password`, mode 0600); the startup log records only that file's path, at WARN level — never the password. Read it, sign in, change the password, then delete the file. With the bundled docker-compose stack: `docker exec pantera cat /var/pantera/bootstrap-admin-password`.
 
 The same rules apply to every local password: self-service changes, an admin resetting a user's password, and the initial password in the **Create User** dialog. The UI shows the checklist while you type and displays the server's rejection message if a password (or a role you are not allowed to grant) is refused.
 
@@ -70,14 +70,14 @@ Recommended ordering for production:
 
 1. **SSO providers** (keycloak, okta) -- Handle interactive users first.
 2. **jwt-password** -- Handle programmatic clients using JWT tokens as passwords.
-3. **env** -- Bootstrap admin access.
+3. **env** -- Static admin credential for emergency or DB-less access.
 4. **pantera** -- Native user database fallback.
 
 ---
 
 ## Environment Variables Provider (type: env)
 
-The simplest provider. Reads a single admin credential from environment variables. Intended for bootstrap access and development.
+The simplest provider. Reads a single admin credential (`PANTERA_USER_NAME` / `PANTERA_USER_PASS`) from environment variables — a static admin login for emergency or development access, and for DB-less deployments. It is separate from the database bootstrap administrator (user `admin`, whose initial password comes from `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`).
 
 ```yaml
 credentials:

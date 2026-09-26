@@ -18,8 +18,10 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 | `PANTERA_DB_IDLE_TIMEOUT_MS` | `600000` | Idle connection timeout (ms) -- 10 minutes |
 | `PANTERA_DB_MAX_LIFETIME_MS` | `1800000` | Maximum connection lifetime (ms) -- 30 minutes |
 | `PANTERA_DB_LEAK_DETECTION_MS` | `5000` | Connection leak detection threshold (ms). v2.2.0 fail-fast default (was `300000`). A WARN past this threshold is a real held-connection bug -- see [Database](database.md#what-a-hikari-leak-warn-means). |
-| `PANTERA_DB_BUFFER_SECONDS` | `2` | Event batch buffer time (seconds) |
-| `PANTERA_DB_BATCH_SIZE` | `200` | Maximum events per database batch |
+| `PANTERA_DB_WRITE_POOL_MAX` | `10` | Maximum connections in the dedicated `DbConsumer` write pool |
+| `PANTERA_DB_WRITE_POOL_MIN` | `2` | Minimum idle connections in the `DbConsumer` write pool |
+
+> The `DbConsumer` event batcher is tuned via the YAML `meta.database` keys `buffer_size` (default 50) and `buffer_time_seconds` (default 2), not environment variables.
 
 ---
 
@@ -66,9 +68,7 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 
 ## Concurrency
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PANTERA_GROUP_DRAIN_PERMITS` | `20` | Maximum concurrent response body drains in group repositories. Controls how many member repositories are probed in parallel during group resolution. |
+Group response-body drain concurrency is sized automatically per repository by the adaptive `RepoBulkhead` — there is no fixed permit environment variable. Storage I/O concurrency is controlled by the `PANTERA_IO_*_THREADS` pools above.
 
 ---
 
@@ -76,10 +76,10 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PANTERA_SEARCH_MAX_PAGE` | `500` | Maximum page number for search pagination |
 | `PANTERA_SEARCH_MAX_SIZE` | `100` | Maximum results per search page |
 | `PANTERA_SEARCH_LIKE_TIMEOUT_MS` | `3000` | SQL statement timeout for LIKE fallback queries (ms). If the tsvector search returns zero results, a LIKE fallback query runs with this timeout. |
-| `PANTERA_SEARCH_OVERFETCH` | `10` | Over-fetch multiplier for permission-filtered search results. The database fetches `page_size * N` rows so that after dropping rows the user has no access to, the page can still be filled. Increase for deployments with many repos where users only access a few. |
+
+> Deep pagination is capped at a fixed offset of 10,000 (`page × size`); a request beyond it is refused with `400`.
 
 ---
 
@@ -96,10 +96,11 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PANTERA_USER_NAME` | (none) | Bootstrap admin username. Used by the `env` auth provider. |
-| `PANTERA_USER_PASS` | (none) | Bootstrap admin password. Used by the `env` auth provider. |
+| `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` | (none) | Initial password for the auto-created `admin` user, consumed once on the first database-backed start (before any admin exists). If unset, a random password is generated and written to `<pantera.home>/bootstrap-admin-password` (default `/var/pantera/bootstrap-admin-password`, mode 0600); the startup log records only that path, never the password. `must_change_password` is set either way. |
+| `PANTERA_USER_NAME` | (none) | Username for the optional `env` auth provider (`type: env`). Not the database bootstrap admin. |
+| `PANTERA_USER_PASS` | (none) | Password for the optional `env` auth provider. |
 | `PANTERA_INIT` | `false` | Set to `true` to auto-initialize default example configurations on first start |
-| `PANTERA_VERSION` | `2.0.0` | Version identifier. Set automatically in the Docker image. |
+| `PANTERA_VERSION` | `2.2.9` | Version identifier. Set automatically in the Docker image. |
 | `PANTERA_DOWNLOAD_TOKEN_SECRET` | (see description) | HMAC key that signs direct-download tokens (`POST .../artifact/download-token` → `GET .../artifact/download-direct`). Must be **at least 32 bytes of random material**; a shorter value aborts startup. When unset: in DB-backed deployments a random 256-bit key is generated once and persisted in `auth_settings` (`download_token_secret`), so every HA node shares it; in database-less single-instance mode an ephemeral random key is generated per process. The key is never derived from process metadata (before 2.2.9 it fell back to a predictable `pantera-download-<pid>-<user>` value — set this variable or upgrade). Tokens are single-use, expire after 60 s, reject future-dated timestamps, and require the issuing user to still hold repository READ at redemption. |
 | `PANTERA_FS_STORAGE_ROOTS` | `/var/pantera/data` | **Fallback tier only** (since 2.2.9): the primary source is the DB-backed `fs_storage_roots` admin setting, editable in the admin UI's Settings page or at the matching `GET`/`PUT /api/v1/admin/...-settings` endpoint -- hot-reloaded, no restart, applied on every node (see [Configuration Reference](../configuration-reference.md#security-policy-settings-auth_settings-table)). This variable is consulted only while no row has been saved. Path-separator-delimited list of directories under which a local-filesystem storage `path` (`fs` or `vertx-file`) submitted through the REST API -- inline in `PUT /api/v1/repositories/<name>` or as a storage alias, and from the admin UI -- is allowed to live. Any other path — including `/` or one that escapes via `..` — is rejected with `400`, so a repository manager cannot mount the host filesystem as a repository. Repositories loaded from YAML files on disk are not affected. Set this when your data directory is elsewhere. |
 | `PANTERA_METRICS_BIND` | `0.0.0.0` | Interface the Prometheus metrics listener (`meta.metrics.port`, default `8087`) binds to. The endpoint is unauthenticated, so on a host with a public interface bind it to the private one (or `127.0.0.1` behind a node-local scraper) instead of exposing it. |
@@ -193,7 +194,7 @@ Two-tier cache (L1 Caffeine + L2 Valkey) in front of `LocalEnabledFilter`. See [
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PANTERA_AUTH_ENABLED_L1_MAX_SIZE` | `10000` | L1 (Caffeine) max entries. |
+| `PANTERA_AUTH_ENABLED_L1_SIZE` | `10000` | L1 (Caffeine) max entries. |
 | `PANTERA_AUTH_ENABLED_L1_TTL_SECONDS` | `300` | L1 TTL in seconds. |
 | `PANTERA_AUTH_ENABLED_L2_ENABLED` | `true` | Enable the Valkey L2 tier. Set `false` to run L1-only. |
 | `PANTERA_AUTH_ENABLED_L2_TTL_SECONDS` | `3600` | L2 TTL in seconds. |
@@ -207,7 +208,7 @@ Two-tier last-known-good fallback for group repositories. `l2.ttlSeconds = 0` is
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PANTERA_GROUP_METADATA_STALE_L1_MAX_SIZE` | `100000` | L1 max entries. |
+| `PANTERA_GROUP_METADATA_STALE_L1_SIZE` | `100000` | L1 max entries. |
 | `PANTERA_GROUP_METADATA_STALE_L1_TTL_SECONDS` | `2592000` | L1 TTL in seconds (30 days). |
 | `PANTERA_GROUP_METADATA_STALE_L2_ENABLED` | `true` | Enable the Valkey L2 tier. |
 | `PANTERA_GROUP_METADATA_STALE_L2_TTL_SECONDS` | `0` | L2 TTL in seconds. `0` means no TTL; Valkey LRU evicts. |

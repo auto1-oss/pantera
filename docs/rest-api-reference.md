@@ -201,7 +201,8 @@ Exchange an OAuth2 authorization code for a Pantera JWT. The server performs the
 {
   "code": "authorization_code_from_idp",
   "provider": "okta",
-  "callback_url": "http://localhost:3000/callback"
+  "callback_url": "http://localhost:3000/callback",
+  "state": "a1b2c3d4e5f6"
 }
 ```
 
@@ -210,6 +211,7 @@ Exchange an OAuth2 authorization code for a Pantera JWT. The server performs the
 | `code`         | string | Yes      | OAuth2 authorization code         |
 | `provider`     | string | Yes      | Provider type name (e.g. "okta")  |
 | `callback_url` | string | Yes      | The redirect URI used in the authorize request |
+| `state`        | string | Yes      | The opaque `state` returned by `GET /api/v1/auth/providers/:name/redirect`, sent back verbatim so Pantera can match the pending login it started (shared across cluster nodes over Valkey since 2.2.9). Single-use and expiring. |
 
 **Response (200):**
 
@@ -221,12 +223,14 @@ Exchange an OAuth2 authorization code for a Pantera JWT. The server performs the
 }
 ```
 
+**Response (401):** the `state` is missing, unknown, already redeemed, or expired — restart the login from the `/redirect` step.
+
 **curl example:**
 
 ```bash
 curl -X POST http://localhost:8086/api/v1/auth/callback \
   -H "Content-Type: application/json" \
-  -d '{"code": "abc123", "provider": "okta", "callback_url": "http://localhost:3000/callback"}'
+  -d '{"code": "abc123", "provider": "okta", "callback_url": "http://localhost:3000/callback", "state": "a1b2c3d4e5f6"}'
 ```
 
 ---
@@ -3231,7 +3235,7 @@ The import endpoint is served on the **repository port** (default 8080). It prov
 
 ### PUT /.import/:repository/:path
 
-Import an artifact into a repository. Supports idempotent uploads with checksum verification.
+Import an artifact into a repository. Supports idempotent uploads with checksum verification. Imports may target only local/hosted repositories, and published files are immutable (re-importing different bytes for an existing file is refused; identical bytes replay as `200 ALREADY_PRESENT`).
 
 **Port:** 8080
 **Method:** PUT or POST
@@ -3305,6 +3309,21 @@ Import an artifact into a repository. Supports idempotent uploads with checksum 
   "digests": { ... }
 }
 ```
+
+**Response (409) -- Already Published (immutable):**
+
+Re-importing *different* bytes for a file that is already stored is refused; identical bytes replay as `200 ALREADY_PRESENT`. Maven `-SNAPSHOT` versions and Composer dev branches stay writable.
+
+```json
+{
+  "status": "CONFLICT",
+  "message": "Import refused: artifact already exists with different content"
+}
+```
+
+**Response (400) -- Not a Local Repository:**
+
+The target is a proxy or group repository; imports may only target local/hosted repositories.
 
 **Response (400) -- Invalid Metadata:**
 

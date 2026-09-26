@@ -373,7 +373,7 @@ Global settings for the outbound HTTP client used by all proxy repositories.
 | `max_requests_queued_per_destination` | int | No | `2048` | Maximum queued requests per upstream host |
 | `idle_timeout` | int | No | `30000` | Connection idle timeout in milliseconds |
 | `follow_redirects` | boolean | No | `true` | Follow HTTP 3xx redirects |
-| `connection_acquire_timeout` | int | No | `120000` | Milliseconds to wait for a pooled connection |
+| `connection_acquire_timeout` | int | No | `30000` | Milliseconds to wait for a pooled connection before failing. Bounds only connection acquisition, never the response-body transfer (large downloads stream for as long as they make progress; stalls are caught by `idle_timeout`). |
 
 ```yaml
 meta:
@@ -384,7 +384,7 @@ meta:
     idle_timeout: 30000
     connection_timeout: 15000
     follow_redirects: true
-    connection_acquire_timeout: 120000
+    connection_acquire_timeout: 30000
 ```
 
 #### Runtime-tunable HTTP client keys (DB-backed, hot-reloaded)
@@ -740,7 +740,7 @@ meta:
     idle_timeout: 30000
     connection_timeout: 15000
     follow_redirects: true
-    connection_acquire_timeout: 120000
+    connection_acquire_timeout: 30000
 
   http_server:
     request_timeout: PT2M
@@ -1548,8 +1548,8 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_DB_IDLE_TIMEOUT_MS` | `600000` | Idle connection timeout (ms) -- 10 minutes |
 | `PANTERA_DB_MAX_LIFETIME_MS` | `1800000` | Maximum connection lifetime (ms) -- 30 minutes |
 | `PANTERA_DB_LEAK_DETECTION_MS` | `300000` | Leak detection threshold (ms) -- 5 minutes |
-| `PANTERA_DB_BUFFER_SECONDS` | `2` | Event buffer flush interval (seconds) |
-| `PANTERA_DB_BATCH_SIZE` | `200` | Maximum events per database batch |
+| `PANTERA_DB_WRITE_POOL_MAX` | `10` | Maximum connections in the dedicated `DbConsumer` write pool |
+| `PANTERA_DB_WRITE_POOL_MIN` | `2` | Minimum idle connections in the `DbConsumer` write pool |
 
 ### 7.2 I/O Thread Pools
 
@@ -1586,18 +1586,14 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 
 ### 7.6 Concurrency
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PANTERA_GROUP_DRAIN_PERMITS` | `20` | Maximum concurrent response body drains in group repositories |
+Group response-body drain concurrency is sized automatically per repository by the adaptive `RepoBulkhead`; there is no fixed permit environment variable. Storage I/O concurrency is set by the `PANTERA_IO_*_THREADS` pools (§7.2).
 
 ### 7.7 Search and API
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PANTERA_SEARCH_LIKE_TIMEOUT_MS` | `3000` | SQL statement timeout for LIKE fallback queries (ms) |
-| `PANTERA_SEARCH_MAX_PAGE` | `500` | Maximum page number for search pagination |
-| `PANTERA_SEARCH_MAX_SIZE` | `100` | Maximum results per search page |
-| `PANTERA_SEARCH_OVERFETCH` | `10` | Over-fetch multiplier for permission-filtered search results. The DB fetches `page_size * N` rows so that after dropping rows the user has no access to, the page can still be filled. Increase for deployments with many repos where users only access a few. |
+| `PANTERA_SEARCH_MAX_SIZE` | `100` | Maximum results per search page. Deep pagination is capped at a fixed offset of 10,000 (`page × size`); beyond it a search is refused with `400`. |
 | `PANTERA_DOWNLOAD_TOKEN_SECRET` | persisted random / ephemeral random | HMAC key for direct-download tokens; ≥32 random bytes. Unset → generated once and stored in `auth_settings` (DB-backed, shared by HA nodes) or ephemeral per process (DB-less). Never derived from process metadata (2.2.9). |
 | `PANTERA_FS_STORAGE_ROOTS` | `/var/pantera/data` | **Fallback tier only** -- the DB-backed `fs_storage_roots` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Approved base directories for local-filesystem (`fs`, `vertx-file`) storage paths submitted via the REST API/UI, inline or as a storage alias; paths outside are rejected with `400` (2.2.9). |
 | `PANTERA_METRICS_BIND` | `0.0.0.0` | Interface the unauthenticated Prometheus metrics listener binds to; restrict to a private address on hosts with a public interface (2.2.9). |
@@ -1629,8 +1625,9 @@ Java application directly (unless noted).
 
 | Variable | Description |
 |----------|-------------|
-| `PANTERA_USER_NAME` | Default admin username (consumed by `type: env` credential provider) |
-| `PANTERA_USER_PASS` | Default admin password (consumed by `type: env` credential provider) |
+| `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` | Initial password for the auto-created `admin` user, consumed once on the first database-backed start. Unset → a random password is written to `<pantera.home>/bootstrap-admin-password` (default `/var/pantera/bootstrap-admin-password`, mode 0600); the log records only that path. |
+| `PANTERA_USER_NAME` | Username for the `env` credential provider (`type: env`) |
+| `PANTERA_USER_PASS` | Password for the `env` credential provider. Not the bootstrap admin -- see `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`. |
 | `PANTERA_CONFIG` | Path to pantera.yml inside the container (default: `/etc/pantera/pantera.yml`) |
 | `PANTERA_VERSION` | Docker image tag / application version |
 
@@ -1704,8 +1701,8 @@ complete variable reference for the Docker Compose stack.
 |----------|--------------|-------------|
 | **Pantera** | | |
 | `PANTERA_VERSION` | `2.0.0` | Docker image version tag |
-| `PANTERA_USER_NAME` | `pantera` | Initial admin username |
-| `PANTERA_USER_PASS` | `changeme` | Initial admin password |
+| `PANTERA_USER_NAME` | `pantera` | Username for the `env` auth provider (dev stack); not the bootstrap admin |
+| `PANTERA_USER_PASS` | (set one) | Password for the `env` auth provider (dev stack) |
 | `PANTERA_CONFIG` | `/etc/pantera/pantera.yml` | Config file path in container |
 | **AWS** | | |
 | `AWS_CONFIG_FILE` | `/home/.aws/config` | AWS config path in container |

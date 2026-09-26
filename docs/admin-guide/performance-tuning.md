@@ -174,7 +174,7 @@ Configure in `meta.http_client` section of `pantera.yml`:
 | Max queued requests | `max_requests_queued_per_destination` | 2048 | Scale with max connections |
 | Idle timeout | `idle_timeout` | 30000 ms | Close idle connections promptly |
 | Connect timeout | `connection_timeout` | 15000 ms | Lower for faster failover |
-| Connection acquire timeout | `connection_acquire_timeout` | 120000 ms | Time waiting for a pooled connection |
+| Connection acquire timeout | `connection_acquire_timeout` | 30000 ms | Time waiting for a pooled connection (acquisition only; never caps the transfer) |
 
 ### Jetty Memory
 

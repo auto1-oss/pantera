@@ -56,8 +56,8 @@ curl -X PUT \
 |--------|---------|
 | `201 Created` | New artifact imported successfully |
 | `200 OK` | Artifact already exists (idempotent replay) |
-| `409 Conflict` | Checksum mismatch -- provided checksum does not match uploaded content |
-| `400 Bad Request` | Missing required headers or invalid metadata |
+| `409 Conflict` | Checksum mismatch, or the path already holds a different published file (releases are immutable; identical bytes replay as `200`) |
+| `400 Bad Request` | Missing required headers, invalid metadata, or the target is a proxy/group repository (imports may only target local repositories) |
 | `503 Service Unavailable` | Import queue is full; retry after a few seconds |
 
 ### Example Response (201 Created)

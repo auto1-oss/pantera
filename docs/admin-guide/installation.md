@@ -159,8 +159,8 @@ docker run -d \
   -e JWT_PRIVATE_KEY_PATH=/etc/pantera/jwt-private.pem \
   -e JWT_PUBLIC_KEY_PATH=/etc/pantera/jwt-public.pem \
   -e PANTERA_USER_NAME=admin \
-  -e PANTERA_USER_PASS=changeme \
-  pantera:2.1.2
+  -e PANTERA_USER_PASS=<choose-a-strong-password> \
+  pantera:2.2.9
 ```
 
 ### Minimal Configuration
@@ -185,22 +185,22 @@ curl http://localhost:8080/.health
 
 ### First Login
 
-On a fresh install Pantera creates a default admin user automatically:
+On a database-backed first start Pantera creates the `admin` user automatically:
 
 | Username | Password |
 |---|---|
-| `admin` | `admin` |
+| `admin` | From `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` if set, else a random password written to `<pantera.home>/bootstrap-admin-password` (default `/var/pantera/bootstrap-admin-password`, mode 0600). |
 
-The `must_change_password` flag is set, so the very first login goes to a forced password-change screen. The new password must meet these rules (server-side `PasswordPolicy.java`):
+The startup log records only that file's path, never the password — retrieve it (e.g. `docker exec pantera cat /var/pantera/bootstrap-admin-password`), sign in, then delete the file. The `must_change_password` flag is set, so the very first login goes to a forced password-change screen. The new password must meet these rules (server-side `PasswordPolicy.java`):
 
 - Minimum 12 characters
 - Uppercase + lowercase + digit + special character
 - Not equal to the username
 - Not a well-known weak password (`admin`, `password`, `changeme`, etc.)
 
-**Change the default immediately in production.** Any non-compliant password is rejected with HTTP 400 `WEAK_PASSWORD`.
+**Set `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` (or retrieve the generated one) and change it on first sign-in.** Any non-compliant password is rejected with HTTP 400 `WEAK_PASSWORD`.
 
-The bootstrap only runs when the `users` table is empty, so an existing install is never overwritten.
+The bootstrap only runs when no `admin` user and no holder of the `admin` role exists, so an existing install is never overwritten. (A DB-less deployment has no bootstrap admin; sign in with the `env` provider credentials `PANTERA_USER_NAME` / `PANTERA_USER_PASS` you set.)
 
 ### Ports
 
@@ -329,9 +329,10 @@ The `.env` file configures all stack services. Key variables to set before first
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `PANTERA_VERSION` | `2.1.2` | Docker image tag |
-| `PANTERA_USER_NAME` | `admin` | Bootstrap admin username |
-| `PANTERA_USER_PASS` | `changeme` | Bootstrap admin password |
+| `PANTERA_VERSION` | `2.2.9` | Docker image tag |
+| `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` | (set one, or read the generated file) | Initial password for the auto-created `admin` user on the first DB-backed start. If unset, a random one is written to `/var/pantera/bootstrap-admin-password` (mode 0600); the log records only that path. |
+| `PANTERA_USER_NAME` | `admin` | Username for the optional `env` auth provider (not the database bootstrap admin) |
+| `PANTERA_USER_PASS` | (set one) | Password for the `env` auth provider |
 | `JWT_PRIVATE_KEY_PATH` | `/etc/pantera/jwt-private.pem` | Path to the RSA private key used to sign tokens (RS256). Generate with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt-private.pem`. |
 | `JWT_PUBLIC_KEY_PATH` | `/etc/pantera/jwt-public.pem` | Path to the matching RSA public key for verification. Generate with `openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem`. |
 | `POSTGRES_USER` | `pantera` | Database username |
