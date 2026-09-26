@@ -438,7 +438,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         // CachedUsers stores entries under SHA-256(username:password) — callers
         // never have that hash, they have the plain username. The previous
         // implementation called cached.invalidate(key) which silently matched
-        // nothing, so a password change left the old admin/admin entry live
+        // nothing, so a password change left the old cached credential entry live
         // for the full TTL. There is no useful way to interpret a username as
         // a cache key, so just flush everything. The cache is small (≤10K
         // entries), invalidate is O(1) per entry, and the call site is rare

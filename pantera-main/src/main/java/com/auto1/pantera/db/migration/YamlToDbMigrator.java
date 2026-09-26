@@ -79,8 +79,8 @@ public final class YamlToDbMigrator {
      * but replaces the {@code config} JSONB entirely.
      *
      * <p>v6: bootstrap default {@code local} + {@code jwt-password}
-     * providers and (on empty users table) the default
-     * {@code admin/admin} user with {@code must_change_password = true}.
+     * providers and (when no admin exists) the {@code admin} user with
+     * {@code must_change_password = true}.
      */
     private static final int MIGRATION_VERSION = 6;
 
@@ -444,19 +444,21 @@ public final class YamlToDbMigrator {
     }
 
     /**
-     * Bootstrap a default {@code admin/admin} user with the {@code admin}
-     * role. Runs on every startup but is idempotent: it skips entirely if
-     * a user named {@code admin} already exists OR any other user already
-     * holds the {@code admin} role. This guarantees:
+     * Bootstrap the {@code admin} user (initial password from
+     * {@code PANTERA_BOOTSTRAP_ADMIN_PASSWORD}, else a random password
+     * written to an owner-only file) with the {@code admin} role. Runs on
+     * every startup but is idempotent: it skips entirely if a user named
+     * {@code admin} already exists OR any other user already holds the
+     * {@code admin} role. This guarantees:
      *
      * <ul>
-     *   <li>Fresh install (no users): admin/admin is created.</li>
+     *   <li>Fresh install (no users): the {@code admin} user is created.</li>
      *   <li>Existing install with {@code admin} user: untouched.</li>
      *   <li>Existing install with another user holding the admin role
      *       (e.g. an SSO-provisioned admin): untouched.</li>
      *   <li>Existing install with users but NO admin-role holder
-     *       (rescue scenario): admin/admin is created so the operator
-     *       can recover access.</li>
+     *       (rescue scenario): the {@code admin} user is created so the
+     *       operator can recover access.</li>
      * </ul>
      *
      * The admin user is created with {@code must_change_password = true},
