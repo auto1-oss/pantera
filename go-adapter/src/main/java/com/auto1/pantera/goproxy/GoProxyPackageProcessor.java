@@ -214,7 +214,9 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                             owner == null || owner.isBlank()
                                 ? ArtifactEvent.DEF_OWNER
                                 : owner,
-                            coords.module(),
+                            // Real module path ("!b" -> "B"): what search
+                            // and group routing look the module up by.
+                            new ModulePath(coords.module()).decoded(),
                             coords.version(),
                             size.get(),
                             created,

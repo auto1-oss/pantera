@@ -15,8 +15,16 @@ import com.auth0.jwt.algorithms.Algorithm;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.auth.JwtTokens;
+import com.auto1.pantera.cooldown.api.CooldownBlock;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownReason;
-import com.auto1.pantera.cooldown.impl.NoopCooldownService;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
+import com.auto1.pantera.cooldown.metadata.MetadataFilter;
+import com.auto1.pantera.cooldown.metadata.MetadataParser;
+import com.auto1.pantera.cooldown.metadata.MetadataRewriter;
 import com.auto1.pantera.db.DbManager;
 import com.auto1.pantera.db.PostgreSQLTestConfig;
 import com.auto1.pantera.http.auth.AuthUser;
@@ -54,6 +62,7 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterAll;
@@ -112,6 +121,16 @@ final class CooldownHandlerFilterTest {
 
     private int port;
 
+    /**
+     * Stand-in for the cooldown service the repository slices serve with.
+     */
+    private RecordingCooldownService servingCooldown;
+
+    /**
+     * Stand-in for the metadata service the repository slices serve with.
+     */
+    private RecordingMetadataService servingMetadata;
+
     @BeforeAll
     static void initDb() {
         final HikariConfig cfg = new HikariConfig();
@@ -135,6 +154,8 @@ final class CooldownHandlerFilterTest {
     void setUp(final Vertx vertx, final VertxTestContext ctx) throws Exception {
         this.truncateCooldowns();
         this.truncateRepositories();
+        this.servingCooldown = new RecordingCooldownService();
+        this.servingMetadata = new RecordingMetadataService();
         // Default: user has no perms — individual tests override before seeding.
         allowedRepos = Set.of();
         final Storage storage = new InMemoryStorage();
@@ -181,7 +202,8 @@ final class CooldownHandlerFilterTest {
             Optional.empty(),
             null,
             Optional.empty(),
-            NoopCooldownService.INSTANCE,
+            this.servingCooldown,
+            this.servingMetadata,
             new TestSettings(),
             ArtifactIndex.NOP,
             sharedDs,
@@ -427,8 +449,14 @@ final class CooldownHandlerFilterTest {
         final Permissions coll = new Permissions();
         // Let AuthzHandler pass for /api/v1/cooldown/*.
         coll.add(ApiCooldownPermission.READ);
+        coll.add(ApiCooldownPermission.WRITE);
         for (final String repo : allowed) {
-            coll.add(new AdapterBasicPermission(repo, "read"));
+            // 2.2.9: cooldown unblock / unblock-all now require per-repository
+            // write in addition to the global ApiCooldownPermission. Grant read
+            // and write as ONE permission — the permission collection is keyed by
+            // name (last-write-wins), so two separate entries would clobber each
+            // other and drop the repo from the readable scope.
+            coll.add(new AdapterBasicPermission(repo, Set.of("read", "write")));
         }
         return coll;
     }
@@ -498,6 +526,151 @@ final class CooldownHandlerFilterTest {
             ps.executeUpdate();
         } catch (final SQLException err) {
             throw new IllegalStateException("truncate repositories failed", err);
+        }
+    }
+
+    @Test
+    void unblockReachesTheInjectedServingServices(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        // 2026-09-23: each API verticle built its own cooldown stack, so an
+        // admin unblock never touched the caches the slices serve from.
+        this.seedRepo("npm_proxy", "npm-proxy");
+        allowedRepos = Set.of("npm_proxy");
+        this.postJson(
+            vertx, ctx, "/api/v1/repositories/npm_proxy/cooldown/unblock",
+            new JsonObject().put("artifact", "@scope/pkg").put("version", "2.1.280"),
+            res -> {
+                Assertions.assertEquals(204, res.statusCode(),
+                    "unblock must succeed, got body: " + res.bodyAsString());
+                Assertions.assertEquals(
+                    java.util.List.of("npm-proxy:npm_proxy:@scope/pkg:2.1.280"),
+                    this.servingCooldown.unblocks,
+                    "unblock must reach the serving cooldown service"
+                );
+                Assertions.assertEquals(
+                    java.util.List.of("npm-proxy:npm_proxy:@scope/pkg"),
+                    this.servingMetadata.invalidations,
+                    "unblock must drop the serving filtered-metadata envelopes"
+                );
+            }
+        );
+    }
+
+    @Test
+    void unblockAllReachesTheInjectedServingServices(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        this.seedRepo("npm_proxy", "npm-proxy");
+        allowedRepos = Set.of("npm_proxy");
+        this.postJson(
+            vertx, ctx, "/api/v1/repositories/npm_proxy/cooldown/unblock-all",
+            new JsonObject(),
+            res -> {
+                Assertions.assertEquals(204, res.statusCode(),
+                    "unblock-all must succeed, got body: " + res.bodyAsString());
+                Assertions.assertEquals(
+                    java.util.List.of("npm-proxy:npm_proxy"),
+                    this.servingCooldown.unblockAlls,
+                    "unblock-all must reach the serving cooldown service"
+                );
+                Assertions.assertEquals(
+                    java.util.List.of("npm-proxy:npm_proxy"),
+                    this.servingMetadata.repoInvalidations,
+                    "unblock-all must drop the serving envelopes for the repo"
+                );
+            }
+        );
+    }
+
+    private void postJson(final Vertx vertx, final VertxTestContext ctx,
+        final String path, final JsonObject body,
+        final Consumer<HttpResponse<Buffer>> assertion) throws Exception {
+        WebClient.create(vertx)
+            .request(HttpMethod.POST, this.port, HOST, path)
+            .bearerTokenAuthentication(this.token)
+            .sendJsonObject(body)
+            .onSuccess(res -> ctx.verify(() -> {
+                assertion.accept(res);
+                ctx.completeNow();
+            }))
+            .onFailure(ctx::failNow)
+            .toCompletionStage().toCompletableFuture()
+            .get(TEST_TIMEOUT, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Cooldown service that records unblock calls; everything else is a no-op.
+     */
+    private static final class RecordingCooldownService implements CooldownService {
+        private final java.util.List<String> unblocks =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final java.util.List<String> unblockAlls =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluate(
+            final CooldownRequest request, final CooldownInspector inspector
+        ) {
+            return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+
+        @Override
+        public CompletableFuture<Void> unblock(final String repoType, final String repoName,
+            final String artifact, final String version, final String actor) {
+            this.unblocks.add(repoType + ":" + repoName + ":" + artifact + ":" + version);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletableFuture<Void> unblockAll(final String repoType,
+            final String repoName, final String actor) {
+            this.unblockAlls.add(repoType + ":" + repoName);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletableFuture<java.util.List<CooldownBlock>> activeBlocks(
+            final String repoType, final String repoName
+        ) {
+            return CompletableFuture.completedFuture(java.util.List.of());
+        }
+    }
+
+    /**
+     * Metadata service that records invalidations; filtering is pass-through.
+     */
+    private static final class RecordingMetadataService implements CooldownMetadataService {
+        private final java.util.List<String> invalidations =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final java.util.List<String> repoInvalidations =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public <T> CompletableFuture<byte[]> filterMetadata(final String repoType,
+            final String repoName, final String packageName, final byte[] rawMetadata,
+            final MetadataParser<T> parser, final MetadataFilter<T> filter,
+            final MetadataRewriter<T> rewriter) {
+            return CompletableFuture.completedFuture(rawMetadata);
+        }
+
+        @Override
+        public void invalidate(final String repoType, final String repoName,
+            final String packageName) {
+            this.invalidations.add(repoType + ":" + repoName + ":" + packageName);
+        }
+
+        @Override
+        public void invalidateAll(final String repoType, final String repoName) {
+            this.repoInvalidations.add(repoType + ":" + repoName);
+        }
+
+        @Override
+        public void clearAll() {
+            // not exercised
+        }
+
+        @Override
+        public String stats() {
+            return "recording";
         }
     }
 

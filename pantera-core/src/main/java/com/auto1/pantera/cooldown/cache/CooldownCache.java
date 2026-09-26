@@ -427,7 +427,27 @@ public final class CooldownCache implements Cleanable<String> {
         this.misses = 0;
         this.deduplications = 0;
         if (this.twoTier) {
-            this.scanAndUpdate("cooldown:*");
+            this.scanAndDelete("cooldown:*");
+        }
+    }
+
+    /**
+     * Forget every cached decision of one repository, in L1 and L2, so the
+     * next request for it is decided again from the database.
+     *
+     * <p>Unlike {@link #unblockAll(String)} this never records a decision:
+     * L2 keys are deleted (SCAN+DEL), not overwritten with "allowed", so a
+     * blocked artifact stays blocked. Used when a repository's cooldown
+     * window changes; other repositories' decisions are left alone.</p>
+     *
+     * @param repoName Repository name
+     */
+    public void invalidateRepo(final String repoName) {
+        final String prefix = "cooldown:" + repoName + ":";
+        this.decisions.asMap().keySet().removeIf(key -> key.startsWith(prefix));
+        this.inflight.keySet().removeIf(key -> key.startsWith(prefix));
+        if (this.twoTier) {
+            this.scanAndDelete(globEscape(prefix) + "*");
         }
     }
 
@@ -495,6 +515,46 @@ public final class CooldownCache implements Cleanable<String> {
     private void putL2Boolean(final String key, final boolean blocked, final long ttlSeconds) {
         final byte[] value = (blocked ? "true" : "false").getBytes();
         this.l2.setex(key, ttlSeconds, value);
+    }
+
+    /**
+     * Delete keys matching pattern using cursor-based SCAN + DEL, so the
+     * next lookup falls through to the database.
+     * @param pattern Redis key pattern (glob-style)
+     */
+    private CompletableFuture<Void> scanAndDelete(final String pattern) {
+        return this.scanAndDeleteStep(ScanCursor.INITIAL, pattern);
+    }
+
+    private CompletableFuture<Void> scanAndDeleteStep(
+        final ScanCursor cursor, final String pattern
+    ) {
+        return this.l2.scan(cursor, ScanArgs.Builder.matches(pattern).limit(100))
+            .toCompletableFuture()
+            .thenCompose(result -> {
+                final CompletableFuture<Long> del;
+                if (result.getKeys().isEmpty()) {
+                    del = CompletableFuture.completedFuture(0L);
+                } else {
+                    del = this.l2.del(result.getKeys().toArray(new String[0]))
+                        .toCompletableFuture();
+                }
+                return del.thenCompose(ignored -> {
+                    if (result.isFinished()) {
+                        return CompletableFuture.<Void>completedFuture(null);
+                    }
+                    return this.scanAndDeleteStep(result, pattern);
+                });
+            });
+    }
+
+    /**
+     * Escape the Redis glob metacharacters of a literal key prefix.
+     * @param literal Literal text
+     * @return Text matching only itself in a SCAN MATCH pattern
+     */
+    private static String globEscape(final String literal) {
+        return literal.replaceAll("([\\\\*?\\[\\]])", "\\\\$1");
     }
 
     /**

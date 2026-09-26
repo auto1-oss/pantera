@@ -23,6 +23,7 @@ import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Locale;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.function.UnaryOperator;
 
 /**
  * Slice wrapper that adds directory browsing capability using streaming approach.
@@ -90,14 +91,47 @@ public final class BrowsableSlice implements Slice {
     private final Storage storage;
 
     /**
-     * Ctor.
+     * Credential-validating gate applied to the directory-listing slice
+     * before it serves, or {@code null} when no gate was supplied.
+     *
+     * <p>SECURITY (2.2.9): a 404 from the origin proves NOTHING about
+     * authorization — an adapter route table answers an unmatched path
+     * (e.g. a traversal path on a Composer/NuGet repo) with 404 BEFORE any
+     * per-route auth slice runs, so "origin said 404, therefore auth
+     * passed" let a bogus {@code Authorization} header list a private
+     * repository's directories. The listing is therefore only ever served
+     * through this gate (which validates the credential and requires
+     * repository READ); with no gate the slice fails closed and returns
+     * the origin's 404 instead of a listing.</p>
+     */
+    private final UnaryOperator<Slice> browseGate;
+
+    /**
+     * Ctor without a listing gate — directory listings are NEVER served on
+     * an origin 404 (fail-closed). Production wiring uses
+     * {@link #BrowsableSlice(Slice, Storage, UnaryOperator)}.
      *
      * @param origin Origin slice to wrap
      * @param storage Storage for directory listings
      */
     public BrowsableSlice(final Slice origin, final Storage storage) {
+        this(origin, storage, null);
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param origin Origin slice to wrap
+     * @param storage Storage for directory listings
+     * @param browseGate Wraps the listing slice in credential validation +
+     *  repository READ authorization; {@code null} disables listings on 404
+     */
+    public BrowsableSlice(
+        final Slice origin, final Storage storage, final UnaryOperator<Slice> browseGate
+    ) {
         this.origin = origin;
         this.storage = storage;
+        this.browseGate = browseGate;
     }
 
     @Override
@@ -132,10 +166,16 @@ public final class BrowsableSlice implements Slice {
                             return CompletableFuture.completedFuture(originResp);
                         }
                         
-                        // If origin returned 404 (not found), try directory listing
-                        // Auth has already passed at this point
+                        // If origin returned 404 (not found), try directory listing —
+                        // but ONLY through the validating gate: the 404 may have come
+                        // from an unmatched route that never consulted auth at all.
                         if (code == 404) {
-                            final Slice browseSlice = this.selectBrowseSlice();
+                            if (this.browseGate == null) {
+                                return CompletableFuture.completedFuture(originResp);
+                            }
+                            final Slice browseSlice = this.browseGate.apply(
+                                this.selectBrowseSlice()
+                            );
                             return browseSlice.response(line, headers, body);
                         }
                         

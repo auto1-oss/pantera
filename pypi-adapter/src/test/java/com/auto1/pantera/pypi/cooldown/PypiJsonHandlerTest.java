@@ -70,7 +70,41 @@ final class PypiJsonHandlerTest {
     void matchesJsonPathButNotSimple() {
         assertThat(this.handler.matches("/pypi/foo/json"), is(true));
         assertThat(this.handler.matches("/simple/foo/"), is(false));
-        assertThat(this.handler.matches("/pypi/foo/1.0.0/json"), is(false));
+        assertThat(this.handler.matches("/pypi/foo/1.0.0/json"), is(true));
+    }
+
+    @Test
+    void perVersionJsonForAllowedVersionPassesThrough() throws Exception {
+        final String body = "{\"info\":{\"name\":\"foo\",\"version\":\"1.0.0\"},"
+            + "\"urls\":[" + fileObject("1.0.0") + "]}";
+        this.upstream.put("/pypi/foo/1.0.0/json", body);
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/pypi/foo/1.0.0/json"), "alice", Headers.EMPTY
+        ).get();
+        assertThat(
+            "allowed per-version document must be forwarded",
+            new String(bodyBytes(resp), StandardCharsets.UTF_8),
+            new org.hamcrest.core.IsEqual<>(body)
+        );
+        assertThat(
+            "cooldown must be evaluated for the requested version",
+            this.cooldown.lastArtifact(),
+            new org.hamcrest.core.IsEqual<>("foo")
+        );
+    }
+
+    @Test
+    void perVersionJsonForBlockedVersionIs404() throws Exception {
+        this.upstream.put(
+            "/pypi/foo/2.0.0/json",
+            "{\"info\":{\"name\":\"foo\",\"version\":\"2.0.0\"},\"urls\":[]}"
+        );
+        this.cooldown.block("2.0.0");
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/pypi/foo/2.0.0/json"), "alice", Headers.EMPTY
+        ).get();
+        resp.body().asBytesFuture().get();
+        assertThat(resp.status().code(), new org.hamcrest.core.IsEqual<>(404));
     }
 
     @Test

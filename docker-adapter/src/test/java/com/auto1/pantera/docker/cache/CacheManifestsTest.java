@@ -483,6 +483,132 @@ final class CacheManifestsTest {
         );
     }
 
+    /**
+     * B76: a GET that finds the tag already cached at the upstream digest
+     * is not a fetch-and-store, so it must not queue an artifact_publish
+     * event (nor rewrite the cache).
+     */
+    @Test
+    void doesNotPublishWhenTagAlreadyCachedAtSameDigest() {
+        final Manifest manifest = CacheManifestsTest.schema2("same");
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final ParkedManifests cache = new ParkedManifests(Optional.of(manifest));
+        new CacheManifests(
+            "library/nginx",
+            new StubRepo(new StaticLayers(Map.of()), new FixedManifests(manifest)),
+            new StubRepo(new RecordingLayers(), cache),
+            Optional.of(events),
+            "docker-proxy",
+            Optional.empty()
+        ).get(ManifestReference.fromTag("1.0")).join();
+        MatcherAssert.assertThat(
+            "no publish event for an already-cached tag",
+            events.size(), new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "the cache is not rewritten",
+            cache.puts.get(), new IsEqual<>(0)
+        );
+    }
+
+    /**
+     * B76: GETs that arrive while the first fetch-and-store is still
+     * writing the tag share that copy, and the publish event is queued
+     * only once the manifest is in the cache.
+     */
+    @Test
+    void publishesOnceForConcurrentFirstPulls() {
+        final Manifest manifest = CacheManifestsTest.schema2("fresh");
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final ParkedManifests cache = new ParkedManifests(Optional.empty());
+        final java.util.concurrent.ConcurrentMap<String, CompletableFuture<Void>> inflight =
+            new java.util.concurrent.ConcurrentHashMap<>();
+        for (int idx = 0; idx < 3; idx += 1) {
+            new CacheManifests(
+                "library/nginx",
+                new StubRepo(new StaticLayers(Map.of()), new FixedManifests(manifest)),
+                new StubRepo(new RecordingLayers(), cache),
+                Optional.of(events),
+                "docker-proxy",
+                Optional.empty(),
+                "unknown",
+                inflight
+            ).get(ManifestReference.fromTag("1.0")).join();
+        }
+        final int before = events.size();
+        cache.release();
+        MatcherAssert.assertThat(
+            "no event before the manifest is stored",
+            before, new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "one store for three concurrent pulls",
+            cache.puts.get(), new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "one publish event for three concurrent pulls",
+            events.size(), new IsEqual<>(1)
+        );
+    }
+
+    private static Manifest schema2(final String config) {
+        final byte[] bytes = Json.createObjectBuilder()
+            .add("mediaType", Manifest.MANIFEST_SCHEMA2)
+            .add(
+                "config",
+                Json.createObjectBuilder().add("digest", new Digest.Sha256(config).string())
+            )
+            .add("layers", Json.createArrayBuilder())
+            .build().toString().getBytes();
+        return new Manifest(new Digest.Sha256(bytes), bytes);
+    }
+
+    /**
+     * Cache manifests whose writes stay pending until released.
+     */
+    private static final class ParkedManifests implements Manifests {
+
+        private final Optional<Manifest> existing;
+
+        private final CompletableFuture<Void> gate = new CompletableFuture<>();
+
+        private final java.util.concurrent.atomic.AtomicInteger puts =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+        private ParkedManifests(final Optional<Manifest> existing) {
+            this.existing = existing;
+        }
+
+        void release() {
+            this.gate.complete(null);
+        }
+
+        @Override
+        public CompletableFuture<Manifest> put(final ManifestReference ref, final Content content) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CompletableFuture<Manifest> putUnchecked(
+            final ManifestReference ref, final Content content
+        ) {
+            this.puts.incrementAndGet();
+            return content.asBytesFuture().thenCombine(
+                this.gate, (bytes, ignored) -> new Manifest(new Digest.Sha256(bytes), bytes)
+            );
+        }
+
+        @Override
+        public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+            return CompletableFuture.completedFuture(this.existing);
+        }
+
+        @Override
+        public CompletableFuture<com.auto1.pantera.docker.Tags> tags(final Pagination pagination) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
     @Test
     void loadsTagsFromOriginAndCache() {
         final int limit = 3;

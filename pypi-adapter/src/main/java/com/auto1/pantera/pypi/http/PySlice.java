@@ -147,12 +147,13 @@ public final class PySlice extends Slice.Wrap {
                             "content-type", Pattern.compile("text.*", Pattern.CASE_INSENSITIVE)
                         )
                     ),
+                    // pip search (XML-RPC) only reads the repository.
                     PySlice.createAuthSlice(
                         new SearchSlice(storage),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
                     )
                 ),
@@ -196,7 +197,7 @@ public final class PySlice extends Slice.Wrap {
                         tokenAuth,
                         new OperationControl(
                                 policy,
-                                new AdapterBasicPermission(name, Action.Standard.WRITE)
+                                new AdapterBasicPermission(name, Action.Standard.DELETE)
                         )
                     )
                 ),
@@ -248,41 +249,6 @@ public final class PySlice extends Slice.Wrap {
                 )
             )
         );
-    }
-
-    /**
-     * Adapter that turns a HEAD request into a GET against the wrapped
-     * slice, then drops the body before returning. RFC 9110 §9.3.2 lets
-     * a server respond to HEAD by computing the GET response and omitting
-     * the body — this is the minimum-effort implementation: the underlying
-     * GET path stays the single source of truth for "does this file exist
-     * and what are its headers".
-     *
-     * <p>The drained body is discarded; status and headers are forwarded
-     * to the caller. The Content-Length header (if present in the GET
-     * response) lets HEAD callers size-check without downloading.</p>
-     */
-    private static final class HeadAsGetSlice implements Slice {
-
-        private final Slice origin;
-
-        HeadAsGetSlice(final Slice origin) {
-            this.origin = origin;
-        }
-
-        @Override
-        public CompletableFuture<Response> response(
-            final RequestLine line, final Headers headers, final Content body
-        ) {
-            final RequestLine asGet = new RequestLine(
-                RqMethod.GET, line.uri(), line.version()
-            );
-            return this.origin.response(asGet, headers, body).thenCompose(resp ->
-                resp.body().asBytesFuture().thenApply(ignored ->
-                    new Response(resp.status(), resp.headers(), Content.EMPTY)
-                )
-            );
-        }
     }
 
     /**

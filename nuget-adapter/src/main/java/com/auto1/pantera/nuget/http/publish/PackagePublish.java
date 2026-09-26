@@ -152,7 +152,7 @@ public final class PackagePublish implements Route {
                         new Login(headers).getValue(), info.packageName(),
                         info.packageVersion(), info.zipSize(),
                         System.currentTimeMillis(), null, info.packagePath()
-                    );
+                    ).withRequestContext(headers);
                     this.events.ifPresent(queue -> queue.add(event));
                     return this.syncIndex.recordSync(event)
                         .thenApply(ignored -> RsStatus.CREATED);

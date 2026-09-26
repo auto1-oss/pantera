@@ -174,6 +174,15 @@ public final class ArtifactNameParser {
         if (clean.isEmpty()) {
             return Optional.empty();
         }
+        // Registry endpoints live under "-/" (dist-tags, attestations,
+        // keys, search, ...). "-" is never a package name: answering empty
+        // makes the group walk its members hosted-first instead of running
+        // a proxy-only fanout keyed on the bogus name "-", which never
+        // reached a hosted member. No name also means no negative-cache
+        // entry for an endpoint answer.
+        if (clean.startsWith("-/")) {
+            return Optional.empty();
+        }
         // Tarball URLs contain /-/ separator
         final int sep = clean.indexOf("/-/");
         if (sep > 0) {
@@ -252,14 +261,17 @@ public final class ArtifactNameParser {
     static Optional<String> parseGo(final String urlPath) {
         final String clean = stripLeadingSlash(urlPath);
         final int atv = clean.indexOf("/@v/");
+        final Optional<String> escaped;
         if (atv > 0) {
-            return Optional.of(clean.substring(0, atv));
+            escaped = Optional.of(clean.substring(0, atv));
+        } else {
+            final int atl = clean.indexOf("/@latest");
+            escaped = atl > 0 ? Optional.of(clean.substring(0, atl)) : Optional.empty();
         }
-        final int atl = clean.indexOf("/@latest");
-        if (atl > 0) {
-            return Optional.of(clean.substring(0, atl));
-        }
-        return Optional.empty();
+        // The index records the real module path ("!b" -> "B").
+        return escaped.map(
+            module -> new com.auto1.pantera.goproxy.ModulePath(module).decoded()
+        );
     }
 
     /**

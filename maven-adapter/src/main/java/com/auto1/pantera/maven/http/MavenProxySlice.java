@@ -198,6 +198,29 @@ public final class MavenProxySlice extends Slice.Wrap {
     }
 
     /**
+     * Storage-path prefix of an artifact's metadata, from
+     * {@code groupId:artifactId} or {@code group/path/artifactId}.
+     *
+     * @param pkg Package coordinate
+     * @return Prefix ending in {@code /}, empty when the coordinate names
+     *  no artifact
+     */
+    private static String metadataPrefix(final String pkg) {
+        final String trimmed = pkg == null ? "" : pkg.trim();
+        final int colon = trimmed.indexOf(':');
+        final String path;
+        if (colon > 0 && colon < trimmed.length() - 1) {
+            path = trimmed.substring(0, colon).replace('.', '/') + "/"
+                + trimmed.substring(colon + 1);
+        } else if (trimmed.indexOf('/') > 0) {
+            path = trimmed;
+        } else {
+            path = "";
+        }
+        return path.isEmpty() ? "" : path.replaceAll("^/+|/+$", "") + "/";
+    }
+
+    /**
      * Build the routing slice with ChecksumProxySlice wrapping CachedProxySlice.
      */
     private static Slice buildRoute(
@@ -239,30 +262,47 @@ public final class MavenProxySlice extends Slice.Wrap {
             rname,
             java.time.Clock.systemUTC()
         );
-        return new SliceRoute(
+        // Admin "refresh package": drop the cached maven-metadata.xml of an
+        // artifact (both tiers) so the next read refetches it; the
+        // refreshed-content hook then drops the filtered envelopes.
+        com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance().register(
+            rname,
+            pkg -> {
+                final String prefix = MavenProxySlice.metadataPrefix(pkg);
+                if (prefix.isEmpty()) {
+                    return java.util.concurrent.CompletableFuture.completedFuture(
+                        "unsupported_name"
+                    );
+                }
+                metadataCache.invalidatePrefix(prefix);
+                return java.util.concurrent.CompletableFuture.completedFuture("invalidated");
+            }
+        );
+        final CachedProxySlice cached = new CachedProxySlice(
+            remote, cache, events, rname, upstreamUrl, rtype,
+            cooldown, inspector, storage, config, metadataCache,
+            cooldownMetadata
+        );
+        return new ContentTypeSlice(new SliceRoute(
             new RtRulePath(
                 MethodRule.HEAD,
                 // Track 5 Phase 2B: pass the raw storage so HEAD on a
                 // cached artifact returns 200 + Content-Length from local
                 // metadata without ever touching upstream. Cache-miss still
-                // proxies to upstream HEAD.
-                new HeadProxySlice(remote, storage)
+                // proxies to upstream HEAD, gated by the same header-time
+                // cooldown check as the GET path so a blocked version
+                // answers 403 on HEAD too.
+                new HeadProxySlice(remote, storage, cached::cooldownAtHeaders)
             ),
             new RtRulePath(
                 MethodRule.GET,
-                new ChecksumProxySlice(
-                    new CachedProxySlice(
-                        remote, cache, events, rname, upstreamUrl, rtype,
-                        cooldown, inspector, storage, config, metadataCache,
-                        cooldownMetadata
-                    )
-                )
+                new ChecksumProxySlice(cached)
             ),
             new RtRulePath(
                 RtRule.FALLBACK,
                 new SliceSimple(ResponseBuilder.methodNotAllowed().build())
             )
-        );
+        ));
     }
 
     /**

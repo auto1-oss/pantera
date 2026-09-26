@@ -20,6 +20,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.html.HtmlEscape;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RequestLinePrefix;
 import com.auto1.pantera.pypi.NormalizedProjectName;
@@ -151,8 +152,9 @@ final class SliceIndex implements Slice {
                     listKey, prefix, packageName, format, indexKey
                 );
             }
-        ).toCompletableFuture();
+        ).thenApply(resp -> SimpleApiFormat.negotiated(resp, headers)).toCompletableFuture();
     }
+
 
     /**
      * Generate a dynamic index AND persist it to storage so the next
@@ -275,46 +277,34 @@ final class SliceIndex implements Slice {
                                     subKeys -> {
                                         if (subKeys.isEmpty()) {
                                             // It's a file, not a directory
-                                            return this.storage.value(key).thenCompose(
-                                                value -> new ContentDigest(value, Digests.SHA256).hex()
-                                            ).thenCompose(
-                                                hex -> PypiSidecar.read(this.storage, key).thenApply(
-                                                    meta -> {
-                                                        final List<SimpleJsonRenderer.FileEntry> result = new ArrayList<>(1);
-                                                        result.add(buildJsonEntry(
-                                                            new KeyLastPart(key).get(),
-                                                            key.string(),
-                                                            hex,
-                                                            meta
-                                                        ));
-                                                        return result;
-                                                    }
-                                                )
+                                            return this.jsonEntry(
+                                                key, key.string(), null
+                                            ).thenApply(
+                                                entry -> {
+                                                    final List<SimpleJsonRenderer.FileEntry> result = new ArrayList<>(1);
+                                                    result.add(entry);
+                                                    return result;
+                                                }
                                             );
                                         } else {
                                             // It's a directory - process all files in it
                                             return Flowable.fromIterable(subKeys)
                                                 .concatMapSingle(
-                                                    subKey -> RxFuture.single(
-                                                        this.storage.value(subKey).thenCompose(
-                                                            value -> new ContentDigest(value, Digests.SHA256).hex()
-                                                        ).thenCompose(
-                                                            hex -> PypiSidecar.read(this.storage, subKey).thenApply(
-                                                                meta -> {
-                                                                    final String versionPath = new KeyLastPart(
-                                                                        new Key.From(subKey.parent().get())
-                                                                    ).get();
-                                                                    final String filename = new KeyLastPart(subKey).get();
-                                                                    return buildJsonEntry(
-                                                                        filename,
-                                                                        String.format("%s/%s", versionPath, filename),
-                                                                        hex,
-                                                                        meta
-                                                                    );
-                                                                }
+                                                    subKey -> {
+                                                        final String versionPath = new KeyLastPart(
+                                                            new Key.From(subKey.parent().get())
+                                                        ).get();
+                                                        return RxFuture.single(
+                                                            this.jsonEntry(
+                                                                subKey,
+                                                                String.format(
+                                                                    "%s/%s", versionPath,
+                                                                    new KeyLastPart(subKey).get()
+                                                                ),
+                                                                versionPath
                                                             )
-                                                        )
-                                                    )
+                                                        );
+                                                    }
                                                 )
                                                 .toList()
                                                 .to(SingleInterop.get())
@@ -356,12 +346,18 @@ final class SliceIndex implements Slice {
                                                         final String attrs = meta
                                                             .map(SliceIndex::buildHtmlAttributes)
                                                             .orElse("");
+                                                        // SECURITY: href (prefix+key) and the
+                                                        // filename text are untrusted; escape at
+                                                        // render. attrs is already escaped by
+                                                        // PypiHtmlAttributes — do not re-escape.
                                                         return String.format(
                                                             "<a href=\"%s#sha256=%s\"%s>%s</a><br/>",
-                                                            String.format("%s/%s", prefix, key.string()),
-                                                            hex,
+                                                            HtmlEscape.escape(
+                                                                String.format("%s/%s", prefix, key.string())
+                                                            ),
+                                                            HtmlEscape.escape(hex),
                                                             attrs,
-                                                            new KeyLastPart(key).get()
+                                                            HtmlEscape.escape(new KeyLastPart(key).get())
                                                         );
                                                     }
                                                 )
@@ -381,12 +377,18 @@ final class SliceIndex implements Slice {
                                                                     final String attrs = meta
                                                                         .map(SliceIndex::buildHtmlAttributes)
                                                                         .orElse("");
+                                                                    // SECURITY: href (prefix+key) and the
+                                                                    // filename text are untrusted; escape at
+                                                                    // render. attrs is already escaped by
+                                                                    // PypiHtmlAttributes — do not re-escape.
                                                                     return String.format(
                                                                         "<a href=\"%s#sha256=%s\"%s>%s</a><br/>",
-                                                                        String.format("%s/%s", prefix, subKey.string()),
-                                                                        hex,
+                                                                        HtmlEscape.escape(
+                                                                            String.format("%s/%s", prefix, subKey.string())
+                                                                        ),
+                                                                        HtmlEscape.escape(hex),
                                                                         attrs,
-                                                                        new KeyLastPart(subKey).get()
+                                                                        HtmlEscape.escape(new KeyLastPart(subKey).get())
                                                                     );
                                                                 }
                                                             )
@@ -425,20 +427,9 @@ final class SliceIndex implements Slice {
      * @return Attribute string (may be empty)
      */
     private static String buildHtmlAttributes(final PypiSidecar.Meta meta) {
-        final StringBuilder attrs = new StringBuilder();
-        if (meta.requiresPython() != null && !meta.requiresPython().isEmpty()) {
-            attrs.append(String.format(" data-requires-python=\"%s\"",
-                meta.requiresPython().replace(">", "&gt;").replace("<", "&lt;")));
-        }
-        if (meta.yanked()) {
-            final String reason = meta.yankedReason().orElse("");
-            attrs.append(String.format(" data-yanked=\"%s\"", reason));
-        }
-        if (meta.distInfoMetadata().isPresent()) {
-            attrs.append(String.format(" data-dist-info-metadata=\"sha256=%s\"",
-                meta.distInfoMetadata().get()));
-        }
-        return attrs.toString();
+        // SECURITY (2.2.9): every value is untrusted; the shared renderer
+        // entity-escapes all of them (the yank reason used to be emitted raw).
+        return PypiHtmlAttributes.of(meta);
     }
 
     /**
@@ -448,13 +439,17 @@ final class SliceIndex implements Slice {
      * @param url Full URL for the file
      * @param sha256 SHA-256 hex digest
      * @param meta Optional sidecar metadata
+     * @param size File size in bytes, negative when unknown
+     * @param version Version directory (nullable)
      * @return FileEntry for JSON rendering
      */
     private static SimpleJsonRenderer.FileEntry buildJsonEntry(
         final String filename,
         final String url,
         final String sha256,
-        final Optional<PypiSidecar.Meta> meta
+        final Optional<PypiSidecar.Meta> meta,
+        final long size,
+        final String version
     ) {
         final String requiresPython = meta.map(PypiSidecar.Meta::requiresPython).orElse(null);
         final java.time.Instant uploadTime = meta.map(PypiSidecar.Meta::uploadTime).orElse(null);
@@ -462,8 +457,35 @@ final class SliceIndex implements Slice {
         final Optional<String> yankedReason = meta.flatMap(PypiSidecar.Meta::yankedReason);
         final Optional<String> distInfoMetadata = meta.flatMap(PypiSidecar.Meta::distInfoMetadata);
         return new SimpleJsonRenderer.FileEntry(
-            filename, url, sha256, requiresPython, uploadTime, yanked, yankedReason, distInfoMetadata
+            filename, url, sha256, requiresPython, uploadTime, yanked, yankedReason,
+            distInfoMetadata, size, version
         );
+    }
+
+    /**
+     * Read one distribution file (digest + size) and its sidecar into a
+     * PEP 691 file entry.
+     *
+     * @param key File key
+     * @param url Relative URL for the entry
+     * @param version Version directory the file lives in (nullable)
+     * @return Future file entry
+     */
+    private CompletableFuture<SimpleJsonRenderer.FileEntry> jsonEntry(
+        final Key key, final String url, final String version
+    ) {
+        return this.storage.value(key).thenCompose(
+            value -> {
+                final long size = value.size().orElse(-1L);
+                return new ContentDigest(value, Digests.SHA256).hex().thenCompose(
+                    hex -> PypiSidecar.read(this.storage, key).thenApply(
+                        meta -> buildJsonEntry(
+                            new KeyLastPart(key).get(), url, hex, meta, size, version
+                        )
+                    )
+                );
+            }
+        ).toCompletableFuture();
     }
 
     private static boolean isRepoIndexRequest(final List<String> segments) {

@@ -23,7 +23,6 @@ import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
@@ -31,12 +30,12 @@ import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
-import org.slf4j.MDC;
 
 import javax.json.Json;
 import javax.json.JsonObject;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -215,24 +214,34 @@ public final class ProxyDownloadSlice implements Slice {
 
             // Evaluate cooldown before proceeding
             final String owner = new Login(headers).getValue();
+            // Keyed like the metadata handlers (ComposerMetadataRequestDetector):
+            // Composer names are case-insensitive, one block row per package.
             final CooldownRequest cdreq = new CooldownRequest(
                 this.rtype,
                 this.rname,
-                packageName,
+                packageName.toLowerCase(Locale.ROOT),
                 version,
                 owner,
                 Instant.now()
             );
 
             // Cache-first: check local storage before network calls
-            // New format uses .zip extension; also check legacy key without it
-            final Key distKey = new Key.From(
-                "dist", vendor, pkg, version + ".zip"
-            );
+            // New format uses .zip extension; also check legacy key without it.
+            // A dev-branch dist requested for a specific commit (?ref=) is
+            // cached per reference and never answered from the version-only
+            // keys, which hold whatever commit the branch pointed at before.
+            final DevDistReference refs = new DevDistReference();
+            final Optional<String> ref = refs.requested(version, line.uri().getRawQuery());
+            final Key distKey = ref
+                .map(r -> refs.key(vendor, pkg, version, r))
+                .orElseGet(() -> new Key.From("dist", vendor, pkg, version + ".zip"));
             final Key legacyKey = new Key.From("dist", vendor, pkg, version);
             return this.storage.exists(distKey).thenCompose(cached -> {
                 if (cached) {
                     return CompletableFuture.completedFuture(distKey);
+                }
+                if (ref.isPresent()) {
+                    return CompletableFuture.completedFuture((Key) null);
                 }
                 // Fall back to legacy key (no .zip)
                 return this.storage.exists(legacyKey).thenApply(
@@ -288,7 +297,7 @@ public final class ProxyDownloadSlice implements Slice {
                         );
                     }
                     return this.fetchAndCache(
-                        line, headers, ctx, packageName, version, distKey
+                        line, headers, ctx, packageName, version, distKey, ref
                     );
                 });
             });
@@ -304,10 +313,11 @@ public final class ProxyDownloadSlice implements Slice {
         final AuditContext ctx,
         final String packageName,
         final String version,
-        final Key distKey
+        final Key distKey,
+        final Optional<String> ref
     ) {
         final String owner = new Login(headers).getValue();
-        return this.findOriginalUrl(packageName, version).thenCompose(originalUrl -> {
+        return this.findOriginalUrl(packageName, version, ref).thenCompose(originalUrl -> {
             if (originalUrl.isEmpty()) {
                 EcsLogger.error("com.auto1.pantera.composer")
                     .message("Could not find original URL for package")
@@ -332,6 +342,29 @@ public final class ProxyDownloadSlice implements Slice {
             if (sameHost(this.remoteBase, ouri)) {
                 target = this.remote;
             } else {
+                // SECURITY (2.2.9): dist.url is publisher-influenced metadata.
+                // A cross-host dist is only dialed when the egress policy
+                // allows the destination (the Jetty resolver re-checks after
+                // DNS); a denied destination is an upstream failure.
+                final java.util.Optional<String> denied = ProxyDownloadSlice.egressDenial(ouri);
+                if (denied.isPresent()) {
+                    EcsLogger.warn("com.auto1.pantera.composer")
+                        .message("dist.url refused by egress policy: " + denied.get())
+                        .eventCategory("network")
+                        .eventAction("egress_denied")
+                        .eventOutcome("failure")
+                        .field("url.full", orig)
+                        .field("destination.address", ouri.getHost())
+                        .field("event.reason", denied.get())
+                        .field("repository.name", this.rname)
+                        .field("log.source", "application")
+                        .log();
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.from(com.auto1.pantera.http.RsStatus.byCode(502))
+                            .textBody("dist destination not allowed")
+                            .build()
+                    );
+                }
                 target = new UriClientSlice(this.clients, baseOf(ouri));
             }
             final String pathWithQuery = buildPathWithQuery(ouri);
@@ -367,33 +400,71 @@ public final class ProxyDownloadSlice implements Slice {
                     );
                     return CompletableFuture.completedFuture(response);
                 }
-                // Buffer content, save to storage, then return
-                return response.body().asBytesFuture().thenCompose(bytes -> {
-                    EcsLogger.info("com.auto1.pantera.composer")
-                        .message("Caching dist artifact to storage")
-                        .eventCategory("web")
-                        .eventAction("proxy_download")
-                        .eventOutcome("success")
-                        .field("package.name", packageName)
-                        .field("package.version", version)
-                        .field("file.size", bytes.length)
-                        .field("log.source", "application")
-                        .log();
-                    return this.storage.save(
-                        distKey, new Content.From(bytes)
-                    ).thenApply(unused -> {
-                        // Genuine cache miss + successful upstream fetch —
-                        // the only branch that should publish.
-                        this.emitEvent(packageName, version, headers);
+                // STREAM the dist through to the client and the cache at once.
+                // Before 2.2.9 the whole upstream body was materialised with
+                // asBytesFuture() — an artifact of any size the upstream chose
+                // to send sat in heap before the first byte reached anyone
+                // (resource-dos F53). ProxyCacheWriter tees the upstream stream
+                // to the response and to a temp file that commits on completion.
+                final com.auto1.pantera.http.cache.ProxyCacheWriter writer =
+                    new com.auto1.pantera.http.cache.ProxyCacheWriter(this.storage, this.rname);
+                final com.auto1.pantera.http.context.RequestContext rctx =
+                    new com.auto1.pantera.http.context.RequestContext(
+                        ctx.traceId(), null, this.rname, orig
+                    );
+                return writer.streamThroughAndCommit(
+                    distKey, orig, response.body().size(), response.body(), null, null, rctx
+                ).toCompletableFuture().thenApply(result -> {
+                    if (result instanceof com.auto1.pantera.http.fault.Result.Err<?>) {
                         AuditLogger.access(
-                            ctx, this.rtype, this.rname, packageName, version,
-                            bytes.length, owner, AuditLogger.OUTCOME_SUCCESS, null
+                            ctx, this.rtype, this.rname, packageName, version, 0L,
+                            owner, AuditLogger.OUTCOME_FAILURE,
+                            AuditLogger.REASON_UPSTREAM_UNAVAILABLE
                         );
-                        return ResponseBuilder.ok()
-                            .header("Content-Type", "application/zip")
-                            .body(new Content.From(bytes))
+                        return ResponseBuilder.badGateway()
+                            .textBody("Upstream temporarily unavailable")
                             .build();
-                    });
+                    }
+                    @SuppressWarnings("unchecked")
+                    final com.auto1.pantera.http.cache.ProxyCacheWriter.StreamedArtifact streamed =
+                        ((com.auto1.pantera.http.fault.Result.Ok<
+                            com.auto1.pantera.http.cache.ProxyCacheWriter.StreamedArtifact
+                        >) result).value();
+                    // Publish + audit only once the cache write actually commits —
+                    // a genuine cache miss + successful upstream fetch is the only
+                    // branch that should publish.
+                    // The size is read back from the committed cache entry:
+                    // upstreams that stream without Content-Length (GitHub
+                    // zipballs) declare no size, and 0 is not a valid audit
+                    // package.size.
+                    streamed.verificationOutcome()
+                        .thenCompose(outcome -> {
+                            if (outcome instanceof com.auto1.pantera.http.fault.Result.Ok<?>) {
+                                return this.committedSize(distKey).thenApply(Optional::of);
+                            }
+                            return CompletableFuture.completedFuture(Optional.<Long>empty());
+                        })
+                        .thenAccept(committed -> committed.ifPresent(size -> {
+                            EcsLogger.info("com.auto1.pantera.composer")
+                                .message("Cached streamed dist artifact to storage")
+                                .eventCategory("web")
+                                .eventAction("proxy_download")
+                                .eventOutcome("success")
+                                .field("package.name", packageName)
+                                .field("package.version", version)
+                                .field("file.size", size)
+                                .field("log.source", "application")
+                                .log();
+                            this.emitEvent(packageName, version, headers);
+                            AuditLogger.access(
+                                ctx, this.rtype, this.rname, packageName, version,
+                                size, owner, AuditLogger.OUTCOME_SUCCESS, null
+                            );
+                        }));
+                    return ResponseBuilder.ok()
+                        .header("Content-Type", "application/zip")
+                        .body(streamed.body())
+                        .build();
                 });
             });
         });
@@ -415,6 +486,27 @@ public final class ProxyDownloadSlice implements Slice {
         }
         out.add("Accept", "application/octet-stream, */*");
         return out;
+    }
+
+    /**
+     * Name-level / literal-IP egress check for a cross-host dist (no DNS —
+     * this runs on the reactive path; the resolver guards resolved names).
+     * Judged by the live admin egress policy (DB-backed, env fallback), the
+     * same one the outbound resolver enforces.
+     * @param uri Dist URI
+     * @return Reason when denied, else empty
+     */
+    private static java.util.Optional<String> egressDenial(final URI uri) {
+        final com.auto1.pantera.http.client.egress.EgressPolicy policy =
+            com.auto1.pantera.http.client.egress.EgressSettingsRegistry.policy().get();
+        final String host = uri.getHost();
+        final java.util.Optional<String> byName = policy.hostRejection(host);
+        if (byName.isPresent()) {
+            return byName;
+        }
+        // DNS-free: only a strictly valid IP literal is parsed; a hostname
+        // (or a malformed numeric host) is left to the egress resolver.
+        return policy.literalRejection(host);
     }
 
     /**
@@ -483,15 +575,46 @@ public final class ProxyDownloadSlice implements Slice {
      *
      * @param packageName Package name (vendor/package)
      * @param version Version
+     * @param ref Requested dist reference (dev versions), if any
      * @return Original URL or empty
      */
     private CompletableFuture<Optional<String>> findOriginalUrl(
         final String packageName,
-        final String version
+        final String version,
+        final Optional<String> ref
     ) {
-        // Metadata is cached by CachedProxySlice with .json extension
-        final Key metadataKey = new Key.From(packageName + ".json");
-        
+        // Metadata is cached by CachedProxySlice with .json extension. Stable
+        // and dev-branch versions live in separate files (Composer v2 serves
+        // dev branches from /p2/<pkg>~dev.json, cached as <pkg>~dev.json), so
+        // a version absent from the stable file is looked up in the dev file.
+        return this.originalUrlFrom(new Key.From(packageName + ".json"), packageName, version, ref)
+            .thenCompose(found -> {
+                if (found.isPresent()) {
+                    return CompletableFuture.completedFuture(found);
+                }
+                return this.originalUrlFrom(
+                    new Key.From(packageName + "~dev.json"), packageName, version, ref
+                );
+            });
+    }
+
+    /**
+     * Resolve a version's original dist URL from one cached metadata file.
+     *
+     * @param metadataKey Cached metadata file
+     * @param packageName Package name ({@code vendor/pkg})
+     * @param version Version
+     * @param ref Requested dist reference: the version's current
+     *     {@code dist.reference} must match it, otherwise the URL (which
+     *     builds a different commit) is not returned
+     * @return Original URL, or empty when the file or the version is absent
+     */
+    private CompletableFuture<Optional<String>> originalUrlFrom(
+        final Key metadataKey,
+        final String packageName,
+        final String version,
+        final Optional<String> ref
+    ) {
         return this.storage.exists(metadataKey).thenCompose(exists -> {
             if (!exists) {
                 EcsLogger.warn("com.auto1.pantera.composer")
@@ -546,6 +669,18 @@ public final class ProxyDownloadSlice implements Slice {
 
                         final JsonObject dist = versionData.getJsonObject("dist");
                         if (dist == null) {
+                            return Optional.empty();
+                        }
+                        if (ref.isPresent() && !ref.get().equals(referenceOf(dist))) {
+                            EcsLogger.warn("com.auto1.pantera.composer")
+                                .message("Requested dev dist reference is not the current one in metadata")
+                                .eventCategory("web")
+                                .eventAction("proxy_download")
+                                .eventOutcome("failure")
+                                .field("package.name", packageName)
+                                .field("package.version", version)
+                                .field("log.source", "application")
+                                .log();
                             return Optional.empty();
                         }
 
@@ -616,6 +751,32 @@ public final class ProxyDownloadSlice implements Slice {
         });
     }
 
+    /**
+     * Size of a committed cache entry; 0 when the storage cannot report it.
+     *
+     * @param key Cache key
+     * @return Size in bytes
+     */
+    private CompletableFuture<Long> committedSize(final Key key) {
+        return this.storage.metadata(key)
+            .<Long>thenApply(
+                meta -> meta.read(com.auto1.pantera.asto.Meta.OP_SIZE)
+                    .map(Long::longValue).orElse(0L)
+            )
+            .exceptionally(err -> 0L);
+    }
+
+    /**
+     * The {@code dist.reference} string of a dist, or null.
+     *
+     * @param dist Dist object
+     * @return Reference or null
+     */
+    private static String referenceOf(final JsonObject dist) {
+        final javax.json.JsonValue value = dist.get("reference");
+        return value instanceof javax.json.JsonString str ? str.getString() : null;
+    }
+
     private static boolean versionEquals(final String a, final String b) {
         return stripV(a).equals(stripV(b));
     }
@@ -674,16 +835,17 @@ public final class ProxyDownloadSlice implements Slice {
     }
 
     /**
-     * Build an {@link AuditContext} for the current request. Reads the
-     * internal {@code X-Pantera-Ctx-*} headers into MDC first (a no-op if
-     * already populated by {@code EcsLoggingSlice} on the request thread;
-     * a real restore on a worker thread that never had it).
+     * Build an {@link AuditContext} for the current request from its internal
+     * {@code X-Pantera-Ctx-*} headers, which are authoritative on any thread
+     * (the thread's MDC is never read: a pooled thread can hold another
+     * request's values). The headers are also bound to this thread's MDC for
+     * the application logs that follow.
      *
      * @param headers Inbound request headers
-     * @return Context carrying whatever trace id / client IP could be resolved
+     * @return Context carrying the request's trace id / client IP
      */
     private AuditContext captureAuditContext(final Headers headers) {
         RequestContextHeaders.bindToMdc(headers);
-        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
+        return new AuditContext(headers);
     }
 }

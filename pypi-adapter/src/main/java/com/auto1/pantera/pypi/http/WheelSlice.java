@@ -15,6 +15,8 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.asto.streams.ContentAsStream;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -23,10 +25,10 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.ContentDisposition;
 import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.headers.ReasonPhrase;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.multipart.RqMultipart;
 import com.auto1.pantera.http.RsStatus;
-import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.pypi.NormalizedProjectName;
 import com.auto1.pantera.pypi.meta.Metadata;
 import com.auto1.pantera.pypi.meta.PackageInfo;
@@ -110,59 +112,23 @@ final class WheelSlice implements Slice {
                 )
             ).thenCompose(
                 info -> {
-                    final CompletionStage<RsStatus> res;
+                    final CompletionStage<Response> res;
                     if (new ValidFilename(info, filename).valid()) {
-                        // Organize by version: <repo>/<package_name>/<version>/<filename>
-                        final String packageName = new NormalizedProjectName.Simple(info.name()).value();
-                        final Key name = new Key.From(
-                            new KeyFromPath(line.uri().toString()),
-                            packageName,
-                            info.version(),
-                            filename
-                        );
-                        CompletionStage<Void> move = this.storage.move(key, name);
-                        if (this.events.isPresent()) {
-                            move = move.thenCompose(
-                                ignored ->
-                                    this.putArtifactToQueue(name, info, iterable)
-                            );
-                        }
-                        // Create sidecar metadata for PEP 503/691 compliance
-                        move = move.thenCompose(
-                            ignored -> PypiSidecar.write(
-                                this.storage,
-                                new Key.From(packageName, info.version(), filename),
-                                info.requiresPython(),
-                                Instant.now().truncatedTo(ChronoUnit.MICROS)
-                            )
-                        );
-                        // Regenerate package-level index.html after upload
-                        final Key packageKey = new Key.From(
-                            new KeyFromPath(line.uri().toString()),
-                            packageName
-                        );
-                        move = move.thenCompose(
-                            ignored -> new IndexGenerator(
-                                this.storage,
-                                packageKey,
-                                line.uri().getPath()
-                            ).generate()
-                        );
-                        // Regenerate repository-level index.html
-                        final Key repoKey = new KeyFromPath(line.uri().toString());
-                        move = move.thenCompose(
-                            ignored -> new IndexGenerator(
-                                this.storage,
-                                repoKey,
-                                line.uri().getPath()
-                            ).generateRepoIndex()
-                        );
-                        res = move.thenApply(ignored -> RsStatus.CREATED);
+                        res = this.publish(key, filename, info, iterable);
                     } else {
-                        res = this.storage.delete(key)
-                            .thenApply(nothing -> RsStatus.BAD_REQUEST);
+                        res = this.storage.delete(key).thenApply(
+                            nothing -> ResponseBuilder.badRequest()
+                                .textBody(
+                                    String.format(
+                                        "Filename '%s' does not match the package metadata"
+                                            + " (name '%s', version '%s')",
+                                        filename, info.name(), info.version()
+                                    )
+                                )
+                                .build()
+                        );
                     }
-                    return res.thenApply(s -> ResponseBuilder.from(s).build());
+                    return res;
                 }
             )
         ).handle(
@@ -173,6 +139,143 @@ final class WheelSlice implements Slice {
                 return response;
             }
         ).toCompletableFuture();
+    }
+
+    /**
+     * Publish a validated upload.
+     *
+     * <p>The target key is always {@code <normalized-name>/<version>/<file>}
+     * relative to the repository root, whatever sub-path the client posted
+     * to (twine's conventional {@code /legacy/} included): the storage key,
+     * the sidecar and both indexes must agree on one layout, or the package
+     * index is rebuilt from the wrong prefix and hides every earlier
+     * release.</p>
+     *
+     * <p>A released file is immutable (PyPI file-name reuse policy): an
+     * identical re-upload is an idempotent 200, a different file under an
+     * existing name is refused with 400 "File already exists" so pinned
+     * hashes keep verifying.</p>
+     *
+     * @param temp Temporary key holding the upload
+     * @param filename Uploaded filename
+     * @param info Package metadata read from the archive
+     * @param headers Request headers
+     * @return Response
+     */
+    private CompletionStage<Response> publish(
+        final Key temp, final String filename, final PackageInfo info, final Headers headers
+    ) {
+        final String packageName = new NormalizedProjectName.Simple(info.name()).value();
+        final Key name = new Key.From(packageName, info.version(), filename);
+        return this.storage.exists(name).thenCompose(
+            exists -> {
+                final CompletionStage<Response> res;
+                if (exists) {
+                    res = this.existing(temp, name, filename);
+                } else {
+                    res = this.store(temp, name, packageName, info, headers)
+                        .thenApply(ignored -> ResponseBuilder.from(RsStatus.CREATED).build());
+                }
+                return res;
+            }
+        );
+    }
+
+    /**
+     * Answer an upload whose target file already exists.
+     *
+     * @param temp Temporary key holding the upload
+     * @param name Existing file key
+     * @param filename Uploaded filename
+     * @return 200 when the bytes are identical, 400 otherwise
+     */
+    private CompletionStage<Response> existing(
+        final Key temp, final Key name, final String filename
+    ) {
+        return this.sha256(temp).thenCombine(this.sha256(name), String::equals)
+            .thenCompose(
+                same -> this.storage.delete(temp).thenApply(
+                    nothing -> {
+                        final Response response;
+                        if (same) {
+                            response = ResponseBuilder.ok().build();
+                        } else {
+                            EcsLogger.warn("com.auto1.pantera.pypi")
+                                .message(
+                                    "Refused re-upload of an existing file with different content"
+                                )
+                                .eventCategory("web")
+                                .eventAction("artifact_upload")
+                                .eventOutcome("failure")
+                                .field("event.reason", "file_exists")
+                                .field("repository.name", this.rname)
+                                .field("file.name", filename)
+                                .field("log.source", "application")
+                                .log();
+                            response = ResponseBuilder.badRequest()
+                                // twine prints only the status line: say why there,
+                                // as PyPI does.
+                                .header(new ReasonPhrase("File already exists"))
+                                .textBody(
+                                    String.format(
+                                        "File already exists: '%s'. A published file cannot be"
+                                            + " replaced; publish a new version instead.",
+                                        filename
+                                    )
+                                )
+                                .build();
+                        }
+                        return response;
+                    }
+                )
+            );
+    }
+
+    /**
+     * SHA-256 of a stored value.
+     * @param key Key
+     * @return Hex digest
+     */
+    private CompletionStage<String> sha256(final Key key) {
+        return this.storage.value(key).thenCompose(
+            value -> new ContentDigest(value, Digests.SHA256).hex()
+        );
+    }
+
+    /**
+     * Move the upload into place, record it, write its sidecar and rebuild
+     * the package and repository indexes.
+     *
+     * @param temp Temporary key holding the upload
+     * @param name Target key
+     * @param packageName Normalized package name
+     * @param info Package metadata
+     * @param headers Request headers
+     * @return Completion
+     */
+    private CompletionStage<Void> store(
+        final Key temp, final Key name, final String packageName,
+        final PackageInfo info, final Headers headers
+    ) {
+        CompletionStage<Void> move = this.storage.move(temp, name);
+        if (this.events.isPresent()) {
+            move = move.thenCompose(ignored -> this.putArtifactToQueue(name, info, headers));
+        }
+        // Create sidecar metadata for PEP 503/691 compliance
+        return move.thenCompose(
+            ignored -> PypiSidecar.write(
+                this.storage,
+                name,
+                info.requiresPython(),
+                Instant.now().truncatedTo(ChronoUnit.MICROS)
+            )
+        ).thenCompose(
+            ignored -> new IndexGenerator(
+                this.storage, new Key.From(packageName), "/"
+            ).generate()
+        ).thenCompose(
+            ignored -> new IndexGenerator(this.storage, Key.ROOT, "/").generateRepoIndex()
+        );
     }
 
     /**
@@ -253,7 +356,7 @@ final class WheelSlice implements Slice {
                     System.currentTimeMillis(),
                     null,
                     key.string()
-                );
+                ).withRequestContext(headers);
                 this.events.ifPresent(queue -> queue.add(event));
                 // Drop any cached 404 for this package so requests that
                 // 404'd before publish do not keep returning 404.

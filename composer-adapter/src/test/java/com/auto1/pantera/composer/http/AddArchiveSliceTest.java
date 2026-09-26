@@ -110,10 +110,21 @@ final class AddArchiveSliceTest {
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.CREATED),
                 new RequestLine(RqMethod.PUT, String.format("/%s", archive)),
-                Headers.EMPTY,
+                Headers.from(
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-php"),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
+                ),
                 new Content.From(new TestResource(archive).asBytes())
             )
         );
         MatcherAssert.assertThat("Queue has one item", queue.size() == 1);
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            queue.peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-php")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            queue.peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 }

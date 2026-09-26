@@ -80,6 +80,11 @@ export function getTechInfo(raw: string): TechInfo {
   return TECH_MAP[base] ?? DEFAULT_TECH
 }
 
+/** Base technology of a raw repo type (e.g. "npm-proxy" -> "npm"). */
+export function repoTypeBase(raw: string): string {
+  return parseType(raw).base
+}
+
 /** Technology label (e.g. "npm", "Maven", "Docker"). */
 export function techLabel(raw: string): string {
   return getTechInfo(raw).label
@@ -146,7 +151,6 @@ export const REPO_TYPE_FILTERS = [
   { label: 'Hex',      value: 'hexpm' },
   { label: 'PHP',      value: 'php' },
   { label: 'File',     value: 'file' },
-  { label: 'Binary',   value: 'binary' },
 ] as const
 
 /** Create form options. */
@@ -183,5 +187,4 @@ export const REPO_TYPE_CREATE_OPTIONS = [
   { label: 'File (Local)',     value: 'file' },
   { label: 'File (Proxy)',     value: 'file-proxy' },
   { label: 'File (Group)',     value: 'file-group' },
-  { label: 'Binary (Local)',   value: 'binary' },
 ] as const

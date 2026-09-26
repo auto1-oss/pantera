@@ -8,7 +8,12 @@ set -e
 export GO111MODULE=on
 
 MODULE_PATH="example.com/hello"
-VERSION="v1.0.1"
+# Go versions are immutable: once a version's .zip is stored, Pantera answers
+# 409 to a different .info/.mod/.zip for it, so a rerun of a completed publish
+# needs a new version. A run that failed before the .zip upload can be rerun
+# as is (the .info may be replaced until the .zip is stored).
+# Override with VERSION=v1.0.2 ./publish-module.sh
+VERSION="${VERSION:-v1.0.1}"
 PANTERA_URL="${PANTERA_URL:-https://localhost:8443}"
 PANTERA_USER="${PANTERA_USER:-ayd}"
 PANTERA_PASS="${PANTERA_PASS:-ayd}"
@@ -35,13 +40,15 @@ EOF
 MOD_FILE="$TMP_DIR/$VERSION.mod"
 cp go.mod "$MOD_FILE"
 
-# Create .zip file (must include module@version path in zip structure)
+# Create .zip file (must include module@version path in zip structure).
+# -D omits directory entries: the go command hashes the zip's entries, so a
+# zip with directory entries fails `go mod verify` for every consumer.
 ZIP_FILE="$TMP_DIR/$VERSION.zip"
 ZIP_DIR="$TMP_DIR/zip-staging"
 mkdir -p "$ZIP_DIR/$MODULE_PATH@$VERSION"
 cp -r ./* "$ZIP_DIR/$MODULE_PATH@$VERSION/"
 cd "$ZIP_DIR"
-zip -r "$ZIP_FILE" "$MODULE_PATH@$VERSION" -x "*.git*"
+zip -qrD "$ZIP_FILE" "$MODULE_PATH@$VERSION" -x "*.git*"
 cd "$SCRIPT_DIR/example.com/hello"
 
 echo "✓ Created module artifacts in $TMP_DIR"
@@ -59,6 +66,10 @@ upload_artifact() {
     "$url")
   if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
     echo "  ✓ Uploaded .$suffix (HTTP $http_code)"
+  elif [[ "$http_code" == "409" ]]; then
+    echo "  ✗ $MODULE_PATH@$VERSION is already published with different content (HTTP 409)"
+    echo "    Go versions are immutable; rerun with a new VERSION=..."
+    exit 1
   else
     echo "  ✗ Failed to upload .$suffix (HTTP $http_code)"
     echo "    URL: $url"
@@ -89,11 +100,11 @@ go mod init test-module
 # Configure Go to use our proxy (go_group combines local + upstream).
 # GOMODCACHE points at a brand-new directory so this run does NOT inherit
 # stale module artifacts from earlier failed publishes.
+# The go command sends credentials over https only and always verifies the
+# registry's certificate (GOINSECURE does not apply to GOPROXY): trust the
+# local nginx CA in the OS trust store, or on Linux point SSL_CERT_FILE at it.
 export GOPROXY="https://$PANTERA_USER:$PANTERA_PASS@localhost:8443/test_prefix/api/go/go_group"
-export GOINSECURE="*"
 export GONOSUMDB="$MODULE_PATH"
-export GONOSUMCHECK="$MODULE_PATH"
-export GOSUMDB=off
 export GOMODCACHE="$TEST_MOD_CACHE"
 
 echo "Attempting to get $MODULE_PATH@$VERSION from group..."
@@ -101,4 +112,13 @@ if go get -v "$MODULE_PATH@$VERSION"; then
     echo "✅ Successfully downloaded $MODULE_PATH@$VERSION from Pantera group"
 else
     echo "❌ Failed to download $MODULE_PATH@$VERSION from Pantera group"
+    exit 1
+fi
+
+echo "Verifying the downloaded module against its zip hash..."
+if go mod verify; then
+    echo "✅ go mod verify passed for $MODULE_PATH@$VERSION"
+else
+    echo "❌ go mod verify failed for $MODULE_PATH@$VERSION"
+    exit 1
 fi

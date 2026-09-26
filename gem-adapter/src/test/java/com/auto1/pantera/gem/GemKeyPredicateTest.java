@@ -43,7 +43,9 @@ final class GemKeyPredicateTest {
         "builder,builder-3.2.4",
         "file-tail,file-tail.gem",
         "gviz,builder-0.3.5.gem",
-        "rails,6.0.2.2.gem"
+        "rails,6.0.2.2.gem",
+        "builder,evilbuilder-3.2.4.gem",
+        "builder,evil/prefixbuilder-1.0.0.gem"
     })
     void testWrongItems(final String name, final String target) {
         MatcherAssert.assertThat(

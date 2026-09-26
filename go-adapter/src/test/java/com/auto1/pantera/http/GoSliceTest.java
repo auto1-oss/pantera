@@ -140,7 +140,13 @@ class GoSliceTest {
     void returnsLatest(final boolean anonymous) throws Exception {
         final String body = "{\"Version\":\"1.1\",\"Time\":\"2020-01-24T00:54:14Z\"}";
         MatcherAssert.assertThat(
-            this.slice(GoSliceTest.storage("example.com/latest/bar/@v/v1.1.info", body), anonymous),
+            this.slice(
+                GoSliceTest.withZip(
+                    GoSliceTest.storage("example.com/latest/bar/@v/v1.1.info", body),
+                    "example.com/latest/bar/@v/v1.1.zip"
+                ),
+                anonymous
+            ),
             new SliceHasResponse(
                 anonymous
                     ? unauthorized()
@@ -148,6 +154,90 @@ class GoSliceTest {
                 GoSliceTest.line("example.com/latest/bar/@latest"),
                 this.headers(anonymous), Content.EMPTY
             )
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "example.com/head/mod/@v/v1.0.0.info",
+        "example.com/head/mod/@v/v1.0.0.mod",
+        "example.com/head/mod/@v/v1.0.0.zip",
+        "example.com/head/mod/@v/list"
+    })
+    void answersHeadForStoredFile(final String path) throws Exception {
+        final String body = "stored-bytes";
+        MatcherAssert.assertThat(
+            this.slice(GoSliceTest.storage(path, body), false),
+            new SliceHasResponse(
+                new AllOf<>(
+                    new RsHasStatus(RsStatus.OK),
+                    new RsHasHeaders(new Header("Content-Length", String.valueOf(body.length())))
+                ),
+                new RequestLine("HEAD", path), this.headers(false), Content.EMPTY
+            )
+        );
+    }
+
+    @Test
+    void answersHeadNotFoundForMissingFile() throws Exception {
+        MatcherAssert.assertThat(
+            this.slice(GoSliceTest.storage("example.com/head/mod/@v/v1.0.0.zip", "x"), false),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.NOT_FOUND),
+                new RequestLine("HEAD", "example.com/head/mod/@v/v2.0.0.zip"),
+                this.headers(false), Content.EMPTY
+            )
+        );
+    }
+
+    @Test
+    void answersHeadForLatest() throws Exception {
+        MatcherAssert.assertThat(
+            this.slice(
+                GoSliceTest.withZip(
+                    GoSliceTest.storage("example.com/head/mod/@v/v1.1.0.info", "{}"),
+                    "example.com/head/mod/@v/v1.1.0.zip"
+                ),
+                false
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.OK),
+                new RequestLine("HEAD", "example.com/head/mod/@latest"),
+                this.headers(false), Content.EMPTY
+            )
+        );
+    }
+
+    @Test
+    void headRequiresAuthentication() throws Exception {
+        MatcherAssert.assertThat(
+            this.slice(GoSliceTest.storage("example.com/head/mod/@v/v1.0.0.zip", "x"), true),
+            new SliceHasResponse(
+                unauthorized(),
+                new RequestLine("HEAD", "example.com/head/mod/@v/v1.0.0.zip"),
+                Headers.EMPTY, Content.EMPTY
+            )
+        );
+    }
+
+    @Test
+    void uploadOfAMixedCaseModuleIsRecordedUnderItsRealPath() throws Exception {
+        // B84: the upload event carried the '!'-escaped module path.
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final GoSlice slice = new GoSlice(
+            new InMemoryStorage(),
+            new PolicyByUsername(USER.getKey()),
+            new Authentication.Single(USER.getKey(), USER.getValue()),
+            "go-repo",
+            Optional.of(events)
+        );
+        slice.response(
+            new RequestLine("PUT", "example.com/!acme/lib/@v/v1.0.0.zip"),
+            Headers.from(new Authorization.Basic(USER.getKey(), USER.getValue())),
+            new Content.From("zip".getBytes(StandardCharsets.UTF_8))
+        ).toCompletableFuture().get();
+        MatcherAssert.assertThat(
+            events.poll().artifactName(), new IsEqual<>("example.com/Acme/lib")
         );
     }
 
@@ -166,7 +256,9 @@ class GoSliceTest {
         final Response response = slice.response(
             new RequestLine("PUT", "example.com/hello/@v/v1.2.3.zip"),
             Headers.from(
-                new Authorization.Basic(USER.getKey(), USER.getValue())
+                new Authorization.Basic(USER.getKey(), USER.getValue()),
+                new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-go"),
+                new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
             ),
             new Content.From(data)
         ).toCompletableFuture().get();
@@ -192,6 +284,14 @@ class GoSliceTest {
         org.junit.jupiter.api.Assertions.assertEquals("1.2.3", event.artifactVersion());
         org.junit.jupiter.api.Assertions.assertEquals(data.length, event.size());
         org.junit.jupiter.api.Assertions.assertEquals(USER.getKey(), event.owner());
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            event.traceId(), new org.hamcrest.core.IsEqual<>("trace-go")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            event.clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
         final Key list = new Key.From("example.com/hello/@v/list");
         org.junit.jupiter.api.Assertions.assertTrue(
             storage.exists(list).toCompletableFuture().join(),
@@ -327,6 +427,17 @@ class GoSliceTest {
             new KeyFromPath(path),
             new Content.From(body.getBytes())
         ).get();
+        return storage;
+    }
+
+    /**
+     * Add an empty module zip to a storage.
+     * @param storage Storage
+     * @param path Zip path
+     * @return The same storage
+     */
+    private static Storage withZip(final Storage storage, final String path) {
+        storage.save(new KeyFromPath(path), Content.EMPTY).join();
         return storage;
     }
 

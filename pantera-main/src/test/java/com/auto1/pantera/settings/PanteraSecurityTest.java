@@ -12,10 +12,10 @@ package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.security.perms.EmptyPermissions;
 import com.auto1.pantera.security.policy.CachedYamlPolicy;
-import com.auto1.pantera.security.policy.Policy;
 import org.hamcrest.MatcherAssert;
-import org.hamcrest.core.IsInstanceOf;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -46,14 +46,14 @@ class PanteraSecurityTest {
     }
 
     @Test
-    void returnsFreePolicyIfYamlSectionIsAbsent() {
-        MatcherAssert.assertThat(
-            "Initiates policy",
+    void returnsDenyPolicyIfYamlSectionIsAbsent() {
+        Assertions.assertInstanceOf(
+            EmptyPermissions.class,
             new PanteraSecurity.FromYaml(
                 Yaml.createYamlMappingBuilder().build(),
                 PanteraSecurityTest.AUTH, Optional.empty()
-            ).policy(),
-            new IsInstanceOf(Policy.FREE.getClass())
+            ).policy().getPermissions(AuthUser.ANONYMOUS),
+            "an absent policy section must deny by default"
         );
     }
 

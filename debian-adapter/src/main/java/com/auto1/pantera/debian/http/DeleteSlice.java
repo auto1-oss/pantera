@@ -23,12 +23,10 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.scheduling.RepositoryEvents;
-import org.slf4j.MDC;
 
 import java.util.Collections;
 import java.util.List;
@@ -56,9 +54,7 @@ public final class DeleteSlice implements Slice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext ctx = new AuditContext(headers);
         final String owner = new Login(headers).getValue();
         final Key key = new KeyFromPath(line.uri().getPath());
 
@@ -127,11 +123,12 @@ public final class DeleteSlice implements Slice {
                         this.config.codename(), arc
                     )
                 ).map(
-                    index -> new UniquePackage(this.asto)
-                        .delete(Collections.singletonList(item), new Key.From(index))
-                        .thenCompose(
-                            nothing -> release.update(new Key.From(index))
-                        )
+                    index -> new IndexLock(this.asto, new Key.From(index)).run(
+                        () -> new UniquePackage(this.asto)
+                            .delete(Collections.singletonList(item), new Key.From(index))
+                    ).thenCompose(
+                        nothing -> release.update(new Key.From(index))
+                    ).toCompletableFuture()
                 ).toArray(CompletableFuture[]::new)
             ).thenCompose(
                 nothing -> new InRelease.Asto(this.asto, this.config).generate(release.key())

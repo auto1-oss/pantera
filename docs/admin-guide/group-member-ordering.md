@@ -26,6 +26,53 @@ upgrade, but the value has no effect (sequential is the only mode).
 Remove the key from your config-management as part of the 2.2.0
 migration; it is purely noise at this point.
 
+## How a request is routed
+
+- The artifact index narrows the walk: when it knows which members hold
+  the package, only those members are asked, still in declared order.
+- When the index has no row yet (it is written a moment after an
+  upload), the group asks the hosted members first, then the proxy
+  members. A freshly published artifact is therefore served through the
+  group as soon as its hosted member has it.
+- After a member serves one file of a version, the other files of that
+  same version (`.pom` after `.jar`, `.sha1` after `.pom`) go to that
+  member for up to 60 seconds, so a file and its checksum always come
+  from the same source. This shortcut covers one version only. It never
+  applies to metadata or index requests (`maven-metadata.xml`, PyPI
+  `/simple/<name>/`, Go `@v/list`, npm package documents). If the
+  member cannot serve the file (404, an error, or its upstream circuit
+  breaker is open), the shortcut is dropped and the group asks the other
+  members in the normal order. The member is not asked a second time for
+  the same request. If no other member has the file, the group answers
+  a 5xx error for a failure, or 503 with `Retry-After` for an open
+  circuit, never 404.
+- A cached "not found" is per file: a missing `-sources.jar` or
+  `.module` never hides the `.jar` or `.pom` of the same version.
+- When the index names the members that hold the file and they all fail,
+  the group answers by the kind of failure: `500` with
+  `X-Pantera-Fault: storage-unavailable` when a hosted member's storage
+  failed, `502` with a `proxies-failed` fault when a proxy member's
+  upstream failed, and `503` with `Retry-After` when the proxy member's
+  upstream circuit breaker is open.
+- A member redirect (`3xx`) or a member that does not support the method
+  (`405`, for example `HEAD` on a proxy endpoint that only answers `GET`)
+  does not count as a member failure and is not relayed. pypi groups
+  rewrite `/simple/<name>/` to the PEP 503 normalised name before asking
+  members.
+- A group always serves through its members' current configuration.
+  Editing, re-pointing or deleting a member (or changing the members of a
+  nested group) applies to every group that contains it at once; the
+  groups do not need to be saved again.
+- A group answers `405 Method Not Allowed` with `Allow: GET, HEAD` to
+  writes. The one exception is the npm audit endpoint
+  (`POST .../-/npm/v1/security/...`), which an npm group forwards to its
+  members.
+- go groups merge `<module>/@v/list` across all members, so the list
+  holds both the hosted and the upstream versions. The merge follows the
+  group member circuit breaker: a member whose circuit is open only
+  contributes what it has in its cache. If no member can answer, the
+  group returns 503 with `Retry-After`, not 404.
+
 ## Heuristics
 
 ### Mixed local + proxy groups (most common)

@@ -17,7 +17,6 @@ import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
-import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -37,6 +36,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -176,7 +176,7 @@ public final class ComposerRootPackagesHandler {
     public CompletableFuture<Response> handle(
         final RequestLine line, final String user, final AuditContext auditCtx
     ) {
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+        return this.upstream.response(line, auditCtx.requestHeaders(), Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->
@@ -391,7 +391,7 @@ public final class ComposerRootPackagesHandler {
         final CooldownRequest req = new CooldownRequest(
             this.repoType,
             this.repoName,
-            pkg,
+            pkg.toLowerCase(Locale.ROOT),
             version,
             user == null ? "composer-root" : user,
             Instant.now()

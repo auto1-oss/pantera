@@ -29,10 +29,12 @@ import java.util.regex.Pattern;
  *       JSON endpoint.</li>
  * </ul>
  *
- * <p>We intentionally do NOT match the version-specific form
- * {@code /pypi/<name>/<version>/json} — those describe a single version
- * and are adequately covered by the artifact-layer cooldown check.
- * Filtering them separately would be redundant.</p>
+ * <p>{@link #isMetadataRequest(String)} matches only the package-level
+ * form. The version-specific form {@code /pypi/<name>/<version>/json} is
+ * recognised separately by {@link #isVersionMetadataRequest(String)} so the
+ * proxy routes it to the JSON API upstream with a per-version cooldown
+ * check instead of letting it fall through to the simple mirror (which
+ * does not serve it).</p>
  *
  * <p>Package name normalisation follows PEP 503: lowercase, collapse
  * runs of {@code [-_.]} to a single {@code -}. We expose the
@@ -73,7 +75,7 @@ public final class PypiJsonMetadataRequestDetector {
      * intent explicit for future readers.
      */
     private static final Pattern VERSION_JSON_PATTERN = Pattern.compile(
-        "^(?:.*/)?pypi/[^/]+/[^/]+/json/?$",
+        "^(?:.*/)?pypi/([^/]+)/([^/]+)/json/?$",
         Pattern.CASE_INSENSITIVE
     );
 
@@ -111,6 +113,40 @@ public final class PypiJsonMetadataRequestDetector {
         // The outer JSON_API_PATTERN already disallows a trailing
         // version segment because the package-name group forbids '/'.
         return Optional.of(matcher.group(1));
+    }
+
+    /**
+     * Whether the given request path targets the version-level JSON API
+     * {@code /pypi/<name>/<version>/json}. A path that also reads as the
+     * package-level form is package-level (that form wins).
+     *
+     * @param path Request path
+     * @return true for {@code /pypi/<name>/<version>/json}
+     */
+    public boolean isVersionMetadataRequest(final String path) {
+        return path != null && !path.isEmpty()
+            && !JSON_API_PATTERN.matcher(path).matches()
+            && VERSION_JSON_PATTERN.matcher(path).matches();
+    }
+
+    /**
+     * Extract package name and version from a
+     * {@code /pypi/<name>/<version>/json} path.
+     *
+     * @param path Request path
+     * @return {@code [name, version]}, empty when the path is not version-level
+     */
+    public Optional<String[]> extractPackageAndVersion(final String path) {
+        final Optional<String[]> result;
+        if (this.isVersionMetadataRequest(path)) {
+            final Matcher matcher = VERSION_JSON_PATTERN.matcher(path);
+            result = matcher.matches()
+                ? Optional.of(new String[] {matcher.group(1), matcher.group(2)})
+                : Optional.empty();
+        } else {
+            result = Optional.empty();
+        }
+        return result;
     }
 
     /**

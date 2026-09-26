@@ -21,7 +21,6 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.Slice;
@@ -40,7 +39,6 @@ import java.util.concurrent.CompletionStage;
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
-import org.slf4j.MDC;
 
 /**
  * {@code GET /<pkg>/<version>} and {@code GET /<pkg>/latest} for hosted npm
@@ -104,9 +102,7 @@ public final class SingleVersionSlice implements Slice {
         final RequestLine line, final Headers headers, final Content body
     ) {
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext ctx = new AuditContext(headers);
         final String owner = new Login(headers).getValue();
         return body.asBytesFuture().thenCompose(ignored -> {
             final Optional<PackageRef> parsed = parse(line.uri().getPath());

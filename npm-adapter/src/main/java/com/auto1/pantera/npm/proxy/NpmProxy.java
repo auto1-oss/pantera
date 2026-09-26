@@ -515,6 +515,34 @@ public class NpmProxy {
     }
 
     /**
+     * Revalidate a package's cached packument NOW, through the same
+     * conditional-refresh path the stale-while-revalidate trigger uses: a
+     * changed upstream packument is saved and fires the packument-write hook
+     * (dropping the cooldown-filtered envelopes), an unchanged one only
+     * re-arms the refresh timestamp, and an upstream failure keeps the
+     * cached copy. Admin "refresh package" entry point.
+     *
+     * @param name Package name
+     * @return Future of the outcome: {@code revalidated} (upstream answered
+     *  and the cache is current), {@code upstream_gone} (a cached package
+     *  now 404s upstream; the cached copy is kept) or {@code not_found}
+     *  (neither cached nor available upstream)
+     */
+    public java.util.concurrent.CompletableFuture<String> revalidate(final String name) {
+        final java.util.concurrent.CompletableFuture<String> result =
+            new java.util.concurrent.CompletableFuture<>();
+        this.conditionalRefresh(name)
+            .map(saved -> saved ? "revalidated" : "upstream_gone")
+            .subscribeOn(this.backgroundScheduler)
+            .subscribe(
+                result::complete,
+                result::completeExceptionally,
+                () -> result.complete("not_found")
+            );
+        return result;
+    }
+
+    /**
      * Attempt conditional refresh using stored upstream ETag.
      * If upstream returns 304 (not modified), just update the refresh timestamp.
      * Otherwise, do a full refresh.

@@ -30,7 +30,9 @@ public final class UserHandlerTest extends AsyncApiTestBase {
      * PUT body for creating a test user.
      */
     private static final JsonObject USER_BODY = new JsonObject()
-        .put("pass", "secret123")
+        // Policy-compliant since 2.2.9: user creation enforces the same
+        // PasswordPolicy as every other password path.
+        .put("pass", "Secret-Fixture-123")
         .put("type", "plain")
         .put("email", "test@example.com");
 

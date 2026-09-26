@@ -19,12 +19,27 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.auth.Authenticator;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.TrimPathSlice;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.http.proxy.ComposerProxySlice;
+import com.auto1.pantera.composer.http.proxy.ComposerStorageCache;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Optional;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -174,6 +189,240 @@ public final class ComposerGroupSliceTest {
         );
     }
 
+    @Test
+    void p2CooldownVerdictIsRelayedVerbatim() throws Exception {
+        final AtomicInteger later = new AtomicInteger(0);
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", (line, headers, body) -> body.asBytesFuture().thenApply(
+            ignored -> ResponseBuilder.notFound()
+                .header("X-Pantera-Cooldown", "all-blocked")
+                .textBody("All versions of 'acme/foo' are under cooldown; no versions available.")
+                .build()
+        ));
+        members.put("repo2", new CountingSlice(later, jsonOk(
+            "{\"packages\":{\"acme/foo\":[{\"name\":\"acme/foo\",\"version\":\"9.9\"}]}}"
+        )));
+        final Response resp = new ComposerGroupSlice(
+            new FakeDelegate(), new MapResolver(members), "php-group",
+            List.of("repo1", "repo2"), 8080, ""
+        ).response(
+            new RequestLine("GET", "/p2/acme/foo.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "status of the verdict kept", resp.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "cooldown marker kept",
+            resp.headers().values("X-Pantera-Cooldown"), new IsEqual<>(List.of("all-blocked"))
+        );
+        MatcherAssert.assertThat(
+            "reason body kept",
+            new String(resp.body().asBytes(), StandardCharsets.UTF_8),
+            new IsEqual<>("All versions of 'acme/foo' are under cooldown; no versions available.")
+        );
+        MatcherAssert.assertThat(
+            "the verdict is authoritative: later members are not asked",
+            later.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void p2GenuineMissFallsThroughToTheNextMember() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", status(RsStatus.NOT_FOUND));
+        members.put("repo2", jsonOk("{\"packages\":{\"acme/foo\":[]}}"));
+        final Response resp = new ComposerGroupSlice(
+            new FakeDelegate(), new MapResolver(members), "php-group",
+            List.of("repo1", "repo2"), 8080, ""
+        ).response(
+            new RequestLine("GET", "/p2/acme/foo.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(resp.status(), new IsEqual<>(RsStatus.OK));
+    }
+
+    @Test
+    void devFileOfALocallyOwnedPackageNeverComesFromAProxy() throws Exception {
+        final AtomicInteger proxyCalls = new AtomicInteger(0);
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("local", ComposerGroupSliceTest.byPath(Map.of(
+            "/local/p2/acme/private.json",
+            "{\"packages\":{\"acme/private\":{\"dev-master\":{\"version\":\"dev-master\"}}}}"
+        )));
+        members.put("proxy", new CountingSlice(proxyCalls, jsonOk(
+            "{\"packages\":{\"acme/private\":[{\"version\":\"dev-feature\"}]}}"
+        )));
+        final Response resp = ComposerGroupSliceTest.group(members, "local", "proxy").response(
+            new RequestLine("GET", "/p2/acme/private~dev.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "no proxy versions for a package owned by a local member",
+            resp.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "the private package name is never sent upstream",
+            proxyCalls.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void localMemberOwnsAPackageEvenWhenAProxyIsDeclaredFirst() throws Exception {
+        final AtomicInteger proxyCalls = new AtomicInteger(0);
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("proxy", new CountingSlice(proxyCalls, jsonOk(
+            "{\"packages\":{\"acme/private\":[{\"version\":\"9.9.9\"}]}}"
+        )));
+        members.put("local", ComposerGroupSliceTest.byPath(Map.of(
+            "/local/p2/acme/private.json",
+            "{\"packages\":{\"acme/private\":{\"1.0.0\":{\"version\":\"1.0.0\"}}}}"
+        )));
+        final Response resp = ComposerGroupSliceTest.group(members, "proxy", "local").response(
+            new RequestLine("GET", "/p2/acme/private.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "the local metadata is served",
+            new String(resp.body().asBytes(), StandardCharsets.UTF_8),
+            Matchers.containsString("1.0.0")
+        );
+        MatcherAssert.assertThat(
+            "the proxy is not asked for a locally owned name",
+            proxyCalls.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void packageUnknownLocallyIsResolvedThroughTheProxy() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("local", status(RsStatus.NOT_FOUND));
+        members.put("proxy", jsonOk("{\"packages\":{\"psr/log\":[{\"version\":\"3.0.0\"}]}}"));
+        final Response resp = ComposerGroupSliceTest.group(members, "local", "proxy").response(
+            new RequestLine("GET", "/p2/psr/log~dev.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(resp.status(), new IsEqual<>(RsStatus.OK));
+    }
+
+    @Test
+    void failingLocalMemberKeepsTheNameAwayFromProxies() throws Exception {
+        final AtomicInteger proxyCalls = new AtomicInteger(0);
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("local", status(RsStatus.INTERNAL_ERROR));
+        members.put("proxy", new CountingSlice(proxyCalls, jsonOk("{\"packages\":{}}")));
+        final Response resp = ComposerGroupSliceTest.group(members, "local", "proxy").response(
+            new RequestLine("GET", "/p2/acme/private.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "ownership cannot be ruled out: unavailable, not missing",
+            resp.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the proxy is not asked while ownership is unknown",
+            proxyCalls.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void p2UpstreamOutageIsServiceUnavailableWithRetryAfter() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("local", status(RsStatus.NOT_FOUND));
+        members.put("proxy", status(RsStatus.BAD_GATEWAY));
+        final Response resp = ComposerGroupSliceTest.group(members, "local", "proxy").response(
+            new RequestLine("GET", "/p2/psr/down.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "an outage is not a missing package",
+            resp.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "clients are told when to retry",
+            resp.headers().values("Retry-After").isEmpty(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void circuitOpenProxyMemberGivesServiceUnavailableWithTheMarker() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("local", status(RsStatus.NOT_FOUND));
+        members.put("proxy", new TrimPathSlice(ComposerGroupSliceTest.circuitOpenProxy(), "proxy"));
+        final Response resp = ComposerGroupSliceTest.group(members, "local", "proxy").response(
+            new RequestLine("GET", "/p2/psr/log.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "an open upstream breaker is an outage",
+            resp.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the circuit-open marker reaches the client",
+            resp.headers().values(UpstreamCircuitOpenException.HEADER),
+            new IsEqual<>(List.of("true"))
+        );
+        MatcherAssert.assertThat(
+            "the breaker's Retry-After is honoured",
+            resp.headers().values("Retry-After"),
+            new IsEqual<>(List.of("42"))
+        );
+    }
+
+    @Test
+    void packagesJsonOutageIsServiceUnavailable() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", status(RsStatus.NOT_FOUND));
+        members.put("repo2", status(RsStatus.BAD_GATEWAY));
+        final Response resp = ComposerGroupSliceTest.group(members, "repo1", "repo2").response(
+            new RequestLine("GET", "/packages.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(resp.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE));
+    }
+
+    @Test
+    void memberForbiddenIsRelayedForP2() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("local", status(RsStatus.FORBIDDEN));
+        members.put("proxy", status(RsStatus.FORBIDDEN));
+        final Response resp = ComposerGroupSliceTest.group(members, "local", "proxy").response(
+            new RequestLine("GET", "/p2/acme/lib.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(resp.status(), new IsEqual<>(RsStatus.FORBIDDEN));
+    }
+
+    @Test
+    void memberForbiddenIsRelayedForPackagesJson() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", status(RsStatus.FORBIDDEN));
+        members.put("repo2", status(RsStatus.FORBIDDEN));
+        final Response resp = ComposerGroupSliceTest.group(members, "repo1", "repo2").response(
+            new RequestLine("GET", "/packages.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(resp.status(), new IsEqual<>(RsStatus.FORBIDDEN));
+    }
+
+    /**
+     * Group whose second member is a proxy only when its name is "proxy".
+     */
+    private static ComposerGroupSlice group(
+        final Map<String, Slice> members, final String first, final String second
+    ) {
+        return new ComposerGroupSlice(
+            new FakeDelegate(), new MapResolver(members), "php-group",
+            List.of(first, second), 8080, "",
+            java.util.Set.of("proxy")
+        );
+    }
+
+    /**
+     * Member answering 200 with the given JSON for exact paths, 404 otherwise.
+     */
+    private static Slice byPath(final Map<String, String> bodies) {
+        return (line, headers, body) -> body.asBytesFuture().thenApply(ignored -> {
+            final String json = bodies.get(line.uri().getPath());
+            if (json == null) {
+                return ResponseBuilder.notFound().build();
+            }
+            return ResponseBuilder.ok()
+                .header("Content-Type", "application/json")
+                .body(json.getBytes(StandardCharsets.UTF_8))
+                .build();
+        });
+    }
+
     private static Slice jsonOk(final String json) {
         return (line, headers, body) -> body.asBytesFuture().thenApply(ignored ->
             ResponseBuilder.ok()
@@ -186,6 +435,63 @@ public final class ComposerGroupSliceTest {
     private static Slice status(final RsStatus status) {
         return (line, headers, body) -> body.asBytesFuture().thenApply(ignored ->
             ResponseBuilder.from(status).build()
+        );
+    }
+
+    /**
+     * A real php-proxy whose upstream breaker is open: every upstream call
+     * is fast-failed with the marked 502 the http-client synthesises.
+     */
+    private static Slice circuitOpenProxy() {
+        final Slice remote = (line, headers, body) -> CompletableFuture.completedFuture(
+            ResponseBuilder.badGateway()
+                .header(UpstreamCircuitOpenException.HEADER, "true")
+                .header("Retry-After", "42")
+                .textBody("Upstream circuit breaker is open")
+                .build()
+        );
+        final ClientSlices clients = new ClientSlices() {
+            @Override
+            public Slice http(final String host) {
+                return remote;
+            }
+
+            @Override
+            public Slice http(final String host, final int port) {
+                return remote;
+            }
+
+            @Override
+            public Slice https(final String host) {
+                return remote;
+            }
+
+            @Override
+            public Slice https(final String host, final int port) {
+                return remote;
+            }
+        };
+        final CooldownInspector nodates = new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(
+                final String artifact, final String version
+            ) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(
+                final String artifact, final String version
+            ) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        final AstoRepository repo = new AstoRepository(new InMemoryStorage());
+        return new ComposerProxySlice(
+            clients, URI.create("https://repo.packagist.example"), repo,
+            Authenticator.ANONYMOUS, new ComposerStorageCache(repo), Optional.empty(),
+            "proxy", "php-proxy", NoopCooldownService.INSTANCE, nodates,
+            "http://localhost:8080/proxy"
         );
     }
 

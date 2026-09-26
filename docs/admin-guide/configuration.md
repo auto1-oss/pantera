@@ -177,7 +177,7 @@ meta:
     idle_timeout: 30000                        # Idle connection timeout (ms)
     connection_timeout: 15000                  # Initial connect timeout (ms)
     follow_redirects: true                     # Follow HTTP 3xx redirects
-    connection_acquire_timeout: 120000         # Wait for pooled connection (ms)
+    connection_acquire_timeout: 30000          # Wait for pooled connection (ms)
 ```
 
 These settings apply to all proxy repository upstream requests. See [Performance Tuning](performance-tuning.md) for sizing recommendations.

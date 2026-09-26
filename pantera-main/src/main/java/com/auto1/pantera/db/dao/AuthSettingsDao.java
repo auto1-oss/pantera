@@ -108,6 +108,27 @@ public final class AuthSettingsDao {
     }
 
     /**
+     * Insert a setting only when absent — an existing value is never
+     * overwritten. Used for first-boot generated secrets (2.2.9 download
+     * token key) so racing HA nodes converge on the first writer's value.
+     *
+     * @param key Setting key
+     * @param value Value to insert when the key does not exist
+     */
+    public void putIfAbsent(final String key, final String value) {
+        final String sql = "INSERT INTO auth_settings (key, value) VALUES (?, ?) "
+            + "ON CONFLICT (key) DO NOTHING";
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, key);
+            ps.setString(2, value);
+            ps.executeUpdate();
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to insert auth setting: " + key, ex);
+        }
+    }
+
+    /**
      * Get all settings as an ordered map (ordered by key).
      * @return Immutable snapshot of all settings
      */

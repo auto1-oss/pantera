@@ -6,14 +6,14 @@ Pantera supports multiple authentication providers that can be combined in a pri
 
 ---
 
-## ⚠ Default Admin Credentials (Fresh Install)
+## ⚠ Bootstrap Administrator (Fresh Install)
 
-On a fresh install with an empty `users` table, Pantera bootstraps a single default user so you can log in and complete setup:
+On a database-backed start where no `admin` user and no holder of the `admin` role yet exists, Pantera bootstraps a single administrator so you can log in and complete setup:
 
 | Field | Value |
 |---|---|
 | **Username** | `admin` |
-| **Password** | `admin` |
+| **Password** | From `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` if set; otherwise a random password written to `<pantera.home>/bootstrap-admin-password` (default `/var/pantera/bootstrap-admin-password`, mode 0600). Never a fixed default. |
 | **Role** | `admin` (all permissions) |
 | **Must change password** | `true` |
 
@@ -27,7 +27,11 @@ On a fresh install with an empty `users` table, Pantera bootstraps a single defa
 - **Not** equal to the username
 - **Not** in the well-known weak-password list (`password`, `admin`, `changeme`, ...)
 
-⚠ **Change this password immediately in production.** The default is logged at WARN level during startup so operators see it. The bootstrap only runs when the `users` table is empty, so it will not overwrite an existing admin account.
+When `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` is set (non-blank) that value is used. Otherwise Pantera generates a random password and writes it to an owner-only file `<pantera.home>/bootstrap-admin-password` (default `/var/pantera/bootstrap-admin-password`, mode 0600); the startup log records only that file's path, at WARN level — never the password. Read it, sign in, change the password, then delete the file. With the bundled docker-compose stack: `docker exec pantera cat /var/pantera/bootstrap-admin-password`.
+
+The same rules apply to every local password: self-service changes, an admin resetting a user's password, and the initial password in the **Create User** dialog. The UI shows the checklist while you type and displays the server's rejection message if a password (or a role you are not allowed to grant) is refused.
+
+⚠ **Change this password immediately.** The bootstrap only runs when no `admin` user and no other holder of the `admin` role exists, so it will not overwrite an existing admin account.
 
 ---
 
@@ -66,14 +70,14 @@ Recommended ordering for production:
 
 1. **SSO providers** (keycloak, okta) -- Handle interactive users first.
 2. **jwt-password** -- Handle programmatic clients using JWT tokens as passwords.
-3. **env** -- Bootstrap admin access.
+3. **env** -- Static admin credential for emergency or DB-less access.
 4. **pantera** -- Native user database fallback.
 
 ---
 
 ## Environment Variables Provider (type: env)
 
-The simplest provider. Reads a single admin credential from environment variables. Intended for bootstrap access and development.
+The simplest provider. Reads a single admin credential (`PANTERA_USER_NAME` / `PANTERA_USER_PASS`) from environment variables — a static admin login for emergency or development access, and for DB-less deployments. It is separate from the database bootstrap administrator (user `admin`, whose initial password comes from `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`).
 
 ```yaml
 credentials:
@@ -302,6 +306,8 @@ meta:
 | `access-token-expiry-seconds` | int | No | `3600` | Access token lifetime (1 hour default) |
 | `refresh-token-expiry-seconds` | int | No | `604800` | Refresh token lifetime (7 days default) |
 
+The same key pair also signs the Hex registry (clients pin its public key from `<hex-repo-url>/public_key`), the short-lived conda upload URLs, and the Conan upload URLs. Rotating the key pair invalidates every issued token and makes existing `mix hex.repo add --public-key` registrations fail signature checks until clients fetch the new key and re-add the repository.
+
 ### Token Architecture
 
 Pantera issues three types of tokens:
@@ -332,8 +338,7 @@ Exchange a refresh token for a new access token:
 
 ```bash
 curl -X POST http://pantera-host:8086/api/v1/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+  -H "Authorization: Bearer $REFRESH_TOKEN"
 ```
 
 ### Generating API Tokens
@@ -408,9 +413,11 @@ curl -X POST http://pantera-host:8086/api/v1/admin/revoke-user/jdoe \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-This publishes a revocation event via Valkey pub/sub, propagating to all cluster nodes within milliseconds. Nodes without Valkey fall back to polling the database every 30 seconds.
+This publishes a revocation event via Valkey pub/sub, propagating to all cluster nodes within milliseconds; the event carries the revocation instant and lifetime, so every node holds the entry for as long as the node that issued it. Nodes without Valkey fall back to polling the database every 5 seconds.
 
-The revocation blocklist is maintained in the `user_tokens` table and an in-memory cache. Access tokens (which are not stored in DB) are invalidated via the blocklist until they expire naturally.
+Refresh and API tokens are revoked in the `user_tokens` table. Access tokens (which are not stored in DB) issued before the revocation — compared at millisecond precision — are rejected via the revocation blocklist until they expire naturally; tokens issued afterwards are not affected, so the user can sign in again. To keep a user out, disable the account instead.
+
+Blocklist entries are kept in Valkey (with a TTL) and, when a database is configured, in the `revocation_blocklist` table. A node reloads every live entry from both at startup, so a restart does not forget a revocation.
 
 ---
 

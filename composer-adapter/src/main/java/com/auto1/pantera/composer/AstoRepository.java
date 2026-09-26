@@ -13,6 +13,8 @@ package com.auto1.pantera.composer;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.composer.http.Archive;
 
 import javax.json.Json;
@@ -135,9 +137,15 @@ public final class AstoRepository implements Repository {
                                 ).thenCompose(arch -> this.asto.save(tmp, arch))
                                 .thenCompose(noth -> this.asto.delete(key))
                                 .thenCompose(noth -> this.asto.move(tmp, key))
+                                .thenCompose(noth -> this.asto.value(key))
                                 .thenCompose(
-                                    noth -> {
-                                        final Package pack = new JsonPackage(this.addDist(compos, key));
+                                    stored -> new ContentDigest(stored, Digests.SHA1).hex()
+                                )
+                                .thenCompose(
+                                    sha -> {
+                                        final Package pack = new JsonPackage(
+                                            this.addDist(compos, key, sha)
+                                        );
                                         return pack.name().thenCompose(
                                             name -> this.updatePackages(AstoRepository.ALL_PACKAGES, pack, Optional.empty())
                                                 .thenCompose(ignored -> this.updatePackages(name.key(), pack, Optional.empty()))
@@ -203,9 +211,11 @@ public final class AstoRepository implements Repository {
      * Add `dist` field to composer json.
      * @param compos Composer json file
      * @param path Prefix path for uploading archive (includes extension)
+     * @param sha Hex SHA-1 of the stored archive; published as
+     *  {@code dist.shasum} so Composer verifies the file it downloads
      * @return Composer json with added `dist` field.
      */
-    private byte[] addDist(final JsonObject compos, final Key path) {
+    private byte[] addDist(final JsonObject compos, final Key path, final String sha) {
         final String url = this.prefix.orElseThrow(
             () -> new IllegalStateException("Prefix url for `dist` for uploaded archive was empty.")
         ).replaceAll("/$", "");
@@ -231,6 +241,7 @@ public final class AstoRepository implements Repository {
             "dist", Json.createObjectBuilder()
                 .add("url", fullUrl)
                 .add("type", distType)
+                .add("shasum", sha)
                 .build()
         ).build()
             .toString()

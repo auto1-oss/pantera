@@ -47,6 +47,13 @@ public final class AuthTokenRest extends BaseRest {
     public static final String JTI = "jti";
 
     /**
+     * Millisecond issue-time claim name. JWT {@code iat} has one-second
+     * resolution; user-wide revocations compare against this claim so a
+     * token issued earlier in the revocation's second is still revoked.
+     */
+    public static final String IAT_MS = "iat_ms";
+
+    /**
      * Tokens provider.
      */
     private final Tokens tokens;

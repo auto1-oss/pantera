@@ -31,6 +31,14 @@ onMounted(async () => {
   }
 })
 
+// SECURITY (2.2.9): only expose the Grafana link when it is a real http(s)
+// URL. grafana_url is an admin/settings-writer value bound into an href, so a
+// stored `javascript:`/`data:` URL would execute on click otherwise.
+const grafanaHref = computed(() => {
+  const url = config.grafanaUrl || ''
+  return /^https?:\/\//i.test(url) ? url : ''
+})
+
 const storageDisplay = computed(() => {
   const raw = stats.value.total_storage
   const bytes = typeof raw === 'string' ? parseFloat(raw) || 0 : raw
@@ -127,8 +135,8 @@ const statCards = computed(() => [
           </h1>
         </div>
         <a
-          v-if="config.grafanaUrl"
-          :href="config.grafanaUrl"
+          v-if="grafanaHref"
+          :href="grafanaHref"
           target="_blank"
           class="text-sm text-amber-500 hover:bg-amber-500/5 flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-amber-500/20 transition-colors"
         >

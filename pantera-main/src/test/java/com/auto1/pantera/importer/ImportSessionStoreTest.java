@@ -12,6 +12,10 @@ package com.auto1.pantera.importer;
 
 import com.auto1.pantera.db.ArtifactDbFactory;
 import com.auto1.pantera.db.PostgreSQLTestConfig;
+import com.auto1.pantera.http.ResponseException;
+import com.auto1.pantera.http.auth.AuthzSlice;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -92,6 +96,78 @@ final class ImportSessionStoreTest {
             );
             final ImportSession quarantined = store.start(request);
             Assertions.assertEquals(ImportSessionStatus.QUARANTINED, quarantined.status());
+        } finally {
+            close(dataSource);
+        }
+    }
+
+    @Test
+    void idempotencyKeyCannotBeReplayedAgainstAnotherTarget() throws Exception {
+        // SECURITY (2.2.9): before the fix the session was looked up by the
+        // idempotency key alone, so re-sending a COMPLETED key with a
+        // different repository/path returned the foreign session's terminal
+        // state and the importer answered ALREADY_PRESENT — silently
+        // short-circuiting an import into repo B on the strength of repo A's key.
+        final DataSource dataSource = datasource();
+        try {
+            final ImportSessionStore store = new ImportSessionStore(dataSource);
+            final ImportRequest first = ImportRequest.parse(
+                new RequestLine(RqMethod.PUT, "/.import/repo-a/pkg/one.bin"),
+                new Headers()
+                    .add(ImportHeaders.REPO_TYPE, "file")
+                    .add(ImportHeaders.IDEMPOTENCY_KEY, "shared-key")
+                    .add(ImportHeaders.CHECKSUM_POLICY, ChecksumPolicy.METADATA.name())
+                    .add(AuthzSlice.LOGIN_HDR, "alice")
+            );
+            store.markCompleted(store.start(first), 1L, new EnumMap<>(DigestType.class));
+            final ImportRequest other = ImportRequest.parse(
+                new RequestLine(RqMethod.PUT, "/.import/repo-b/pkg/two.bin"),
+                new Headers()
+                    .add(ImportHeaders.REPO_TYPE, "file")
+                    .add(ImportHeaders.IDEMPOTENCY_KEY, "shared-key")
+                    .add(ImportHeaders.CHECKSUM_POLICY, ChecksumPolicy.METADATA.name())
+                    .add(AuthzSlice.LOGIN_HDR, "alice")
+            );
+            final ResponseException rejected = Assertions.assertThrows(
+                ResponseException.class, () -> store.start(other)
+            );
+            MatcherAssert.assertThat(
+                "an idempotency key already bound to repo-a/one.bin must be refused (409) for repo-b/two.bin",
+                rejected.response().status().code(), new IsEqual<>(409)
+            );
+        } finally {
+            close(dataSource);
+        }
+    }
+
+    @Test
+    void idempotencyKeyIsBoundToTheAuthenticatedCaller() throws Exception {
+        // SECURITY (2.2.9): the key must also be bound to the principal that
+        // created it — another writer on the same repository must not be able
+        // to resume, short-circuit or inherit a session by guessing its key.
+        final DataSource dataSource = datasource();
+        try {
+            final ImportSessionStore store = new ImportSessionStore(dataSource);
+            final Headers base = new Headers()
+                .add(ImportHeaders.REPO_TYPE, "file")
+                .add(ImportHeaders.IDEMPOTENCY_KEY, "caller-key")
+                .add(ImportHeaders.CHECKSUM_POLICY, ChecksumPolicy.METADATA.name());
+            final ImportRequest alice = ImportRequest.parse(
+                new RequestLine(RqMethod.PUT, "/.import/repo-a/pkg/three.bin"),
+                base.copy().add(AuthzSlice.LOGIN_HDR, "alice")
+            );
+            store.start(alice);
+            final ImportRequest bob = ImportRequest.parse(
+                new RequestLine(RqMethod.PUT, "/.import/repo-a/pkg/three.bin"),
+                base.copy().add(AuthzSlice.LOGIN_HDR, "bob")
+            );
+            final ResponseException rejected = Assertions.assertThrows(
+                ResponseException.class, () -> store.start(bob)
+            );
+            MatcherAssert.assertThat(
+                "a different caller reusing alice's idempotency key must be refused (409)",
+                rejected.response().status().code(), new IsEqual<>(409)
+            );
         } finally {
             close(dataSource);
         }

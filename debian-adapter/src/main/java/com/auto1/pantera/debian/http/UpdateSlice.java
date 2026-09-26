@@ -31,13 +31,16 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 
+import java.io.InputStream;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -49,6 +52,12 @@ public final class UpdateSlice implements Slice {
      * Repository type name.
      */
     private static final String REPO_TYPE = "debian";
+
+    /**
+     * Upload path: a {@code .deb} / {@code .udeb} file outside {@code dists/}.
+     */
+    private static final Pattern PACKAGE_PATH =
+        Pattern.compile("^/(?!dists/)(?:[^/]+/)*[^/]+\\.u?deb$");
 
     /**
      * Abstract storage.
@@ -100,22 +109,43 @@ public final class UpdateSlice implements Slice {
     @Override
     public CompletableFuture<Response> response(final RequestLine line, final Headers headers,
                                                 final Content body) {
-        final Key key = new KeyFromPath(line.uri().getPath());
+        final String path = line.uri().getPath();
+        if (!UpdateSlice.PACKAGE_PATH.matcher(path).matches()) {
+            // The request path is the storage key. A bare component path
+            // (`/main`) stored every upload under the same key, each one
+            // overwriting the previous package, and a path such as
+            // dists/<codename>/Release would overwrite a repository index.
+            return body.discard().thenApply(
+                nothing -> ResponseBuilder.badRequest()
+                    .textBody(
+                        "Upload the package to its file path, e.g. pool/main/<name>_<version>_<arch>.deb"
+                    ).build()
+            );
+        }
+        final Key key = new KeyFromPath(path);
         return this.asto.save(key, new Content.From(body))
             .thenCompose(nothing -> this.asto.value(key))
             .thenCompose(
                 content -> new ContentAsStream<String>(content)
-                    .process(input -> new Control.FromInputStream(input).asString())
+                    .process(UpdateSlice::control)
             )
             .thenCompose(
                 control -> {
-                    final List<String> common = new ControlField.Architecture().value(control)
-                        .stream().filter(item -> this.config.archs().contains(item))
+                    final List<String> archs = UpdateSlice.architectures(control);
+                    final List<String> common = archs.stream()
+                        .filter(item -> this.config.archs().contains(item))
                         .collect(Collectors.toList());
                     final CompletableFuture<Response> res;
                     if (common.isEmpty()) {
                         res = this.asto.delete(key).thenApply(
-                            nothing -> ResponseBuilder.badRequest().build()
+                            nothing -> ResponseBuilder.badRequest()
+                                .textBody(
+                                    String.format(
+                                        "Package architecture '%s' is not one of this repository's architectures (%s)",
+                                        String.join(" ", archs),
+                                        String.join(" ", this.config.archs())
+                                    )
+                                ).build()
                         );
                     } else {
                         // Always run logEvents — it now also drives the
@@ -138,8 +168,17 @@ public final class UpdateSlice implements Slice {
                     if (throwable == null) {
                         return CompletableFuture.completedFuture(resp);
                     } else {
-                        res = this.asto.delete(key)
-                            .thenApply(nothing -> ResponseBuilder.internalError().build());
+                        final Throwable cause = UpdateSlice.cause(throwable);
+                        res = this.asto.delete(key).thenApply(
+                            nothing -> {
+                                if (cause instanceof InvalidPackageException) {
+                                    return ResponseBuilder.badRequest()
+                                        .textBody(cause.getMessage())
+                                        .build();
+                                }
+                                return ResponseBuilder.internalError().build();
+                            }
+                        );
                     }
                     return res;
                 }
@@ -164,9 +203,11 @@ public final class UpdateSlice implements Slice {
                         this.config.codename(), arc
                     )
                 ).map(
-                    index -> new UniquePackage(this.asto)
-                        .add(Collections.singletonList(item), new Key.From(index))
-                        .thenCompose(nothing -> release.update(new Key.From(index)))
+                    index -> new IndexLock(this.asto, new Key.From(index)).run(
+                        () -> new UniquePackage(this.asto)
+                            .add(Collections.singletonList(item), new Key.From(index))
+                    ).thenCompose(nothing -> release.update(new Key.From(index)))
+                        .toCompletableFuture()
                 ).toArray(CompletableFuture[]::new)
             ).thenCompose(
                 nothing -> new InRelease.Asto(this.asto, this.config).generate(release.key())
@@ -201,7 +242,7 @@ public final class UpdateSlice implements Slice {
                         UpdateSlice.REPO_TYPE, this.config.codename(), owner,
                         String.join("_", name, val), version, size,
                         System.currentTimeMillis(), null, artifact.string()
-                    );
+                    ).withRequestContext(hdrs);
                     this.events.ifPresent(queue -> queue.add(event));
                     syncs.add(this.syncIndex.recordSync(event));
                 });
@@ -213,5 +254,72 @@ public final class UpdateSlice implements Slice {
                     .invalidateAfterUpload("debian", name);
                 return CompletableFuture.allOf(syncs.toArray(CompletableFuture[]::new));
             });
+    }
+
+    /**
+     * Control file of an uploaded package.
+     * @param input Package bytes
+     * @return Control file
+     * @throws InvalidPackageException If the upload is not a Debian package
+     */
+    private static String control(final InputStream input) {
+        try {
+            return new Control.FromInputStream(input).asString();
+        } catch (final IllegalStateException ex) {
+            throw new InvalidPackageException(
+                String.format("The upload is not a valid Debian package: %s", ex.getMessage()),
+                ex
+            );
+        }
+    }
+
+    /**
+     * Architectures a control file declares.
+     * @param control Control file
+     * @return Architectures
+     * @throws InvalidPackageException If the control file declares none
+     */
+    private static List<String> architectures(final String control) {
+        final List<String> res;
+        try {
+            res = new ControlField.Architecture().value(control);
+        } catch (final RuntimeException ex) {
+            throw new InvalidPackageException(
+                "The upload is not a valid Debian package: its control file has no Architecture",
+                ex
+            );
+        }
+        return res;
+    }
+
+    /**
+     * Unwrap completion wrappers.
+     * @param err Error
+     * @return Underlying cause
+     */
+    private static Throwable cause(final Throwable err) {
+        Throwable res = err;
+        while (res instanceof CompletionException && res.getCause() != null) {
+            res = res.getCause();
+        }
+        return res;
+    }
+
+    /**
+     * The upload is not a Debian package Pantera can index.
+     * @since 2.2.9
+     */
+    private static final class InvalidPackageException extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Ctor.
+         * @param message Reason for the client
+         * @param cause Cause
+         */
+        InvalidPackageException(final String message, final Throwable cause) {
+            super(message, cause);
+        }
     }
 }

@@ -29,7 +29,6 @@ import com.auto1.pantera.http.client.auth.AuthClientSlice;
 import com.auto1.pantera.http.client.auth.Authenticator;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rt.MethodRule;
@@ -52,9 +51,9 @@ import java.util.concurrent.CompletableFuture;
  * <p>Dispatch order (cooldown-aware):</p>
  * <ol>
  *   <li>{@link ComposerRootPackagesHandler} for {@code /packages.json}
- *       and {@code /repo.json} — filters blocked versions out of
- *       inline root aggregation shapes before the response leaves
- *       the proxy.</li>
+ *       and {@code /repo.json} — serves the proxy's own root, whose
+ *       {@code metadata-url} points back at this proxy (the per-package
+ *       files carry the versions), and audits the listing view.</li>
  *   <li>{@link ComposerPackageMetadataHandler} for
  *       {@code /p2/<vendor>/<pkg>.json} and
  *       {@code /packages/<vendor>/<pkg>.json} — filters blocked
@@ -208,22 +207,28 @@ public class ComposerProxySlice implements Slice {
             baseUrl,
             upstreamUrl
         );
+        // The proxy's own repository root. Composer fetches /packages.json
+        // before anything else; the root only has to send the per-package
+        // lookups (metadata-url) back to this proxy, whose p2 path is served
+        // through the cache below. It is never fetched through the metadata
+        // cache: /packages.json is not a vendor/package name.
+        final Slice root = new SliceSimple(
+            () -> ResponseBuilder.ok()
+                .jsonBody(
+                    String.format(
+                        "{\"packages\":{},\"metadata-url\":\"%s/p2/%%package%%.json\"}",
+                        ComposerProxySlice.basePath(baseUrl, rname)
+                    )
+                )
+                .build()
+        );
         this.fallback = new SliceRoute(
             new RtRulePath(
                 new RtRule.All(
                     new RtRule.ByPath(PackageMetadataSlice.ALL_PACKAGES),
                     MethodRule.GET
                 ),
-                new SliceSimple(
-                    () -> ResponseBuilder.ok()
-                        .jsonBody(
-                            String.format(
-                                "{\"packages\":{}, \"metadata-url\":\"/%s/p2/%%package%%.json\"}",
-                                rname
-                            )
-                        )
-                        .build()
-                )
+                root
             ),
             new RtRulePath(
                 new RtRule.All(
@@ -270,7 +275,7 @@ public class ComposerProxySlice implements Slice {
         // entirely. Mirrors the npm/PyPI packument-inline pattern
         // landed in {@code dbdde1736}.
         this.rootHandler = new ComposerRootPackagesHandler(
-            cachedProxy, cooldown, rtype, rname
+            root, cooldown, rtype, rname
         );
         this.packageHandler = new ComposerPackageMetadataHandler(
             cachedProxy, cooldown, rtype, rname
@@ -283,15 +288,13 @@ public class ComposerProxySlice implements Slice {
     ) {
         final String path = line.uri().getPath();
         final String user = new Login(headers).getValue();
-        // Bound as early as possible — before any async hop — so the
+        // Captured at entry from the request's X-Pantera-Ctx-* headers —
+        // before any async hop, and never from MDC, which on a pooled
+        // thread can hold another request's values — so the
         // AuditLogger.resolution() call downstream in the cooldown
-        // handlers gets real trace.id / client.ip instead of nulls from
-        // a worker thread that never had EcsLoggingSlice's MDC bound.
+        // handlers carries this request's trace.id / client.ip.
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext auditCtx = new AuditContext(
-            org.slf4j.MDC.get(EcsMdc.TRACE_ID),
-            org.slf4j.MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext auditCtx = new AuditContext(headers);
         // Cooldown handlers run ahead of the legacy route so blocked
         // versions cannot leak through the root / per-package
         // metadata surfaces. Mirrors the Go / PyPI / Docker
@@ -319,6 +322,29 @@ public class ComposerProxySlice implements Slice {
                 .thenCompose(ignored -> this.packageHandler.handle(line, user, auditCtx));
         }
         return this.fallback.response(line, headers, body);
+    }
+
+    /**
+     * Host-relative path of this repository, used as the {@code metadata-url}
+     * prefix of the root. Host-relative so Composer resolves it against the
+     * host it was configured with (and sends its credentials there); the
+     * path comes from the repository URL so a reverse-proxy sub-path is kept.
+     *
+     * @param baseUrl Repository URL
+     * @param rname Repository name (fallback when the URL has no path)
+     * @return Path without a trailing slash, e.g. {@code /php_proxy}
+     */
+    private static String basePath(final String baseUrl, final String rname) {
+        String path = null;
+        try {
+            path = URI.create(baseUrl).getRawPath();
+        } catch (final IllegalArgumentException ignored) {
+            // Not a URI: fall back to the repository name below.
+        }
+        if (path == null || path.isBlank() || "/".equals(path)) {
+            path = "/" + rname;
+        }
+        return path.replaceAll("/+$", "");
     }
 
     /**

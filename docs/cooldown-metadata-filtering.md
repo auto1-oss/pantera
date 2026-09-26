@@ -36,10 +36,10 @@ and any unbounded-latest resolution endpoint the client can query.
 | maven-proxy        | `maven-metadata.xml` (rewrites `<versions>`, `<latest>`, `<release>`) |
 | gradle-proxy       | Same as maven-proxy (reuses Maven components) |
 | npm-proxy          | `GET /{pkg}` (packument -- full and abbreviated), `GET /{pkg}/latest` (dist-tag shortcut). `dist-tags.latest` is rewritten to the highest non-blocked version; other dist-tags pointing to blocked versions are dropped. |
-| pypi-proxy         | `/simple/{pkg}/` (PEP 503 HTML index), `/pypi/{pkg}/json` (JSON API). `info.version` and `urls` are rewritten to the highest non-blocked version using PEP 440 ordering. |
+| pypi-proxy         | `/simple/{pkg}/` (PEP 503 HTML index), `/pypi/{pkg}/json` and `/pypi/{pkg}/{ver}/json` (JSON API). `info.version` and `urls` are rewritten to the highest non-blocked version using PEP 440 ordering. |
 | docker-proxy       | `/v2/{name}/tags/list` (filters the `tags` array); `/v2/{name}/manifests/{tag}` (returns 404 `MANIFEST_UNKNOWN` when the tag resolves to a blocked digest or the tag itself is blocked). `/manifests/<digest>` continues through the existing digest-level cooldown check. |
 | go-proxy           | `/{module}/@v/list` (filters the version list); `/{module}/@latest` (rewrites `Version` to the highest non-blocked version if upstream latest is blocked; preserves `Origin`; returns 403 if every version is blocked). |
-| php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json` (per-package version filtering); `/packages.json`, `/repo.json` (root aggregation -- filters inline packages, passes through lazy-providers schemes unchanged). |
+| php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json` (per-package version filtering); `/packages.json`, `/repo.json` (the proxy serves its own root, whose `metadata-url` points at its `/p2/` endpoint, so versions are filtered per package; the upstream root is not fetched). |
 | file-proxy         | **No metadata filtering.** File / raw proxies have no version-resolution semantics -- no tags, no version lists, no packument. Cooldown applies only at the artifact-fetch layer, based on the file's cached-at / remote-modified timestamp relative to the cooldown window. See the dedicated section below. |
 
 ### Hosted-only adapters (out of scope)
@@ -89,11 +89,14 @@ Two metadata code paths are supported, with separate SPI implementations.
 **Direct artifact admission (`*.jar`, `*.pom`, `*.module`, `*.aar`, …):**
 
 - `CachedProxySlice.preProcess` routes primary artifacts through `verifyAndServePrimary`, which runs `cooldown.evaluate(...)` on the cache-miss path. Versions still within cooldown never enter cache; cache-hit serves are not re-evaluated (admission-gate model). Manual blocks of already-cached versions require cache eviction by an admin — `JdbcCooldownService.invalidateEnvelope` handles the metadata side; the storage side is the admin's tool.
-- For SNAPSHOT artifacts, `buildCooldownRequest` extracts the timestamped form from the filename so each timestamped binary gets its own admission decision (not one shared decision per base SNAPSHOT coordinate).
+- Every primary file of a version — `.jar`, `.pom`, Gradle `.module`, `.war`, `.aar`, classifier jars including `-sources` / `-javadoc` — is gated under the same `(artifact, version)` key as the main jar (`MavenVersionFile`), so one block covers the whole version and one unblock releases it. Checksum and signature sidecars (`.sha1`, `.md5`, `.sha256`, `.sha512`, `.asc`) are not gated; they follow their primary.
+- For SNAPSHOT artifacts, `buildCooldownRequest` derives the timestamped form from the directory's base version and the file name (`my-lib/1.0-SNAPSHOT/my-lib-1.0-20260519.090000-1.jar` → `1.0-20260519.090000-1`), so each timestamped binary gets its own admission decision and hyphenated artifactIds never mis-split.
 
 **ETag / Last-Modified contract.** Responses emit a Pantera-computed weak ETag (`W/"<sha256-base64-of-filtered-body>"`) and a fresh `Last-Modified` (HTTP-date now). Upstream `X-Checksum-*`, `CF-*`, `Age`, `X-Amz-*` are stripped — they would advertise checksums of the unfiltered upstream bytes that Pantera does not serve. Inbound `If-None-Match` matching the computed ETag returns `304` with empty body.
 
-**Filtered-output cache.** Materialised in `PerInputFilteredMetadataCache`, keyed by `(repoType, repoName, packageName, upstreamSha256)` plus a 1-hour `computedAtBucket`. When upstream metadata changes (new version landed), the cache key changes and the next request refilters. When the cooldown cutoff advances (versions age out of the window), the bucket rolls and the next request refilters. 50 K entries, in-memory only in v2.2.0; disk persistence deferred. Gradle uses the same components; Gradle Module Metadata (`.module`) files are admission-gated like any other primary artifact — they carry no version list of their own, so no filter rewriting applies.
+**Filtered-output cache.** The proxy keeps no private filtered-bytes cache: the filtered result is cached only in the shared envelope cache (`FilteredMetadataCache`), which every block, unblock, expiry, upstream refresh and upload invalidates. Both metadata levels are keyed by the dotted artifact package (`com.example.my-lib`) — the same name snapshot downloads record block rows under — and the snapshot-level envelope uses its own variant (`snapshot-1.0-SNAPSHOT`) so it never collides with the artifact-level envelope. When every version is blocked the proxy answers `403` with `X-Pantera-Cooldown: all-blocked`.
+
+**Groups.** A Maven/Gradle group relays the winning member's already-filtered `maven-metadata.xml` and caches it per node for 10 minutes. The cache listens for cooldown package-change events (delivered on every node) and drops that package's artifact- and snapshot-level entries, and everything on a policy change; there is no distributed primary tier. A member answer carrying `X-Pantera-Cooldown` (any status) ends the walk and is relayed verbatim — never cached, never replaced by the stale fallback — and the `.sha1` / `.md5` of such metadata relays the same answer. Gradle uses the same components; Gradle Module Metadata (`.module`) files are admission-gated like any other primary artifact — they carry no version list of their own, so no filter rewriting applies.
 
 ### SNAPSHOT classifier knob
 
@@ -144,6 +147,9 @@ Precedence (highest first): per-repo-name SNAPSHOT → per-repo-name (non-SNAPSH
 - **JSON API (`/pypi/{pkg}/json`):** Filters `releases` by version; rewrites
   `info.version` and the top-level `urls` array to reflect the highest
   non-blocked version using PEP 440 ordering.
+- **Per-version JSON API (`/pypi/{pkg}/{ver}/json`):** Proxied from the same
+  JSON API upstream; a version under cooldown answers `404` (with
+  `X-Pantera-Cooldown: blocked`), exactly like a version that does not exist.
 - Both endpoints are covered because package managers and browsers resolve
   unbounded `pip install foo` through different paths.
 - **HEAD support:** Hosted PySlice handles `HEAD` on both the file path
@@ -283,7 +289,7 @@ lifecycle in a dedicated handler:
 - `GoListHandler` -- `/{module}/@v/list`
 - `GoLatestHandler` -- `/{module}/@latest`
 - `PypiSimpleHandler` -- `/simple/{pkg}/`
-- `PypiJsonHandler` -- `/pypi/{pkg}/json`
+- `PypiJsonHandler` -- `/pypi/{pkg}/json`, `/pypi/{pkg}/{ver}/json`
 - `DockerTagsListHandler` -- `/v2/{name}/tags/list`
 - `DockerManifestTagHandler` -- `/v2/{name}/manifests/{tag}`
 - `ComposerPackageMetadataHandler` -- `/packages/...`, `/p2/...`
@@ -338,16 +344,31 @@ the 403/404 response (format-appropriate).
 ### Unblock a Specific Version
 
 ```bash
-curl -X POST "http://pantera:8086/api/v1/cooldown/unblock" \
+curl -X POST "http://pantera:8086/api/v1/repositories/npm-proxy/cooldown/unblock" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"repo_type":"npm","repo_name":"npm-proxy","package":"lodash","version":"4.18.0"}'
+  -H "Content-Type: application/json" \
+  -d '{"artifact":"lodash","version":"4.18.0"}'
 ```
 
 On unblock:
-- The DB record is updated first
-- `FilteredMetadataCache` L1 + L2 are invalidated for the package
-- `CooldownCache` L1 + L2 are invalidated for the specific version
-- All invalidation futures complete synchronously before the 200 response
+- The block is archived to history (`MANUAL_UNBLOCK`) and the live row is
+  kept with `status = 'INACTIVE'`, `unblocked_at` / `unblocked_by` set and the
+  original `blocked_until`. An evaluation that misses the decision cache finds
+  the released row and allows the version; before 2.2.9 the row was deleted,
+  so the next evaluation re-created the block from the release date. Released
+  rows never appear in the blocked list or counts, and are deleted once
+  `blocked_until` has passed (see *Cleanup execution modes*).
+- `CooldownCache` L1 + L2 are set to "allowed" for the version.
+- `FilteredMetadataCache` L1 + L2 are invalidated for the package (every
+  variant, e.g. npm `full` and `abbreviated`).
+- All invalidations complete before the `204` response.
+- The REST API and the repository slices share one cooldown service and one
+  metadata service per process, so the unblock clears the caches clients are
+  served from (2.2.9; previously each API verticle built its own copies).
+- A filter computation already in flight when the unblock lands does not
+  write its pre-unblock result back into the cache, and an L1 envelope with
+  blocked versions is revalidated at least every L1 TTL even when its earliest
+  block ends days later, so a missed invalidation self-heals within minutes.
 
 ### Policy Change (Duration Update)
 
@@ -449,6 +470,12 @@ identifies the chosen mode:
 
 History retention is enforced daily by either mechanism (pg_cron job
 `purge-cooldown-history` or the fallback's hourly check-gated purge).
+
+Manually released (`INACTIVE`) rows whose `blocked_until` has passed are
+deleted every 10 minutes by the pg_cron job `purge-released-cooldowns`
+(migration V144) or, without pg_cron, by the Vertx fallback in the same tick
+as the expiry archive. They were archived at release time, so this writes no
+second history row.
 
 ## Permission model
 

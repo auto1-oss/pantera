@@ -15,11 +15,15 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.AuthzSlice;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 
 import javax.json.Json;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -45,10 +49,45 @@ public final class PostStageCommitSlice implements Slice {
     private final String url;
 
     /**
+     * Upload tickets, empty when the post_url carries none.
+     */
+    private final Optional<UploadTickets> tickets;
+
+    /**
+     * Repository name.
+     */
+    private final String repo;
+
+    /**
      * @param url Url to upload
      */
     public PostStageCommitSlice(final String url) {
+        this(url, Optional.empty(), "");
+    }
+
+    /**
+     * Stage/commit slice whose {@code post_url} carries an upload ticket for
+     * the authenticated user: anaconda-client POSTs the package to that URL
+     * without any credentials.
+     * @param url Url to upload
+     * @param tickets Upload tickets
+     * @param repo Repository name
+     */
+    public PostStageCommitSlice(final String url, final UploadTickets tickets, final String repo) {
+        this(url, Optional.of(tickets), repo);
+    }
+
+    /**
+     * Primary ctor.
+     * @param url Url to upload
+     * @param tickets Upload tickets
+     * @param repo Repository name
+     */
+    private PostStageCommitSlice(final String url, final Optional<UploadTickets> tickets,
+        final String repo) {
         this.url = url;
+        this.tickets = tickets;
+        this.repo = repo;
     }
 
     @Override
@@ -58,6 +97,7 @@ public final class PostStageCommitSlice implements Slice {
         );
         if (matcher.matches()) {
             final String name = matcher.group(1);
+            final String upload = this.uploadUrl(headers, name);
             return ResponseBuilder.ok()
                 .jsonBody(Json.createReader(
                     new StringReader(
@@ -80,8 +120,8 @@ public final class PostStageCommitSlice implements Slice {
                             "    \"x-amz-storage-class\": \"STANDARD\"",
                             "  }, ",
                             "  \"package_id\": \"610d055a4e06fc7145474a3a\", ",
-                            String.format("  \"post_url\": \"%s/%s\", ", this.url, name),
-                            String.format("  \"s3_url\": \"%s/%s\", ", this.url, name),
+                            String.format("  \"post_url\": \"%s\", ", upload),
+                            String.format("  \"s3_url\": \"%s\", ", upload),
                             "  \"s3form_data\": {",
                             "    \"Content-Type\": \"application/octet-stream\", ",
                             "    \"acl\": \"private\", ",
@@ -102,5 +142,30 @@ public final class PostStageCommitSlice implements Slice {
             ).completedFuture();
         }
         return ResponseBuilder.badRequest().completedFuture();
+    }
+
+    /**
+     * URL the client POSTs the package to. When tickets are enabled and the
+     * request was authenticated, the URL carries a ticket for exactly this
+     * user, repository and package ({@code <url>/t/<ticket>/<subdir>/<file>}).
+     * @param headers Request headers
+     * @param name Package key ({@code <subdir>/<file>})
+     * @return Upload URL
+     */
+    private String uploadUrl(final Headers headers, final String name) {
+        final Optional<String> user = headers.find(AuthzSlice.LOGIN_HDR).stream()
+            .findFirst()
+            .map(Header::getValue)
+            .filter(val -> !val.isBlank() && !AuthUser.ANONYMOUS.name().equals(val));
+        final String res;
+        if (this.tickets.isPresent() && user.isPresent()) {
+            res = String.format(
+                "%s/t/%s/%s", this.url,
+                this.tickets.get().issue(user.get(), this.repo, name), name
+            );
+        } else {
+            res = String.format("%s/%s", this.url, name);
+        }
+        return res;
     }
 }

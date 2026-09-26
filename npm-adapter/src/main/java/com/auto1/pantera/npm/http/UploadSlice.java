@@ -121,7 +121,7 @@ public final class UploadSlice implements Slice {
                                 new Login(headers).getValue(),
                                 info.packageName(), info.packageVersion(), info.tarSize(),
                                 System.currentTimeMillis(), null, info.packagePath()
-                            );
+                            ).withRequestContext(headers);
                             queue.add(event);
                             return this.syncIndex.recordSync(event);
                         })

@@ -7,19 +7,21 @@ correctly REJECT packages based on their upload timestamp. If the JSON
 response is malformed or upload-time is missing, uv can't enforce the
 cutoff and the test fails.
 
-Run:
+Run (PANTERA_URL overrides the index, as in test.sh):
     uv run python -m pytest tests/ -v
 """
+import os
 import re
 import subprocess
 import tempfile
 from pathlib import Path
 
 
-PANTERA_GROUP = (
-    "http://ayd:ayd@localhost:8081"
-    "/test_prefix/api/pypi/pypi_group/simple/"
-)
+# Same index as test.sh: honour PANTERA_URL, default to the dev stack group.
+PANTERA_GROUP = os.environ.get(
+    "PANTERA_URL",
+    "http://ayd:ayd@localhost:8081/test_prefix/api/pypi/pypi_group/simple/",
+).rstrip("/") + "/"
 
 
 def _uv_lock(pyproject_content: str) -> subprocess.CompletedProcess:

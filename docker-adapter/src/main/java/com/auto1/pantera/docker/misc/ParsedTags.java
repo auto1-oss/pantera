@@ -42,6 +42,16 @@ public final class ParsedTags implements Tags {
         return this.origin.json();
     }
 
+    @Override
+    public boolean complete() {
+        return this.origin.complete();
+    }
+
+    @Override
+    public boolean known() {
+        return this.origin.known();
+    }
+
     /**
      * Get repository name from origin.
      *

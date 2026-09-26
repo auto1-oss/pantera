@@ -168,6 +168,9 @@ public final class AdminAuthHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Request body is required");
             return;
         }
+        if (AdminAuthHandler.refusesNull(ctx, body)) {
+            return;
+        }
         for (final String key : body.fieldNames()) {
             if (!CB_KEYS.contains(key)) {
                 ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
@@ -291,6 +294,9 @@ public final class AdminAuthHandler {
         final JsonObject body = ctx.body().asJsonObject();
         if (body == null || body.isEmpty()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Request body is required");
+            return;
+        }
+        if (AdminAuthHandler.refusesNull(ctx, body)) {
             return;
         }
         for (final String key : body.fieldNames()) {
@@ -418,6 +424,9 @@ public final class AdminAuthHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Request body is required");
             return;
         }
+        if (AdminAuthHandler.refusesNull(ctx, body)) {
+            return;
+        }
         for (final String key : body.fieldNames()) {
             if (!CLIENT_BASE_KEYS.contains(key)) {
                 ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
@@ -515,6 +524,9 @@ public final class AdminAuthHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Request body is required");
             return;
         }
+        if (AdminAuthHandler.refusesNull(ctx, body)) {
+            return;
+        }
         // Validate access_token_ttl_seconds if provided
         if (body.containsKey("access_token_ttl_seconds")) {
             final Object rawTtl = body.getValue("access_token_ttl_seconds");
@@ -578,15 +590,19 @@ public final class AdminAuthHandler {
             return;
         }
         CompletableFuture.supplyAsync(
-            () -> this.tokenDao.revokeAllForUser(username),
+            () -> {
+                final int revoked = this.tokenDao.revokeAllForUser(username);
+                // On the worker: the blocklist may write through to the DB.
+                if (this.blocklist != null) {
+                    this.blocklist.revokeUser(username, REVOKE_USER_TTL_SECONDS);
+                }
+                return revoked;
+            },
             HandlerExecutor.get()
         ).whenComplete((count, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
-                if (this.blocklist != null) {
-                    this.blocklist.revokeUser(username, REVOKE_USER_TTL_SECONDS);
-                }
                 EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("Admin revoked all tokens for user (revoked_count=" + count + ")")
                     .eventCategory("iam")
@@ -604,5 +620,22 @@ public final class AdminAuthHandler {
                         .encode());
             }
         });
+    }
+
+    /**
+     * Refuse a settings body carrying a JSON {@code null}: it used to fail
+     * the write with an NPE (500) after the keys before it were stored.
+     * @param ctx Routing context (answered 400 when refused)
+     * @param body Request body
+     * @return True when the request was refused
+     */
+    private static boolean refusesNull(final RoutingContext ctx, final JsonObject body) {
+        for (final String key : body.fieldNames()) {
+            if (body.getValue(key) == null) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST", key + " must not be null");
+                return true;
+            }
+        }
+        return false;
     }
 }

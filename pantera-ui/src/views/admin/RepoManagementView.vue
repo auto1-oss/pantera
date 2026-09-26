@@ -95,8 +95,15 @@ async function handleDelete(name: string) {
   const confirmed = await confirmDel(name)
   if (!confirmed) return
   try {
-    await deleteRepo(name)
-    notify.success('Repository deleted', name)
+    const result = await deleteRepo(name)
+    if (result === 'deleting') {
+      notify.info(
+        'Repository is being deleted',
+        `${name} disappears from the list when its data has been removed`,
+      )
+    } else {
+      notify.success('Repository deleted', name)
+    }
     load()
   } catch {
     notify.error('Failed to delete repository')

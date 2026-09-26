@@ -18,8 +18,10 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 | `PANTERA_DB_IDLE_TIMEOUT_MS` | `600000` | Idle connection timeout (ms) -- 10 minutes |
 | `PANTERA_DB_MAX_LIFETIME_MS` | `1800000` | Maximum connection lifetime (ms) -- 30 minutes |
 | `PANTERA_DB_LEAK_DETECTION_MS` | `5000` | Connection leak detection threshold (ms). v2.2.0 fail-fast default (was `300000`). A WARN past this threshold is a real held-connection bug -- see [Database](database.md#what-a-hikari-leak-warn-means). |
-| `PANTERA_DB_BUFFER_SECONDS` | `2` | Event batch buffer time (seconds) |
-| `PANTERA_DB_BATCH_SIZE` | `200` | Maximum events per database batch |
+| `PANTERA_DB_WRITE_POOL_MAX` | `10` | Maximum connections in the dedicated `DbConsumer` write pool |
+| `PANTERA_DB_WRITE_POOL_MIN` | `2` | Minimum idle connections in the `DbConsumer` write pool |
+
+> The `DbConsumer` event batcher is tuned via the YAML `meta.database` keys `buffer_size` (default 50) and `buffer_time_seconds` (default 2), not environment variables.
 
 ---
 
@@ -41,6 +43,7 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 | `PANTERA_DEDUP_MAX_AGE_MS` | `300000` | Maximum age of in-flight dedup entries (ms) -- 5 minutes. Stale entries are cleaned up by a background thread. |
 | `PANTERA_DOCKER_CACHE_EXPIRY_HOURS` | `24` | Docker proxy cache entry lifetime (hours) |
 | `PANTERA_BODY_BUFFER_THRESHOLD` | `1048576` | Request body size threshold (bytes). Bodies smaller than this are buffered in memory; larger bodies are streamed from disk. |
+| `PANTERA_MAX_REQUEST_BODY_BYTES` | `10737418240` (10 GiB) | **Fallback tier only** (since 2.2.9): the primary source is the DB-backed `max_request_body_bytes` admin setting, editable in the admin UI's Settings page or at the matching `GET`/`PUT /api/v1/admin/...-settings` endpoint -- hot-reloaded, no restart, applied on every node (see [Configuration Reference](../configuration-reference.md#security-policy-settings-auth_settings-table)). This variable is consulted only while no row has been saved. Hard cap on a single request body, applied to every request regardless of per-repository `content-length-max`. A declared `Content-Length` above it is rejected with `413` before any byte is read; a chunked body is metered as it streams and rejected with `413` once it exceeds the cap. |
 
 ---
 
@@ -65,9 +68,7 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 
 ## Concurrency
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PANTERA_GROUP_DRAIN_PERMITS` | `20` | Maximum concurrent response body drains in group repositories. Controls how many member repositories are probed in parallel during group resolution. |
+Group response-body drain concurrency is sized automatically per repository by the adaptive `RepoBulkhead` — there is no fixed permit environment variable. Storage I/O concurrency is controlled by the `PANTERA_IO_*_THREADS` pools above.
 
 ---
 
@@ -75,10 +76,10 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PANTERA_SEARCH_MAX_PAGE` | `500` | Maximum page number for search pagination |
 | `PANTERA_SEARCH_MAX_SIZE` | `100` | Maximum results per search page |
 | `PANTERA_SEARCH_LIKE_TIMEOUT_MS` | `3000` | SQL statement timeout for LIKE fallback queries (ms). If the tsvector search returns zero results, a LIKE fallback query runs with this timeout. |
-| `PANTERA_SEARCH_OVERFETCH` | `10` | Over-fetch multiplier for permission-filtered search results. The database fetches `page_size * N` rows so that after dropping rows the user has no access to, the page can still be filled. Increase for deployments with many repos where users only access a few. |
+
+> Deep pagination is capped at a fixed offset of 10,000 (`page × size`); a request beyond it is refused with `400`.
 
 ---
 
@@ -95,11 +96,19 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PANTERA_USER_NAME` | (none) | Bootstrap admin username. Used by the `env` auth provider. |
-| `PANTERA_USER_PASS` | (none) | Bootstrap admin password. Used by the `env` auth provider. |
+| `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` | (none) | Initial password for the auto-created `admin` user, consumed once on the first database-backed start (before any admin exists). If unset, a random password is generated and written to `<pantera.home>/bootstrap-admin-password` (default `/var/pantera/bootstrap-admin-password`, mode 0600); the startup log records only that path, never the password. `must_change_password` is set either way. |
+| `PANTERA_USER_NAME` | (none) | Username for the optional `env` auth provider (`type: env`). Not the database bootstrap admin. |
+| `PANTERA_USER_PASS` | (none) | Password for the optional `env` auth provider. |
 | `PANTERA_INIT` | `false` | Set to `true` to auto-initialize default example configurations on first start |
-| `PANTERA_VERSION` | `2.0.0` | Version identifier. Set automatically in the Docker image. |
-| `PANTERA_DOWNLOAD_TOKEN_SECRET` | (auto-generated) | HMAC secret for direct download token signing. If not set, a random secret is generated at startup (not shared across HA nodes). Set explicitly in HA deployments. |
+| `PANTERA_VERSION` | `2.2.9` | Version identifier. Set automatically in the Docker image. |
+| `PANTERA_DOWNLOAD_TOKEN_SECRET` | (see description) | HMAC key that signs direct-download tokens (`POST .../artifact/download-token` → `GET .../artifact/download-direct`). Must be **at least 32 bytes of random material**; a shorter value aborts startup. When unset: in DB-backed deployments a random 256-bit key is generated once and persisted in `auth_settings` (`download_token_secret`), so every HA node shares it; in database-less single-instance mode an ephemeral random key is generated per process. The key is never derived from process metadata (before 2.2.9 it fell back to a predictable `pantera-download-<pid>-<user>` value — set this variable or upgrade). Tokens are single-use, expire after 60 s, reject future-dated timestamps, and require the issuing user to still hold repository READ at redemption. |
+| `PANTERA_FS_STORAGE_ROOTS` | `/var/pantera/data` | **Fallback tier only** (since 2.2.9): the primary source is the DB-backed `fs_storage_roots` admin setting, editable in the admin UI's Settings page or at the matching `GET`/`PUT /api/v1/admin/...-settings` endpoint -- hot-reloaded, no restart, applied on every node (see [Configuration Reference](../configuration-reference.md#security-policy-settings-auth_settings-table)). This variable is consulted only while no row has been saved. Path-separator-delimited list of directories under which a local-filesystem storage `path` (`fs` or `vertx-file`) submitted through the REST API -- inline in `PUT /api/v1/repositories/<name>` or as a storage alias, and from the admin UI -- is allowed to live. Any other path — including `/` or one that escapes via `..` — is rejected with `400`, so a repository manager cannot mount the host filesystem as a repository. Repositories loaded from YAML files on disk are not affected. Set this when your data directory is elsewhere. |
+| `PANTERA_METRICS_BIND` | `0.0.0.0` | Interface the Prometheus metrics listener (`meta.metrics.port`, default `8087`) binds to. The endpoint is unauthenticated, so on a host with a public interface bind it to the private one (or `127.0.0.1` behind a node-local scraper) instead of exposing it. |
+| `PANTERA_EGRESS_BLOCK_PRIVATE` | `false` | **Fallback tier only** (since 2.2.9): the primary source is the DB-backed `egress_block_private` admin setting, editable in the admin UI's Settings page or at the matching `GET`/`PUT /api/v1/admin/...-settings` endpoint -- hot-reloaded, no restart, applied on every node (see [Configuration Reference](../configuration-reference.md#security-policy-settings-auth_settings-table)). This variable is consulted only while no row has been saved. Outbound egress policy for every request Pantera makes on its own behalf (proxy upstreams, upstream index links, Bearer token realms, repository `remotes[].url`, storage-alias endpoints). Link-local, any-local and multicast addresses and the cloud metadata service (`169.254.169.254`, `fd00:ec2::254`, `fd20:ce::254`, `100.100.100.200`, `metadata.google.internal`, matched with or without a trailing dot) are always denied. Set `true` to also deny loopback and private ranges (RFC1918, `fc00::/7` unique-local, `100.64.0.0/10` shared address space) — appropriate for hardened deployments whose upstreams are all public; leave `false` when private registries or the local dev stack are proxied. Enforced after DNS resolution on every connect (redirect hops included) and at config write time. Behind an outbound HTTP proxy (`meta.http_client.proxies` or the JVM `http.proxyHost`/`https.proxyHost` properties), each request target and redirect hop is checked by name and against Pantera's own DNS answer before the connection to the proxy opens; the proxy resolves the name itself, so a target Pantera cannot resolve is left to the proxy -- enforce the same deny list on the proxy. |
+| `PANTERA_EGRESS_ALLOW_HOSTS` | *(empty)* | **Fallback tier only** (since 2.2.9): the primary source is the DB-backed `egress_allow_hosts` admin setting, editable in the admin UI's Settings page or at the matching `GET`/`PUT /api/v1/admin/...-settings` endpoint -- hot-reloaded, no restart, applied on every node (see [Configuration Reference](../configuration-reference.md#security-policy-settings-auth_settings-table)). This variable is consulted only while no row has been saved. Comma-separated hostnames exempt from the strict-mode loopback/private-range refusal, e.g. a private registry that must be reachable in strict mode. The allowlist never exempts the cloud metadata service, link-local, any-local or multicast destinations, even when an allowlisted name resolves to one. |
+| `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` | *(empty)* | **Fallback tier only** (since 2.2.9): the primary source is the DB-backed `upstream_credential_allow_hosts` admin setting, editable in the admin UI's Settings page or at the matching `GET`/`PUT /api/v1/admin/...-settings` endpoint -- hot-reloaded, no restart, applied on every node (see [Configuration Reference](../configuration-reference.md#security-policy-settings-auth_settings-table)). This variable is consulted only while no row has been saved. Comma-separated additional hosts that may receive an upstream's configured credentials. By default credentials are released only to the upstream host itself or a host under its parent domain (Docker Hub's `auth.docker.io` for `registry-1.docker.io`); a Bearer challenge realm or index/mirror link on any other host is requested anonymously, so a malicious upstream cannot harvest them. |
+| `PANTERA_LOGIN_THROTTLE_MAX_FAILURES` | `5` | **Fallback tier only** (since 2.2.9): the primary source is the DB-backed `login_throttle_max_failures` admin setting (Settings → Login Throttling, or `PUT /api/v1/admin/login-throttle-settings`). Password sign-in attempts tolerated per (user, client IP) — and 4× that many per user from any address — before further attempts are refused with `429` for the window. The client IP is the TCP peer unless `trust_forwarded_headers` is on; then it is the rightmost `X-Forwarded-For` entry (the peer the nearest proxy appended), else `X-Real-IP` when no `X-Forwarded-For` arrived. The per-user budget means repeated wrong passwords from anyone can lock a known account out of password sign-in (`POST /api/v1/auth/token`) for the window; SSO and already-issued tokens keep working. |
+| `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS` | `900` | **Fallback tier only** (since 2.2.9): the primary source is the DB-backed `login_throttle_window_seconds` admin setting. Window, in seconds, in which sign-in attempts are counted; a successful login clears the (user, client IP) counter. Counters are kept per node, shared by all API workers on it. |
 | `PANTERA_CLIENT_BASE_URL` | `` (empty) | **Fallback tier only**, mirrors the DB-backed `client_base_url` admin setting, editable at `GET`/`PUT /api/v1/admin/client-base-url-settings` or the admin UI's Settings page -- hot-reloaded, no restart, broadcast to every cluster node. Canonical origin (+ optional path prefix), e.g. `http://localhost:9999` or `https://reg.example.com/artifactory`, used to build absolute links Pantera emits (npm `dist.tarball`) for every repository with no explicit `url:`. Once set, it is ENFORCED, not merely a default: `Host` and `X-Forwarded-*` are not consulted at all for those repositories, making `PANTERA_TRUST_FORWARDED_HEADERS`/`PANTERA_CLIENT_BASE_HOST_ALLOWLIST` below unnecessary and closing the remaining Host-spoofing surface structurally rather than by filtering. Must parse as an absolute `http`/`https` URL; an invalid value at the admin endpoint is rejected with `400` before anything is written. Empty (the default) leaves the two settings below in effect exactly as before this setting existed. |
 | `PANTERA_CLIENT_BASE_SCHEME` | `auto` | **Fallback tier only**, mirrors the DB-backed `client_base_scheme` admin setting, editable at `GET`/`PUT /api/v1/admin/client-base-url-settings` or the admin UI's Settings page -- hot-reloaded, no restart. One of `auto`, `http`, `https`. `auto` derives the scheme from the request (`X-Forwarded-Proto` when forwarded headers are trusted, else `http`). Set to `https` when Pantera is behind a TLS-terminating layer-4 load balancer that forwards neither TLS nor `X-Forwarded-Proto` -- without it every emitted link says `http`. The host keeps deriving per request, so multiple client-facing DNS names each keep their own URLs. An invalid value at the admin endpoint is rejected with `400` before anything is written. |
 | `PANTERA_TRUST_FORWARDED_HEADERS` | `false` | **Fallback tier only** (since 2.3.0): the primary source is the DB-backed `trust_forwarded_headers` admin setting, editable at `GET`/`PUT /api/v1/admin/client-base-url-settings` or the admin UI's Settings page -- hot-reloaded, no restart, broadcast to every cluster node. This env var is consulted only when no `auth_settings` row is present (the key name is unchanged from the pre-2.3.0 env-only flag, so an existing deployment's setting keeps working as-is). Set to `true` only when Pantera sits behind a fronting reverse proxy that overwrites `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Prefix` on **every** inbound request (e.g. nginx/ALB in front of the backend). These headers are client-suppliable and are used to build the client-facing base URL for absolute links Pantera emits (npm `dist.tarball`); if left trusted without such a proxy, a client can steer those URLs at an arbitrary host and the response is cacheable by the fronting proxy. When `false` (the default), the base URL is derived from the `Host` header only (scheme `http`, subject to `PANTERA_CLIENT_BASE_HOST_ALLOWLIST` below) and `X-Forwarded-Prefix` is ignored. Ignored entirely while `PANTERA_CLIENT_BASE_URL` above is set. See [Configuration Reference](../configuration-reference.md#78-miscellaneous) for how a repository's own `url:` key is the other way to make a reverse-proxy deployment correct. |
@@ -185,7 +194,7 @@ Two-tier cache (L1 Caffeine + L2 Valkey) in front of `LocalEnabledFilter`. See [
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PANTERA_AUTH_ENABLED_L1_MAX_SIZE` | `10000` | L1 (Caffeine) max entries. |
+| `PANTERA_AUTH_ENABLED_L1_SIZE` | `10000` | L1 (Caffeine) max entries. |
 | `PANTERA_AUTH_ENABLED_L1_TTL_SECONDS` | `300` | L1 TTL in seconds. |
 | `PANTERA_AUTH_ENABLED_L2_ENABLED` | `true` | Enable the Valkey L2 tier. Set `false` to run L1-only. |
 | `PANTERA_AUTH_ENABLED_L2_TTL_SECONDS` | `3600` | L2 TTL in seconds. |
@@ -199,7 +208,7 @@ Two-tier last-known-good fallback for group repositories. `l2.ttlSeconds = 0` is
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PANTERA_GROUP_METADATA_STALE_L1_MAX_SIZE` | `100000` | L1 max entries. |
+| `PANTERA_GROUP_METADATA_STALE_L1_SIZE` | `100000` | L1 max entries. |
 | `PANTERA_GROUP_METADATA_STALE_L1_TTL_SECONDS` | `2592000` | L1 TTL in seconds (30 days). |
 | `PANTERA_GROUP_METADATA_STALE_L2_ENABLED` | `true` | Enable the Valkey L2 tier. |
 | `PANTERA_GROUP_METADATA_STALE_L2_TTL_SECONDS` | `0` | L2 TTL in seconds. `0` means no TTL; Valkey LRU evicts. |

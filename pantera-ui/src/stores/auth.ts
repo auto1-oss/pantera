@@ -87,7 +87,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
     loading.value = true
     try {
-      const resp = await authApi.exchangeOAuthCode(code, provider, callbackUrl)
+      const resp = await authApi.exchangeOAuthCode(code, provider, callbackUrl, state)
       token.value = resp.token
       localStorage.setItem('access_token', resp.token)
       if (resp.refresh_token) {

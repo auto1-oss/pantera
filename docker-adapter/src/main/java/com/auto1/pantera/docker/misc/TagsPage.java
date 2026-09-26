@@ -28,14 +28,62 @@ public final class TagsPage implements Tags {
     private final Pagination pagination;
 
     /**
+     * Whether every source of the tags answered.
+     */
+    private final boolean whole;
+
+    /**
+     * Whether a source holds the repository name.
+     */
+    private final boolean held;
+
+    /**
      * @param repoName Repository name.
      * @param tags Tags.
      * @param pagination Pagination parameters.
      */
     public TagsPage(String repoName, List<String> tags, Pagination pagination) {
+        this(repoName, tags, pagination, true, true);
+    }
+
+    /**
+     * @param repoName Repository name.
+     * @param tags Tags.
+     * @param pagination Pagination parameters.
+     * @param complete Whether every source of the tags answered.
+     */
+    public TagsPage(
+        String repoName, List<String> tags, Pagination pagination, boolean complete
+    ) {
+        this(repoName, tags, pagination, complete, true);
+    }
+
+    /**
+     * @param repoName Repository name.
+     * @param tags Tags.
+     * @param pagination Pagination parameters.
+     * @param complete Whether every source of the tags answered.
+     * @param known Whether a source holds the repository name.
+     */
+    public TagsPage(
+        String repoName, List<String> tags, Pagination pagination, boolean complete,
+        boolean known
+    ) {
         this.repoName = repoName;
         this.tags = tags;
         this.pagination = pagination;
+        this.whole = complete;
+        this.held = known;
+    }
+
+    @Override
+    public boolean known() {
+        return this.held;
+    }
+
+    @Override
+    public boolean complete() {
+        return this.whole;
     }
 
     @Override

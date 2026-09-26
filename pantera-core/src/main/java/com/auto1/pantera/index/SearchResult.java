@@ -70,6 +70,32 @@ public record SearchResult(
     }
 
     /**
+     * Restrict a result to the given repositories: drops documents outside
+     * the set and recomputes {@code totalHits} and both facets from the
+     * survivors, so no aggregate can name or count a repository the caller
+     * may not read. Used by the scope-safe default of
+     * {@link ArtifactIndex#search(String, int, int, String, String, String, boolean, List)}.
+     *
+     * @param result Unscoped result
+     * @param allowed Readable repository names (empty = deny everything)
+     * @return Scoped result
+     */
+    public static SearchResult scopedTo(
+        final SearchResult result, final java.util.Set<String> allowed
+    ) {
+        final List<ArtifactDocument> docs = result.documents().stream()
+            .filter(doc -> allowed.contains(doc.repoName()))
+            .toList();
+        final Map<String, Long> types = new java.util.LinkedHashMap<>();
+        final Map<String, Long> repos = new java.util.LinkedHashMap<>();
+        for (final ArtifactDocument doc : docs) {
+            types.merge(doc.repoType(), 1L, Long::sum);
+            repos.merge(doc.repoName(), 1L, Long::sum);
+        }
+        return new SearchResult(docs, docs.size(), result.offset(), null, types, repos);
+    }
+
+    /**
      * Empty search result.
      */
     public static final SearchResult EMPTY =

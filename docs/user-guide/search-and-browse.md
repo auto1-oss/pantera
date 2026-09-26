@@ -181,7 +181,9 @@ curl -X POST http://pantera-host:8086/api/v1/search/reindex \
 # Returns 202 Accepted
 ```
 
-The reindex runs asynchronously in the background.
+The reindex runs asynchronously in the background. Poll
+`GET /api/v1/search/reindex` for its progress. A second request while one is
+running returns `409 Conflict`.
 
 For full endpoint documentation, see the [REST API Reference](../rest-api-reference.md).
 

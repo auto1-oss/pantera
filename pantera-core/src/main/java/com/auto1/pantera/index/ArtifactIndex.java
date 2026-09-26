@@ -64,6 +64,49 @@ public interface ArtifactIndex extends Closeable {
     }
 
     /**
+     * Remove every row describing a storage path that was deleted: the
+     * path itself (a file) or everything under it (a folder). Rows are
+     * matched on the storage path they were indexed from, which is the
+     * {@code name} for path-named formats (file, helm, ...) and the
+     * {@code path_prefix} for formats whose {@code name} is a package
+     * identity (maven's dotted coordinates, composer's vendor/package,
+     * docker's image). Both the bare and a leading-slash form of the
+     * path are matched.
+     *
+     * <p>The default delegates to {@link #remove} and {@link #removePrefix},
+     * which match on {@code name} only.</p>
+     *
+     * @param repoName Repository name (exact match)
+     * @param path Deleted storage path, relative to the repository; must
+     *  not be empty
+     * @return Future carrying the number of rows removed
+     */
+    default CompletableFuture<Integer> removeByPath(
+        final String repoName, final String path
+    ) {
+        final String dir = path.endsWith("/") ? path : path + "/";
+        return this.remove(repoName, path).thenCompose(
+            nothing -> this.removePrefix(repoName, dir)
+        );
+    }
+
+    /**
+     * Remove every row of a repository. Used when the repository itself is
+     * deleted, so search, locate and group routing stop returning
+     * artifacts of a repository that no longer exists (and do not
+     * resurrect them if the name is reused).
+     *
+     * <p>Default implementation removes nothing; concrete indexes should
+     * override.</p>
+     *
+     * @param repoName Repository name (exact match)
+     * @return Future carrying the number of rows removed
+     */
+    default CompletableFuture<Integer> removeRepo(final String repoName) {
+        return CompletableFuture.completedFuture(0);
+    }
+
+    /**
      * Full-text search across all indexed artifacts.
      *
      * @param query Search query string
@@ -92,6 +135,43 @@ public interface ArtifactIndex extends Closeable {
         String repoType, String repoName, String sortBy, boolean sortAsc
     ) {
         return search(query, maxResults, offset);
+    }
+
+    /**
+     * Permission-scoped search: results, {@code totalHits} and the
+     * type/repository facets are all restricted to {@code allowedRepos}.
+     *
+     * <p>SECURITY (2.2.9, search-authz): every implementation MUST honour the
+     * scope for the aggregates, not only the documents — serving
+     * {@code total}/{@code repo_counts} from an unscoped query leaks the
+     * existence and size of repositories the caller cannot read. The
+     * default here is scope-safe for any implementation: it runs the
+     * unscoped search and then filters documents AND recomputes the
+     * facets from the surviving documents. Implementations that can push
+     * the scope into their query (the DB index) override it.</p>
+     *
+     * @param query Search query string
+     * @param maxResults Maximum results to return
+     * @param offset Starting offset for pagination
+     * @param repoType Optional repo type base filter
+     * @param repoName Optional exact repository name filter
+     * @param sortBy Sort field
+     * @param sortAsc True for ascending
+     * @param allowedRepos Repositories the caller may read: {@code null} =
+     *  unrestricted, empty = deny everything, else the allow-list
+     * @return Scoped search result
+     */
+    default CompletableFuture<SearchResult> search(
+        final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy,
+        final boolean sortAsc, final List<String> allowedRepos
+    ) {
+        if (allowedRepos == null) {
+            return search(query, maxResults, offset, repoType, repoName, sortBy, sortAsc);
+        }
+        final java.util.Set<String> allowed = new java.util.HashSet<>(allowedRepos);
+        return search(query, maxResults, offset, repoType, repoName, sortBy, sortAsc)
+            .thenApply(result -> SearchResult.scopedTo(result, allowed));
     }
 
     /**
@@ -143,6 +223,19 @@ public interface ArtifactIndex extends Closeable {
      */
     default CompletableFuture<Map<String, Object>> getStats() {
         return CompletableFuture.completedFuture(Map.of());
+    }
+
+    /**
+     * Get index statistics scoped to the caller's readable repositories.
+     * @param allowedRepos Repository names the caller may read; {@code null}
+     *  means no restriction (the global total), an empty list means deny-all
+     *  (a total of zero).
+     * @return map of stat name to value
+     */
+    default CompletableFuture<Map<String, Object>> getStats(
+        final java.util.List<String> allowedRepos
+    ) {
+        return this.getStats();
     }
 
     /**

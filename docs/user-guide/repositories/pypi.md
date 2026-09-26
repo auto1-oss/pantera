@@ -32,6 +32,8 @@ Replace:
 - `your-jwt-token` with the JWT token from the API
 - `pypi-proxy` with the name of your PyPI proxy repository
 
+pip sends the credentials in the index URL. Percent-encode a username containing `@` (e.g. `me%40example.com`). `trusted-host` is only needed for a plain-HTTP registry.
+
 ### Environment Variable Alternative
 
 ```bash
@@ -60,6 +62,8 @@ pip install my-internal-package==1.0.0
 ```
 
 All package lookups are routed through Pantera, which caches packages from the configured upstream (typically `https://pypi.org/simple/`).
+
+A proxy repository does not serve the root project index (`/simple/` with no project name). It answers `404` with the header `X-Pantera-Reason: not_implemented` and does not contact the upstream. pip and uv never request the root index; they always resolve `/simple/<project>/`.
 
 ---
 
@@ -99,6 +103,91 @@ twine upload \
   dist/*
 ```
 
+The upload URL is the repository root. The PyPI-style `/legacy/` suffix
+(`http://pantera-host:8080/pypi-local/legacy/`) is accepted too; either way the
+file is stored at `<package>/<version>/<file>` in the repository.
+
+### Published files are immutable
+
+As on PyPI, a published file cannot be replaced. Uploading a file whose name
+already exists with **different** content is rejected with the HTTP status
+`400 File already exists`; twine prints it as
+`HTTPError: 400 Bad Request from <upload-url>` with `File already exists` on
+the next line. Publish a new version instead. Re-uploading the **identical**
+file succeeds and changes nothing, so re-running a partly failed
+`twine upload dist/*` is safe as it is.
+
+Do not add `--skip-existing`: twine supports that flag only for PyPI and TestPyPI and
+refuses it for any other repository URL before uploading anything
+(`UnsupportedConfiguration: The configured repository ... does not have support
+for the following features: --skip-existing`).
+
+---
+
+## Yank a Release
+
+Yanking (PEP 592) hides a release from unpinned resolution without deleting
+it: `pip install pkg` skips the yanked version, while an exact pin
+(`pkg==1.2.0`) still installs it with a warning. Yank from the Pantera UI or
+with the REST API (requires `write` on the repository):
+
+```bash
+curl -X POST http://pantera-host:8086/api/v1/pypi/pypi-local/my-package/1.2.0/yank \
+  -H "Authorization: Bearer your-jwt-token" \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "broken build"}'
+```
+
+`.../unyank` reverses it. The simple index reflects the change immediately. See
+the [REST API Reference](../../rest-api-reference.md) for details.
+
+---
+
+## Search
+
+`pip search --index http://your-username:your-token@pantera-host:8080/pypi-local/ <name>`
+works against a **local** repository and needs only read permission. Group and
+proxy repositories cannot search; they answer with an XML-RPC fault that pip
+prints as an error. Use the Pantera UI search for those.
+
+---
+
+## uv
+
+Add the index to `pyproject.toml` (`default = true` replaces PyPI; `publish-url` is the local repository for uploads):
+
+```toml
+[[tool.uv.index]]
+name = "pantera"
+url = "http://pantera-host:8080/pypi-group/simple/"
+publish-url = "http://pantera-host:8080/pypi-local"
+default = true
+```
+
+uv reads the credentials from environment variables named after the index:
+
+```bash
+export UV_INDEX_PANTERA_USERNAME='your-username'
+export UV_INDEX_PANTERA_PASSWORD='your-api-token'
+uv add requests
+uv build
+uv publish --index pantera --trusted-publishing never
+```
+
+---
+
+## Poetry
+
+```bash
+poetry source add --priority=primary pantera http://pantera-host:8080/pypi-group/simple/
+poetry config http-basic.pantera 'your-username' 'your-api-token'
+
+# Uploads go to a local repository, configured separately
+poetry config repositories.pantera-publish http://pantera-host:8080/pypi-local
+poetry config http-basic.pantera-publish 'your-username' 'your-api-token'
+poetry publish --build -r pantera-publish
+```
+
 ---
 
 ## Common Issues
@@ -109,7 +198,10 @@ twine upload \
 | `SSLError` or certificate errors | pip expects HTTPS by default | Add `trusted-host = pantera-host` to pip.conf or use `--trusted-host` flag |
 | `Could not find a version that satisfies the requirement` | Package not cached in proxy, or wrong index URL | Verify the index-url includes `/simple` at the end |
 | Upload fails with `403 Forbidden` | User lacks write permission on local repo | Contact admin for publish access |
-| Upload fails with `400 Bad Request` | Uploading to a proxy repository | Upload only to a **local** PyPI repository |
+| Upload fails with `404 Not Found` (proxy) or `405 Method Not Allowed` (group) | Uploading to a proxy or group repository | Upload only to a **local** PyPI repository |
+| Upload fails with `400 File already exists` | A file with that name was already published with different content | Bump the version and upload again; published files are immutable |
+| Upload fails with `400 Bad Request: Filename ... does not match the package metadata` | The archive's file name does not match the name/version inside it | Rebuild the distribution (`python -m build`) instead of renaming files |
+| `403 Forbidden` when installing through a group | Read on the group alone is not enough; each member is authorized separately | Grant read on the group **and** on its member repositories |
 | Package installs old version | pip caching locally | Run with `--no-cache-dir` flag |
 
 ---

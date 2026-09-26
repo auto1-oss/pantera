@@ -36,6 +36,12 @@ Add Pantera as a Composer repository in your project's `composer.json`:
 
 Set `secure-http` to `false` only if your Pantera instance does not use HTTPS.
 
+### Using a Proxy Repository Directly
+
+You can also point Composer at a `php-proxy` repository (for example `http://pantera-host:8080/php-proxy`) when you only need upstream packages. The proxy answers `packages.json` itself and sends the per-package lookups back to its own `/p2/` endpoint. Use a group when you also need packages from a local repository.
+
+Dev-branch dists (`dev-*`, `*-dev`) downloaded through a proxy are tied to the commit named in the metadata. The dist URL ends in `?ref=<commit>`, so after the branch moves, `composer update` downloads the new commit rather than a cached copy of the old one.
+
 ### Configure Authentication
 
 Create or edit `~/.composer/auth.json`:
@@ -71,20 +77,81 @@ composer require vendor/package
 
 Pantera resolves packages through the group repository, checking your local repository first and then falling through to the proxied upstream (Packagist).
 
+How a group resolves package metadata:
+
+- Local (hosted) members are always asked before proxy members, whatever the member order in the group.
+- A package that exists in a local member belongs to that member. The group never asks a proxy member about it, including its `dev-*` branches, so Packagist cannot add versions to a private package and private package names are not sent upstream.
+- A `403` from a member is returned as `403`. A group reader also needs read permission on the member repositories.
+- When a member cannot answer (for example, the upstream is down) and no other member has the package, the group returns `503` with `Retry-After` instead of `404`. When the upstream circuit breaker is open, the proxy's `502` and the group's `503` both carry `X-Pantera-Circuit-Open: true` and the breaker's `Retry-After`.
+
 ---
 
 ## Publish Packages
 
 ### Upload a Package Archive
 
+Set `"version"` in the package's `composer.json` (without it the upload becomes `dev-master`) and exclude `vendor/` from the archive:
+
+```json
+{
+  "version": "1.0.0",
+  "archive": {
+    "exclude": ["/vendor", "/dist"]
+  }
+}
+```
+
+Build and upload the archive (prints `201` once the package is indexed):
+
 ```bash
-curl -X PUT \
-  -H "Authorization: Basic $(echo -n your-username:your-jwt-token | base64)" \
-  --data-binary @my-package-1.0.0.zip \
+composer archive --format=zip --dir=dist --file=my-package-1.0.0
+curl -sS -w '%{http_code}\n' -u 'your-username:your-api-token' \
+  --upload-file dist/my-package-1.0.0.zip \
   http://pantera-host:8080/php-local/my-package-1.0.0.zip
 ```
 
 The local Composer repository indexes uploaded archives and makes them available for `composer require`.
+
+### Version Resolution
+
+Pantera takes the package version from the first of these that is present:
+
+1. `"version"` in the archive's `composer.json`.
+2. A `major.minor.patch` version in the file name, such as `my-package-1.0.0.zip`.
+3. `dev-master`. An archive with no version in `composer.json` or in its file name is published as `dev-master`, and the upload does not warn about it.
+
+### Re-uploading a Version
+
+Published releases are immutable:
+
+| Upload | Result |
+|--------|--------|
+| A release that is not published yet | `201`, published |
+| The same release again with the same content | `201`, nothing changes |
+| The same release again with different content | `409 Conflict`, the published archive is kept |
+| The same release again, when either archive is corrupt or too large to compare | `409 Conflict`, the published archive is kept |
+| A dev branch (`dev-*` or `*-dev`) | `201`, replaces the previous upload of that branch |
+
+Pantera compares the files inside the two archives, not their bytes. It compares at most 256 MiB of unpacked content and 65,536 entries, and it does not read a published archive larger than 256 MiB. When it cannot complete the comparison, it treats the upload as different.
+
+To ship a change, publish a new version. The same rules apply to JSON package registrations (`PUT /` with a package JSON body, or `PUT /?version=1.0.0` for a body without a `version` field).
+
+Every uploaded archive is listed with `dist.shasum`, the SHA-1 of the archive as Pantera stores it (Pantera writes the resolved version into its `composer.json`, so it differs from the SHA-1 of the file you uploaded). Composer records it in `composer.lock` and checks every download against it. After a dev branch is re-uploaded, `composer install` from an older lock file fails the checksum check; run `composer update <package>` to lock the new upload. Releases uploaded before Pantera 2.2.9 keep their entry without `dist.shasum`, and Composer skips the check for them.
+
+An archive that cannot be read, has no `composer.json`, or has a `composer.json` that is not valid JSON is rejected with `400 Bad Request`.
+
+### Delete a Package Archive
+
+Composer has no delete command. Delete an archive from the Pantera UI or with the REST API ([`DELETE /api/v1/repositories/:name/artifacts`](../../rest-api-reference.md)), using its storage path:
+
+```bash
+curl -X DELETE http://pantera-host:8086/api/v1/repositories/php-local/artifacts \
+  -H "Authorization: Bearer your-jwt-token" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "artifacts/vendor/my-package/1.0.0/vendor-my-package-1.0.0.zip"}'
+```
+
+Uploaded archives are stored as `artifacts/<vendor>/<package>/<version>/<vendor>-<package>-<version>.<zip|tar.gz>`. Consumers that locked the deleted version fail to install it. To ship a fix, publish a new version.
 
 ---
 
@@ -97,6 +164,10 @@ The local Composer repository indexes uploaded archives and makes them available
 | `curl error 60: SSL certificate problem` | HTTPS verification failure | Set `"secure-http": false` in composer.json (non-HTTPS) or install proper certs |
 | Package found on Packagist but not resolving | Proxy not configured for packagist.org | Ask admin to verify the php-proxy remote URL |
 | `Your requirements could not be resolved` | Dependency conflict, not a Pantera issue | Run `composer update --with-all-dependencies` to resolve conflicts |
+| `409 Conflict` on upload | That release is already published with different content, or the two archives could not be compared (corrupt or too large) | Publish a new version |
+| `400 Bad Request` on upload | The archive is unreadable or its `composer.json` is missing or invalid | Rebuild the archive with `composer archive` |
+| `503 Service Unavailable` with `Retry-After` from a group, or `502` from a proxy | The upstream could not be reached or sent invalid metadata | Retry later. The package is not reported as missing during an upstream outage |
+| `403 Forbidden` from a group | Your account cannot read one of the group's member repositories | Ask an admin for read access on the member repositories |
 
 ---
 

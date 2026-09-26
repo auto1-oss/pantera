@@ -699,7 +699,7 @@ public final class MetadataRegenerator {
 
     /**
      * Regenerate RubyGems specs.
-     * CRITICAL: Uses exclusive locking + retries to prevent race conditions during concurrent imports.
+     * Serialized with every other index writer by the index lock of {@link Gem#update}.
      *
      * @param artifactKey Artifact key
      * @return Completion stage
@@ -710,14 +710,10 @@ public final class MetadataRegenerator {
             return CompletableFuture.completedFuture(null);
         }
         
-        // CRITICAL: Lock specs files during update (specs.4.8.gz, latest_specs.4.8.gz, prerelease_specs.4.8.gz)
-        final Key specsLock = new Key.From("specs.4.8.gz");
-        
+        // Gem#update holds the index lock (specs.4.8.gz) every index writer
+        // -- upload, management-API delete, import -- takes.
         return this.withRetry(
-            () -> this.storage.exclusively(
-                specsLock,
-                lockedStorage -> new Gem(this.storage).update(artifactKey).thenApply(ignored -> null)
-            ),
+            () -> new Gem(this.storage).update(artifactKey).thenApply(ignored -> null),
             "RubyGems specs update for " + path
         );
     }

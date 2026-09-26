@@ -6,6 +6,7 @@ package com.auto1.pantera.docker.cache;
 
 import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.docker.misc.OfficialImageName;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 
 import java.time.Duration;
@@ -46,7 +47,25 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
      */
     private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> seen;
 
+    /**
+     * Official-image naming rule: release dates recorded by the cache layer
+     * under the client's spelling ({@code nginx}) and looked up by the
+     * cooldown layer under the canonical one ({@code library/nginx}) must
+     * land on the same key.
+     */
+    private final OfficialImageName names;
+
     public DockerProxyCooldownInspector() {
+        this(new OfficialImageName(false));
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param names Official-image naming rule of the proxied upstream
+     */
+    public DockerProxyCooldownInspector(final OfficialImageName names) {
+        this.names = names;
         final long expiryHours = ConfigDefaults.getLong(
             "PANTERA_DOCKER_CACHE_EXPIRY_HOURS", 24L
         );
@@ -107,7 +126,7 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
         final ReleaseDateCallback cb = this.releaseDateCallback;
         if (cb != null) {
             try {
-                cb.onRelease(artifact, version, release);
+                cb.onRelease(this.names.normalize(artifact), version, release);
             } catch (final Exception ignored) {
                 // persistence failure must not break the hot path
             }
@@ -149,8 +168,8 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
         this.seen.invalidateAll();
     }
 
-    private static String key(final String artifact, final String version) {
-        return String.format("%s:%s", artifact, version);
+    private String key(final String artifact, final String version) {
+        return String.format("%s:%s", this.names.normalize(artifact), version);
     }
 
     private static String digestKey(final String repoName, final String digest) {

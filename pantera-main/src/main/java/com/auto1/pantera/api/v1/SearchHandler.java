@@ -17,9 +17,11 @@ import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.index.ArtifactIndex;
-import com.auto1.pantera.index.DbArtifactIndex;
+import com.auto1.pantera.index.ScopedSearchIndex;
 import com.auto1.pantera.index.SearchQueryParser;
 import com.auto1.pantera.index.SearchQueryParser.FieldFilter;
+import com.auto1.pantera.index.reindex.IndexReindex;
+import com.auto1.pantera.index.reindex.ReindexStatus;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.perms.FreePermissions;
 import com.auto1.pantera.security.policy.Policy;
@@ -27,14 +29,15 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
-import java.security.Permission;
 import java.security.PermissionCollection;
 import java.util.ArrayList;
-import java.util.Enumeration;
+import java.util.Collection;
+
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.eclipse.jetty.http.HttpStatus;
 
 /**
@@ -44,7 +47,8 @@ import org.eclipse.jetty.http.HttpStatus;
  * <ul>
  *   <li>GET /api/v1/search?q={query}&amp;page={0}&amp;size={20} — paginated search</li>
  *   <li>GET /api/v1/search/locate?path={path} — locate repos containing artifact</li>
- *   <li>POST /api/v1/search/reindex — trigger full reindex (202)</li>
+ *   <li>POST /api/v1/search/reindex — start a full index rebuild (202, 409 if running)</li>
+ *   <li>GET /api/v1/search/reindex — index rebuild status</li>
  *   <li>GET /api/v1/search/stats — index statistics</li>
  * </ul>
  *
@@ -86,13 +90,56 @@ public final class SearchHandler {
     private final Policy<?> policy;
 
     /**
-     * Ctor.
+     * Names of every configured repository — the universe the caller's
+     * read grants are evaluated against when building the SQL scope.
+     */
+    private final Supplier<Collection<String>> repositories;
+
+    /**
+     * Index rebuild job, null when there is no database to rebuild.
+     */
+    private final IndexReindex reindexer;
+
+    /**
+     * Ctor without a repository enumerator: only unrestricted callers
+     * (FreePermissions / wildcard read) can search; everyone else is scoped
+     * to nothing. Kept for callers and tests that do not wire settings.
      * @param index Artifact index
      * @param policy Pantera security policy
      */
     public SearchHandler(final ArtifactIndex index, final Policy<?> policy) {
+        this(index, policy, List::of);
+    }
+
+    /**
+     * Ctor without an index rebuild job (reindex answers 503).
+     * @param index Artifact index
+     * @param policy Pantera security policy
+     * @param repositories Enumerator of configured repository names
+     */
+    public SearchHandler(
+        final ArtifactIndex index, final Policy<?> policy,
+        final Supplier<Collection<String>> repositories
+    ) {
+        this(index, policy, repositories, null);
+    }
+
+    /**
+     * Ctor.
+     * @param index Artifact index
+     * @param policy Pantera security policy
+     * @param repositories Enumerator of configured repository names
+     * @param reindexer Index rebuild job, null when there is no database
+     */
+    public SearchHandler(
+        final ArtifactIndex index, final Policy<?> policy,
+        final Supplier<Collection<String>> repositories,
+        final IndexReindex reindexer
+    ) {
         this.index = Objects.requireNonNull(index, "index");
         this.policy = Objects.requireNonNull(policy, "policy");
+        this.repositories = Objects.requireNonNull(repositories, "repositories");
+        this.reindexer = reindexer;
     }
 
     /**
@@ -113,6 +160,11 @@ public final class SearchHandler {
         router.post("/api/v1/search/reindex")
             .handler(new AuthzHandler(this.policy, ApiSearchPermission.WRITE))
             .handler(this::reindex);
+        // GET /api/v1/search/reindex — status of the rebuild job; admin
+        // scope like the trigger (its last error names repositories).
+        router.get("/api/v1/search/reindex")
+            .handler(new AuthzHandler(this.policy, ApiSearchPermission.WRITE))
+            .handler(this::reindexStatus);
         // GET /api/v1/search
         router.get("/api/v1/search")
             .handler(new AuthzHandler(this.policy, ApiSearchPermission.READ))
@@ -191,7 +243,7 @@ public final class SearchHandler {
         // Fix 5: resolve allowed repos for SQL-level filtering.
         // FreePermissions (admin/wildcard) gets null → no restriction in SQL.
         // Otherwise enumerate AdapterBasicPermission read entries.
-        final List<String> allowedRepos = resolveAllowedRepos(perms);
+        final List<String> allowedRepos = this.resolveAllowedRepos(perms);
         // Effective FTS query: bare terms only (field values are handled as filters).
         // When blank (pure field-filter query like "name:pydantic"), DbArtifactIndex
         // switches to the filter-only LIKE path automatically.
@@ -202,24 +254,21 @@ public final class SearchHandler {
         // which emitted "date" for SortField.DATE — a value that toSortField does
         // not recognise, silently degrading every created_at sort to RELEVANCE
         // (rank DESC, name ASC). asc/desc then produced identical orderings.
+        // SECURITY (2.2.9, search-authz): ALWAYS pass the caller's scope down.
+        // The old `instanceof DbArtifactIndex` branch was dead in production
+        // (the index is wrapped in ArtifactIndexCache), so the scope-less
+        // overload ran and total/type_counts/repo_counts were served from an
+        // unscoped query even though documents were post-filtered.
         final java.util.concurrent.CompletableFuture<com.auto1.pantera.index.SearchResult> future;
-        if (this.index instanceof DbArtifactIndex) {
-            if (fieldFilters.isEmpty() && parsed.ftsQuery().equals(query)) {
-                // No structured syntax used — fast path (backward compat)
-                future = ((DbArtifactIndex) this.index).search(
-                    query, size, dbOffset, repoType, repoName,
-                    sortBy, sortAsc, allowedRepos
-                );
-            } else {
-                future = ((DbArtifactIndex) this.index).search(
-                    ftsQuery, size, dbOffset, repoType, repoName,
-                    sortBy, sortAsc, allowedRepos, fieldFilters
-                );
-            }
+        if (this.index instanceof ScopedSearchIndex) {
+            future = ((ScopedSearchIndex) this.index).searchScoped(
+                ftsQuery, size, dbOffset, repoType, repoName,
+                sortBy, sortAsc, allowedRepos, fieldFilters
+            );
         } else {
             future = this.index.search(
                 query, size, dbOffset, repoType, repoName,
-                sortBy, sortAsc
+                sortBy, sortAsc, allowedRepos
             );
         }
         future.whenComplete((result, error) -> {
@@ -237,8 +286,9 @@ public final class SearchHandler {
             // If index is not DbArtifactIndex, fall back to client-side filtering.
             final JsonArray items = new JsonArray();
             for (final var doc : result.documents()) {
-                if (!(this.index instanceof DbArtifactIndex)
-                    && !perms.implies(new AdapterBasicPermission(doc.repoName(), "read"))) {
+                // Defense in depth: the index scoped the query, but never
+                // emit a document the caller cannot read, whatever the index.
+                if (!perms.implies(new AdapterBasicPermission(doc.repoName(), "read"))) {
                     continue;
                 }
                 final JsonObject obj = new JsonObject()
@@ -302,30 +352,25 @@ public final class SearchHandler {
      * @param perms User's permission collection
      * @return List of allowed repo names, or null if no restriction
      */
-    private static List<String> resolveAllowedRepos(final PermissionCollection perms) {
-        // FreePermissions implies everything — no restriction
-        if (perms instanceof FreePermissions) {
-            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - null signals "unrestricted"; empty list would mean "deny everything"
+    private List<String> resolveAllowedRepos(final PermissionCollection perms) {
+        // Unrestricted ONLY when the policy genuinely implies read on every
+        // repository (FreePermissions, or a wildcard grant that implies it).
+        if (perms instanceof FreePermissions
+            || perms.implies(new AdapterBasicPermission("*", "read"))) {
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - null is the index contract for "no SQL restriction"
         }
+        // Otherwise evaluate the caller's grants against the configured
+        // repositories with implies() (role-aware — DbUser permissions are
+        // not enumerable via elements(), which is why the old
+        // elements()-based scan found nothing and FAILED OPEN). An empty
+        // list is a genuine deny-all and the index matches nothing.
         final List<String> repos = new ArrayList<>();
-        final Enumeration<Permission> elements = perms.elements();
-        while (elements.hasMoreElements()) {
-            final Permission perm = elements.nextElement();
-            if (perm instanceof AdapterBasicPermission) {
-                final String name = perm.getName();
-                if ("*".equals(name)) {
-                    // Wildcard — unrestricted access
-                    return null; // NOPMD ReturnEmptyCollectionRatherThanNull - null signals "unrestricted"; empty list would mean "deny everything"
-                }
-                // Include repos the user can read
-                if (perm.implies(new AdapterBasicPermission(name, "read"))) {
-                    repos.add(name);
-                }
+        for (final String name : this.repositories.get()) {
+            if (perms.implies(new AdapterBasicPermission(name, "read"))) {
+                repos.add(name);
             }
         }
-        // If no AdapterBasicPermission entries were found, fall through to unrestricted
-        // (other permission types like API permissions don't restrict repo access)
-        return repos.isEmpty() ? null : repos;
+        return repos;
     }
 
     /**
@@ -375,27 +420,148 @@ public final class SearchHandler {
     }
 
     /**
-     * Trigger a full reindex (async, returns 202).
+     * Start a full index rebuild on its dedicated thread. Answers 202 when
+     * started, 409 when a rebuild is already running in this process, 503
+     * when there is no database-backed index to rebuild. Non-blocking: the
+     * job only flips an atomic flag and hands off to its own executor.
      * @param ctx Routing context
      */
     private void reindex(final RoutingContext ctx) {
-        EcsLogger.info("com.auto1.pantera.api.v1")
-            .message("Full reindex triggered via API")
-            .eventCategory("database")
-            .eventAction("reindex")
-            .field("user.name",
-                ctx.user() != null
-                    ? ctx.user().principal().getString(AuthTokenRest.SUB)
-                    : null)
-            .field("log.source", "application")
-            .log();
+        if (this.reindexer == null) {
+            SearchHandler.noDatabase(ctx);
+            return;
+        }
+        final String actor = ctx.user() != null
+            ? ctx.user().principal().getString(AuthTokenRest.SUB) : null;
+        final boolean started = this.reindexer.start(actor);
+        SearchHandler.audit(actor, started, SearchHandler.clientIp(ctx));
+        final JsonObject body = SearchHandler.statusJson(this.reindexer.status());
+        if (started) {
+            ctx.response()
+                .setStatusCode(HttpStatus.ACCEPTED_202)
+                .putHeader("Content-Type", "application/json")
+                .end(body
+                    .put("status", "started")
+                    .put("message", "Full reindex initiated")
+                    .encode());
+        } else {
+            ctx.response()
+                .setStatusCode(HttpStatus.CONFLICT_409)
+                .putHeader("Content-Type", "application/json")
+                .end(body
+                    .put("code", HttpStatus.CONFLICT_409)
+                    .put("status", "running")
+                    .put("message", "A search index rebuild is already running")
+                    .encode());
+        }
+    }
+
+    /**
+     * Index rebuild status.
+     * @param ctx Routing context
+     */
+    private void reindexStatus(final RoutingContext ctx) {
+        if (this.reindexer == null) {
+            SearchHandler.noDatabase(ctx);
+            return;
+        }
         ctx.response()
-            .setStatusCode(HttpStatus.ACCEPTED_202)
+            .setStatusCode(HttpStatus.OK_200)
+            .putHeader("Content-Type", "application/json")
+            .end(SearchHandler.statusJson(this.reindexer.status()).encode());
+    }
+
+    /**
+     * Answer 503: there is no database-backed index to rebuild.
+     * @param ctx Routing context
+     */
+    private static void noDatabase(final RoutingContext ctx) {
+        ctx.response()
+            .setStatusCode(HttpStatus.SERVICE_UNAVAILABLE_503)
             .putHeader("Content-Type", "application/json")
             .end(new JsonObject()
-                .put("status", "started")
-                .put("message", "Full reindex initiated")
+                .put("code", HttpStatus.SERVICE_UNAVAILABLE_503)
+                .put("message", "Search index rebuild requires a database")
                 .encode());
+    }
+
+    /**
+     * Status as JSON.
+     * @param status Status
+     * @return JSON object
+     */
+    private static JsonObject statusJson(final ReindexStatus status) {
+        return new JsonObject()
+            .put("state", status.state())
+            .put("started_at", SearchHandler.instant(status.startedAt()))
+            .put("finished_at", SearchHandler.instant(status.finishedAt()))
+            .put("repos_total", status.reposTotal())
+            .put("repos_done", status.reposDone())
+            .put("repos_skipped", status.reposSkipped())
+            .put("repos_failed", status.reposFailed())
+            .put("rows_pruned", status.rowsPruned())
+            .put("rows_upserted", status.rowsUpserted())
+            .put("rows_removed", status.rowsRemoved())
+            .put("last_error", status.lastError());
+    }
+
+    /**
+     * ISO-8601 text of an instant.
+     * @param instant Instant, may be null
+     * @return Text, null for null
+     */
+    private static String instant(final java.time.Instant instant) {
+        return instant == null ? null : instant.toString();
+    }
+
+    /**
+     * Audit the rebuild trigger: the admin audit trail plus a configuration
+     * log line.
+     * @param actor User
+     * @param started Whether a run started (false: one was already running)
+     * @param clientIp Client IP, may be null
+     */
+    private static void audit(final String actor, final boolean started, final String clientIp) {
+        com.auto1.pantera.audit.AuditServiceRegistry.instance().sharedService().record(
+            new com.auto1.pantera.audit.AuditEvent(
+                java.time.Instant.now(), actor, "SEARCH_REINDEX", "artifacts",
+                java.util.Map.of("outcome", started ? "started" : "already_running"),
+                started, clientIp
+            )
+        );
+        EcsLogger.info("com.auto1.pantera.api.v1")
+            .message(
+                started ? "Full search index rebuild triggered via API"
+                    : "Search index rebuild refused: one is already running"
+            )
+            .eventCategory("configuration")
+            .eventAction("search_reindex")
+            .eventOutcome(started ? "success" : "failure")
+            .field("user.name", actor)
+            .field("client.ip", clientIp)
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * Client IP of the request: {@code X-Forwarded-For} (first entry), then
+     * {@code X-Real-IP}, then the TCP peer — the order the other admin
+     * audit helpers use.
+     * @param ctx Routing context
+     * @return Client IP, null when unknown
+     */
+    private static String clientIp(final RoutingContext ctx) {
+        String hint = ctx.request().getHeader("X-Forwarded-For");
+        if (hint != null && hint.contains(",")) {
+            hint = hint.substring(0, hint.indexOf(',')).trim();
+        }
+        if (hint == null || hint.isBlank()) {
+            hint = ctx.request().getHeader("X-Real-IP");
+        }
+        if ((hint == null || hint.isBlank()) && ctx.request().remoteAddress() != null) {
+            hint = ctx.request().remoteAddress().host();
+        }
+        return hint == null || hint.isBlank() ? null : hint;
     }
 
     /**
@@ -403,7 +569,18 @@ public final class SearchHandler {
      * @param ctx Routing context
      */
     private void stats(final RoutingContext ctx) {
-        this.index.getStats().whenComplete((map, error) -> {
+        // Scope the totals to the caller's readable repositories, exactly as
+        // search does — otherwise the global count leaks how many artifacts
+        // exist in repositories the caller cannot read. null = unrestricted
+        // (admin / wildcard read), empty = deny-all (zero).
+        final PermissionCollection perms = this.policy.getPermissions(
+            new AuthUser(
+                ctx.user().principal().getString(AuthTokenRest.SUB),
+                ctx.user().principal().getString(AuthTokenRest.CONTEXT)
+            )
+        );
+        final List<String> allowedRepos = this.resolveAllowedRepos(perms);
+        this.index.getStats(allowedRepos).whenComplete((map, error) -> {
             if (error != null) {
                 ctx.response()
                     .setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)

@@ -45,10 +45,12 @@ public final class RequestContextHeaders {
     /**
      * Read the request-context headers from {@code headers} and put them
      * into the current thread's MDC under
-     * {@link EcsMdc#TRACE_ID} / {@link EcsMdc#CLIENT_IP}. Empty or
-     * already-present MDC values are not overwritten (i.e. an
-     * inner-request-thread MDC takes precedence over the header — useful
-     * when EcsLoggingSlice already set MDC for the calling thread).
+     * {@link EcsMdc#TRACE_ID} / {@link EcsMdc#CLIENT_IP}. A header that is
+     * present replaces whatever the thread's MDC holds: worker threads are
+     * pooled and can still carry an earlier, unrelated request's values,
+     * while the headers always describe the request being processed (on
+     * the request thread both are equal anyway). A missing or empty header
+     * leaves the MDC untouched.
      *
      * @param headers Inbound request headers carrying the internal
      *                {@code X-Pantera-Ctx-*} fields (may be empty if the
@@ -57,17 +59,13 @@ public final class RequestContextHeaders {
      *                missing fields).
      */
     public static void bindToMdc(final Headers headers) {
-        if (MDC.get(EcsMdc.TRACE_ID) == null) {
-            final String traceId = first(headers, EcsLoggingSlice.CTX_TRACE_ID_HEADER);
-            if (traceId != null && !traceId.isEmpty()) {
-                MDC.put(EcsMdc.TRACE_ID, traceId);
-            }
+        final String traceId = first(headers, EcsLoggingSlice.CTX_TRACE_ID_HEADER);
+        if (traceId != null && !traceId.isEmpty()) {
+            MDC.put(EcsMdc.TRACE_ID, traceId);
         }
-        if (MDC.get(EcsMdc.CLIENT_IP) == null) {
-            final String clientIp = first(headers, EcsLoggingSlice.CTX_CLIENT_IP_HEADER);
-            if (clientIp != null && !clientIp.isEmpty()) {
-                MDC.put(EcsMdc.CLIENT_IP, clientIp);
-            }
+        final String clientIp = first(headers, EcsLoggingSlice.CTX_CLIENT_IP_HEADER);
+        if (clientIp != null && !clientIp.isEmpty()) {
+            MDC.put(EcsMdc.CLIENT_IP, clientIp);
         }
     }
 

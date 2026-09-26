@@ -451,8 +451,35 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
     }
 
     private Path nsRoot() { return this.root.resolve(this.namespace); }
-    private Path filePath(final Key key) { return nsRoot().resolve(Paths.get(key.string())); }
-    private Path metaPath(final Key key) { return nsRoot().resolve(Paths.get(key.string() + ".meta")); }
+
+    private Path filePath(final Key key) {
+        return contain(nsRoot().resolve(Paths.get(key.string())));
+    }
+
+    private Path metaPath(final Key key) {
+        return contain(nsRoot().resolve(Paths.get(key.string() + ".meta")));
+    }
+
+    /**
+     * Contain a resolved cache path within the namespace root.
+     *
+     * <p>SECURITY (2.2.9): a bare {@code nsRoot().resolve(key)} let a cache key
+     * with parent segments escape the cache directory for overwrite/delete on
+     * an S3 disk-cache repository. Mirrors the {@code FileStorage.keyPath}
+     * guard.</p>
+     *
+     * @param candidate Resolved candidate path
+     * @return Normalized path, guaranteed under the namespace root
+     */
+    private Path contain(final Path candidate) {
+        final Path norm = candidate.normalize();
+        if (!norm.startsWith(nsRoot().normalize())) {
+            throw new PanteraIOException(
+                "Cache entry path is out of the namespace root"
+            );
+        }
+        return norm;
+    }
 
     private static Flowable<ByteBuffer> filePublisher(final Path file) {
         return Flowable.generate(() -> FileChannel.open(file, StandardOpenOption.READ), (ch, emitter) -> {

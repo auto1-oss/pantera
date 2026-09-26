@@ -23,6 +23,9 @@ import com.auto1.pantera.hex.proto.generated.PackageOuterClass;
 import com.auto1.pantera.hex.proto.generated.SignedOuterClass;
 import com.auto1.pantera.hex.utils.Gzip;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.ContentLength;
 import com.auto1.pantera.http.hm.RsHasStatus;
@@ -33,15 +36,20 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.LinkedList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.StringContains;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -95,14 +103,24 @@ class UploadSliceTest {
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.CREATED),
                 new RequestLine(RqMethod.POST, String.format("/publish?replace=%s", replace)),
-                Headers.from(new ContentLength(UploadSliceTest.tar.length)),
+                Headers.from(
+                    new ContentLength(UploadSliceTest.tar.length),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-hex"),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
+                ),
                 new Content.From(UploadSliceTest.tar)
             )
         );
         MatcherAssert.assertThat(
-            "Package was not saved in storage",
-            this.storage.value(new Key.From("packages/decimal")).join(),
-            new ContentIs(Files.readAllBytes(new ResourceUtil("packages/decimal").asPath()))
+            "Package record does not name the repository",
+            PackageOuterClass.Package.parseFrom(
+                SignedOuterClass.Signed.parseFrom(
+                    new Gzip(
+                        this.storage.value(new Key.From("packages/decimal")).join().asBytes()
+                    ).decompress()
+                ).getPayload()
+            ).getRepository(),
+            new IsEqual<>("my-hexpm-test")
         );
         MatcherAssert.assertThat(
             "Tarball was not saved in storage",
@@ -122,6 +140,14 @@ class UploadSliceTest {
         MatcherAssert.assertThat(
             "Package version should be 2.0.0", event.artifactVersion(), new IsEqual<>("2.0.0")
         );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            event.traceId(), new org.hamcrest.core.IsEqual<>("trace-hex")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            event.clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 
     @Test
@@ -137,10 +163,10 @@ class UploadSliceTest {
             )
         );
         MatcherAssert.assertThat(
-            "Wrong response status for a package that already exists, INTERNAL_ERROR is expected",
+            "Wrong response status for a package that already exists, UNPROCESSABLE_ENTITY is expected",
             this.slice,
             new SliceHasResponse(
-                new RsHasStatus(RsStatus.INTERNAL_ERROR),
+                new RsHasStatus(RsStatus.UNPROCESSABLE_ENTITY),
                 new RequestLine(RqMethod.POST, "/publish?replace=false"),
                 Headers.from(new ContentLength(UploadSliceTest.tar.length)),
                 new Content.From(UploadSliceTest.tar)
@@ -183,16 +209,136 @@ class UploadSliceTest {
     }
 
     @Test
+    void releaseEndpointAnswersATermTheHexClientCanDecode() {
+        // mix hex.publish decodes the answer with binary_to_term: an empty
+        // body made it print "Publishing failed :invalid_term" although the
+        // release was stored.
+        final Response rsp = this.slice.response(
+            new RequestLine(RqMethod.POST, "/packages/decimal/releases"),
+            Headers.from(
+                new ContentLength(UploadSliceTest.tar.length),
+                new Header("Accept", "application/vnd.hex+erlang"),
+                new Header("Authorization", "Basic c2VjcmV0OnNlY3JldA=="),
+                new Header(ClientBaseUrl.HEADER, "http://reg.example.com/api/my-hexpm-test")
+            ),
+            new Content.From(UploadSliceTest.tar)
+        ).join();
+        MatcherAssert.assertThat("status", rsp.status(), new IsEqual<>(RsStatus.CREATED));
+        MatcherAssert.assertThat(
+            "content type",
+            rsp.headers().values("Content-Type"),
+            new IsEqual<>(List.of("application/vnd.hex+erlang"))
+        );
+        MatcherAssert.assertThat(
+            "request credentials are not echoed back",
+            rsp.headers().values("Authorization").isEmpty(), new IsEqual<>(true)
+        );
+        final Map<String, String> term = UploadSliceTest.erlangMap(rsp.body().asBytes());
+        MatcherAssert.assertThat("version", term.get("version"), new IsEqual<>("2.0.0"));
+        MatcherAssert.assertThat("name", term.get("name"), new IsEqual<>("decimal"));
+        MatcherAssert.assertThat(
+            "html_url",
+            term.get("html_url"),
+            new IsEqual<>("http://reg.example.com/api/my-hexpm-test/tarballs/decimal-2.0.0.tar")
+        );
+    }
+
+    @Test
+    void existingReleaseAnswersAMessageTheHexClientCanDecode() {
+        this.slice.response(
+            new RequestLine(RqMethod.POST, "/publish"),
+            Headers.from(new ContentLength(UploadSliceTest.tar.length)),
+            new Content.From(UploadSliceTest.tar)
+        ).join();
+        final Response rsp = this.slice.response(
+            new RequestLine(RqMethod.POST, "/publish"),
+            Headers.from(new ContentLength(UploadSliceTest.tar.length)),
+            new Content.From(UploadSliceTest.tar)
+        ).join();
+        MatcherAssert.assertThat(
+            "status", rsp.status(), new IsEqual<>(RsStatus.UNPROCESSABLE_ENTITY)
+        );
+        MatcherAssert.assertThat(
+            "message",
+            UploadSliceTest.erlangMap(rsp.body().asBytes()).get("message"),
+            new StringContains("--replace")
+        );
+    }
+
+    @Test
+    void releaseEndpointAnswersJsonWhenAskedFor() {
+        final Response rsp = this.slice.response(
+            new RequestLine(RqMethod.POST, "/packages/decimal/releases"),
+            Headers.from(
+                new ContentLength(UploadSliceTest.tar.length),
+                new Header("Accept", "application/json")
+            ),
+            new Content.From(UploadSliceTest.tar)
+        ).join();
+        MatcherAssert.assertThat(
+            new io.vertx.core.json.JsonObject(rsp.body().asString()).getString("version"),
+            new IsEqual<>("2.0.0")
+        );
+    }
+
+    @Test
     void returnsBadRequestOnIncorrectRequest() {
         MatcherAssert.assertThat(
             "Wrong response status, BAD_REQUEST is expected",
             this.slice,
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.BAD_REQUEST),
-                new RequestLine(RqMethod.POST, "/publish")
+                new RequestLine(RqMethod.POST, "/unknown")
+            )
+        );
+        MatcherAssert.assertThat(
+            "Wrong response status for a body that is not a Hex tarball, BAD_REQUEST is expected",
+            this.slice,
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.BAD_REQUEST),
+                new RequestLine(RqMethod.POST, "/publish?replace=false"),
+                Headers.EMPTY,
+                new Content.From("not a tarball".getBytes())
             )
         );
         MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());
+    }
+
+    /**
+     * Decode an Erlang external-term map of binaries and small integers
+     * (what the Hex client decodes with binary_to_term).
+     * @param bytes Term
+     * @return Map with integers as strings
+     */
+    private static Map<String, String> erlangMap(final byte[] bytes) {
+        final ByteBuffer buf = ByteBuffer.wrap(bytes);
+        MatcherAssert.assertThat("term version", buf.get() & 0xff, new IsEqual<>(131));
+        MatcherAssert.assertThat("map tag", buf.get() & 0xff, new IsEqual<>(116));
+        final int arity = buf.getInt();
+        final Map<String, String> res = new HashMap<>();
+        for (int idx = 0; idx < arity; idx += 1) {
+            final String key = UploadSliceTest.erlangValue(buf);
+            res.put(key, UploadSliceTest.erlangValue(buf));
+        }
+        MatcherAssert.assertThat("whole term consumed", buf.remaining(), new IsEqual<>(0));
+        return res;
+    }
+
+    private static String erlangValue(final ByteBuffer buf) {
+        final int tag = buf.get() & 0xff;
+        final String res;
+        if (tag == 109) {
+            final byte[] val = new byte[buf.getInt()];
+            buf.get(val);
+            res = new String(val, StandardCharsets.UTF_8);
+        } else if (tag == 97) {
+            res = String.valueOf(buf.get() & 0xff);
+        } else if (tag == 98) {
+            res = String.valueOf(buf.getInt());
+        } else {
+            throw new IllegalStateException(String.format("Unexpected term tag %d", tag));
+        }
+        return res;
     }
 
     private boolean checkPackage(

@@ -13,9 +13,14 @@ package com.auto1.pantera.pypi.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
+import com.auto1.pantera.cooldown.response.CooldownResponseFactory;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.context.ContextualExecutor;
+import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -254,7 +259,11 @@ public final class CachedPyProxySlice implements Slice {
         // requested path is a primary artifact. All other paths fall
         // through to the existing metadata / origin flow unchanged.
         if (this.cacheWriter != null && isPrimaryArtifact(path)) {
-            return this.verifyAndServePrimary(line, key, path);
+            // Captured before any async hop: the cache-hit access record
+            // must carry THIS request's correlation, not a pooled thread's.
+            return this.verifyAndServePrimary(
+                line, headers, key, path, CachedPyProxySlice.captureAuditContext(headers)
+            );
         }
 
         // Check metadata cache for wheels and index pages
@@ -461,12 +470,13 @@ public final class CachedPyProxySlice implements Slice {
      * Maven primary-path decision.
      */
     private CompletableFuture<Response> verifyAndServePrimary(
-        final RequestLine line, final Key key, final String path
+        final RequestLine line, final Headers headers, final Key key, final String path,
+        final AuditContext actx
     ) {
         final Storage storage = this.rawStorage.orElseThrow();
         return storage.exists(key).thenCompose(present -> {
             if (present) {
-                return this.serveFromCache(storage, key);
+                return this.serveFromCache(storage, key, new Login(headers).getValue(), actx);
             }
             // T-P06: single-flight the cache-miss leg. The leader streams
             // upstream → tee → client + storage; followers park on the
@@ -482,10 +492,12 @@ public final class CachedPyProxySlice implements Slice {
                 }
             );
             if (isLeader[0]) {
-                return this.streamPrimary(line, key, path, leaderGate);
+                return this.streamPrimary(line, headers, key, path, leaderGate);
             }
             return gate.exceptionally(err -> null)
-                .thenCompose(ignored -> this.verifyAndServePrimary(line, key, path));
+                .thenCompose(
+                    ignored -> this.verifyAndServePrimary(line, headers, key, path, actx)
+                );
         }).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.pypi")
                 .message("PyPI primary-artifact verify-and-serve failed; returning 502")
@@ -513,6 +525,7 @@ public final class CachedPyProxySlice implements Slice {
      */
     private CompletableFuture<Response> streamPrimary(
         final RequestLine line,
+        final Headers headers,
         final Key key,
         final String path,
         final CompletableFuture<Void> leaderGate
@@ -529,8 +542,23 @@ public final class CachedPyProxySlice implements Slice {
         sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
         sidecars.put(ChecksumAlgo.MD5, () -> this.fetchSidecar(line, ".md5"));
         sidecars.put(ChecksumAlgo.SHA512, () -> this.fetchSidecar(line, ".sha512"));
-        return this.origin.response(line, Headers.EMPTY, Content.EMPTY)
+        // The request headers carry the authenticated caller and the
+        // X-Pantera-Ctx-* request context; the origin derives the audit
+        // user.name / client.ip / trace.id of this fetch from them.
+        return this.origin.response(line, headers, Content.EMPTY)
             .thenCompose(resp -> {
+                if (CachedPyProxySlice.isCooldownVerdict(resp)) {
+                    // Pantera's own cooldown 403 for a blocked file, not an
+                    // upstream answer: relay it verbatim (Retry-After, the
+                    // marker and the blocked-until body) instead of the
+                    // non-authoritative 404 below. Nothing is cached, so
+                    // followers re-enter, fetch again and get the verdict
+                    // re-evaluated -- an unblock is visible at once.
+                    if (!leaderGate.isDone()) {
+                        leaderGate.complete(null);
+                    }
+                    return CompletableFuture.completedFuture(resp);
+                }
                 if (!resp.status().success()) {
                     // Drain non-2xx body to release the connection.
                     resp.body().asBytesFuture();
@@ -614,6 +642,17 @@ public final class CachedPyProxySlice implements Slice {
     }
 
     /**
+     * Whether an origin response is a cooldown verdict produced by Pantera
+     * itself, as opposed to an upstream answer.
+     *
+     * @param response Origin response
+     * @return True when the response carries the cooldown marker header
+     */
+    private static boolean isCooldownVerdict(final Response response) {
+        return !response.headers().values(CooldownResponseFactory.HEADER).isEmpty();
+    }
+
+    /**
      * Fetch a sidecar for the primary at {@code line}. Returns
      * {@link Optional#empty()} for 4xx/5xx so the writer treats the
      * sidecar as absent; I/O errors collapse to empty so a transient
@@ -639,14 +678,46 @@ public final class CachedPyProxySlice implements Slice {
     }
 
     /**
-     * Serve the primary from storage after a successful atomic write.
+     * Serve a cached primary. This is an artifact serve (a cache hit, or a
+     * single-flight follower re-entering against the now-warm cache), so it
+     * leaves the {@code artifact_access} audit record the cache-miss fetch
+     * gets from the origin.
+     *
+     * @param storage Cache storage
+     * @param key Primary key
+     * @param user Requesting user
+     * @param actx Request correlation captured before any async hop
+     * @return Response with the cached bytes
      */
     private CompletableFuture<Response> serveFromCache(
-        final Storage storage, final Key key
+        final Storage storage, final Key key, final String user, final AuditContext actx
     ) {
-        return storage.value(key).thenApply(content ->
-            ResponseBuilder.ok().body(content).build()
-        );
+        return storage.value(key).thenApply(content -> {
+            final String file = key.string().substring(key.string().lastIndexOf('/') + 1);
+            final DistFilename dist = new DistFilename(file);
+            AuditLogger.access(
+                actx, this.repoType, this.repoName,
+                dist.project().orElse(file), dist.version().orElse(null),
+                content.size().orElse(0L), user,
+                AuditLogger.OUTCOME_SUCCESS, null
+            );
+            return ResponseBuilder.ok().body(content).build();
+        });
+    }
+
+    /**
+     * Build an {@link AuditContext} for the current request from its internal
+     * {@code X-Pantera-Ctx-*} headers, which are authoritative on any thread
+     * (the thread's MDC is never read: a pooled thread can hold another
+     * request's values). The headers are also bound to this thread's MDC for
+     * the application logs that follow.
+     *
+     * @param headers Inbound request headers
+     * @return Context carrying the request's trace id / client IP
+     */
+    private static AuditContext captureAuditContext(final Headers headers) {
+        RequestContextHeaders.bindToMdc(headers);
+        return new AuditContext(headers);
     }
 
     /**

@@ -13,6 +13,7 @@ package com.auto1.pantera.asto;
 import com.auto1.pantera.asto.ext.CompletableFutureSupport;
 import com.auto1.pantera.asto.lock.storage.StorageLock;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -139,6 +140,11 @@ public final class SubStorage implements Storage {
     }
 
     @Override
+    public CompletableFuture<Void> deleteEmptyDirectories(final Key key) {
+        return this.origin.deleteEmptyDirectories(new PrefixedKed(this.prefix, key));
+    }
+
+    @Override
     public <T> CompletionStage<T> exclusively(
         final Key key,
         final Function<Storage, CompletionStage<T>> operation
@@ -149,6 +155,17 @@ public final class SubStorage implements Storage {
     @Override
     public String identifier() {
         return this.id;
+    }
+
+    /**
+     * On-disk path of {@code key}, resolved under this storage's prefix,
+     * when the origin exposes one (a file-system origin); empty otherwise.
+     * @param key Key relative to this sub storage
+     * @return Path in the origin, if it has one
+     */
+    @Override
+    public Optional<java.nio.file.Path> pathFor(final Key key) {
+        return this.origin.pathFor(new PrefixedKed(this.prefix, key));
     }
 
     /**

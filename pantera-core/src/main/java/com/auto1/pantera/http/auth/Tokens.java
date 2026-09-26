@@ -40,12 +40,45 @@ public interface Tokens {
     }
 
     /**
+     * Issue a named, expiring API token for a client that logs in with a
+     * password (e.g. {@code npm login}) and stores the result as its
+     * registry credential. Implementations with a token store MUST persist
+     * it (so it can be listed and revoked) and MUST honour the admin token
+     * lifetime policy; such a token is never permanent. The default, for
+     * implementations without a token store, is an ordinary access token.
+     *
+     * @param user Authenticated user
+     * @param label Human-readable label shown in the token list
+     * @return String token
+     */
+    default String issueApiToken(final AuthUser user, final String label) {
+        return generate(user);
+    }
+
+    /**
      * Generate an access + refresh token pair for login/callback.
      * @param user Authenticated user
      * @return Token pair (access token, refresh token, expiresIn)
      */
     default TokenPair generatePair(AuthUser user) {
         throw new UnsupportedOperationException("Token pair generation not supported");
+    }
+
+    /**
+     * Rotate a refresh token: consume the presented refresh token (by JTI)
+     * and issue a successor access + refresh pair. Implementations MUST
+     * refuse (return {@code null}) when the presented JTI is not a live
+     * refresh token owned by {@code user}, so a replayed or stolen refresh
+     * token cannot mint new credentials. The default keeps pre-2.2.9
+     * behaviour for implementations without a token store.
+     *
+     * @param user Authenticated user (subject of the presented token)
+     * @param refreshJti JTI of the presented refresh token
+     * @return Successor pair, or {@code null} when the presented token was
+     *  not acceptable
+     */
+    default TokenPair rotate(AuthUser user, String refreshJti) {
+        return generatePair(user);
     }
 
     /**

@@ -35,7 +35,7 @@ const userItems = computed<NavItem[]>(() => {
   if (canRead('api_cooldown_permissions')) {
     items.push({ label: 'Cooldown', icon: 'pi pi-clock', to: '/cooldown' })
   }
-  items.push({ label: 'Quick Setup', icon: 'pi pi-bolt', to: '/setup' })
+  items.push({ label: 'Set Me Up', icon: 'pi pi-bolt', to: '/setup' })
   return items
 })
 
@@ -56,6 +56,7 @@ const adminItems = computed<NavItem[]>(() => {
   if (auth.isAdmin) {
     items.push({ label: 'Auth Providers', icon: 'pi pi-key', to: '/admin/auth-providers' })
     items.push({ label: 'Negative Cache', icon: 'pi pi-ban', to: '/admin/neg-cache' })
+    items.push({ label: 'Troubleshoot', icon: 'pi pi-wrench', to: '/admin/troubleshoot' })
     items.push({ label: 'System Settings', icon: 'pi pi-sliders-h', to: '/admin/settings' })
   }
   return items

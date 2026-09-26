@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.FetchSignal;
 import com.auto1.pantera.http.cache.NegativeCache;
@@ -68,6 +69,7 @@ public final class CachedNpmProxySlice implements Slice {
      * a genuine upstream 404, which needs no annotation.
      */
     private static final String UPSTREAM_STATUS_HEADER = "X-Pantera-Upstream-Status";
+
 
     /**
      * Origin slice (NpmProxySlice).
@@ -248,6 +250,19 @@ public final class CachedNpmProxySlice implements Slice {
             .thenApply(response -> {
                 capture.set(response);
                 final long duration = System.currentTimeMillis() - startTime;
+                if (CachedNpmProxySlice.isCooldownVerdict(response)) {
+                    // Pantera's own cooldown 403, not an upstream answer: it is
+                    // authoritative, so serve it as-is (the body names
+                    // blocked_until, Retry-After says when to retry). Laundering
+                    // it into the non-authoritative 404 below hid the reason
+                    // from clients. RaceSlice keeps racing other remotes on a
+                    // 403 and returns it only when none answers 2xx; a group
+                    // walk treats it as authoritative, like every other
+                    // adapter's cooldown 403. Never negative-cached, so an
+                    // unblock is visible on the next request. Followers
+                    // re-fetch origin, which re-evaluates the cooldown.
+                    return new UpstreamOutcome(FetchSignal.SUCCESS, response.status().code());
+                }
                 if (response.status().code() == 404) {
                     // WS8 Bug B2: a probe request must not be able to
                     // poison a real one. A HEAD reaching this point 404'd
@@ -276,7 +291,7 @@ public final class CachedNpmProxySlice implements Slice {
                     );
                     return new UpstreamOutcome(FetchSignal.ERROR, response.status().code());
                 }
-                // Non-404 4xx (403 rate-limit / unauthorized, 410 Gone for
+                // Non-404 upstream 4xx (403 rate-limit / unauthorized, 410 Gone for
                 // unpublished, 451, 409, etc.) means "this remote doesn't
                 // serve this artifact" — semantically equivalent to NOT_FOUND
                 // from the RaceSlice's perspective. Mapping to ERROR (→ 503)
@@ -374,6 +389,22 @@ public final class CachedNpmProxySlice implements Slice {
                     ).build()
                 );
         }
+    }
+
+    /**
+     * Whether the origin's response is Pantera's own cooldown verdict (a 403
+     * tagged {@code X-Pantera-Cooldown} by the cooldown response factory or
+     * the all-versions-blocked packument path) rather than an upstream
+     * refusal.
+     *
+     * @param response Origin response
+     * @return True for a cooldown 403
+     */
+    private static boolean isCooldownVerdict(final Response response) {
+        return response.status() == RsStatus.FORBIDDEN
+            && !response.headers().values(
+                com.auto1.pantera.cooldown.response.CooldownResponseFactory.HEADER
+            ).isEmpty();
     }
 
     /**

@@ -35,7 +35,7 @@ class ContentLengthRestrictionTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"10,0", "10,not number", "10,1", "10,10"})
+    @CsvSource({"10,0", "10,1", "10,10"})
     public void shouldPassRequestsWithinLimit(int limit, String value) {
         final Slice slice = new ContentLengthRestriction(
             (line, headers, body) -> ResponseBuilder.ok().completedFuture(), limit
@@ -53,6 +53,46 @@ class ContentLengthRestrictionTest {
         final Response response = slice.response(new RequestLine("GET", "/"), Headers.EMPTY, Content.EMPTY)
             .join();
         ResponseAssert.checkOk(response);
+    }
+
+    /**
+     * resource-dos F17: a malformed Content-Length used to PASS (the parse
+     * failure was treated as "within limit"), so a client could dodge the
+     * operator's cap with a non-numeric header.
+     */
+    @Test
+    public void malformedContentLengthIsRejected() {
+        final Slice slice = new ContentLengthRestriction(
+            (line, headers, body) -> ResponseBuilder.ok().completedFuture(), 10
+        );
+        final Response response = slice.response(
+            new RequestLine("PUT", "/"), this.headers("not number"), Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(response, new RsHasStatus(RsStatus.REQUEST_TOO_LONG));
+    }
+
+    /**
+     * resource-dos F17: the check only ever looked at the declared header,
+     * so a chunked body (no Content-Length at all) of ANY size sailed past
+     * the operator's cap. Actual bytes must be metered.
+     */
+    @Test
+    public void chunkedBodyExceedingLimitIsRejected() {
+        final Slice slice = new ContentLengthRestriction(
+            (line, headers, body) -> body.asBytesFuture().thenApply(
+                bytes -> ResponseBuilder.ok().build()
+            ),
+            10
+        );
+        final byte[] payload = new byte[20];
+        // No size hint: exactly what the server builds for chunked framing.
+        final Content chunked = new Content.From(
+            io.reactivex.Flowable.just(java.nio.ByteBuffer.wrap(payload))
+        );
+        final Response response = slice.response(
+            new RequestLine("PUT", "/"), Headers.EMPTY, chunked
+        ).join();
+        MatcherAssert.assertThat(response, new RsHasStatus(RsStatus.REQUEST_TOO_LONG));
     }
 
     private Headers headers(final String value) {

@@ -11,8 +11,10 @@ import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.docker.asto.RegistryRoot;
 import com.auto1.pantera.docker.cache.CacheDocker;
 import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;
+import com.auto1.pantera.cooldown.CooldownLinkedVersions;
 import com.auto1.pantera.docker.composite.MultiReadDocker;
-import com.auto1.pantera.docker.composite.ReadWriteDocker;
+import com.auto1.pantera.docker.cooldown.CooldownImageName;
+import com.auto1.pantera.docker.misc.OfficialImageName;
 import com.auto1.pantera.docker.http.DockerSlice;
 import com.auto1.pantera.docker.http.TrimmedDocker;
 import com.auto1.pantera.docker.proxy.ProxyDocker;
@@ -30,6 +32,7 @@ import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.RemoteConfig;
 import com.auto1.pantera.http.client.auth.AuthClientSlice;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.repo.RepoConfig;
@@ -129,12 +132,23 @@ public final class DockerProxy implements Slice {
             final Optional<Queue<ArtifactEvent>> events,
             final CooldownService cooldown
     ) {
-        final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
+        final OfficialImageName official = new OfficialImageName(
+            cfg.remotes().stream().map(RemoteConfig::uri).toList()
+        );
+        final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector(official);
         final var registry = PublishDateRegistries.instance();
         if (registry instanceof DbPublishDateRegistry dbRegistry) {
-            inspector.setReleaseDateCallback((artifact, version, release) ->
-                dbRegistry.persist("docker", artifact, version, release, "manifest-config"));
+            inspector.setReleaseDateCallback(new DockerReleaseDates(dbRegistry, cfg.type()));
         }
+        cfg.storageOpt().ifPresent(
+            storage -> CooldownLinkedVersions.instance().register(
+                cfg.name(),
+                new DockerLinkedDigests(
+                    new AstoDocker(cfg.name(), new SubStorage(RegistryRoot.V2, storage)),
+                    official
+                )
+            )
+        );
         final Docker proxies = new MultiReadDocker(
             cfg.remotes().stream().map(r -> proxy(client, cfg, events, r, inspector))
                 .toList()
@@ -146,13 +160,23 @@ public final class DockerProxy implements Slice {
                         cfg.name(),
                         new SubStorage(RegistryRoot.V2, storage)
                     );
-                    return new ReadWriteDocker(new MultiReadDocker(local, proxies), local);
+                    // Read-only for clients: uploads and manifest PUTs
+                    // answer 405 UNSUPPORTED (MultiReadDocker refuses
+                    // writes). Only the CacheDocker writers inside
+                    // `proxies` populate this storage. A ReadWriteDocker
+                    // here let any user with push overwrite a cached
+                    // upstream tag for every puller (B35).
+                    return new MultiReadDocker(local, proxies);
                 }
             )
             .orElse(proxies);
         docker = new TrimmedDocker(docker, cfg.name());
+        // writable=false: push routes answer 405 UNSUPPORTED before any
+        // repository lookup, so a refused push never fetches, caches or
+        // publishes the upstream manifest, and upload bodies are drained.
         Slice slice = new DockerSlice(
-            docker, policy, new CombinedAuthScheme(auth, tokens), events
+            docker, policy, new CombinedAuthScheme(auth, tokens), events,
+            SyncArtifactIndexer.NOOP, false
         );
         slice = new DockerProxyCooldownSlice(
             slice,
@@ -160,7 +184,8 @@ public final class DockerProxy implements Slice {
             cfg.type(),
             cooldown,
             inspector,
-            docker
+            docker,
+            new CooldownImageName(cfg.name(), official)
         );
         if (cfg.port().isEmpty()) {
             slice = new DockerRoutingSlice.Reverted(slice);

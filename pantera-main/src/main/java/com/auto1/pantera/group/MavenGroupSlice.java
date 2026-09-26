@@ -29,7 +29,6 @@ import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
 
@@ -40,7 +39,13 @@ import java.util.concurrent.ForkJoinPool;
  * <ul>
  *   <li>Tries members sequentially in declared order; returns the first
  *       successful response (cooldown-filtered).</li>
- *   <li>Caches the filtered winning bytes (12 hour TTL, L1+L2).</li>
+ *   <li>Caches the filtered winning bytes per node (10 minute TTL,
+ *       invalidated by cooldown package events — see
+ *       {@link GroupMetadataCache}).</li>
+ *   <li>A member answering with Pantera's cooldown verdict (the
+ *       {@code X-Pantera-Cooldown} marker, e.g. the all-versions-blocked
+ *       403) ends the walk: the verdict is relayed verbatim, never cached,
+ *       never replaced by stale bytes.</li>
  *   <li>If no member returns 200, falls back to last-known-good stale
  *       cache, otherwise 404.</li>
  * </ul>
@@ -233,13 +238,37 @@ public final class MavenGroupSlice implements Slice {
             return mergeMetadata(line, headers, body, path);
         }
 
-        // Handle checksum requests for merged metadata
-        if ("GET".equals(method) && (path.endsWith("maven-metadata.xml.sha1") || path.endsWith("maven-metadata.xml.md5"))) {
+        // Handle checksum requests for merged metadata: every sidecar must be
+        // the digest of the bytes this group serves for the metadata, so none
+        // of them may be forwarded to a member (whose answer would describe
+        // different bytes, or be the metadata XML itself).
+        if ("GET".equals(method) && metadataChecksumAlgorithm(path).isPresent()) {
             return handleChecksumRequest(line, headers, body, path);
         }
 
         // All other requests use standard group behavior
         return delegate.response(line, headers, body);
+    }
+
+    /**
+     * JCA digest algorithm of a {@code maven-metadata.xml} checksum sidecar.
+     * @param path Request path
+     * @return Algorithm name, or empty when the path is not a metadata sidecar
+     */
+    private static java.util.Optional<String> metadataChecksumAlgorithm(final String path) {
+        final String algorithm;
+        if (path.endsWith("maven-metadata.xml.sha1")) {
+            algorithm = "SHA-1";
+        } else if (path.endsWith("maven-metadata.xml.md5")) {
+            algorithm = "MD5";
+        } else if (path.endsWith("maven-metadata.xml.sha256")) {
+            algorithm = "SHA-256";
+        } else if (path.endsWith("maven-metadata.xml.sha512")) {
+            algorithm = "SHA-512";
+        } else {
+            algorithm = null;
+        }
+        return java.util.Optional.ofNullable(algorithm);
     }
 
     /**
@@ -253,7 +282,7 @@ public final class MavenGroupSlice implements Slice {
         final String path
     ) {
         // Determine checksum type
-        final boolean isSha1 = path.endsWith(".sha1");
+        final String algorithm = metadataChecksumAlgorithm(path).orElseThrow();
         final String metadataPath = path.substring(0, path.lastIndexOf('.'));
 
         // Get merged metadata from cache or merge it
@@ -265,13 +294,19 @@ public final class MavenGroupSlice implements Slice {
 
         return mergeMetadata(metadataLine, headers, body, metadataPath)
             .thenApply(metadataResponse -> {
+                if (metadataResponse.status() != RsStatus.OK) {
+                    // No metadata to digest (cooldown verdict, 404, error):
+                    // relay the metadata answer instead of a 200 checksum
+                    // of an error body.
+                    return CompletableFuture.completedFuture(metadataResponse);
+                }
                 // Extract body from metadata response
                 return metadataResponse.body().asBytesFuture()
                     .thenApply(metadataBytes -> {
                         try {
                             // Compute checksum
                             final java.security.MessageDigest digest = java.security.MessageDigest.getInstance(
-                                isSha1 ? "SHA-1" : "MD5"
+                                algorithm
                             );
                             final byte[] checksumBytes = digest.digest(metadataBytes);
 
@@ -339,14 +374,10 @@ public final class MavenGroupSlice implements Slice {
                 // blind spot.
                 com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
                 final com.auto1.pantera.audit.AuditContext hitCtx =
-                    new com.auto1.pantera.audit.AuditContext(
-                        org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
-                        org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
-                    );
+                    new com.auto1.pantera.audit.AuditContext(headers);
                 final String hitPkg =
-                    new com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector()
-                        .extractPackageName(path)
-                        .map(name -> name.replace('/', '.'))
+                    new com.auto1.pantera.maven.cooldown.MavenMetadataCoordinates()
+                        .packageName(path)
                         .orElse(path);
                 com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
                     hitCtx, this.repoType, this.group, hitPkg,
@@ -472,6 +503,26 @@ public final class MavenGroupSlice implements Slice {
         final RequestLine memberLine = rewritePath(line, member);
         return memberSlice.response(memberLine, dropFullPathHeader(headers), Content.EMPTY)
             .thenCompose(resp -> {
+                if (isCooldownVerdict(resp)) {
+                    // The member's own cooldown verdict (e.g. every version
+                    // blocked) is authoritative for the whole group: a later
+                    // member must not serve the blocked versions and stale
+                    // bytes must not mask the verdict. Relay it verbatim;
+                    // never cache it.
+                    EcsLogger.info("com.auto1.pantera.group")
+                        .message("Member returned a cooldown verdict for metadata; relaying it")
+                        .eventCategory("web")
+                        .eventAction("metadata_fetch")
+                        .eventOutcome("failure")
+                        .field("event.reason", "cooldown_active")
+                        .field("repository.name", this.group)
+                        .field("member.name", member)
+                        .field("http.response.status_code", resp.status().code())
+                        .field("url.path", path)
+                        .field("log.source", "application")
+                        .log();
+                    return CompletableFuture.completedFuture(resp);
+                }
                 if (resp.status() == RsStatus.OK) {
                     return readResponseBody(resp.body())
                         .thenCompose(rawBytes -> {
@@ -617,23 +668,32 @@ public final class MavenGroupSlice implements Slice {
     private CompletableFuture<byte[]> auditMetadataResolution(
         final String path, final byte[] mergedBytes, final Headers headers
     ) {
-        final Optional<String> pkgOpt =
-            new com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector()
-                .extractPackageName(path);
-        final String pkg = pkgOpt.map(name -> name.replace('/', '.')).orElse(path);
+        final String pkg = new com.auto1.pantera.maven.cooldown.MavenMetadataCoordinates()
+            .packageName(path)
+            .orElse(path);
         // Capture correlation context before the audit emit — the audit record
         // must reflect this request, not whatever the worker thread has bound.
         com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
         com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
-            new com.auto1.pantera.audit.AuditContext(
-                org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
-                org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
-            ),
+            new com.auto1.pantera.audit.AuditContext(headers),
             this.repoType, this.group, pkg,
             new com.auto1.pantera.http.headers.Login(headers).getValue(),
             "group relays member metadata verbatim; cooldown is enforced by proxy members"
         );
         return CompletableFuture.completedFuture(mergedBytes);
+    }
+
+    /**
+     * Whether a member answered with Pantera's own cooldown verdict (any
+     * status carrying the {@code X-Pantera-Cooldown} marker).
+     *
+     * @param resp Member response
+     * @return True for a cooldown verdict
+     */
+    private static boolean isCooldownVerdict(final Response resp) {
+        return !resp.headers().values(
+            com.auto1.pantera.cooldown.response.CooldownResponseFactory.HEADER
+        ).isEmpty();
     }
 
     /**

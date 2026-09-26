@@ -35,6 +35,100 @@ public final class CooldownRepository {
         this.dataSource = Objects.requireNonNull(dataSource);
     }
 
+    /**
+     * Every cooldown record — live rows and archived history — of a package
+     * in a set of repositories, newest history first. Live rows map to
+     * {@code blocked} (active, window open), {@code expired} (active, window
+     * over, not yet archived) or {@code released} (manually unblocked);
+     * history rows to {@code released} (manual unblock / admin purge) or
+     * {@code expired}. Admin package inspector only; blocking JDBC.
+     *
+     * @param repoNames Repository names
+     * @param artifacts Artifact name spellings
+     * @return Records
+     */
+    public List<CooldownPackageRow> findForPackage(
+        final java.util.Collection<String> repoNames,
+        final java.util.Collection<String> artifacts
+    ) {
+        if (repoNames.isEmpty() || artifacts.isEmpty()) {
+            return List.of();
+        }
+        final List<CooldownPackageRow> out = new ArrayList<>();
+        final long now = System.currentTimeMillis();
+        final String live =
+            "SELECT repo_type, repo_name, artifact, version, status, reason, "
+                + "blocked_until, unblocked_at FROM artifact_cooldowns "
+                + "WHERE repo_name = ANY(?) AND artifact = ANY(?)";
+        final String history =
+            "SELECT repo_type, repo_name, artifact, version, reason, blocked_until, "
+                + "archive_reason, archived_at FROM artifact_cooldowns_history "
+                + "WHERE repo_name = ANY(?) AND artifact = ANY(?) "
+                + "ORDER BY archived_at DESC LIMIT 5000";
+        try (Connection conn = this.dataSource.getConnection()) {
+            final Array repos = conn.createArrayOf("varchar", repoNames.toArray());
+            final Array names = conn.createArrayOf("varchar", artifacts.toArray());
+            try (PreparedStatement stmt = conn.prepareStatement(live)) {
+                stmt.setArray(1, repos);
+                stmt.setArray(2, names);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        out.add(CooldownRepository.liveRow(rs, now));
+                    }
+                }
+            }
+            try (PreparedStatement stmt = conn.prepareStatement(history)) {
+                stmt.setArray(1, repos);
+                stmt.setArray(2, names);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        final String archive = rs.getString("archive_reason");
+                        out.add(new CooldownPackageRow(
+                            rs.getString("repo_type"), rs.getString("repo_name"),
+                            rs.getString("artifact"), rs.getString("version"),
+                            ArchiveReason.EXPIRED.name().equals(archive) ? "expired" : "released",
+                            Instant.ofEpochMilli(rs.getLong("blocked_until")),
+                            rs.getString("reason"), false,
+                            Instant.ofEpochMilli(rs.getLong("archived_at"))
+                        ));
+                    }
+                }
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to query cooldown records of a package", err);
+        }
+        return out;
+    }
+
+    /**
+     * Map a live cooldown row.
+     *
+     * @param rs Result set positioned on the row
+     * @param now Current epoch millis
+     * @return Record
+     * @throws SQLException On read failure
+     */
+    private static CooldownPackageRow liveRow(final ResultSet rs, final long now)
+        throws SQLException {
+        final BlockStatus status = BlockStatus.fromDatabase(rs.getString("status"));
+        final long until = rs.getLong("blocked_until");
+        final long unblocked = rs.getLong("unblocked_at");
+        final Instant at = rs.wasNull() ? null : Instant.ofEpochMilli(unblocked);
+        final String state;
+        if (status == BlockStatus.ACTIVE) {
+            state = until > now ? "blocked" : "expired";
+        } else if (status == BlockStatus.EXPIRED) {
+            state = "expired";
+        } else {
+            state = "released";
+        }
+        return new CooldownPackageRow(
+            rs.getString("repo_type"), rs.getString("repo_name"),
+            rs.getString("artifact"), rs.getString("version"), state,
+            Instant.ofEpochMilli(until), rs.getString("reason"), true, at
+        );
+    }
+
     Optional<DbBlockRecord> find(
         final String repoType,
         final String repoName,
@@ -130,18 +224,21 @@ public final class CooldownRepository {
 
     /**
      * Archive all active blocks for a repository into
-     * {@code artifact_cooldowns_history} and delete them from the live table
-     * in a single CTE. Mirrors {@link #archiveExpiredBatch(int)} but keyed by
-     * {@code (repo_type, repo_name)} and parameterised by archive reason +
-     * actor. Used by the service-level bulk unblock ("Unblock All" per repo).
+     * {@code artifact_cooldowns_history} and mark the live rows
+     * {@code INACTIVE} in a single CTE. The live row is kept (with
+     * {@code blocked_until}) so later evaluations see the manual release
+     * instead of re-blocking the version once the decision cache ages out;
+     * {@link #purgeReleasedBatch(int)} removes it after the window ends.
+     * Used by the service-level bulk unblock ("Unblock All" per repo).
      * @param repoType Repository type.
      * @param repoName Repository name.
      * @param reason Archive reason written to each history row.
-     * @param actor Username performing the action; written to {@code archived_by}.
-     * @return Number of rows moved to history.
+     * @param actor Username performing the action; written to {@code archived_by}
+     *     and {@code unblocked_by}.
+     * @return Number of rows released.
      */
-    public int archiveAndDeleteByRepo(final String repoType, final String repoName,
-                                      final ArchiveReason reason, final String actor) {
+    public int archiveAndReleaseByRepo(final String repoType, final String repoName,
+                                       final ArchiveReason reason, final String actor) {
         final String sql = "WITH victims AS ("
             + "SELECT id FROM artifact_cooldowns"
             + " WHERE repo_type = ? AND repo_name = ? AND status = 'ACTIVE'"
@@ -156,19 +253,23 @@ public final class CooldownRepository {
             + "c.installed_by, c.release_date, ?, ?, ? "
             + "FROM artifact_cooldowns c JOIN victims v ON v.id = c.id "
             + "RETURNING original_id) "
-            + "DELETE FROM artifact_cooldowns c USING archived a "
-            + "WHERE c.id = a.original_id";
+            + "UPDATE artifact_cooldowns c SET status = 'INACTIVE', "
+            + "unblocked_at = ?, unblocked_by = ? "
+            + "FROM archived a WHERE c.id = a.original_id";
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            final long now = Instant.now().toEpochMilli();
             stmt.setString(1, repoType);
             stmt.setString(2, repoName);
-            stmt.setLong(3, Instant.now().toEpochMilli());
+            stmt.setLong(3, now);
             stmt.setString(4, reason.name());
             stmt.setString(5, actor);
+            stmt.setLong(6, now);
+            stmt.setString(7, actor);
             return stmt.executeUpdate();
         } catch (final SQLException err) {
             throw new IllegalStateException(
-                "Failed to archive+delete active blocks for repo", err);
+                "Failed to archive+release active blocks for repo", err);
         }
     }
 
@@ -705,6 +806,86 @@ public final class CooldownRepository {
     }
 
     /**
+     * Archive a single ACTIVE block into history and mark the live row
+     * {@code INACTIVE} (manual release) in one transaction. Keeping the row
+     * is what makes a manual unblock durable: an evaluation that misses the
+     * decision cache finds the released row and allows the version rather
+     * than re-creating a block from the release date. No-op (returns
+     * {@code false}) when the row is gone or no longer ACTIVE, so a repeated
+     * unblock never writes a second history row.
+     * @param blockId Id of the row in {@code artifact_cooldowns}.
+     * @param reason Reason written to the history row.
+     * @param actor Username performing the release.
+     * @return {@code true} when an ACTIVE row was released.
+     */
+    public boolean archiveAndRelease(final long blockId,
+                                     final ArchiveReason reason,
+                                     final String actor) {
+        final String archiveSql = "INSERT INTO artifact_cooldowns_history ("
+            + "original_id, repo_type, repo_name, artifact, version, "
+            + "reason, blocked_by, blocked_at, blocked_until, "
+            + "installed_by, release_date, archived_at, archive_reason, archived_by"
+            + ") SELECT id, repo_type, repo_name, artifact, version, "
+            + "reason, blocked_by, blocked_at, blocked_until, "
+            + "installed_by, release_date, ?, ?, ? "
+            + "FROM artifact_cooldowns WHERE id = ? AND status = 'ACTIVE'";
+        final String releaseSql = "UPDATE artifact_cooldowns SET status = 'INACTIVE', "
+            + "unblocked_at = ?, unblocked_by = ? WHERE id = ? AND status = 'ACTIVE'";
+        try (Connection conn = this.dataSource.getConnection()) {
+            conn.setAutoCommit(false);
+            try (PreparedStatement ins = conn.prepareStatement(archiveSql);
+                PreparedStatement upd = conn.prepareStatement(releaseSql)) {
+                final long now = Instant.now().toEpochMilli();
+                ins.setLong(1, now);
+                ins.setString(2, reason.name());
+                ins.setString(3, actor);
+                ins.setLong(4, blockId);
+                if (ins.executeUpdate() == 0) {
+                    conn.commit();
+                    return false;
+                }
+                upd.setLong(1, now);
+                upd.setString(2, actor);
+                upd.setLong(3, blockId);
+                if (upd.executeUpdate() == 0) {
+                    conn.rollback();
+                    return false;
+                }
+                conn.commit();
+                return true;
+            } catch (final SQLException err) {
+                conn.rollback();
+                throw new IllegalStateException("archiveAndRelease failed", err);
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException("archiveAndRelease failed", err);
+        }
+    }
+
+    /**
+     * Delete manually released ({@code INACTIVE}) rows whose cooldown window
+     * has ended. They were archived to history at release time, so this is a
+     * plain delete. Mirrors the V144 {@code purge-released-cooldowns} cron.
+     * @param limit Maximum number of rows to delete in this batch.
+     * @return Number of rows deleted.
+     */
+    public int purgeReleasedBatch(final int limit) {
+        final String sql = "WITH victims AS ("
+            + "SELECT id FROM artifact_cooldowns"
+            + " WHERE status = 'INACTIVE' AND blocked_until < ?"
+            + " ORDER BY blocked_until LIMIT ? FOR UPDATE SKIP LOCKED) "
+            + "DELETE FROM artifact_cooldowns c USING victims v WHERE c.id = v.id";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, Instant.now().toEpochMilli());
+            stmt.setInt(2, limit);
+            return stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to purge released cooldowns", err);
+        }
+    }
+
+    /**
      * Find active blocks restricted to a set of accessible repository names,
      * with optional filters and SQL-side pagination.
      * @param accessibleRepos Set of repo names the caller may see. Empty → [].
@@ -735,7 +916,7 @@ public final class CooldownRepository {
             ? "blocked_at" : ACTIVE_SORT_COL_MAP.getOrDefault(sortBy, "blocked_at");
         final String dir = sortAsc ? "ASC" : "DESC";
         final String sql = ACTIVE_SELECT_COLS
-            + " WHERE repo_name = ANY(?)"
+            + " WHERE status = 'ACTIVE' AND repo_name = ANY(?)"
             + " AND (? IS NULL OR repo_name = ?)"
             + " AND (? IS NULL OR LOWER(repo_type) = LOWER(?)"
             + " OR LOWER(repo_type) LIKE LOWER(?) || '-%')"
@@ -784,7 +965,7 @@ public final class CooldownRepository {
             return 0L;
         }
         final String sql = "SELECT COUNT(*) FROM artifact_cooldowns"
-            + " WHERE repo_name = ANY(?)"
+            + " WHERE status = 'ACTIVE' AND repo_name = ANY(?)"
             + " AND (? IS NULL OR repo_name = ?)"
             + " AND (? IS NULL OR LOWER(repo_type) = LOWER(?)"
             + " OR LOWER(repo_type) LIKE LOWER(?) || '-%')"

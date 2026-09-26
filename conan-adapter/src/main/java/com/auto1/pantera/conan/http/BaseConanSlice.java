@@ -21,7 +21,6 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
-import com.auto1.pantera.http.rq.RqHeaders;
 import io.vavr.Tuple2;
 
 import javax.json.Json;
@@ -77,11 +76,11 @@ abstract class BaseConanSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
-        final String hostname = new RqHeaders.Single(headers, "Host").asString();
+        final RepoFileUrl urls = new RepoFileUrl(headers);
         final Matcher matcher = this.pathwrap.getPattern().matcher(line.uri().getPath());
         final CompletableFuture<RequestResult> content;
         if (matcher.matches()) {
-            content = this.getResult(line, hostname, matcher);
+            content = this.getResult(line, urls, matcher);
         } else {
             content = CompletableFuture.completedFuture(new RequestResult());
         }
@@ -131,12 +130,12 @@ abstract class BaseConanSlice implements Slice {
     /**
      * Processess the request and returns result data for this request.
      * @param request Pantera request line helper object instance.
-     * @param hostname Current server host name string to construct and process URLs.
+     * @param urls Client-facing URLs of repository files.
      * @param matcher Matched pattern matcher object for the current path wrapper.
      * @return Future object, providing request result data.
      */
     protected abstract CompletableFuture<RequestResult> getResult(
-        RequestLine request, String hostname, Matcher matcher
+        RequestLine request, RepoFileUrl urls, Matcher matcher
     );
 
     /**

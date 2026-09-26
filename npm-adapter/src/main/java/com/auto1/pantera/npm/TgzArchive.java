@@ -104,6 +104,16 @@ public final class TgzArchive {
     public static class JsonFromStream {
 
         /**
+         * Upper bound on a {@code package.json} entry (1 MiB). The entry size
+         * comes from the tar HEADER — attacker-controlled on publish — and
+         * before 2.2.9 it was used verbatim as an allocation size, so a
+         * forged multi-gigabyte header drove a heap allocation of that size
+         * before a byte was read (resource-dos F16). Real manifests are a
+         * few KB; anything above this is refused up front.
+         */
+        public static final long MAX_PACKAGE_JSON_BYTES = 1024L * 1024L;
+
+        /**
          * Input stream to read json from.
          */
         private final InputStream input;
@@ -134,6 +144,15 @@ public final class TgzArchive {
                     }
                     final String[] parts = entry.getName().split("/");
                     if ("package.json".equals(parts[parts.length - 1])) {
+                        // Bound the allocation BEFORE trusting the header size.
+                        if (entry.getSize() > MAX_PACKAGE_JSON_BYTES) {
+                            throw new PanteraException(
+                                String.format(
+                                    "'package.json' entry declares %d bytes, above the %d-byte limit",
+                                    entry.getSize(), MAX_PACKAGE_JSON_BYTES
+                                )
+                            );
+                        }
                         // Read package.json without closing the tar stream
                         final byte[] jsonBytes = new byte[(int) entry.getSize()];
                         int totalRead = 0;

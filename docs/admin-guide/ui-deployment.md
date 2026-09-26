@@ -105,6 +105,7 @@ pantera-ui:
     - GRAFANA_URL=http://localhost:3000/goto/bfgfvn3efggsge?orgId=1
     - APP_TITLE=Pantera
     - DEFAULT_PAGE_SIZE=25
+    - REGISTRY_URL=http://localhost:8081
   ports:
     - "8090:80"
   networks:
@@ -143,13 +144,28 @@ docker run -d -p 8090:80 \
 | `APP_TITLE` | Application title in header and login page | `Pantera` | `My Registry` |
 | `GRAFANA_URL` | Link to Grafana dashboard (shown on Dashboard page) | _(empty)_ | `https://grafana.example.com/d/pantera` |
 | `DEFAULT_PAGE_SIZE` | Default page size for paginated lists | `20` | `50` |
-| `REGISTRY_URL` | Public base URL of the registry shown in client setup snippets (Tech Setup page). Falls back to the UI's own origin (`window.location.origin`) when empty. | _(empty)_ | `https://registry.example.com` |
+| `REGISTRY_URL` | Client-facing registry address used in Set Me Up snippets (not the UI's address). The server-side **Registry URL** setting overrides it. See [Registry URL for Set Me Up](#registry-url-for-set-me-up). | _(empty)_ | `https://registry.example.com` |
 | `APM_ENABLED` | Enable the Elastic APM RUM agent in the browser | `false` | `true` |
 | `APM_SERVER_URL` | Elastic APM server URL | _(empty)_ | `https://apm.example.com` |
 | `APM_SERVICE_NAME` | Service name reported to APM | `pantera-ui` | `pantera-ui-prod` |
 | `APM_ENVIRONMENT` | Environment reported to APM | `production` | `staging` |
 
 **How it works:** On container startup, `docker-entrypoint.sh` runs `envsubst` on `config.json.template` to produce `config.json`, and — only when `API_UPSTREAM` is set — injects the `/api/` proxy block into the nginx config. The Vue app loads `config.json` via `fetch('/config.json')` before mounting. No rebuild is needed to change configuration — restart the container with new env vars. All variables except `API_UPSTREAM` end up in `config.json`; `API_UPSTREAM` is consumed only by the nginx config generation.
+
+---
+
+## Registry URL for Set Me Up
+
+The Set Me Up pages generate client configuration (`settings.xml`, `.npmrc`, `pip.conf`, ...) that points at the registry. The registry address is resolved as follows:
+
+1. The **Registry URL** in *System Settings* (stored server-side as `ui.registry_url`, returned by `GET /api/v1/settings/ui`), else
+2. the UI container's `REGISTRY_URL` (`registryUrl` in `config.json`).
+
+Set it to the address **clients** use to reach repositories — the backend port or the reverse proxy in front of it — never the UI's address. The UI and the registry usually live on different hosts or ports, and snippets built from the UI address do not work.
+
+- **Global prefix:** when `meta.global_prefixes` is configured, the first prefix is appended automatically (`https://registry.example.com` becomes `https://registry.example.com/test_prefix`) unless the URL already ends with it. Do not add it yourself.
+- **Unset:** snippets fall back to the UI's own origin and every Set Me Up page shows a banner saying the registry URL is not configured (admins get a link to System Settings).
+- **Per-repository override:** a repository whose configuration sets its own `url` (or `settings.url`) uses that address verbatim in its snippets, without the prefix. Formats that embed the URL in their metadata (Helm, Composer, NuGet) must be reached at exactly that address.
 
 ---
 

@@ -11,14 +11,24 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.RepoAuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
+import com.auto1.pantera.http.auth.OperationControl;
+import com.auto1.pantera.api.v1.download.DownloadTokens;
+import com.auto1.pantera.api.v1.download.DownloadTokenSupport;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
+import com.auto1.pantera.http.headers.ContentFileName;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -35,15 +45,13 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
+import java.util.concurrent.CompletionStage;
 import javax.json.Json;
 import javax.json.JsonStructure;
 import javax.sql.DataSource;
@@ -55,29 +63,15 @@ import javax.sql.DataSource;
 public final class ArtifactHandler {
 
     /**
-     * Download token TTL in milliseconds.
+     * Direct-download capability tokens (SECURITY, 2.2.9). Replaces the
+     * static HMAC key that fell back to the predictable
+     * {@code pantera-download-<pid>-<user.name>} — see
+     * {@link com.auto1.pantera.api.v1.download.DownloadTokenKey} for the
+     * resolution rules and {@link DownloadTokens} for the verification
+     * contract (constant-time signature check, two-sided timestamp, true
+     * single use, repository + issuer binding).
      */
-    private static final long TOKEN_TTL_MS = 60_000L;
-
-    /**
-     * HMAC algorithm for stateless token signing.
-     */
-    private static final String HMAC_ALGO = "HmacSHA256";
-
-    /**
-     * HMAC secret key — derived from system identity at startup.
-     * Stateless tokens allow any instance behind NLB to validate.
-     */
-    private static final byte[] HMAC_SECRET;
-
-    static {
-        final String seed = System.getenv().getOrDefault(
-            "PANTERA_DOWNLOAD_TOKEN_SECRET", // NOPMD HardCodedCryptoKey - env var name, not key material
-            "pantera-download-" + ProcessHandle.current().pid()
-                + "-" + System.getProperty("user.name", "default")
-        );
-        HMAC_SECRET = seed.getBytes(StandardCharsets.UTF_8);
-    }
+    private final DownloadTokens tokens;
 
     /**
      * Repository settings create/read/update/delete.
@@ -145,12 +139,34 @@ public final class ArtifactHandler {
     ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy, final DataSource dataSource,
         final ArtifactIndex artifactIndex, final StorageMetaCache metaCache) {
+        this(
+            crs, repoData, policy, dataSource, artifactIndex, metaCache,
+            DownloadTokenSupport.create(dataSource)
+        );
+    }
+
+    /**
+     * Ctor with an explicit token component (tests inject a known key,
+     * clock and nonce ledger).
+     * @param crs Repository settings CRUD
+     * @param repoData Repository data management
+     * @param policy Pantera security policy
+     * @param dataSource Artifacts DB DataSource (nullable)
+     * @param artifactIndex Index used by delete handlers to cascade DB removal
+     * @param metaCache Caffeine-backed storage metadata cache
+     * @param tokens Direct-download token component
+     */
+    ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
+        final Policy<?> policy, final DataSource dataSource,
+        final ArtifactIndex artifactIndex, final StorageMetaCache metaCache,
+        final DownloadTokens tokens) {
         this.crs = crs;
         this.repoData = repoData;
         this.policy = policy;
         this.dataSource = dataSource;
         this.artifactIndex = artifactIndex == null ? ArtifactIndex.NOP : artifactIndex;
         this.metaCache = metaCache == null ? new StorageMetaCache() : metaCache;
+        this.tokens = tokens;
     }
 
     /**
@@ -183,25 +199,40 @@ public final class ArtifactHandler {
             new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.READ);
         final ApiRepositoryPermission delete =
             new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.DELETE);
+        // SECURITY (2.2.9, artifact-repo-authz): the global api_repository
+        // bit alone is repository-agnostic. Every route below names a
+        // repository in the URL, so it ALSO requires the per-repository
+        // AdapterBasicPermission(name, read|delete) the data plane enforces
+        // — otherwise a coarse global grant reads/deletes artifacts of
+        // repositories the principal has no grant on (BOLA).
+        final RepoAuthzHandler repoRead =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.READ);
+        final RepoAuthzHandler repoDelete =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.DELETE);
         // GET /api/v1/repositories/:name/tree — directory listing (cursor-based)
         router.get("/api/v1/repositories/:name/tree")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::treeHandler);
         // GET /api/v1/repositories/:name/artifact — artifact detail
         router.get("/api/v1/repositories/:name/artifact")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::artifactDetailHandler);
         // GET /api/v1/repositories/:name/artifact/pull — pull instructions
         router.get("/api/v1/repositories/:name/artifact/pull")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::pullInstructionsHandler);
         // GET /api/v1/repositories/:name/artifact/download — download artifact (JWT auth)
         router.get("/api/v1/repositories/:name/artifact/download")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::downloadHandler);
         // POST /api/v1/repositories/:name/artifact/download-token — issue single-use token
         router.post("/api/v1/repositories/:name/artifact/download-token")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::downloadTokenHandler);
         // GET /api/v1/repositories/:name/artifact/download-direct — download via token (no JWT)
         router.get("/api/v1/repositories/:name/artifact/download-direct")
@@ -209,10 +240,12 @@ public final class ArtifactHandler {
         // DELETE /api/v1/repositories/:name/artifacts — delete artifact
         router.delete("/api/v1/repositories/:name/artifacts")
             .handler(new AuthzHandler(this.policy, delete))
+            .handler(repoDelete)
             .handler(this::deleteArtifactHandler);
         // DELETE /api/v1/repositories/:name/packages — delete package folder
         router.delete("/api/v1/repositories/:name/packages")
             .handler(new AuthzHandler(this.policy, delete))
+            .handler(repoDelete)
             .handler(this::deletePackageFolderHandler);
     }
 
@@ -226,6 +259,10 @@ public final class ArtifactHandler {
         final String repoName = ctx.pathParam("name");
         final String path = ctx.queryParam("path").stream()
             .findFirst().orElse("/");
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final String sortBy = normalizeTreeSort(
             ctx.queryParam("sort").stream().findFirst().orElse("name")
         );
@@ -627,6 +664,10 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final String repoName = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(repoName);
         final String filename = path.contains("/")
@@ -742,6 +783,10 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final String repoName = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(repoName);
         final String filename = path.contains("/")
@@ -756,7 +801,7 @@ public final class ArtifactHandler {
                     ctx.response()
                         .setStatusCode(200)
                         .putHeader("Content-Disposition",
-                            "attachment; filename=\"" + filename + "\"")
+                            new ContentFileName(filename).getValue())
                         .putHeader("Content-Type", "application/octet-stream");
                     if (size >= 0) {
                         ctx.response().putHeader("Content-Length", String.valueOf(size));
@@ -817,25 +862,39 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final String repoName = ctx.pathParam("name");
-        // Build stateless HMAC-signed token: payload.signature
-        // Any instance behind NLB can validate without shared state
-        final long now = System.currentTimeMillis();
-        final String payload = repoName + "\n" + path + "\n" + now;
-        final String payloadB64 = Base64.getUrlEncoder().withoutPadding()
-            .encodeToString(payload.getBytes(StandardCharsets.UTF_8));
-        final String signature = hmacSign(payload);
-        final String token = payloadB64 + "." + signature;
-        ctx.response()
-            .setStatusCode(200)
-            .putHeader("Content-Type", "application/json")
-            .end(new JsonObject().put("token", token).encode());
+        // The token names its issuer so redemption can re-check that the
+        // issuer still holds repository READ (possession is not authorization).
+        final JsonObject principal = ctx.user().principal();
+        final String user = principal.getString(com.auto1.pantera.api.AuthTokenRest.SUB);
+        final String context = principal.getString(
+            com.auto1.pantera.api.AuthTokenRest.CONTEXT, "api"
+        );
+        this.tokens.issue(repoName, path, user, context)
+            .thenAccept(token -> ctx.response()
+                .setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end(new JsonObject().put("token", token).encode()))
+            .exceptionally(err -> {
+                ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Download tokens unavailable");
+                return null;
+            });
     }
 
     /**
      * GET /api/v1/repositories/:name/artifact/download-direct — download via
      * single-use token. No JWT required. The browser navigates here directly,
      * so the native download manager handles progress and disk streaming.
+     *
+     * <p>SECURITY (2.2.9): the token is verified by {@link DownloadTokens}
+     * (constant-time signature, bounded timestamp, repository match, nonce
+     * spent before streaming) and THEN the issuer named in the token must
+     * still hold repository READ — a token proves possession, not
+     * authorization.</p>
      * @param ctx Routing context
      */
     private void downloadDirectHandler(final RoutingContext ctx) {
@@ -844,44 +903,63 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Download token is required");
             return;
         }
-        // Validate stateless HMAC token: payloadB64.signature
-        final int dot = token.indexOf('.');
-        if (dot < 0) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Malformed download token");
-            return;
-        }
-        final String payloadB64 = token.substring(0, dot);
-        final String signature = token.substring(dot + 1);
-        final String payload;
-        try {
-            payload = new String(
-                Base64.getUrlDecoder().decode(payloadB64), StandardCharsets.UTF_8
-            );
-        } catch (final IllegalArgumentException ex) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid download token encoding");
-            return;
-        }
-        if (!hmacSign(payload).equals(signature)) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid download token signature");
-            return;
-        }
-        final String[] parts = payload.split("\n");
-        if (parts.length != 3) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid download token payload");
-            return;
-        }
-        final String tokenRepo = parts[0];
-        final long tokenTime = Long.parseLong(parts[2]);
-        if (System.currentTimeMillis() - tokenTime > TOKEN_TTL_MS) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Download token has expired");
-            return;
-        }
         final String repoName = ctx.pathParam("name");
-        if (!repoName.equals(tokenRepo)) {
+        this.tokens.verify(token, repoName)
+            .thenAccept(verified -> {
+                if (verified.status() != DownloadTokens.Status.OK) {
+                    ArtifactHandler.rejectToken(ctx, verified.status());
+                    return;
+                }
+                final OperationControl control = new OperationControl(
+                    this.policy, new AdapterBasicPermission(repoName, Action.Standard.READ)
+                );
+                if (!control.allowed(verified.user())) {
+                    ApiResponse.sendError(
+                        ctx, 403, "FORBIDDEN", "Token issuer may not read this repository"
+                    );
+                    return;
+                }
+                this.streamArtifact(ctx, repoName, verified.path());
+            })
+            .exceptionally(err -> {
+                ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Download tokens unavailable");
+                return null;
+            });
+    }
+
+    /**
+     * Map a failed token verification to its response.
+     * @param ctx Routing context
+     * @param status Failure reason
+     */
+    private static void rejectToken(final RoutingContext ctx, final DownloadTokens.Status status) {
+        if (status == DownloadTokens.Status.REPO_MISMATCH) {
             ApiResponse.sendError(ctx, 403, "FORBIDDEN", "Token does not match repository");
             return;
         }
-        final String path = parts[1];
+        final String reason = switch (status) {
+            case MALFORMED -> "Malformed download token";
+            case EXPIRED -> "Download token has expired";
+            case FUTURE_DATED -> "Download token is not yet valid";
+            case REPLAYED -> "Download token already used";
+            default -> "Invalid download token signature";
+        };
+        ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", reason);
+    }
+
+    /**
+     * Stream the artifact named by a verified, authorized download token.
+     * @param ctx Routing context
+     * @param repoName Repository name
+     * @param path Artifact path within the repository
+     */
+    private void streamArtifact(
+        final RoutingContext ctx, final String repoName, final String path
+    ) {
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final String filename = path.contains("/")
             ? path.substring(path.lastIndexOf('/') + 1)
             : path;
@@ -895,7 +973,7 @@ public final class ArtifactHandler {
                     ctx.response()
                         .setStatusCode(200)
                         .putHeader("Content-Disposition",
-                            "attachment; filename=\"" + filename + "\"")
+                            new ContentFileName(filename).getValue())
                         .putHeader("Content-Type", "application/octet-stream");
                     if (size >= 0) {
                         ctx.response().putHeader("Content-Length", String.valueOf(size));
@@ -953,6 +1031,10 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
         CompletableFuture.supplyAsync(() -> {
@@ -1000,6 +1082,31 @@ public final class ArtifactHandler {
      * @param ctx Routing context
      */
     private void deleteArtifactHandler(final RoutingContext ctx) {
+        this.deletePath(ctx, false);
+    }
+
+    /**
+     * DELETE /api/v1/repositories/:name/packages — delete package folder.
+     * @param ctx Routing context
+     */
+    private void deletePackageFolderHandler(final RoutingContext ctx) {
+        this.deletePath(ctx, true);
+    }
+
+    /**
+     * Shared delete flow: storage delete (DB-fallback storage lookup), then
+     * the cascade that keeps everything derived from storage consistent --
+     * the tree-view metadata cache, the artifact index (matched on the
+     * storage path the rows were indexed from), the format's own metadata
+     * of a local repository -- and an {@code artifact_delete} audit record.
+     * The cascade also runs when storage no longer holds the path, so stale
+     * index rows and metadata are cleared; only a path neither stored nor
+     * indexed answers 404. The cascade is best-effort: a failure is logged
+     * and the storage delete still answers 204.
+     * @param ctx Routing context
+     * @param folder Whether the path is a package folder
+     */
+    private void deletePath(final RoutingContext ctx, final boolean folder) {
         final String bodyStr = ctx.body().asString();
         if (bodyStr == null || bodyStr.isBlank()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "JSON body is required");
@@ -1017,51 +1124,53 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Field 'path' is required");
             return;
         }
+        if (ArtifactHandler.traversedPath(path)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
+            return;
+        }
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
         final String repoName = rname.toString();
-        // Fix (2.2.0): use DB-fallback storage lookup so DB-only repos
-        // created via the management UI don't 500 with
-        // `No value for key: {repo}.yml`. On success, cascade the delete
-        // into the artifacts DB index so search/locate don't return
-        // ghosts for files that have been removed from storage. The
-        // cascade is best-effort: if it fails we still return 204 and
-        // log — the ghost will resolve next backfill pass.
-        this.repoData.deleteArtifact(rname, path, this.crs)
-            .thenCompose(deleted -> {
-                if (!deleted) {
-                    return CompletableFuture.completedFuture(deleted);
-                }
-                // Evict from metadata cache so the next tree view doesn't
-                // show stale size/modified for a file that no longer exists.
-                this.metaCache.invalidate(repoName, path);
-                // Cover both cases: single file at the exact path, and
-                // directory delete (which also removes any children).
-                return this.artifactIndex.remove(repoName, path)
-                    .thenCompose(
-                        nothing -> this.artifactIndex.removePrefix(
-                            repoName, path.endsWith("/") ? path : path + "/"
+        // Captured before any async hop (the MDC does not survive it).
+        final AuditContext audit = new ApiAuditContext(ctx).value();
+        final String actor = ctx.user() == null ? null
+            : ctx.user().principal().getString(com.auto1.pantera.api.AuthTokenRest.SUB);
+        CompletableFuture.supplyAsync(() -> this.repoTypeOf(rname), HandlerExecutor.get())
+            .thenCompose(
+                repoType -> {
+                    final CompletionStage<Boolean> deletion = folder
+                        ? this.repoData.deletePackageFolder(rname, path, this.crs)
+                        : this.repoData.deleteArtifact(rname, path, this.crs);
+                    // The cascade runs whether or not storage still held
+                    // the path: index rows and format metadata can outlive
+                    // their files (the index went stale through an earlier
+                    // bug), and a delete is how an operator clears them.
+                    return deletion.thenCompose(
+                        deleted -> this.cascade(rname, repoType, path, folder).thenApply(
+                            indexed -> {
+                                final boolean found = deleted || indexed > 0;
+                                AuditLogger.delete(
+                                    audit, repoType, repoName, path, null, actor,
+                                    found ? AuditLogger.OUTCOME_SUCCESS
+                                        : AuditLogger.OUTCOME_FAILURE,
+                                    found ? null : AuditLogger.REASON_NOT_FOUND
+                                );
+                                return found;
+                            }
                         )
-                    )
-                    .<Boolean>handle((count, err) -> {
-                        if (err != null) {
-                            EcsLogger.warn("com.auto1.pantera.api.v1")
-                                .message("Artifact deleted from storage but"
-                                    + " DB-index cascade failed; ghost row"
-                                    + " will persist until next backfill: "
-                                    + err.getMessage())
-                                .eventCategory("database")
-                                .eventAction("delete_index_cascade_failed")
-                                .field("repository.name", repoName)
-                                .field("file.path", path)
-                                .error(err)
-                                .field("log.source", "application")
-                                .log();
-                        }
-                        return deleted;
-                    });
-            })
+                    );
+                }
+            )
             .thenAccept(
-                deleted -> ctx.response().setStatusCode(204).end()
+                found -> {
+                    if (found) {
+                        ctx.response().setStatusCode(204).end();
+                    } else {
+                        ApiResponse.sendError(
+                            ctx, 404, "NOT_FOUND",
+                            "Nothing is stored or indexed at path: " + path
+                        );
+                    }
+                }
             )
             .exceptionally(
                 err -> {
@@ -1072,68 +1181,94 @@ public final class ArtifactHandler {
     }
 
     /**
-     * DELETE /api/v1/repositories/:name/packages — delete package folder.
-     * @param ctx Routing context
+     * Keep everything derived from storage consistent with a delete.
+     * Never fails: each step logs its own failure.
+     * @param rname Repository name
+     * @param repoType Repository type
+     * @param path Deleted path
+     * @param folder Whether a folder was deleted
+     * @return Number of search index rows removed (0 when that step failed)
      */
-    private void deletePackageFolderHandler(final RoutingContext ctx) {
-        final String bodyStr = ctx.body().asString();
-        if (bodyStr == null || bodyStr.isBlank()) {
-            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "JSON body is required");
-            return;
-        }
-        final javax.json.JsonObject body;
-        try {
-            body = Json.createReader(new StringReader(bodyStr)).readObject();
-        } catch (final Exception ex) {
-            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
-            return;
-        }
-        final String path = body.getString("path", "").trim();
-        if (path.isEmpty()) {
-            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Field 'path' is required");
-            return;
-        }
-        final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
+    private CompletableFuture<Integer> cascade(
+        final RepositoryName rname, final String repoType, final String path,
+        final boolean folder
+    ) {
         final String repoName = rname.toString();
-        // Fix (2.2.0): DB-fallback storage lookup + DB-index cascade. See
-        // deleteArtifactHandler for the rationale.
-        this.repoData.deletePackageFolder(rname, path, this.crs)
-            .thenCompose(deleted -> {
-                if (!deleted) {
-                    return CompletableFuture.completedFuture(deleted);
+        if (folder) {
+            this.metaCache.invalidatePrefix(repoName, path);
+        } else {
+            this.metaCache.invalidate(repoName, path);
+        }
+        final CompletableFuture<Integer> index = this.artifactIndex.removeByPath(repoName, path)
+            .handle((count, err) -> {
+                if (err != null) {
+                    ArtifactHandler.cascadeFailed(
+                        "Deleted from storage but the search index cascade failed",
+                        repoName, path, err
+                    );
+                    return 0;
                 }
-                // Evict all cache entries under this folder prefix so the
-                // next tree view doesn't serve stale metadata for deleted files.
-                this.metaCache.invalidatePrefix(repoName, path);
-                return this.artifactIndex.removePrefix(
-                        repoName, path.endsWith("/") ? path : path + "/"
-                    )
-                    .<Boolean>handle((count, err) -> {
-                        if (err != null) {
-                            EcsLogger.warn("com.auto1.pantera.api.v1")
-                                .message("Package folder deleted from storage"
-                                    + " but DB-index cascade failed: "
-                                    + err.getMessage())
-                                .eventCategory("database")
-                                .eventAction("delete_index_cascade_failed")
-                                .field("repository.name", repoName)
-                                .field("file.path", path)
-                                .error(err)
-                                .field("log.source", "application")
-                                .log();
-                        }
-                        return deleted;
-                    });
-            })
-            .thenAccept(
-                deleted -> ctx.response().setStatusCode(204).end()
+                return count == null ? 0 : count;
+            });
+        final CompletableFuture<Void> format = this.repoData.repoStorage(rname, this.crs)
+            .thenCompose(
+                asto -> new FormatDeleteHooks().afterDelete(
+                    repoType, new SubStorage(new Key.From(repoName), asto), repoName, path
+                )
             )
-            .exceptionally(
-                err -> {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
-                    return null;
+            .<Void>handle((nothing, err) -> {
+                if (err != null) {
+                    ArtifactHandler.cascadeFailed(
+                        "Deleted from storage but the " + repoType
+                            + " metadata could not be updated",
+                        repoName, path, err
+                    );
                 }
-            );
+                return null;
+            })
+            .toCompletableFuture();
+        return index.thenCombine(format, (count, nothing) -> count);
+    }
+
+    /**
+     * Log a failed cascade step.
+     * @param message Message
+     * @param repoName Repository name
+     * @param path Deleted path
+     * @param err Failure
+     */
+    private static void cascadeFailed(
+        final String message, final String repoName, final String path, final Throwable err
+    ) {
+        EcsLogger.warn("com.auto1.pantera.api.v1")
+            .message(message)
+            .eventCategory("database")
+            .eventAction("delete_cascade_failed")
+            .eventOutcome("failure")
+            .field("repository.name", repoName)
+            .field("file.path", path)
+            .error(err)
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * The type of a repository, or {@code unknown}. Blocking (DB read).
+     * @param rname Repository name
+     * @return Repository type
+     */
+    private String repoTypeOf(final RepositoryName rname) {
+        String type = "unknown";
+        if (this.crs != null && this.crs.exists(rname)) {
+            final JsonStructure config = this.crs.value(rname);
+            if (config instanceof javax.json.JsonObject) {
+                final javax.json.JsonObject jobj = (javax.json.JsonObject) config;
+                final javax.json.JsonObject repo = jobj.containsKey("repo")
+                    ? jobj.getJsonObject("repo") : jobj;
+                type = repo.getString("type", "unknown");
+            }
+        }
+        return type;
     }
 
     /**
@@ -1165,18 +1300,12 @@ public final class ArtifactHandler {
                 )
             );
         } else if (repoType.startsWith("docker")) {
-            final String image = dockerImageName(path);
-            if (image != null) {
-                instructions.add(
-                    String.format("docker pull <pantera-host>/%s", image)
-                );
-            } else {
-                instructions.add(
-                    String.format(
-                        "docker pull <pantera-host>/%s/<image>:<tag>", repoName
-                    )
-                );
-            }
+            instructions.add(
+                String.format(
+                    "docker pull <pantera-host>/%s",
+                    new DockerPullReference(repoName, path).value()
+                )
+            );
         } else if (repoType.startsWith("pypi")) {
             final String pkg = pypiPackageName(path);
             instructions.add(
@@ -1221,6 +1350,34 @@ public final class ArtifactHandler {
     }
 
     /**
+     * Whether a client-supplied artifact path escapes its repository namespace.
+     *
+     * <p>SECURITY (2.2.9): the REST artifact routes build
+     * {@code Key.From(repo, path)} directly and do not pass through the
+     * package-listener {@code PathTraversalGuardSlice}. On root-contained
+     * storage (vertx-file, S3) a {@code ../otherRepo/x} path would resolve into
+     * a sibling repository, sidestepping the per-repository authorization on
+     * {@code :name}. Legitimate artifact paths never contain {@code .}/{@code ..}
+     * segments, control characters or backslashes, so any such input is
+     * rejected.</p>
+     *
+     * @param path Client-supplied path
+     * @return {@code true} when the path is unsafe and must be refused
+     */
+    private static boolean traversedPath(final String path) {
+        boolean bad = path.indexOf('\0') >= 0 || path.indexOf('\\') >= 0;
+        if (!bad) {
+            for (final String seg : path.split("/")) {
+                if ("..".equals(seg) || ".".equals(seg)) {
+                    bad = true;
+                    break;
+                }
+            }
+        }
+        return bad;
+    }
+
+    /**
      * Extract Maven GAV from artifact path.
      * Path: com/example/lib/1.0/lib-1.0.jar → com.example:lib:1.0
      * @param path Artifact path
@@ -1256,34 +1413,6 @@ public final class ArtifactHandler {
             return parts[0] + "/" + parts[1];
         }
         return parts[0];
-    }
-
-    /**
-     * Extract Docker image name from storage path.
-     * Storage path: docker/registry/v2/repositories/image/... → image
-     * @param path Artifact path
-     * @return Image name or null if it's a blob/internal path
-     */
-    private static String dockerImageName(final String path) {
-        final String[] parts = path.split("/");
-        final int repoIdx = indexOf(parts, "repositories");
-        if (repoIdx >= 0 && repoIdx + 1 < parts.length) {
-            final StringBuilder image = new StringBuilder();
-            for (int i = repoIdx + 1; i < parts.length; i++) {
-                if ("_manifests".equals(parts[i]) || "_layers".equals(parts[i])
-                    || "_uploads".equals(parts[i])) {
-                    break;
-                }
-                if (image.length() > 0) {
-                    image.append('/');
-                }
-                image.append(parts[i]);
-            }
-            if (image.length() > 0) {
-                return image.toString();
-            }
-        }
-        return null;
     }
 
     /**
@@ -1330,34 +1459,4 @@ public final class ArtifactHandler {
         return parts[0];
     }
 
-    /**
-     * Find index of element in array.
-     * @param arr Array
-     * @param target Target element
-     * @return Index or -1
-     */
-    private static int indexOf(final String[] arr, final String target) {
-        for (int i = 0; i < arr.length; i++) {
-            if (target.equals(arr[i])) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    /**
-     * Compute HMAC-SHA256 signature for the given payload.
-     * @param payload Data to sign
-     * @return URL-safe Base64 encoded signature
-     */
-    private static String hmacSign(final String payload) {
-        try {
-            final Mac mac = Mac.getInstance(HMAC_ALGO);
-            mac.init(new SecretKeySpec(HMAC_SECRET, HMAC_ALGO));
-            final byte[] sig = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
-            return Base64.getUrlEncoder().withoutPadding().encodeToString(sig);
-        } catch (final Exception ex) {
-            throw new IllegalStateException("HMAC signing failed", ex);
-        }
-    }
 }

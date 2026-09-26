@@ -36,10 +36,10 @@ If Pantera is behind an Nginx reverse proxy with TLS termination (e.g., on port 
 
 ## Login
 
-Authenticate with your Pantera credentials:
+Authenticate with your Pantera credentials (`--password-stdin` keeps the token out of the process list):
 
 ```bash
-docker login pantera-host:8080 -u your-username -p your-jwt-token
+echo 'your-api-token' | docker login pantera-host:8080 -u 'your-username' --password-stdin
 ```
 
 Or interactively:
@@ -85,7 +85,7 @@ docker pull pantera-host:8080/docker-group/library/ubuntu:22.04
 
 ## Push Images
 
-Push images to a local Docker repository:
+Push images to a local Docker repository. Proxy and group repositories are read-only: a push to them fails with `405 UNSUPPORTED` (`docker push` reports `unsupported`).
 
 ### Step 1: Tag the Image
 
@@ -100,6 +100,41 @@ docker tag myapp:latest pantera-host:8080/docker-local/myapp:1.0.0
 docker push pantera-host:8080/docker-local/myapp:latest
 docker push pantera-host:8080/docker-local/myapp:1.0.0
 ```
+
+Blob uploads may be monolithic or chunked (several `PATCH` requests with `Content-Range: <start>-<end>`, then the committing `PUT`), so resumable pushes from tools such as `crane`, `oras` or `skopeo` work. A chunk whose start is not the end of the data already uploaded is refused with `416` and a `Range: 0-<last byte held>` header; resume from there.
+
+---
+
+## List Images and Tags
+
+```bash
+# Images in a repository (needs the 'catalog' registry permission)
+curl -u 'your-username:your-api-token' http://pantera-host:8080/v2/docker-local/_catalog
+
+# Tags of an image
+curl -u 'your-username:your-api-token' http://pantera-host:8080/v2/docker-local/myapp/tags/list
+```
+
+The catalog is per repository (`/v2/<repo>/_catalog`) and lists full image names with the repository prefix (`docker-local/myapp`, `docker-local/team/tools/builder`); there is no registry-wide `/v2/_catalog`. A proxy repository's catalog lists the images it has cached. A group's catalog is the union of its members' catalogs, named under the group (`docker-group/myapp`), which are the names you pull through the group; each member contributes only if you hold the `catalog` permission on it.
+
+Both endpoints page with `?n=<count>&last=<name>`. On every repository type, a full page (catalog or tags) carries a `Link: <...>; rel="next"` header pointing at the next page. The catalog's `last` is a name from an earlier page, including the repository prefix. A `last` outside the repository (`400 NAME_INVALID`) or an `n` that is not a non-negative integer (`400 PAGINATION_NUMBER_INVALID`) is rejected. A tags request for an image the repository does not hold answers `404 NAME_UNKNOWN`, on every page (with or without `last`); a `last` past the final tag of an image the repository holds answers an empty page. Through a group, the tags pages of an image come from the first member that holds it, so following the group's `Link` keeps paging that member's tags.
+
+---
+
+## Delete Images
+
+The registry API does not delete: `DELETE /v2/<repo>/<image>/manifests/<reference>` and `DELETE /v2/<repo>/<image>/blobs/<digest>` answer `405 UNSUPPORTED` (so `skopeo delete` and `crane delete` report the operation as unsupported, not the image as missing).
+
+Delete a tag from a local repository in the UI (repository browser), or with the REST API (needs `api_repository_permissions: delete`):
+
+```bash
+curl -X DELETE http://pantera-host:8086/api/v1/repositories/docker-local/packages \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "docker/registry/v2/repositories/myapp/_manifests/tags/1.0.0"}'
+```
+
+The `path` is the tag's storage folder: `docker/registry/v2/repositories/<image>/_manifests/tags/<tag>`. See [REST API Reference](../../rest-api-reference.md#delete-apiv1repositoriesnamepackages).
 
 ---
 
@@ -124,6 +159,10 @@ The proxy tries each configured upstream in order until it finds the requested i
 | `http: server gave HTTP response to HTTPS client` | Docker expects HTTPS by default | Add Pantera to `insecure-registries` in `daemon.json` |
 | `unauthorized: authentication required` | Not logged in or token expired | Run `docker login` with a fresh JWT token |
 | `denied: requested access to the resource is denied` | User lacks push permission | Contact admin for write access to the Docker local repository |
+| `denied` when re-pushing an existing tag (e.g. `latest`) with new content | Moving an existing tag needs the `overwrite` action on top of `push` | Push a new tag, or ask the admin to grant `overwrite` |
+| Push fails with `unsupported` (405) | The target is a proxy or group repository | Push to a local (`docker`) repository instead |
+| `name unknown` (404 `NAME_UNKNOWN`) on a tags list | The repository holds no tags for that image name | Check the image path (`<repo>/<image>`, include `library/` for official images) |
+| `size invalid` (413 `SIZE_INVALID`) during push | A layer exceeds the server's request-body limit | Ask the admin to raise the limit |
 | `manifest unknown` | Image not cached in proxy yet | Verify the image path matches upstream (include `library/` for official images) |
 | Push fails with `500 Internal Server Error` | Large layer upload timeout | Ask admin to increase `proxy_timeout` and check Nginx `client_max_body_size` |
 | Pull is slow for first request | Image being fetched from upstream for the first time | This is expected; subsequent pulls will be fast from cache |

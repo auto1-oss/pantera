@@ -20,6 +20,7 @@ import com.auto1.pantera.http.hm.ResponseAssert;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
+import org.hamcrest.MatcherAssert;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -66,6 +67,21 @@ class BlobEntityHeadTest {
                 ), Headers.EMPTY, Content.EMPTY
             ).join(),
             RsStatus.NOT_FOUND
+        );
+    }
+
+    /**
+     * B81: a malformed digest is 400 DIGEST_INVALID, not 404 BLOB_UNKNOWN.
+     */
+    @Test
+    void shouldAnswerDigestInvalidForMalformedDigest() {
+        MatcherAssert.assertThat(
+            this.slice.response(
+                new RequestLine(RqMethod.HEAD, "/v2/test/blobs/sha256:xyz"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            new IsErrorsResponse(RsStatus.BAD_REQUEST, "DIGEST_INVALID")
         );
     }
 }

@@ -19,10 +19,8 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.RepositoryEvents;
-import org.slf4j.MDC;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -64,14 +62,12 @@ public final class SliceDelete implements Slice {
     public CompletableFuture<Response> response(
         RequestLine line, Headers headers, Content body
     ) {
-        // Captured synchronously, on this call's thread — MDC is correctly
-        // populated here by EcsLoggingSlice. storage.exists()/delete() may
-        // complete their continuations on a DispatchedStorage worker thread
-        // that never had MDC bound, so the values are threaded through this
-        // closure rather than re-read from MDC inside the continuation.
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        // Captured at entry from the request's X-Pantera-Ctx-* headers:
+        // storage.exists()/delete() may complete their continuations on a
+        // DispatchedStorage worker thread whose MDC is empty or holds another
+        // request's values, so the context is threaded through this closure
+        // and never read from MDC.
+        final AuditContext ctx = new AuditContext(headers);
         final String owner = new Login(headers).getValue();
         final KeyFromPath key = new KeyFromPath(line.uri().getPath());
         return this.storage.exists(key)

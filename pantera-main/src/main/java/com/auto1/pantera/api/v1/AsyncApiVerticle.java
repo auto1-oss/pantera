@@ -30,6 +30,9 @@ import com.auto1.pantera.db.dao.UserDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.index.reindex.CrudReindexRepos;
+import com.auto1.pantera.index.reindex.IndexReindex;
+import com.auto1.pantera.index.reindex.JdbcReindexStore;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.PanteraSecurity;
@@ -46,6 +49,8 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.handler.BodyHandler;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import javax.sql.DataSource;
 
@@ -54,6 +59,14 @@ import javax.sql.DataSource;
  * Replaces the old RestApi verticle. Uses plain Vert.x Router.
  */
 public final class AsyncApiVerticle extends AbstractVerticle {
+
+    /**
+     * Login throttle shared by every instance of this verticle in the
+     * process (B16): VertxMain deploys several instances, and a per-instance
+     * throttle multiplied the configured limit by their number.
+     */
+    private static final com.auto1.pantera.auth.LoginThrottle LOGIN_THROTTLE =
+        new com.auto1.pantera.auth.LoginThrottle();
 
     /**
      * Pantera caches.
@@ -122,6 +135,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     private final JwtTokens jwtTokens;
 
     /**
+     * Serving-side access for the admin cache tools (repository topology,
+     * in-process repository requests, breaker state, node identity).
+     */
+    private final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics;
+
+    /**
      * Primary constructor.
      * @param caches Pantera settings caches
      * @param configsStorage Pantera settings storage
@@ -130,7 +149,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * @param keystore KeyStore
      * @param jwt JWT authentication provider (Vert.x, for route protection)
      * @param events Artifact metadata events queue
-     * @param cooldown Cooldown service
+     * @param cooldown Cooldown service — the SAME instance the repository
+     *  slices serve traffic with, so an admin unblock updates the decision
+     *  cache the serving path reads
+     * @param cooldownMetadata Cooldown metadata service — likewise the serving
+     *  instance, so an unblock drops the filtered-metadata envelopes clients
+     *  are actually served from
      * @param settings Pantera settings
      * @param artifactIndex Artifact index for search
      * @param dataSource Database data source, nullable
@@ -142,14 +166,57 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final int port,
         final PanteraSecurity security,
         final Optional<KeyStore> keystore,
-        final JWTAuth jwt, // NOPMD UnusedFormalParameter - public API; JWTAuth is reserved for upcoming route-protection wiring
+        final JWTAuth jwt,
         final Optional<MetadataEventQueues> events,
         final CooldownService cooldown,
+        final CooldownMetadataService cooldownMetadata,
         final Settings settings,
         final ArtifactIndex artifactIndex,
         final DataSource dataSource,
         final JwtTokens jwtTokens
     ) {
+        this(
+            caches, configsStorage, port, security, keystore, jwt, events, cooldown,
+            cooldownMetadata, settings, artifactIndex, dataSource, jwtTokens,
+            new com.auto1.pantera.api.v1.admin.AdminDiagnostics()
+        );
+    }
+
+    /**
+     * Primary constructor with the admin cache tools' serving-side access.
+     * @param caches Pantera settings caches
+     * @param configsStorage Pantera settings storage
+     * @param port Port to run API on
+     * @param security Pantera security
+     * @param keystore KeyStore
+     * @param jwt JWT authentication provider (Vert.x, for route protection)
+     * @param events Artifact metadata events queue
+     * @param cooldown Cooldown service shared with the repository slices
+     * @param cooldownMetadata Cooldown metadata service shared with the slices
+     * @param settings Pantera settings
+     * @param artifactIndex Artifact index for search
+     * @param dataSource Database data source, nullable
+     * @param jwtTokens RS256 tokens provider for token issuance
+     * @param diagnostics Serving-side access for the admin cache tools
+     * @checkstyle ParameterNumberCheck (20 lines)
+     */
+    public AsyncApiVerticle(
+        final PanteraCaches caches,
+        final Storage configsStorage,
+        final int port,
+        final PanteraSecurity security,
+        final Optional<KeyStore> keystore,
+        final JWTAuth jwt, // NOPMD UnusedFormalParameter - public API; JWTAuth is reserved for upcoming route-protection wiring
+        final Optional<MetadataEventQueues> events,
+        final CooldownService cooldown,
+        final CooldownMetadataService cooldownMetadata,
+        final Settings settings,
+        final ArtifactIndex artifactIndex,
+        final DataSource dataSource,
+        final JwtTokens jwtTokens,
+        final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics
+    ) {
+        this.diagnostics = diagnostics;
         this.caches = caches;
         this.configsStorage = configsStorage;
         this.port = port;
@@ -157,7 +224,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         this.keystore = keystore;
         this.events = events;
         this.cooldown = cooldown;
-        this.cooldownMetadata = CooldownSupport.createMetadataService(cooldown, settings);
+        this.cooldownMetadata = cooldownMetadata;
         this.settings = settings;
         this.artifactIndex = artifactIndex;
         this.dataSource = dataSource;
@@ -166,24 +233,37 @@ public final class AsyncApiVerticle extends AbstractVerticle {
 
     /**
      * Convenience constructor for deployment from VertxMain.
+     *
+     * <p>The cooldown services are injected, never built here: every verticle
+     * instance used to call {@code CooldownSupport.create} itself, so admin
+     * unblocks mutated a private decision cache and envelope cache while the
+     * repository slices kept serving their own stale "blocked" state.</p>
      * @param settings Pantera settings
      * @param port Port to start verticle on
      * @param jwt JWT authentication provider
      * @param dataSource Database data source, nullable
      * @param jwtTokens RS256 tokens provider for token issuance, nullable
+     * @param cooldown Serving cooldown service (shared with the slices)
+     * @param cooldownMetadata Serving cooldown metadata service (shared)
+     * @param diagnostics Serving-side access for the admin cache tools
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     public AsyncApiVerticle(final Settings settings, final int port,
         final JWTAuth jwt, final DataSource dataSource,
-        final JwtTokens jwtTokens) {
+        final JwtTokens jwtTokens, final CooldownService cooldown,
+        final CooldownMetadataService cooldownMetadata,
+        final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics) {
         this(
             settings.caches(), settings.configStorage(),
             port, settings.authz(), settings.keyStore(), jwt,
             settings.artifactMetadata(),
-            CooldownSupport.create(settings),
+            cooldown,
+            cooldownMetadata,
             settings,
             settings.artifactIndex(),
             dataSource,
-            jwtTokens
+            jwtTokens,
+            diagnostics
         );
     }
 
@@ -236,27 +316,29 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     span.parentSpanId()
                 );
             }
-            // Extract client IP. X-Forwarded-For (comma-separated, first
-            // entry is the real client), fall back to X-Real-IP, then
-            // the TCP remote address.
-            String clientIp = req.getHeader("X-Forwarded-For");
-            if (clientIp != null && clientIp.contains(",")) {
-                clientIp = clientIp.substring(0, clientIp.indexOf(',')).trim();
-            }
-            if (clientIp == null || clientIp.isBlank()) {
-                clientIp = req.getHeader("X-Real-IP");
-            }
-            if (clientIp == null || clientIp.isBlank()) {
-                final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
-                if (remote != null) {
-                    clientIp = remote.host();
-                }
-            }
+            // Client IP for logs/audit. SECURITY (2.2.9): forwarding
+            // headers are client-supplied and were honoured unconditionally,
+            // letting any caller falsify the audited source address. They
+            // count only when the deployment declares a trusted proxy
+            // (trust_forwarded_headers, the same setting the client-facing
+            // base URL uses); otherwise the TCP peer is recorded.
+            final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+            final String clientIp = new com.auto1.pantera.api.ClientIpResolver(
+                com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier()
+                    .get().trustForwardedHeaders()
+            ).resolve(
+                remote == null ? null : remote.host(),
+                req.getHeader("X-Forwarded-For"),
+                req.getHeader("X-Real-IP")
+            );
             if (clientIp != null && !clientIp.isBlank()) {
                 org.slf4j.MDC.put(
                     com.auto1.pantera.http.log.EcsMdc.CLIENT_IP, clientIp
                 );
             }
+            // The same values ride on the routing context: MDC does not
+            // survive the async auth hop, audit records must still carry them.
+            new ApiAuditContext(ctx).bind(span.traceId(), clientIp);
             // Echo the server-generated traceparent in the response so
             // the UI / APM agent can correlate UI transactions with the
             // backend span.
@@ -346,7 +428,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.security.policy(),
             this.dataSource != null ? new AuthProviderDao(this.dataSource) : null,
             this.dataSource != null ? new UserTokenDao(this.dataSource) : null,
-            this.dataSource != null ? new AuthSettingsDao(this.dataSource) : null
+            this.dataSource != null ? new AuthSettingsDao(this.dataSource) : null,
+            AsyncApiVerticle.LOGIN_THROTTLE
         );
         authHandler.register(router);
         // JWT auth for all /api/v1/* routes EXCEPT download-direct (uses HMAC token auth).
@@ -359,13 +442,11 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 : null;
         router.route("/api/v1/*").handler(ctx -> {
             final String path = ctx.request().path();
-            // Skip JWT auth for public endpoints (registered before this filter)
-            if (path.contains("/artifact/download-direct")
-                || path.endsWith("/auth/token")
-                || path.endsWith("/auth/callback")
-                || path.endsWith("/auth/providers")
-                || path.contains("/auth/providers/")
-                || path.endsWith("/health")) {
+            // Skip JWT auth ONLY for the exact public routes (registered before
+            // this filter). SECURITY (2.2.9): this used to be a substring match,
+            // which exempted any protected route whose path merely embedded
+            // "/artifact/download-direct" — see PublicApiRoutes.
+            if (PublicApiRoutes.exempt(ctx.request().method(), path)) {
                 ctx.next();
                 return;
             }
@@ -385,15 +466,30 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 return;
             }
             final String rawToken = authHeader.substring(7);
-            unifiedAuth.user(rawToken).toCompletableFuture()
-                .thenAccept(userOpt -> {
-                    if (userOpt.isPresent()) {
-                        final com.auto1.pantera.http.auth.AuthUser authUser = userOpt.get();
+            unifiedAuth.validatedAsync(rawToken).toCompletableFuture()
+                .thenAccept(validOpt -> {
+                    if (validOpt.isPresent()) {
+                        final com.auto1.pantera.auth.UnifiedJwtAuthHandler.ValidatedToken valid =
+                            validOpt.get();
+                        // SECURITY (2.2.9, SecOps jwt-token-confusion): enforce
+                        // token-purpose scope per route. A REFRESH token only
+                        // reaches /auth/refresh; ordinary routes take ACCESS/API.
+                        if (!com.auto1.pantera.auth.ApiTokenTypeGate.allows(path, valid.type())) {
+                            ApiResponse.sendError(
+                                ctx, 401, "UNAUTHORIZED", "Token type not valid for this route"
+                            );
+                            return;
+                        }
+                        final com.auto1.pantera.http.auth.AuthUser authUser = valid.user();
                         // Bridge into Vert.x User so ctx.user().principal() works
                         // for all downstream handlers (me, generate, list, settings, etc.)
+                        // The verified type and JTI ride along so /auth/refresh can
+                        // rotate exactly the presented refresh token.
                         final io.vertx.core.json.JsonObject principal = new io.vertx.core.json.JsonObject()
                             .put(com.auto1.pantera.api.AuthTokenRest.SUB, authUser.name())
-                            .put(com.auto1.pantera.api.AuthTokenRest.CONTEXT, authUser.authContext());
+                            .put(com.auto1.pantera.api.AuthTokenRest.CONTEXT, authUser.authContext())
+                            .put(com.auto1.pantera.api.AuthTokenRest.TYPE, valid.type().value())
+                            .put(com.auto1.pantera.api.AuthTokenRest.JTI, valid.jti());
                         ctx.setUser(io.vertx.ext.auth.User.fromToken(rawToken));
                         ctx.user().principal().mergeIn(principal);
                         ctx.next();
@@ -409,16 +505,23 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         // Register protected auth routes (requires JWT)
         authHandler.registerProtected(router);
         // Register all handler groups
+        // Repository lifecycle events reach the local consumer AND every
+        // peer node (HA): a security-tightening change must not keep
+        // applying on one node only until restart (2.2.9).
+        final com.auto1.pantera.api.RepositoryEventBroadcaster repoEvents =
+            com.auto1.pantera.api.RepositoryEventBroadcaster.attach(
+                this.vertx.eventBus(), this.settings.cacheInvalidationPubSub()
+            );
         new RepositoryHandler(
             this.caches.filtersCache(), crs,
-            new RepoData(this.configsStorage, this.caches.storagesCache()),
+            this.repoData(),
             this.security.policy(), this.events,
             this.cooldown,
-            this.vertx.eventBus()
+            repoEvents, this.artifactIndex
         ).register(router);
         new BulkAccessPolicyHandler(
             crs, this.security.policy(),
-            this.caches.filtersCache(), this.vertx.eventBus()
+            this.caches.filtersCache(), repoEvents
         ).register(router);
         if (users != null) {
             // Wire the revocation blocklist + token DAO so that
@@ -456,9 +559,9 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     this.security.authentication()
                 : null
         ).register(router);
-        new DashboardHandler(crs, this.dataSource).register(router);
+        new DashboardHandler(crs, this.dataSource, this.security.policy()).register(router);
         new ArtifactHandler(
-            crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
+            crs, this.repoData(),
             this.security.policy(), this.dataSource, this.artifactIndex
         ).register(router);
         new CooldownHandler(
@@ -467,10 +570,10 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             crs, this.settings.cooldown(), this.dataSource,
             this.security.policy()
         ).register(router);
-        new SearchHandler(this.artifactIndex, this.security.policy()).register(router);
-        new PypiHandler(
-            crs, new RepoData(this.configsStorage, this.caches.storagesCache())
+        new SearchHandler(
+            this.artifactIndex, this.security.policy(), crs::listAll, this.reindexer(crs)
         ).register(router);
+        this.pypiHandler(crs).register(router);
         if (this.dataSource != null) {
             new AdminAuthHandler(
                 new AuthSettingsDao(this.dataSource),
@@ -478,10 +581,14 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 this.jwtTokens != null ? this.jwtTokens.blocklist() : null,
                 this.security.policy()
             ).register(router);
+            new SecurityPolicySettingsHandler(
+                new AuthSettingsDao(this.dataSource), this.security.policy(),
+                com.auto1.pantera.settings.policy.SecurityPolicySettingsSync.attach(
+                    this.settings.cacheInvalidationPubSub()
+                )
+            ).register(router);
         }
-        new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(
-            this.security.policy()
-        ).register(router);
+        this.cacheTools(router);
         // Start server
         final HttpServer server;
         final String schema;
@@ -539,5 +646,134 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     .field("log.source", "application")
                     .log()
             );
+    }
+
+    /**
+     * Admin cache tools: negative cache, cooldown package inspector and
+     * refresh, troubleshooter. All admin-only.
+     * @param router Router
+     */
+    private void cacheTools(final Router router) {
+        final com.auto1.pantera.http.cache.NegativeCache negative =
+            com.auto1.pantera.http.cache.NegativeCacheRegistry.instance().sharedCache();
+        final com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry envelopes =
+            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance();
+        final com.auto1.pantera.api.v1.admin.CooldownLookup lookup;
+        final com.auto1.pantera.api.v1.admin.SuggestLookup names;
+        if (this.dataSource == null) {
+            lookup = com.auto1.pantera.api.v1.admin.CooldownLookup.NONE;
+            names = com.auto1.pantera.api.v1.admin.SuggestLookup.NONE;
+        } else {
+            lookup = new com.auto1.pantera.cooldown.CooldownRepository(this.dataSource)
+                ::findForPackage;
+            names = new com.auto1.pantera.api.v1.admin.JdbcSuggestLookup(this.dataSource);
+        }
+        final com.auto1.pantera.api.v1.admin.PackageInspector inspector =
+            new com.auto1.pantera.api.v1.admin.PackageInspector(
+                this.diagnostics, negative, envelopes::sharedCache, lookup
+            );
+        new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(
+            this.security.policy(), this.diagnostics
+        ).register(router);
+        new com.auto1.pantera.api.v1.admin.CooldownInspectResource(
+            this.security.policy(), inspector,
+            new com.auto1.pantera.api.v1.admin.PackageRefresher(
+                inspector, negative, envelopes::sharedCache,
+                com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance()
+            ),
+            new com.auto1.pantera.api.v1.admin.PackageSuggester(names)
+        ).register(router);
+        new com.auto1.pantera.api.v1.admin.TroubleshootResource(
+            this.security.policy(),
+            new com.auto1.pantera.api.v1.admin.Troubleshooter(this.diagnostics, negative, inspector)
+        ).register(router);
+    }
+
+    /**
+     * PyPI yank/unyank handler. With a database, repositories live in the DB
+     * and may name their storage by alias, so the repo storage is resolved
+     * alias-aware like the serving path ({@link DbRepoStorage}); otherwise
+     * the YAML config (which resolves aliases itself) is used.
+     * @param crs Repository settings
+     * @return Handler
+     */
+    private PypiHandler pypiHandler(final CrudRepoSettings crs) {
+        final PypiHandler handler;
+        if (this.dataSource == null) {
+            handler = new PypiHandler(
+                crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
+                this.security.policy()
+            );
+        } else {
+            handler = new PypiHandler(this.security.policy(), this.dbRepoStorage(crs));
+        }
+        return handler;
+    }
+
+    /**
+     * The process-wide search index rebuild job, or null without a database.
+     * Repositories live in the DB, so their storage is resolved alias-aware
+     * like the serving path ({@link DbRepoStorage}).
+     * @param crs Repository settings
+     * @return Job, null when there is no database
+     */
+    private IndexReindex reindexer(final CrudRepoSettings crs) {
+        final IndexReindex job;
+        if (this.dataSource == null) {
+            job = null;
+        } else {
+            final DataSource source = this.dataSource;
+            final DbRepoStorage storages = this.dbRepoStorage(crs);
+            job = SharedReindex.obtain(
+                source,
+                () -> new IndexReindex(
+                    new JdbcReindexStore(source), new CrudReindexRepos(crs, storages)
+                )
+            );
+        }
+        return job;
+    }
+
+    /**
+     * Repository storage resolved alias-aware from the DB: global aliases,
+     * then the repository's own, as {@code DbRepositories} merges them.
+     * @param crs Repository settings
+     * @return Storage resolver
+     */
+    private DbRepoStorage dbRepoStorage(final CrudRepoSettings crs) {
+        final StorageAliasDao aliases = new StorageAliasDao(this.dataSource);
+        return new DbRepoStorage(
+            crs,
+            repo -> {
+                final List<javax.json.JsonObject> merged =
+                    new ArrayList<>(aliases.listGlobal());
+                merged.addAll(aliases.listForRepo(repo));
+                return merged;
+            },
+            this.caches.storagesCache()
+        );
+    }
+
+    /**
+     * Repository data management resolving storage aliases like the
+     * serving path: database aliases (global, then the repository's own,
+     * as {@code DbRepositories} merges them) with the YAML alias files as
+     * the fallback.
+     * @return Repository data
+     */
+    private RepoData repoData() {
+        if (this.dataSource == null) {
+            return new RepoData(this.configsStorage, this.caches.storagesCache());
+        }
+        final StorageAliasDao aliases = new StorageAliasDao(this.dataSource);
+        return new RepoData(
+            this.configsStorage, this.caches.storagesCache(),
+            repo -> {
+                final java.util.List<javax.json.JsonObject> merged =
+                    new java.util.ArrayList<>(aliases.listGlobal());
+                merged.addAll(aliases.listForRepo(repo));
+                return merged;
+            }
+        );
     }
 }

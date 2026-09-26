@@ -11,75 +11,102 @@
 package com.auto1.pantera.composer.http.proxy;
 
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import javax.json.Json;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 
 /**
- * Test for {@link CacheTimeControl}.
+ * Test for {@link CacheTimeControl}: freshness is judged from the storage's
+ * {@code updated-at} metadata, and an entry whose storage reports no
+ * timestamp (S3 before 2.2.9, vertx-file, in-memory) is treated as stale —
+ * never as fresh forever.
+ *
  * @since 0.4
  */
 final class CacheTimeControlTest {
-    /**
-     * Storage.
-     */
-    private Storage storage;
 
-    @BeforeEach
-    void setUp() {
-        this.storage = new InMemoryStorage();
-    }
+    /**
+     * Cached item key.
+     */
+    private static final Key ITEM = new Key.From("p2/vendor/package.json");
 
     @Test
-    void verifiesTimeValueCorrectlyForFreshCache() {
-        final String pkg = "p2/vendor/package.json";  // Use the actual cached file key
-        final Key itemKey = new Key.From(pkg);
-        // Save the cached item (will have current timestamp)
-        new BlockingStorage(this.storage).save(
-            itemKey,
-            "test content".getBytes()
-        );
-        // The validation now uses filesystem metadata timestamps
-        // Note: InMemoryStorage doesn't provide "updated-at" metadata,
-        // so CacheTimeControl falls back to Instant.now() which always validates as fresh
+    void freshWhenUpdatedWithinTtl() {
         MatcherAssert.assertThat(
-            "Fresh cache should be valid (InMemoryStorage fallback to current time)",
-            this.validate(pkg),
+            CacheTimeControlTest.validate(CacheTimeControlTest.stamped(Instant.now())),
             new IsEqual<>(true)
         );
     }
 
     @Test
-    void falseForAbsentPackageInCacheFile() {
-        // With filesystem timestamps, non-existent files return false
+    void staleWhenUpdatedBeforeTtl() {
         MatcherAssert.assertThat(
-            this.validate("not/exist"),
+            CacheTimeControlTest.validate(
+                CacheTimeControlTest.stamped(Instant.now().minus(Duration.ofHours(13)))
+            ),
             new IsEqual<>(false)
         );
     }
 
     @Test
-    void falseIfCacheIsAbsent() {
+    void staleWhenStorageReportsNoTimestamp() {
+        final Storage storage = new InMemoryStorage();
+        new BlockingStorage(storage).save(ITEM, "cached".getBytes(StandardCharsets.UTF_8));
         MatcherAssert.assertThat(
-            this.validate("file/notexist"),
+            CacheTimeControlTest.validate(storage),
             new IsEqual<>(false)
         );
     }
 
-    private boolean validate(final String pkg) {
-        return new CacheTimeControl(this.storage)
-            .validate(new Key.From(pkg), Remote.EMPTY)
+    @Test
+    void staleWhenAbsent() {
+        MatcherAssert.assertThat(
+            CacheTimeControlTest.validate(new InMemoryStorage()),
+            new IsEqual<>(false)
+        );
+    }
+
+    private static boolean validate(final Storage storage) {
+        return new CacheTimeControl(storage)
+            .validate(ITEM, Remote.EMPTY)
             .toCompletableFuture().join();
+    }
+
+    /**
+     * Storage holding the item whose metadata carries the given
+     * {@code updated-at} (what FileStorage and S3Storage report).
+     *
+     * @param updated Last-modified instant
+     * @return Storage
+     */
+    private static Storage stamped(final Instant updated) {
+        final Storage mem = new InMemoryStorage();
+        new BlockingStorage(mem).save(ITEM, "cached".getBytes(StandardCharsets.UTF_8));
+        return new Storage.Wrap(mem) {
+            @Override
+            public CompletableFuture<? extends Meta> metadata(final Key key) {
+                return CompletableFuture.completedFuture(
+                    new Meta() {
+                        @Override
+                        public <T> T read(final Meta.ReadOperator<T> opr) {
+                            final Map<String, String> raw = new HashMap<>();
+                            Meta.OP_UPDATED_AT.put(raw, updated);
+                            return opr.take(raw);
+                        }
+                    }
+                );
+            }
+        };
     }
 }

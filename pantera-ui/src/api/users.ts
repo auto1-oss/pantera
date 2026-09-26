@@ -24,13 +24,16 @@ export async function deleteUser(name: string): Promise<void> {
 /**
  * Change a user's password.
  *
- * Self-service: supply the user's current password in `oldPass`.
- * The backend verifies it and returns 403 if it does not match.
+ * Self-service (changing your own password): needs no permission grant,
+ * but `oldPass` must be your current stored password; the backend returns
+ * 403 if it is missing or does not match (a session token is not accepted
+ * as the current password).
  *
- * Admin-reset: omit `oldPass` (or pass an empty string). The backend
- * recognises the caller is changing someone ELSE's password — the
- * route-level change_password permission is authorization enough, so
- * no old password is required.
+ * Reset (changing someone ELSE's password): omit `oldPass` (or pass an
+ * empty string). The caller needs the change_password permission and must
+ * pass the privilege ceiling: without all_permission, the backend returns
+ * 403 when the target is an administrator (holds all_permission) or holds
+ * any role the caller does not hold.
  */
 export async function changePassword(
   name: string,

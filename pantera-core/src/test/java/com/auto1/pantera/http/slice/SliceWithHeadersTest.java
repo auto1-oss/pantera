@@ -54,4 +54,24 @@ class SliceWithHeadersTest {
         );
     }
 
+    @Test
+    void keepsContentLengthOfBodylessResponse() {
+        MatcherAssert.assertThat(
+            new SliceWithHeaders(
+                new SliceSimple(
+                    new com.auto1.pantera.http.Response(
+                        com.auto1.pantera.http.RsStatus.OK,
+                        Headers.from("Content-Length", "3000"),
+                        Content.EMPTY
+                    )
+                ),
+                Headers.from("Content-Type", "application/octet-stream")
+            ).response(RequestLine.from("HEAD /a.bin HTTP/1.1"), Headers.EMPTY, Content.EMPTY)
+                .join(),
+            new RsHasHeaders(
+                new Header("Content-Length", "3000"),
+                new Header("Content-Type", "application/octet-stream")
+            )
+        );
+    }
 }

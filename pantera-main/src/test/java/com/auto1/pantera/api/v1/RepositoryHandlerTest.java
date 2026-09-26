@@ -82,6 +82,211 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void hostRootCannotBecomeARepository(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // SECURITY (2.2.9): a repo manager submitting {type: fs, path: "/"}
+        // used to mount the host filesystem as a repository.
+        final JsonObject hostRoot = new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file")
+                .put("storage", new JsonObject().put("type", "fs").put("path", "/"))
+        );
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/host-root")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(hostRoot)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "an inline fs storage root outside the approved base must be refused"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
+    void groupMembersAreListedInOrder(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // B96: the endpoint read "remotes" (a proxy's upstreams), so every
+        // group answered an empty member list.
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/members-grp")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven-group")
+                    .put("members", new JsonArray().add("maven-local").add("maven-central"))
+            ))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, put.statusCode(), "group must be created");
+        final HttpResponse<Buffer> get = client
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/members-grp/members")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send()
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            new JsonArray().add("maven-local").add("maven-central"),
+            get.bodyAsJsonObject().getJsonArray("members"),
+            "members must be the group's member repositories in declared order"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
+    void unsupportedRepositoryTypeIsRefused(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // B57: type "binary" was stored with 200 and then every request to
+        // the repository answered 500 "Unsupported repository type".
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/bin-repo",
+            new JsonObject().put(
+                "repo",
+                new JsonObject()
+                    .put("type", "binary")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+            ),
+            res -> {
+                Assertions.assertEquals(400, res.statusCode(), "unknown type must be refused");
+                Assertions.assertTrue(
+                    res.bodyAsJsonObject().getString("message").contains("binary"),
+                    "the message must name the refused type"
+                );
+            }
+        );
+    }
+
+    @Test
+    void vertxFileStorageOutsideApprovedRootsIsRefused(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        // B12: only type "fs" was checked, so "vertx-file" mounted any path.
+        final JsonObject body = new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file")
+                .put("storage", new JsonObject().put("type", "vertx-file").put("path", "/etc"))
+        );
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/vx-root")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "a vertx-file storage root outside the approved base must be refused"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
+    void existingRepoOutsideApprovedRootsStaysEditable(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        // A repository saved before the 2.2.9 roots existed: the UI re-sends
+        // its unchanged storage block on every save, which must not be
+        // refused; moving it to another unapproved path still is.
+        final String legacy = "/opt/pantera-legacy";
+        new com.auto1.pantera.db.dao.RepositoryDao(AsyncApiTestBase.sharedDs()).save(
+            new com.auto1.pantera.api.RepositoryName.Simple("legacy-root"),
+            javax.json.Json.createObjectBuilder().add(
+                "repo", javax.json.Json.createObjectBuilder()
+                    .add("type", "file")
+                    .add("storage", javax.json.Json.createObjectBuilder()
+                        .add("type", "fs").add("path", legacy))
+            ).build()
+        );
+        final JsonObject edited = RepositoryHandlerTest.fileRepo(legacy);
+        edited.getJsonObject("repo").put("anonymous_read", true);
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> keep = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/legacy-root")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(edited)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        final HttpResponse<Buffer> move = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/legacy-root")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(RepositoryHandlerTest.fileRepo("/opt/elsewhere"))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            200, keep.statusCode(), "an update keeping the saved fs path must be accepted"
+        );
+        Assertions.assertEquals(
+            400, move.statusCode(), "moving to an unapproved fs path must still be refused"
+        );
+        ctx.completeNow();
+    }
+
+    private static JsonObject fileRepo(final String path) {
+        return new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file")
+                .put("storage", new JsonObject().put("type", "fs").put("path", path))
+        );
+    }
+
+    @Test
+    void remotePointingAtCloudMetadataIsRefused(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // SECURITY (2.2.9): remotes[].url was never validated, so a repo
+        // manager could point a proxy at the cloud metadata service and have
+        // Pantera fetch it server-side on the next read (SSRF).
+        final JsonObject body = new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file-proxy")
+                .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                .put("remotes", new JsonArray().add(
+                    new JsonObject().put("url", "http://169.254.169.254/latest/meta-data/")
+                ))
+        );
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/ssrf-remote")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "a remote on the cloud metadata address must be refused at config write"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
+    void remoteWithoutHttpSchemeIsRefused(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final JsonObject body = new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file-proxy")
+                .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                .put("remotes", new JsonArray().add(
+                    new JsonObject().put("url", "file:///etc/passwd")
+                ))
+        );
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/ssrf-scheme")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "a non-http(s) remote must be refused at config write"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
     void headReturns200IfExists(final Vertx vertx, final VertxTestContext ctx) throws Exception {
         final WebClient client = WebClient.create(vertx);
         // Step 1: PUT the repo
@@ -131,6 +336,93 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
             .toCompletionStage().toCompletableFuture()
             .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
         Assertions.assertEquals(200, del.statusCode());
+        ctx.completeNow();
+    }
+
+    @Test
+    void deleteAuditCarriesTheClientIp(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // R19: the delete is audited from the removal's completion stage on
+        // a worker thread; the client IP was read from the (empty) MDC there.
+        final java.util.List<com.auto1.pantera.audit.AuditEvent> events =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+        final com.auto1.pantera.audit.AuditServiceRegistry reg =
+            com.auto1.pantera.audit.AuditServiceRegistry.instance();
+        reg.setSharedService(event -> {
+            events.add(event);
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        });
+        try {
+            final WebClient client = WebClient.create(vertx);
+            final HttpResponse<Buffer> put = client
+                .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/audit-ip")
+                .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+                .sendJsonObject(VALID_BODY)
+                .toCompletionStage().toCompletableFuture()
+                .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+            Assertions.assertEquals(200, put.statusCode(), "repository must be created");
+            final HttpResponse<Buffer> del = client
+                .delete(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/audit-ip")
+                .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+                .send()
+                .toCompletionStage().toCompletableFuture()
+                .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+            Assertions.assertEquals(200, del.statusCode(), "delete must succeed");
+            org.awaitility.Awaitility.await()
+                .atMost(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS)
+                .until(() -> events.stream().anyMatch(
+                    evt -> "REPO_DELETE".equals(evt.action())
+                        && "audit-ip".equals(evt.target())
+                ));
+            final com.auto1.pantera.audit.AuditEvent deleted = events.stream()
+                .filter(
+                    evt -> "REPO_DELETE".equals(evt.action())
+                        && "audit-ip".equals(evt.target())
+                )
+                .findFirst().orElseThrow();
+            Assertions.assertNotNull(
+                deleted.ipAddress(), "the delete audit must carry the client IP"
+            );
+        } finally {
+            reg.clear();
+        }
+        ctx.completeNow();
+    }
+
+    @Test
+    void deleteRepoRemovesItsDataOnly(final Vertx vertx, final VertxTestContext ctx,
+        @org.junit.jupiter.api.io.TempDir final java.nio.file.Path root) throws Exception {
+        // B06: a repository created through the API has no YAML file; its
+        // data used to survive DELETE and reappear when the name was reused.
+        final java.nio.file.Path mine = root.resolve("del-data").resolve("secret.txt");
+        final java.nio.file.Path sibling = root.resolve("del-data-2").resolve("keep.txt");
+        java.nio.file.Files.createDirectories(mine.getParent());
+        java.nio.file.Files.createDirectories(sibling.getParent());
+        java.nio.file.Files.writeString(mine, "SECRET");
+        java.nio.file.Files.writeString(sibling, "KEEP");
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/del-data")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(RepositoryHandlerTest.fileRepo(root.toString()))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, put.statusCode(), "repository must be created");
+        final HttpResponse<Buffer> del = client
+            .delete(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/del-data")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send()
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, del.statusCode(), "delete must succeed");
+        Assertions.assertFalse(
+            java.nio.file.Files.exists(mine),
+            "the repository's data must be gone once DELETE has answered"
+        );
+        Assertions.assertTrue(
+            java.nio.file.Files.exists(sibling),
+            "another repository sharing the storage root must be untouched"
+        );
         ctx.completeNow();
     }
 

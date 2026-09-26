@@ -148,6 +148,8 @@ For zero-downtime upgrades in HA deployments:
 
 Database migrations run on the first node that starts with the new version. Subsequent nodes detect that migrations have already been applied and skip them.
 
+**Token revocations while versions are mixed (upgrading to 2.2.9 from an earlier release).** Revocations (sign-out, password change, `revoke-user`, API-token revoke) keep propagating in both directions during the rollout: a 2.2.9 node publishes each revocation in both the 2.2.9 message format and the earlier one, and it still applies messages from nodes not yet upgraded. The earlier release handles what it receives its own way: it records the revocation at the time it receives the message and keeps it for 2 hours, and it rejects every session of a revoked user on that node for those 2 hours, including one opened after the revocation. When a 2.2.9 node restarts, it reloads each user revocation that an earlier release wrote to Valkey as a revocation of every token issued before the restart. To keep this window short, finish the rollout promptly.
+
 ---
 
 ## Database Migrations

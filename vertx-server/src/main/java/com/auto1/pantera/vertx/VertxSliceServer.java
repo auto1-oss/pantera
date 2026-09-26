@@ -12,11 +12,13 @@ package com.auto1.pantera.vertx;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.auth.AuthzSlice;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.ReasonPhrase;
 import com.auto1.pantera.http.server.SecurityHeadersSlice;
 import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -57,6 +59,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 import java.util.Objects;
 
 /**
@@ -110,6 +113,25 @@ public final class VertxSliceServer implements Closeable {
      * Environment variable name for overriding the body buffer threshold.
      */
     private static final String ENV_BODY_BUFFER_THRESHOLD = "PANTERA_BODY_BUFFER_THRESHOLD";
+
+    /**
+     * Default hard cap on a single request body, in bytes (10 GiB).
+     *
+     * <p>Applied to EVERY request regardless of per-repository
+     * {@code content-length-max}: a declared {@code Content-Length} above it
+     * is rejected with 413 before a byte is read, and a chunked body is
+     * metered as it streams and rejected with 413 once it exceeds the cap.
+     * Before 2.2.9 there was no server-level cap at all — the only limiter
+     * was per-repository, opt-in, unset in every shipped config, and
+     * trusted the declared header (resource-dos F31/F17). Override via
+     * {@code PANTERA_MAX_REQUEST_BODY_BYTES}.</p>
+     */
+    public static final long DEFAULT_MAX_REQUEST_BODY_BYTES = 10L * 1024L * 1024L * 1024L;
+
+    /**
+     * Environment variable name for overriding the request-body cap.
+     */
+    private static final String ENV_MAX_REQUEST_BODY_BYTES = "PANTERA_MAX_REQUEST_BODY_BYTES";
 
     /**
      * HTTP/2 forbidden headers per RFC 7540 Section 8.1.2.
@@ -176,6 +198,12 @@ public final class VertxSliceServer implements Closeable {
      * buffered in memory; bodies equal to or larger are streamed from disk.
      */
     private final long bodyBufferThreshold;
+
+    /**
+     * Hard cap on a single request body in bytes — see
+     * {@link #DEFAULT_MAX_REQUEST_BODY_BYTES}.
+     */
+    private final LongSupplier maxRequestBodyBytes;
 
     /**
      * Flag to reject new requests during graceful shutdown drain window.
@@ -288,6 +316,27 @@ public final class VertxSliceServer implements Closeable {
     }
 
     /**
+     * Defaults for everything but the request-body cap, which is read
+     * through the supplier on every request (DB-backed admin setting).
+     * @param vertx The vertx.
+     * @param served The slice to be served.
+     * @param options The options to use.
+     * @param requestTimeout Maximum time to process a single request. Zero disables timeout enforcement.
+     * @param maxRequestBodyBytes Live source of the hard cap on a single request body in bytes.
+     */
+    public VertxSliceServer(
+        final Vertx vertx,
+        final Slice served,
+        final HttpServerOptions options,
+        final Duration requestTimeout,
+        final LongSupplier maxRequestBodyBytes
+    ) {
+        this(vertx, served, options, requestTimeout, DEFAULT_DRAIN_TIMEOUT,
+            ConfigDefaults.getLong(ENV_BODY_BUFFER_THRESHOLD, DEFAULT_BODY_BUFFER_THRESHOLD),
+            maxRequestBodyBytes);
+    }
+
+    /**
      * @param vertx The vertx.
      * @param served The slice to be served.
      * @param options The options to use.
@@ -311,8 +360,7 @@ public final class VertxSliceServer implements Closeable {
      * @param options The options to use.
      * @param requestTimeout Maximum time to process a single request. Zero disables timeout enforcement.
      * @param drainTimeout Maximum time to wait for in-flight requests to drain during shutdown.
-     * @param bodyBufferThreshold Body buffer threshold in bytes. Bodies smaller than this are buffered
-     *     in memory; bodies equal to or larger are streamed from disk. Must be positive.
+     * @param bodyBufferThreshold Body buffer threshold in bytes; see the canonical ctor.
      */
     public VertxSliceServer(
         final Vertx vertx,
@@ -321,6 +369,57 @@ public final class VertxSliceServer implements Closeable {
         final Duration requestTimeout,
         final Duration drainTimeout,
         final long bodyBufferThreshold
+    ) {
+        this(vertx, served, options, requestTimeout, drainTimeout, bodyBufferThreshold,
+            ConfigDefaults.getLong(ENV_MAX_REQUEST_BODY_BYTES, DEFAULT_MAX_REQUEST_BODY_BYTES));
+    }
+
+    /**
+     * @param vertx The vertx.
+     * @param served The slice to be served.
+     * @param options The options to use.
+     * @param requestTimeout Maximum time to process a single request. Zero disables timeout enforcement.
+     * @param drainTimeout Maximum time to wait for in-flight requests to drain during shutdown.
+     * @param bodyBufferThreshold Body buffer threshold in bytes. Bodies smaller than this are buffered
+     *     in memory; bodies equal to or larger are streamed from disk. Must be positive.
+     * @param maxRequestBodyBytes Hard cap on a single request body in bytes, metered on
+     *     actual bytes for declared and chunked framing alike. Must be positive.
+     */
+    public VertxSliceServer(
+        final Vertx vertx,
+        final Slice served,
+        final HttpServerOptions options,
+        final Duration requestTimeout,
+        final Duration drainTimeout,
+        final long bodyBufferThreshold,
+        final long maxRequestBodyBytes
+    ) {
+        this(vertx, served, options, requestTimeout, drainTimeout, bodyBufferThreshold,
+            VertxSliceServer.fixedCap(maxRequestBodyBytes));
+    }
+
+    /**
+     * Canonical ctor. The request-body cap is read through {@code
+     * maxRequestBodyBytes} on every request, so a DB-backed admin setting
+     * applies without a restart; the supplier must be cheap and non-blocking
+     * (it runs on the event loop).
+     * @param vertx The vertx.
+     * @param served The slice to be served.
+     * @param options The options to use.
+     * @param requestTimeout Maximum time to process a single request. Zero disables timeout enforcement.
+     * @param drainTimeout Maximum time to wait for in-flight requests to drain during shutdown.
+     * @param bodyBufferThreshold Body buffer threshold in bytes; must be positive.
+     * @param maxRequestBodyBytes Live source of the hard cap on a single request body in
+     *     bytes, metered on actual bytes for declared and chunked framing alike.
+     */
+    public VertxSliceServer(
+        final Vertx vertx,
+        final Slice served,
+        final HttpServerOptions options,
+        final Duration requestTimeout,
+        final Duration drainTimeout,
+        final long bodyBufferThreshold,
+        final LongSupplier maxRequestBodyBytes
     ) {
         this.vertx = Objects.requireNonNull(vertx, "vertx must not be null");
         // T-S05: wrap the served slice in the outermost security-headers
@@ -346,8 +445,31 @@ public final class VertxSliceServer implements Closeable {
         if (bodyBufferThreshold <= 0) {
             throw new IllegalArgumentException("bodyBufferThreshold must be positive");
         }
+        this.maxRequestBodyBytes = Objects.requireNonNull(
+            maxRequestBodyBytes, "maxRequestBodyBytes must not be null"
+        );
         this.bodyBufferThreshold = bodyBufferThreshold;
         this.serverRef = new AtomicReference<>();
+    }
+
+    /**
+     * Validate a fixed cap and wrap it.
+     * @param maxRequestBodyBytes Cap in bytes, must be positive
+     * @return Constant supplier
+     */
+    private static LongSupplier fixedCap(final long maxRequestBodyBytes) {
+        if (maxRequestBodyBytes <= 0) {
+            throw new IllegalArgumentException("maxRequestBodyBytes must be positive");
+        }
+        return () -> maxRequestBodyBytes;
+    }
+
+    /**
+     * Get the configured request-body cap.
+     * @return Cap in bytes
+     */
+    public long maxRequestBodyBytes() {
+        return this.maxRequestBodyBytes.getAsLong();
     }
 
     /**
@@ -396,9 +518,22 @@ public final class VertxSliceServer implements Closeable {
     /**
      * Start the server.
      *
+     * <p>Blocks until the socket is bound. The bind itself completes on a
+     * Vert.x event loop, so this method must never be called ON an event
+     * loop: it would wait for itself forever and freeze every connection
+     * pinned to that loop. Call it from a boot or worker thread
+     * ({@code executeBlocking}).</p>
+     *
      * @return Port the server is listening on.
+     * @throws IllegalStateException When called on a Vert.x event-loop thread
      */
     public int start() {
+        if (io.vertx.core.Context.isOnEventLoopThread()) {
+            throw new IllegalStateException(
+                "VertxSliceServer.start() blocks until the port is bound and must not "
+                    + "run on a Vert.x event-loop thread; call it from a worker thread"
+            );
+        }
         this.shuttingDown.set(false);
         for (int attempt = 1; attempt <= BIND_MAX_ATTEMPTS; attempt++) {
             final HttpServer server = this.vertx.createHttpServer(this.options);
@@ -544,6 +679,67 @@ public final class VertxSliceServer implements Closeable {
     }
 
     /**
+     * Refuse a request whose body exceeds the hard cap with
+     * {@code 413 Payload Too Large}, logging the state transition. On
+     * HTTP/1.x the connection is marked {@code Connection: close} because an
+     * unread (declared) or partially-read (chunked) body would otherwise
+     * desync keep-alive framing; on HTTP/2 only the stream is reset.
+     *
+     * @param req The request
+     * @param guarded Thread-safe response guard
+     * @param declared Declared Content-Length, or -1 when the cap tripped on
+     *  a metered chunked body
+     */
+    private void rejectTooLarge(
+        final HttpServerRequest req,
+        final GuardedHttpServerResponse guarded,
+        final long declared
+    ) {
+        EcsLogger.warn("com.auto1.pantera.vertx")
+            .message("Request body exceeds the hard cap; rejected with 413")
+            .eventCategory("web")
+            .eventAction("request_body_limit")
+            .eventOutcome("failure")
+            .field("http.request.method", req.method().name())
+            .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+            .field("http.request.body.bytes", declared)
+            .field("http.response.status_code", HttpURLConnection.HTTP_ENTITY_TOO_LARGE)
+            .field("log.source", "http")
+            .log();
+        final boolean h2 = req.version() == HttpVersion.HTTP_2;
+        if (!h2) {
+            // HTTP/1.x: the unread body would desync keep-alive framing.
+            // HTTP/2 forbids connection-specific headers (RFC 9113 8.2.2);
+            // sending one is a protocol error that kills the whole h2c
+            // connection, and every other stream multiplexed on it.
+            req.response().putHeader("Connection", "close");
+        }
+        final String detail = "request body exceeds the configured limit of "
+            + this.maxRequestBodyBytes.getAsLong() + " bytes";
+        final String message;
+        if (req.path().startsWith("/v2/")) {
+            // Docker Registry API: clients print OCI error bodies.
+            if (!req.response().headWritten()) {
+                req.response().putHeader("Content-Type", "application/json");
+            }
+            message = String.format(
+                "{\"errors\":[{\"code\":\"SIZE_INVALID\",\"message\":\"%s\"}]}", detail
+            );
+        } else {
+            message = "Payload Too Large: " + detail;
+        }
+        final boolean sent = guarded.safeSendError(
+            "proxyHandler.requestBodyLimit", HttpURLConnection.HTTP_ENTITY_TOO_LARGE, message
+        );
+        if (h2 && sent) {
+            // HTTP/2: the complete response was sent before the request body;
+            // tell the client to stop sending it (RST_STREAM NO_ERROR,
+            // RFC 9113 8.1) instead of closing the connection.
+            req.response().reset(0L);
+        }
+    }
+
+    /**
      * A handler which proxy incoming requests to encapsulated slice.
      * @return The request handler.
      */
@@ -613,10 +809,28 @@ public final class VertxSliceServer implements Closeable {
                     final long contentLength = hasContentLength
                         ? Long.parseLong(req.getHeader("Content-Length")) : -1L;
 
+                    // Hard request-body cap (resource-dos F31/F17, 2.2.9): a declared
+                    // size above the cap is refused before a single body byte is read
+                    // or any slice runs — the declared length used to flow straight
+                    // into Content.From and, on an auth-denial path, into an eager
+                    // allocation of that size. Chunked bodies are metered below.
+                    if (contentLength > this.maxRequestBodyBytes.getAsLong()) {
+                        this.rejectTooLarge(req, guardedResponse, contentLength);
+                        transaction.setResult("error");
+                        transaction.end();
+                        this.inFlightRequests.decrementAndGet();
+                        return;
+                    }
+
                     // For small bodies with known size (< threshold), buffer for simpler error handling.
                     // For large bodies or chunked transfers (unknown size), stream directly.
                     if (hasContentLength && contentLength < this.bodyBufferThreshold) {
-                        // Small body - buffer for simpler error handling
+                        // Small body - buffer for simpler error handling.
+                        // The interim 100 must go out BEFORE buffering: a client
+                        // that sent Expect: 100-continue withholds the body until
+                        // it sees it, so waiting for the body first stalls every
+                        // small upload until the client's own expect timeout.
+                        continueResponseFut(VertxSliceServer.requestHeaders(req), req.response());
                         req.bodyHandler(body -> {
                             EcsLogger.debug("com.auto1.pantera.vertx")
                                 .message("Small request body buffered")
@@ -663,7 +877,13 @@ public final class VertxSliceServer implements Closeable {
                             .log();
                         this.serveWithStream(req, contentLength, guardedResponse).whenComplete((result, throwable) -> {
                             try {
-                                if (throwable != null) {
+                                if (throwable != null
+                                    && com.auto1.pantera.http.RequestBodyTooLargeException.isCause(throwable)) {
+                                    // A metered (chunked) body crossed the hard cap while the
+                                    // slice was consuming it — a limit, not a server fault.
+                                    this.rejectTooLarge(req, guardedResponse, -1L);
+                                    transaction.setResult("error");
+                                } else if (throwable != null) {
                                     EcsLogger.error("com.auto1.pantera.vertx")
                                         .message("Request serving failed (streaming)")
                                         .eventCategory("web")
@@ -755,11 +975,25 @@ public final class VertxSliceServer implements Closeable {
      * matches what the same client would have put in an HTTP/1.1 {@code Host}
      * header — host-allowlist comparisons are exact, including any port.</p>
      *
+     * <p>The internal login header ({@link AuthzSlice#LOGIN_HDR}) is dropped:
+     * it names the authenticated user and is stamped by the authorization
+     * slices only. Accepted from the wire it would let a client claim to be
+     * someone else wherever a slice reads the login.</p>
+     *
      * @param req Inbound request
      * @return Headers, with {@code Host} present whenever an authority is known
      */
     private static Headers requestHeaders(final HttpServerRequest req) {
         Headers result = Headers.from(req.headers());
+        if (!result.find(AuthzSlice.LOGIN_HDR).isEmpty()) {
+            final Headers clean = new Headers();
+            for (final Header hdr : result) {
+                if (!AuthzSlice.LOGIN_HDR.equalsIgnoreCase(hdr.getKey())) {
+                    clean.add(hdr);
+                }
+            }
+            result = clean;
+        }
         if (result.values("Host").isEmpty()) {
             final io.vertx.reactivex.core.net.HostAndPort authority = req.authority();
             if (authority != null && authority.host() != null && !authority.host().isEmpty()) {
@@ -859,10 +1093,15 @@ public final class VertxSliceServer implements Closeable {
             });
 
         // Create Content: with known size when Content-Length is present,
-        // or without size for chunked transfers
-        final Content requestBody = contentLength >= 0
-            ? new Content.From(contentLength, bodyStream)
-            : new Content.From(bodyStream);
+        // or without size for chunked transfers. Either way the ACTUAL bytes
+        // are metered against the hard cap (a chunked body carries no
+        // declared size to check up front — resource-dos F17).
+        final Content requestBody = new com.auto1.pantera.http.body.BoundedContent(
+            contentLength >= 0
+                ? new Content.From(contentLength, bodyStream)
+                : new Content.From(bodyStream),
+            this.maxRequestBodyBytes.getAsLong()
+        );
 
         // No request timeout on the streaming path: body ingestion duration is
         // unbounded (depends on file size and upload speed). The connection idle
@@ -996,8 +1235,8 @@ public final class VertxSliceServer implements Closeable {
             ),
             req
         );
-        final CompletionStage<Void> continueFuture = continueResponseFut(requestHeaders, req.response());
-        return response.thenCombine(continueFuture, (resp, ignored) -> resp)
+        // 100 Continue (if expected) was already written before buffering.
+        return response
             .thenCompose(
                 resp -> {
                     // Ensure trace context is set for response handling
@@ -1234,6 +1473,28 @@ public final class VertxSliceServer implements Closeable {
     }
 
 
+    /**
+     * The reason phrase a slice asked for with {@link ReasonPhrase}, when it
+     * is safe to put in a status line: 1 to 128 printable ASCII characters
+     * (space and tab allowed, no CR/LF). Anything else is ignored and the
+     * standard phrase is kept.
+     * @param headers Response headers
+     * @return Phrase or null
+     */
+    private static String reasonPhrase(final Headers headers) {
+        String result = null;
+        for (final Header header : headers) {
+            if (ReasonPhrase.NAME.equalsIgnoreCase(header.getKey())) {
+                final String value = header.getValue();
+                if (!value.isEmpty() && value.length() <= 128
+                    && value.chars().allMatch(chr -> chr == '\t' || chr >= 0x20 && chr < 0x7f)) {
+                    result = value;
+                }
+            }
+        }
+        return result;
+    }
+
     private static CompletionStage<Void> accept(
         HttpServerResponse response, RsStatus status, Headers headers, Content body,
         boolean isHead, io.vertx.core.http.HttpVersion version,
@@ -1260,6 +1521,12 @@ public final class VertxSliceServer implements Closeable {
             return CompletableFuture.completedFuture(null);
         }
         response.setStatusCode(status.code());
+        // A slice may ask for a custom reason phrase (HTTP/1.x only; HTTP/2
+        // has none). The internal header itself is never sent.
+        final String phrase = VertxSliceServer.reasonPhrase(headers);
+        if (phrase != null && version != HttpVersion.HTTP_2) {
+            response.setStatusMessage(phrase);
+        }
 
         // Filter HTTP/2 forbidden headers per RFC 7540 Section 8.1.2
         // Connection-specific headers MUST NOT be included in HTTP/2 messages
@@ -1267,7 +1534,9 @@ public final class VertxSliceServer implements Closeable {
             ? filterHttp2ForbiddenHeaders(headers)
             : headers;
 
-        filteredHeaders.stream().forEach(h -> response.putHeader(h.getKey(), h.getValue()));
+        filteredHeaders.stream()
+            .filter(h -> !ReasonPhrase.NAME.equalsIgnoreCase(h.getKey()))
+            .forEach(h -> response.putHeader(h.getKey(), h.getValue()));
 
         // Skip compression for already-compressed binary artifacts (jar, gz, tar, rpm, etc.)
         // Setting Content-Encoding: identity tells Vert.x not to apply gzip compression,

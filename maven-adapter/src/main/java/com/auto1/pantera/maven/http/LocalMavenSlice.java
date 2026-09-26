@@ -108,15 +108,18 @@ final class LocalMavenSlice implements Slice {
                     }
                 ).thenCompose(Function.identity());
             case HEAD ->
-//                new ArtifactHeadResponse(this.storage, artifact);
                 storage.exists(artifact).thenApply(
                     exists -> {
                         if (exists) {
+                            // Same entity headers as GET, including the
+                            // Content-Length from the storage metadata.
                             return new RepositoryChecksums(storage)
                                 .checksums(artifact)
-                                .thenApply(
-                                    checksums -> ResponseBuilder.ok()
+                                .thenCombine(
+                                    storage.metadata(artifact),
+                                    (checksums, meta) -> ResponseBuilder.ok()
                                         .headers(ArtifactHeaders.from(artifact, checksums))
+                                        .header(new ContentLength(meta.read(Meta.OP_SIZE).orElseThrow()))
                                         .build()
                                 );
                         }
@@ -139,12 +142,18 @@ final class LocalMavenSlice implements Slice {
                 this.storage, key,
                 // Use optimized value retrieval for metadata files too
                 () -> StorageArtifactSlice.optimizedValue(this.storage, key)
-                    .thenApply(val -> ResponseBuilder.ok().body(val).build())
+                    .thenApply(
+                        val -> ResponseBuilder.ok()
+                            .header(ArtifactHeaders.contentType(key))
+                            .body(val)
+                            .build()
+                    )
             );
             case HEAD -> plainResponse(this.storage, key,
                 () -> this.storage.metadata(key)
                     .thenApply(
                         meta -> ResponseBuilder.ok()
+                            .header(ArtifactHeaders.contentType(key))
                             .header(new ContentLength(meta.read(Meta.OP_SIZE).orElseThrow()))
                             .build()
                     )

@@ -160,12 +160,25 @@ public final class GemSlice extends Slice.Wrap {
                         )
                     )
                 ),
+                // SECURITY (2.2.9): the dependency and gem-info GETs were routed
+                // with no auth wrapper while the upload and the fallback GET
+                // used createAuthSlice. Behind the presence-only
+                // AnonymousAccessSlice gate, any bogus Authorization header
+                // therefore disclosed private-repository gem metadata. Both
+                // now require a validated credential with repo-scoped READ.
                 new RtRulePath(
                     new RtRule.All(
                         MethodRule.GET,
                         new RtRule.ByPath("/api/v1/dependencies")
                     ),
-                    new DepsGemSlice(storage)
+                    GemSlice.createAuthSlice(
+                        new DepsGemSlice(storage),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
                 ),
                 new RtRulePath(
                     new RtRule.All(
@@ -179,7 +192,14 @@ public final class GemSlice extends Slice.Wrap {
                         MethodRule.GET,
                         new RtRule.ByPath(ApiGetSlice.PATH_PATTERN)
                     ),
-                    new ApiGetSlice(storage)
+                    GemSlice.createAuthSlice(
+                        new ApiGetSlice(storage),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
                 ),
                 new RtRulePath(
                     MethodRule.GET,

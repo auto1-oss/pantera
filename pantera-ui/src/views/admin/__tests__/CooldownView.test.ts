@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth'
 import CooldownView from '../CooldownView.vue'
 import PrimeVue from 'primevue/config'
 import Aura from '@primeuix/themes/aura'
+import { createRouter, createMemoryHistory } from 'vue-router'
 
 // The settings API is mocked at module level so we can observe which
 // params CooldownView forwards to /cooldown/blocked for each
@@ -31,10 +32,19 @@ vi.mock('@/components/layout/AppLayout.vue', () => ({
   default: { name: 'AppLayoutStub', template: '<div><slot /></div>' },
 }))
 
+// CooldownView keeps its tab state in the route query, so it needs a
+// router. A throwaway in-memory router keeps each mount isolated.
+function testRouter() {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/cooldown', component: { template: '<div />' } }],
+  })
+}
+
 function mountView() {
   return mount(CooldownView, {
     global: {
-      plugins: [[PrimeVue, { theme: { preset: Aura } }]],
+      plugins: [[PrimeVue, { theme: { preset: Aura } }], testRouter()],
       directives: {
         // PrimeVue's tooltip directive isn't registered in tests; a
         // no-op stub keeps the "Failed to resolve directive" warning

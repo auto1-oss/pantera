@@ -49,7 +49,9 @@ class UpdateSliceTest {
      * Test headers.
      */
     private static final Headers HEADERS = Headers.from(
-        ContentType.mime("multipart/form-data; boundary=\"simple boundary\"")
+        ContentType.mime("multipart/form-data; boundary=\"simple boundary\""),
+        new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-conda"),
+        new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
     );
 
     /**
@@ -99,6 +101,14 @@ class UpdateSliceTest {
             true
         );
         MatcherAssert.assertThat("Package info was added to events queue", this.events.size() == 1);
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            this.events.peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-conda")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            this.events.peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 
     @ParameterizedTest
@@ -150,6 +160,34 @@ class UpdateSliceTest {
         );
     }
 
+    @ParameterizedTest
+    @CsvSource({"linux-64/pkg-1.0-0.tar.bz2", "noarch/pkg-1.0-0.conda"})
+    void rejectsBodyThatIsNotACondaPackage(final String key) throws IOException {
+        final com.auto1.pantera.http.Response rsp = new UpdateSlice(
+            this.asto, Optional.of(this.events), UpdateSliceTest.RNAME
+        ).response(
+            new RequestLine(RqMethod.POST, String.format("/%s", key)),
+            UpdateSliceTest.HEADERS,
+            new Content.From(this.body("junk, not a package".getBytes(StandardCharsets.UTF_8)))
+        ).join();
+        MatcherAssert.assertThat(
+            "an invalid package is a client error",
+            rsp.status(), new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "the client is told why",
+            rsp.body().asString(),
+            new org.hamcrest.core.StringContains("not a valid conda package")
+        );
+        MatcherAssert.assertThat(
+            "nothing is left in storage, not even the temporary upload",
+            this.asto.list(Key.ROOT).join().isEmpty(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "no publish event", this.events.isEmpty(), new IsEqual<>(true)
+        );
+    }
+
     @Test
     @Disabled("Upload synchronization behaviour should be discussed further")
     void returnsBadRequestIfPackageAlreadyExists() {
@@ -164,6 +202,45 @@ class UpdateSliceTest {
         );
         MatcherAssert.assertThat(
             "Package info was not added to events queue", this.events.isEmpty()
+        );
+    }
+
+    @Test
+    void mergesUnderTheRepodataLockTheDeletePrunesUnder() throws IOException {
+        final String name = "7zip-19.00-h59b6b97_2.conda";
+        final Key repodata = new Key.From("linux-64", "repodata.json");
+        final java.util.concurrent.CompletableFuture<Void> parked =
+            new java.util.concurrent.CompletableFuture<>();
+        final java.util.concurrent.CompletableFuture<Void> entered =
+            new java.util.concurrent.CompletableFuture<>();
+        final java.util.concurrent.CompletableFuture<Void> holder =
+            new com.auto1.pantera.asto.lock.storage.IndexUpdateLock(this.asto, repodata).run(
+                locked -> {
+                    entered.complete(null);
+                    return parked;
+                }
+            );
+        entered.join();
+        final java.util.concurrent.CompletableFuture<com.auto1.pantera.http.Response> upload =
+            new UpdateSlice(this.asto, Optional.of(this.events), UpdateSliceTest.RNAME)
+                .response(
+                    new RequestLine(RqMethod.POST, String.format("/linux-64/%s", name)),
+                    UpdateSliceTest.HEADERS,
+                    new Content.From(this.body(new TestResource(name).asBytes()))
+                );
+        MatcherAssert.assertThat(
+            "the package is not listed while another writer holds the repodata lock",
+            this.asto.exists(repodata).join(), new IsEqual<>(false)
+        );
+        parked.complete(null);
+        holder.join();
+        MatcherAssert.assertThat(
+            "the upload completes once the lock is released",
+            upload.join().status(), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the package is listed",
+            this.asto.value(repodata).join().asString().contains(name), new IsEqual<>(true)
         );
     }
 

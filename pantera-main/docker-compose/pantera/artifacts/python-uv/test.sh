@@ -18,6 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 PANTERA_URL="${PANTERA_URL:-http://ayd:ayd@localhost:8081/test_prefix/api/pypi/pypi_group/simple/}"
+# The pytest suite (Test 5) reads the same variable.
+export PANTERA_URL
 
 echo "=== Pantera PEP 691 / uv test ==="
 echo "Index: $PANTERA_URL"

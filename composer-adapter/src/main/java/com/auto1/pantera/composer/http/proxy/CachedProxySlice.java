@@ -14,6 +14,9 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.FromStorageCache;
@@ -25,6 +28,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.context.RequestContext;
@@ -60,6 +64,7 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
+import org.slf4j.MDC;
 
 /**
  * Composer proxy slice — pure cache + URL-rewrite + primary-artifact
@@ -211,7 +216,13 @@ final class CachedProxySlice implements Slice {
     }
 
     @Override
-    public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
+    public CompletableFuture<Response> response(
+        final RequestLine line, final Headers rqheaders, final Content body
+    ) {
+        // Captured synchronously on the caller's thread, before any async
+        // hop: continuations (and the stale-while-revalidate refresh) run on
+        // pooled threads that may still hold an earlier request's MDC.
+        final Headers headers = CachedProxySlice.withRequestContext(rqheaders);
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         // GET requests should have empty body, but we must consume it to complete the request
         return body.asBytesFuture().thenCompose(ignored -> {
@@ -235,12 +246,21 @@ final class CachedProxySlice implements Slice {
             // Keep ~dev suffix in cache key to avoid collision between stable and dev metadata
             final String name = path
                 .replaceAll("^/p2?/", "")
+                .replaceAll("^/+", "")
                 .replaceAll("\\^.*", "")
-                .replaceAll(".json$", "");
+                .replaceAll("\\.json$", "");
+            if (!CachedProxySlice.isStorableName(name)) {
+                // Not a package metadata name (e.g. the repository root or a
+                // path with empty / parent segments): there is nothing to
+                // cache or look up, and building a storage key would fail.
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build()
+                );
+            }
 
             // Check cache FIRST before any network calls — offline mode
             // serves cached content even when upstream is unreachable.
-            return this.checkCacheFirst(line, name);
+            return this.checkCacheFirst(line, headers, name);
         });
     }
 
@@ -249,16 +269,21 @@ final class CachedProxySlice implements Slice {
      * metadata is served even when the upstream is unavailable.
      *
      * @param line Request line
+     * @param headers Request headers (carry the request's trace id)
      * @param name Package name
      * @return Response future
      */
     private CompletableFuture<Response> checkCacheFirst(
         final RequestLine line,
+        final Headers headers,
         final String name
     ) {
-        // Check storage cache FIRST before any network calls
+        // Check storage cache FIRST before any network calls. Metadata is
+        // written as <name>.json (ComposerStorageCache and fetchThroughCache),
+        // so the lookup and the freshness check must use that same key.
+        final Key cachedKey = new Key.From(name + ".json");
         return new FromStorageCache(this.repo.storage()).load(
-            new Key.From(name),
+            cachedKey,
             Remote.EMPTY,
             CacheControl.Standard.ALWAYS
         ).thenCompose(cached -> {
@@ -274,10 +299,10 @@ final class CachedProxySlice implements Slice {
                 return cached.get().asBytesFuture().thenCompose(bytes -> {
                     // Stale-while-revalidate: check freshness, trigger background refresh if stale
                     return new CacheTimeControl(this.repo.storage()).validate(
-                        new Key.From(name), Remote.EMPTY
+                        cachedKey, Remote.EMPTY
                     ).thenCompose(fresh -> {
                         if (!fresh) {
-                            this.backgroundRefresh(line, name);
+                            this.backgroundRefresh(line, headers, name);
                         }
                         return this.serveCachedMetadata(bytes);
                     });
@@ -286,7 +311,7 @@ final class CachedProxySlice implements Slice {
             // Cache MISS - fetch through cache. Per-version cooldown is
             // owned by ComposerPackageMetadataHandler / ComposerRootPackagesHandler;
             // CachedProxySlice's job is pure cache + URL-rewrite + integrity.
-            return this.fetchThroughCache(line, name);
+            return this.fetchThroughCache(line, headers, name, true);
         }).toCompletableFuture();
     }
 
@@ -309,65 +334,172 @@ final class CachedProxySlice implements Slice {
 
     /**
      * Trigger background refresh of metadata (stale-while-revalidate pattern).
-     * Serves stale content immediately while refreshing in background.
+     * Serves stale content immediately while refreshing in background. The
+     * client already got the stale copy, so a failed refresh is reported as
+     * such — never as the 502 a foreground miss would answer.
      *
      * @param line Request line
+     * @param headers Request headers (carry the request's trace id)
      * @param name Package name
      */
     private void backgroundRefresh(
         final RequestLine line,
+        final Headers headers,
         final String name
     ) {
         if (this.refreshing.add(name)) {
+            // The headers carry the request context captured in response();
+            // the pool worker that runs the refresh may still hold an
+            // earlier, unrelated request's MDC, so that is cleared first.
+            final String trace = CachedProxySlice.traceId(headers);
             CompletableFuture.runAsync(() -> {
+                MDC.remove(EcsMdc.TRACE_ID);
+                MDC.remove(EcsMdc.CLIENT_IP);
+                RequestContextHeaders.bindToMdc(headers);
                 try {
-                    this.fetchThroughCache(line, name).join();
-                    EcsLogger.debug("com.auto1.pantera.composer")
-                        .message("Background refresh completed")
-                        .eventCategory("database")
-                        .eventAction("stale_while_revalidate")
-                        .eventOutcome("success")
-                        .field("package.name", name)
-                        .field("log.source", "application")
-                        .log();
-                } catch (final Exception err) {
-                    EcsLogger.warn("com.auto1.pantera.composer")
-                        .message("Background refresh failed")
-                        .eventCategory("database")
-                        .eventAction("stale_while_revalidate")
-                        .eventOutcome("failure")
-                        .field("package.name", name)
-                        .error(err)
-                        .field("log.source", "application")
-                        .log();
+                    this.refresh(line, headers, name, trace);
                 } finally {
                     this.refreshing.remove(name);
+                    MDC.remove(EcsMdc.TRACE_ID);
+                    MDC.remove(EcsMdc.CLIENT_IP);
                 }
             });
         }
     }
 
     /**
+     * Run one stale-while-revalidate refresh and log its outcome.
+     *
+     * @param line Request line
+     * @param headers Request headers carrying the request context
+     * @param name Package name
+     * @param trace Trace id of the originating request, or null
+     */
+    private void refresh(
+        final RequestLine line,
+        final Headers headers,
+        final String name,
+        final String trace
+    ) {
+        try {
+            final Response refreshed =
+                this.fetchThroughCache(line, headers, name, false).join();
+            refreshed.body().discard().join();
+            RequestContextHeaders.bindToMdc(headers);
+            if (refreshed.status().success()) {
+                EcsLogger.debug("com.auto1.pantera.composer")
+                    .message("Background refresh completed")
+                    .eventCategory("database")
+                    .eventAction("stale_while_revalidate")
+                    .eventOutcome("success")
+                    .field("repository.name", this.rname)
+                    .field("package.name", name)
+                    .field("trace.id", trace)
+                    .field("log.source", "application")
+                    .log();
+            } else {
+                EcsLogger.warn("com.auto1.pantera.composer")
+                    .message(
+                        "Background refresh of stale metadata failed (status "
+                            + refreshed.status().code()
+                            + "); the cached copy stays served"
+                    )
+                    .eventCategory("database")
+                    .eventAction("stale_while_revalidate")
+                    .eventOutcome("failure")
+                    .field("event.reason", "upstream_unavailable")
+                    .field("repository.name", this.rname)
+                    .field("package.name", name)
+                    .field("trace.id", trace)
+                    .field("log.source", "application")
+                    .log();
+            }
+        } catch (final Exception err) {
+            RequestContextHeaders.bindToMdc(headers);
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("Background refresh of stale metadata failed; the cached copy stays served")
+                .eventCategory("database")
+                .eventAction("stale_while_revalidate")
+                .eventOutcome("failure")
+                .field("repository.name", this.rname)
+                .field("package.name", name)
+                .field("trace.id", trace)
+                .error(err)
+                .field("log.source", "application")
+                .log();
+        }
+    }
+
+    /**
+     * Request headers with the internal request-context headers filled in
+     * from the calling thread's MDC when the caller did not supply them.
+     *
+     * @param headers Request headers
+     * @return Copy of the headers carrying the request context when known
+     */
+    private static Headers withRequestContext(final Headers headers) {
+        final Headers out = headers.copy();
+        CachedProxySlice.fill(out, EcsLoggingSlice.CTX_TRACE_ID_HEADER, EcsMdc.TRACE_ID);
+        CachedProxySlice.fill(out, EcsLoggingSlice.CTX_CLIENT_IP_HEADER, EcsMdc.CLIENT_IP);
+        return out;
+    }
+
+    /**
+     * Add a context header from the MDC when the headers lack it.
+     *
+     * @param headers Headers to fill
+     * @param header Context header name
+     * @param key MDC key
+     */
+    private static void fill(final Headers headers, final String header, final String key) {
+        final String mdc = MDC.get(key);
+        if (headers.find(header).isEmpty() && mdc != null && !mdc.isEmpty()) {
+            headers.add(header, mdc);
+        }
+    }
+
+    /**
+     * Trace id of the request, from the internal context header.
+     *
+     * @param headers Request headers
+     * @return Trace id, or null when absent
+     */
+    private static String traceId(final Headers headers) {
+        return headers.find(EcsLoggingSlice.CTX_TRACE_ID_HEADER).stream()
+            .findFirst().map(Header::getValue).orElse(null);
+    }
+
+    /**
      * Fetch package through cache.
      *
      * @param line Request line
+     * @param headers Request headers (carry the request's trace id)
      * @param name Package name
+     * @param foreground Whether the client waits on this lookup (false for a
+     *  stale-while-revalidate refresh, whose caller reports the outcome)
      * @return Response future
      */
     private CompletableFuture<Response> fetchThroughCache(
         final RequestLine line,
-        final String name
+        final Headers headers,
+        final String name,
+        final boolean foreground
     ) {
         // Package name for merge: strip ~dev suffix since Packagist JSON uses base name
         final String packageName = name.replaceAll("~dev$", "");
+        // Records whether the upstream failed to answer (unreachable, 5xx,
+        // malformed body) as opposed to answering "no such package": only
+        // the latter may become a 404.
+        final UpstreamFailure failure = new UpstreamFailure();
         return this.cache.load(
             new Key.From(name),  // Cache key keeps ~dev to prevent collision
-            new Remote.WithErrorHandling(
+            CachedProxySlice.recording(
+                failure,
                 () -> this.repo.packages().thenApply(
                         pckgs -> pckgs.orElse(new JsonPackages())
                     ).thenCompose(Packages::content)
                     .thenCombine(
-                        this.packageFromRemote(line),
+                        this.packageFromRemote(line, headers, failure),
                         (lcl, rmt) -> new MergePackage.WithRemote(packageName, lcl).merge(rmt)
                     ).thenCompose(Function.identity())
                     .thenCompose(contentOpt -> {
@@ -402,7 +534,9 @@ final class CachedProxySlice implements Slice {
             new CacheTimeControl(this.repo.storage())
         ).thenCompose((java.util.Optional<? extends Content> pkgs) -> {
             if (pkgs.isEmpty()) {
-                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                return CompletableFuture.completedFuture(
+                    this.missResponse(failure, name, headers, foreground)
+                );
             }
             // Content is already pre-rewritten at write time.
             // Persist the rewritten bytes under {name}.json so
@@ -435,8 +569,202 @@ final class CachedProxySlice implements Slice {
                 .error(throwable)
                 .field("log.source", "application")
                 .log();
-            return ResponseBuilder.notFound().build();
+            return this.missResponse(failure, name, headers, foreground);
         }).toCompletableFuture();
+    }
+
+    /**
+     * Response for a metadata lookup that produced no content: 404 when the
+     * upstream answered that the package does not exist, 502 when it could
+     * not answer at all (an outage is not proof of absence, and a 404 would
+     * make Composer report a missing package).
+     *
+     * @param failure Upstream failure record of this lookup
+     * @param name Package name
+     * @param headers Request headers (carry the request's trace id)
+     * @param foreground Whether the 502 goes to a waiting client (logged
+     *  here) or to a background refresh (logged by its caller)
+     * @return Response
+     */
+    private Response missResponse(
+        final UpstreamFailure failure, final String name, final Headers headers,
+        final boolean foreground
+    ) {
+        if (!failure.failed()) {
+            return ResponseBuilder.notFound().build();
+        }
+        if (foreground) {
+            RequestContextHeaders.bindToMdc(headers);
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("Upstream could not answer the metadata lookup; returning 502")
+                .eventCategory("network")
+                .eventAction("metadata_fetch")
+                .eventOutcome("failure")
+                .field("event.reason", "upstream_unavailable")
+                .field("repository.name", this.rname)
+                .field("package.name", name)
+                .field("trace.id", CachedProxySlice.traceId(headers))
+                .field("log.source", "application")
+                .log();
+        }
+        final ResponseBuilder builder = ResponseBuilder.badGateway();
+        if (failure.circuitOpen()) {
+            // Preserve the upstream breaker's marker so a php-group does not
+            // convict this member on a fast-failed call (see CLAUDE.md).
+            builder.header(UpstreamCircuitOpenException.HEADER, "true");
+            if (failure.retryAfter() > 0L) {
+                builder.header("Retry-After", Long.toString(failure.retryAfter()));
+            }
+        }
+        return builder
+            .textBody("Upstream temporarily unavailable")
+            .build();
+    }
+
+    /**
+     * Wrap a remote so that any failure is recorded and turned into an
+     * empty result (the cache contract), instead of being silently
+     * swallowed as {@link Remote.WithErrorHandling} does.
+     *
+     * @param failure Failure record
+     * @param origin Remote to guard
+     * @return Guarded remote
+     */
+    private static Remote recording(final UpstreamFailure failure, final Remote origin) {
+        return () -> {
+            CompletionStage<Optional<? extends Content>> stage;
+            try {
+                stage = origin.get();
+            } catch (final RuntimeException ex) {
+                stage = CompletableFuture.failedFuture(ex);
+            }
+            return stage.handle((content, err) -> {
+                if (err != null) {
+                    failure.record(err);
+                    EcsLogger.warn("com.auto1.pantera.composer")
+                        .message("Remote metadata retrieval failed")
+                        .eventCategory("network")
+                        .eventAction("metadata_fetch")
+                        .eventOutcome("failure")
+                        .error(err)
+                        .field("log.source", "application")
+                        .log();
+                    return Optional.empty();
+                }
+                return content;
+            });
+        };
+    }
+
+    /**
+     * Whether an upstream status means the upstream could not answer (as
+     * opposed to a definitive miss such as 404 / 410).
+     *
+     * @param code HTTP status code
+     * @return True for server errors, throttling and upstream auth failures
+     */
+    private static boolean isUpstreamFailure(final int code) {
+        return code >= 500 || code == 429 || code == 401 || code == 403
+            || code == 407 || code == 408;
+    }
+
+    /**
+     * Per-lookup record of an upstream failure, including whether it was a
+     * fast-fail of the outbound circuit breaker (marker header or
+     * {@link UpstreamCircuitOpenException}) and its Retry-After hint.
+     */
+    private static final class UpstreamFailure {
+        /**
+         * Whether a failure was observed.
+         */
+        private volatile boolean flag;
+
+        /**
+         * Whether the failure carried the circuit-open marker.
+         */
+        private volatile boolean open;
+
+        /**
+         * Retry-After hint of the circuit-open failure in seconds; 0 if unknown.
+         */
+        private volatile long retry;
+
+        /**
+         * Record a failed upstream response.
+         *
+         * @param headers Upstream response headers
+         */
+        void record(final Headers headers) {
+            this.flag = true;
+            if (!headers.values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+                this.circuit(UpstreamFailure.seconds(headers.values("Retry-After")));
+            }
+        }
+
+        /**
+         * Record an upstream call that failed with an exception.
+         *
+         * @param err Failure, possibly wrapped
+         */
+        void record(final Throwable err) {
+            this.flag = true;
+            Throwable cur = err;
+            while (cur != null) {
+                if (cur instanceof UpstreamCircuitOpenException) {
+                    this.circuit(((UpstreamCircuitOpenException) cur).retryAfterSeconds());
+                    break;
+                }
+                cur = cur.getCause();
+            }
+        }
+
+        /**
+         * @return Whether a failure was recorded
+         */
+        boolean failed() {
+            return this.flag;
+        }
+
+        /**
+         * @return Whether a failure carried the circuit-open marker
+         */
+        boolean circuitOpen() {
+            return this.open;
+        }
+
+        /**
+         * @return Retry-After hint in seconds; 0 when unknown
+         */
+        long retryAfter() {
+            return this.retry;
+        }
+
+        /**
+         * Mark the failure as a circuit-open fast-fail.
+         *
+         * @param hint Retry-After hint in seconds
+         */
+        private void circuit(final long hint) {
+            this.open = true;
+            this.retry = Math.max(this.retry, hint);
+        }
+
+        /**
+         * Delta-seconds value of the first Retry-After header; 0 if absent.
+         *
+         * @param values Retry-After header values
+         * @return Seconds
+         */
+        private static long seconds(final List<String> values) {
+            if (values.isEmpty()) {
+                return 0L;
+            }
+            try {
+                return Math.max(0L, Long.parseLong(values.get(0).trim()));
+            } catch (final NumberFormatException ignored) {
+                return 0L;
+            }
+        }
     }
 
     /**
@@ -542,19 +870,23 @@ final class CachedProxySlice implements Slice {
     /**
      * Obtains info about package from remote.
      * @param line The request line (usually like this `GET /p2/vendor/package.json HTTP_1_1`)
+     * @param headers Request headers (carry the request's trace id)
+     * @param failure Record of an upstream failure for this lookup
      * @return Content from respond of remote. If there were some errors,
-     *  empty will be returned.
+     *  empty will be returned and the failure recorded.
      */
     private CompletionStage<Optional<? extends Content>> packageFromRemote(
-        final RequestLine line
+        final RequestLine line, final Headers headers, final UpstreamFailure failure
     ) {
         final long startTime = System.currentTimeMillis();
-        return new Remote.WithErrorHandling(
+        return CachedProxySlice.recording(
+            failure,
             () -> {
                 try {
                     return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
                         .thenCompose(response -> {
                             final long duration = System.currentTimeMillis() - startTime;
+                            RequestContextHeaders.bindToMdc(headers);
                             EcsLogger.debug("com.auto1.pantera.composer")
                                 .message("Remote response received")
                                 .eventCategory("web")
@@ -582,12 +914,18 @@ final class CachedProxySlice implements Slice {
                                 if (response.status().code() >= 500) {
                                     this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
                                 }
+                                if (CachedProxySlice.isUpstreamFailure(response.status().code())) {
+                                    failure.record(response.headers());
+                                }
+                                RequestContextHeaders.bindToMdc(headers);
                                 EcsLogger.warn("com.auto1.pantera.composer")
                                     .message("Remote returned non-success status")
                                     .eventCategory("web")
                                     .eventAction("remote_fetch")
                                     .eventOutcome("failure")
+                                    .field("repository.name", this.rname)
                                     .field("url.path", line.uri().getPath())
+                                    .field("trace.id", CachedProxySlice.traceId(headers))
                                     .field("http.response.status_code", response.status().code())
                                     .field("log.source", "http")
                                     .log();
@@ -652,6 +990,25 @@ final class CachedProxySlice implements Slice {
     }
 
     // ===== WI-07 §9.5: ProxyCacheWriter integration =====
+
+    /**
+     * Whether a metadata name derived from the request path can be used as a
+     * storage key: non-blank, no empty segments, no parent references.
+     *
+     * @param name Name derived from the request path
+     * @return True when the name is a usable relative key
+     */
+    private static boolean isStorableName(final String name) {
+        if (name.isBlank()) {
+            return false;
+        }
+        for (final String part : name.split("/", -1)) {
+            if (part.isEmpty() || ".".equals(part) || "..".equals(part)) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /**
      * Check if path represents a Composer primary artifact (zip / tar /

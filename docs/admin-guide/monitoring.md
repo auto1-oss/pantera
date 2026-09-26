@@ -21,6 +21,11 @@ meta:
       - http       # HTTP request/response metrics
 ```
 
+The endpoint is unauthenticated (Prometheus scrapes it) and lists repository
+names and upstream hosts, so keep it on the private network. It binds to all
+interfaces by default; `PANTERA_METRICS_BIND=<address>` restricts it to one
+interface (2.2.9), e.g. `127.0.0.1` behind a node-local scraper.
+
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
 | `endpoint` | string | Yes | URL path for metrics scraping (must start with `/`) |

@@ -27,7 +27,21 @@ registry=http://pantera-host:8080/npm-group
 
 Replace:
 - `npm-group` with the name of your group repository
-- `your-jwt-token-here` with the JWT token obtained from the API
+- `your-jwt-token-here` with an API token (Profile page, or generate one in the UI's **Set Me Up** page)
+
+Instead of pasting a token you can run `npm login`, see [Logging In with `npm login`](#logging-in-with-npm-login).
+
+### Logging In with `npm login`
+
+`npm login` (and `npm adduser`) work against local, proxy and group repositories:
+
+```bash
+npm login --registry http://pantera-host:8080/npm-group/
+```
+
+npm first tries its web login, which Pantera declines, and then prompts for your Pantera username and password (to skip the web attempt, pass `--auth-type=legacy`). Pantera checks the password and returns a Pantera API token, which npm writes to your user `.npmrc` as the `_authToken` for that registry path. The token is labelled `npm login`, expires after 30 days (or sooner, if an administrator has set a shorter maximum token lifetime), and appears in your token list in the UI, where you can revoke it. Users who sign in only through SSO have no Pantera password, so they generate an API token in the UI instead. The login request body is limited to 64 KiB (a real login is far smaller); a larger body is answered `413`.
+
+`npm logout` is not supported: Pantera does not revoke tokens through the npm registry API, so every repository (local, proxy or group) declines the request with `404` and `X-Pantera-Reason: not_implemented`, and the command fails (see [Unsupported Endpoints](#unsupported-endpoints)). To log out, delete the `_authToken` line from your user `.npmrc` and revoke the token in the UI.
 
 ### Alternative: Basic Auth
 
@@ -132,7 +146,7 @@ npm publish --registry http://pantera-host:8080/npm-local
 
 ## Dist-Tags & Custom Channels
 
-Every published version gets the `latest` dist-tag by default. To publish to a custom channel (e.g. a beta/next release line) instead:
+Every published version gets the `latest` dist-tag by default. A package always has a `latest` tag: while it has only prerelease versions (for example, its first publish used `--tag next`, or its last stable version was unpublished), `latest` points at the highest prerelease until a stable version is published or you set it with `npm dist-tag add`. To publish to a custom channel (e.g. a beta/next release line) instead:
 
 ```bash
 npm publish --tag beta
@@ -154,9 +168,9 @@ npm install @myorg/my-package@beta
 
 Dist-tags are persisted durably per package on local repositories, so `dist-tag ls`/`add`/`rm`, `--tag` publishes, and installing by tag all reflect the same state. `npm deprecate` and `npm unpublish <pkg>@<version>` (single-version) are also effective against local repositories: a deprecated version is marked in the packument, and an unpublished version genuinely stops being served. Removing a version or a dist-tag (`npm unpublish <pkg>@<version>`, `npm dist-tag rm`) requires the `delete` permission; publishing and adding a dist-tag only require `write`.
 
-Whole-package removal (`npm unpublish <pkg> --force`) additionally requires a current packument revision (`_rev`) with the request. The npm CLI does this automatically -- it reads the packument before force-unpublishing -- so this is transparent to normal CLI use. A hand-rolled script that calls the registry API directly must read `_rev` from the package's own packument first and send it with the delete; a mismatched revision is rejected with `409 Conflict`, a missing or literal `undefined` revision (the usual sign a script never read the packument) with `428 Precondition Required`, and an unknown package with `404 Not Found`.
+Whole-package removal (`npm unpublish <pkg> --force`) additionally requires a current packument revision (`_rev`) with the request. The same check applies to both steps of `npm unpublish <pkg>@<version>`: the update that drops the version from the packument (`PUT <pkg>/-rev/<revision>`), and the final delete of the removed version's tarball (`DELETE <pkg>/-/<file>.tgz/-rev/<revision>`) with the revision the packument reports once the version is gone. The revision changes whenever a version or a dist-tag is added or removed (its leading number is the version count), so a client holding a stale packument cannot remove versions published after it read it. The npm CLI does all of this automatically -- it reads the packument before each change -- so this is transparent to normal CLI use. A hand-rolled script that calls the registry API directly must read `_rev` from the package's own packument first and send it with the request; a mismatched revision is rejected with `409 Conflict`, a missing revision (no `/-rev/<rev>` segment, an empty one, or the literal `undefined` -- the usual sign a script never read the packument) with `428 Precondition Required`, and an unknown package with `404 Not Found`. The `409` and `428` responses carry a JSON body such as `{"error": "revision required: ..."}` and an `X-Pantera-Reason` header (`revision_mismatch` or `revision_required`).
 
-On proxy repositories, `npm dist-tag ls` and `npm search` are forwarded upstream (read-through, not persisted locally).
+On proxy repositories, `npm dist-tag ls` and `npm search` are forwarded upstream (read-through, not persisted locally). Proxy and group repositories are read-only: `npm publish`, `npm unpublish` and `npm dist-tag add`/`rm` against them answer `405 Method Not Allowed`; publish to a local repository.
 
 ---
 
@@ -177,7 +191,7 @@ address you requested -- a proxy or group never hands back another
 repository's URL, so the response is usable as-is by strict clients such as
 corepack.
 
-`HEAD` requests are also supported on packument and tarball URLs (returns headers only, e.g. `Content-Length`, no body) — useful for existence checks without downloading.
+`HEAD` requests are also supported on packument and tarball URLs (headers only, no body) — useful for existence checks without downloading. A tarball `HEAD` carries `Content-Length`; a packument `HEAD` carries `ETag` and `Content-Type` but no `Content-Length`, because the packument body is streamed (the `GET` uses chunked transfer encoding too).
 
 ---
 
@@ -188,6 +202,8 @@ corepack.
 ```bash
 npm search my-package --registry http://pantera-host:8080/npm-local
 ```
+
+Results list each package once, at its highest stable version (its highest prerelease if it has no stable version), with the description and keywords from that version's `package.json`. On a local repository the page size (`size`) is capped at 250 packages (default 20); a larger `size` returns 250, and a `from` offset past the last package returns an empty page.
 
 ---
 
@@ -211,7 +227,7 @@ If you published with `npm publish --provenance`, the provenance/attestation bun
 
 `npm token` is not supported. Every Pantera repository is JWT-authenticated -- there is no "local, non-JWT" mode for the npm CLI's own token management to manage -- so API tokens are issued from the Pantera UI or REST API instead: see [Generating Long-Lived API Tokens](../getting-started.md#generating-long-lived-api-tokens). This matches Artifactory, which does not support `npm token` either. Requests to `npm token` subcommands are declined; see [Unsupported Endpoints](#unsupported-endpoints).
 
-`npm profile get` returns the authenticated user's identity. `npm profile set` is accepted (`200`) but is a no-op -- Pantera has no per-npm profile field beyond username/email to persist -- and requires the `write` permission.
+`npm whoami` and `npm profile get` return the authenticated user's identity on local, proxy and group repositories. `npm profile set` is accepted (`200`) but is a no-op -- Pantera has no per-npm profile field beyond username/email to persist -- and requires the `write` permission.
 
 ---
 
@@ -222,14 +238,15 @@ Pantera does not implement the following npm CLI surfaces:
 | Command | Area |
 |---------|------|
 | `npm token` | Registry-scoped token management -- see [Tokens & Profile](#tokens--profile) |
+| `npm logout` | Token revocation through the registry -- see [Logging in with npm login](#logging-in-with-npm-login) |
 | `npm hook` | Webhooks |
 | `npm org` | Write operations (organization membership management) |
 | `npm team` | Team management |
 | `npm star` | Package starring -- behaves differently, see below |
 
-A request to `npm token`, `npm hook`, `npm org` (write operations), or `npm team` is declined immediately with `404 Not Found`, an `X-Pantera-Reason: not_implemented` response header, and a small JSON body naming the operation -- never a `5xx`. This is deliberate, not an oversight: npm's client retries any `>= 500` response on a non-`POST` request, and that retry check is purely status-code based, so even a semantically-correct `501 Not Implemented` would still be retried for roughly a minute before the client gave up. Only a `4xx` fails fast.
+A request to `npm token`, `npm logout`, `npm hook`, `npm org` (write operations), or `npm team` is declined immediately with `404 Not Found`, an `X-Pantera-Reason: not_implemented` response header, and a small JSON body naming the operation -- never a `5xx`. This is deliberate, not an oversight: npm's client retries any `>= 500` response on a non-`POST` request, and that retry check is purely status-code based, so even a semantically-correct `501 Not Implemented` would still be retried for roughly a minute before the client gave up. Only a `4xx` fails fast.
 
-`npm star` does not get this clean decline. Unlike the other four, it has no endpoint of its own: the npm CLI sends it as `PUT /<pkg>` with a `users` key in the body -- the same route and method npm uses to publish that package. Because the request is indistinguishable from a publish at the routing layer, there is no way to add a dedicated decline route for it without also intercepting real publishes, so it falls through to the publish handler, which rejects it as a malformed publish payload instead of naming `star` as the actual operation.
+`npm star` does not get this clean decline. Unlike the others, it has no endpoint of its own: the npm CLI sends it as `PUT /<pkg>` with a `users` key in the body -- the same route and method npm uses to publish that package. Because the request is indistinguishable from a publish at the routing layer, there is no way to add a dedicated decline route for it without also intercepting real publishes, so it falls through to the publish handler, which rejects it as a malformed publish payload instead of naming `star` as the actual operation.
 
 ---
 
@@ -240,7 +257,7 @@ A typical npm group combines:
 1. A **local** repository for your organization's private packages
 2. A **proxy** repository that caches packages from npmjs.org
 
-Point your `.npmrc` registry at the group, and Pantera handles resolution order automatically.
+Point your `.npmrc` registry at the group, and Pantera handles resolution order automatically. Registry endpoints work through the group as well: `npm dist-tag ls` and attestations are answered by the first member that has the package (local members first), `npm search` merges the results of every member (local packages first), and `GET /-/npm/v1/keys` returns every member's signing keys, so `npm audit signatures` verifies both locally published and upstream packages. If no member can answer a search or keys request (every member is failing or unreachable), the group returns `503` with `Retry-After` instead of an empty result, so retry after the indicated delay.
 
 ---
 
@@ -252,6 +269,8 @@ Point your `.npmrc` registry at the group, and Pantera handles resolution order 
 | `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | HTTPS certificate issue | Use `http://` or set `strict-ssl=false` in `.npmrc` |
 | `npm ERR! 404 Not Found` | Package not cached in proxy yet, or wrong registry URL | Verify the registry URL in `.npmrc`; check if the proxy has upstream configured |
 | `npm ERR! code E403` | User lacks write permission | Contact admin for publish access to the local repository |
+| `npm ERR! code E405` on publish | `publishConfig.registry` or `--registry` points at a proxy or group repository | Publish to the local repository |
+| `npm login` fails with `E401` | Wrong password, or an SSO-only account with no Pantera password | Check the password, or generate an API token in the UI and put it in `.npmrc` |
 | Publish goes to npmjs.org instead of Pantera | Missing `publishConfig` in `package.json` | Add `publishConfig.registry` or use `--registry` flag |
 | `ETARGET` no matching version | Package exists upstream but is in cooldown | Check with admin; see [Cooldown](../cooldown.md) |
 | Scoped packages not resolving | Scope registry not configured | Add `@myorg:registry=http://pantera-host:8080/npm-group` to `.npmrc` |

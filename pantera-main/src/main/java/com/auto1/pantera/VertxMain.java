@@ -24,6 +24,7 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.misc.RepoNameMeterFilter;
 import com.auto1.pantera.http.misc.StorageExecutors;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.jetty.http3.Http3Server;
 import com.auto1.pantera.jetty.http3.SslFactoryFromYaml;
@@ -155,7 +156,7 @@ public final class VertxMain {
     public VertxMain(final Path config, final int port) {
         this.config = config;
         this.port = port;
-        this.servers = new ArrayList<>(0);
+        this.servers = java.util.Collections.synchronizedList(new ArrayList<>(0));
         this.http3 = new ConcurrentHashMap<>(0);
     }
 
@@ -311,11 +312,17 @@ public final class VertxMain {
         final com.auto1.pantera.auth.RevocationBlocklist revocationBlocklist;
         if (settings.valkeyConnection().isPresent()
             && settings.cacheInvalidationPubSub().isPresent()) {
-            revocationBlocklist = new com.auto1.pantera.auth.ValkeyRevocationBlocklist(
-                settings.valkeyConnection().get(),
-                settings.cacheInvalidationPubSub().get(),
-                (int) java.time.Duration.ofHours(2).toSeconds()
-            );
+            final com.auto1.pantera.auth.ValkeyRevocationBlocklist valkeyBlocklist =
+                new com.auto1.pantera.auth.ValkeyRevocationBlocklist(
+                    settings.valkeyConnection().get(),
+                    settings.cacheInvalidationPubSub().get(),
+                    (int) java.time.Duration.ofHours(2).toSeconds(),
+                    sharedDs.map(com.auto1.pantera.db.dao.RevocationDao::new).orElse(null)
+                );
+            // Boot thread: reload live revocations from Valkey (+ the DB
+            // copy) so a restart does not forget them (B47).
+            valkeyBlocklist.restore();
+            revocationBlocklist = valkeyBlocklist;
             EcsLogger.info("com.auto1.pantera")
                 .message("Valkey-backed token revocation blocklist active (cross-node broadcast)")
                 .eventCategory("configuration")
@@ -337,8 +344,20 @@ public final class VertxMain {
         } else {
             revocationBlocklist = null;
         }
+        // SECURITY (2.2.9, SecOps #40): expose the same revocation /
+        // JTI-ownership / enabled-state validators to the reflectively-built
+        // jwt-password auth provider so a token used as a Basic password is
+        // subjected to the same checks as a Bearer token.
+        com.auto1.pantera.auth.TokenRevocationRegistry.instance()
+            .install(revocationBlocklist, userTokenDao, enabledCheck);
+        // SECURITY (2.2.9, SecOps token-revocation #9): the issuer must read
+        // the admin-configured access/refresh TTLs (AuthSettingsDao) — it was
+        // wired with null, so the admin API's TTL settings never applied.
+        final com.auto1.pantera.db.dao.AuthSettingsDao authSettingsDao = sharedDs
+            .map(com.auto1.pantera.db.dao.AuthSettingsDao::new)
+            .orElse(null);
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
-            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null,
+            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, authSettingsDao,
             revocationBlocklist, enabledCheck
         );
         // Install the circuit-breaker settings loader BEFORE constructing
@@ -375,6 +394,20 @@ public final class VertxMain {
         // deployment -- the same regression already fixed for
         // ClientBaseUrlSettingsLoader below.
         com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        // 2.2.9 security policy settings (request-body cap + fs storage
+        // roots, outbound egress policy, login throttling): DB row -> env
+        // -> default per key, admin-editable at runtime. Installed
+        // unconditionally for the same DB-less-boot reason as above; the
+        // egress loader also feeds http-client's EgressSettingsRegistry.
+        com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        com.auto1.pantera.settings.policy.EgressSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
         // WS8 fixwave-c (2.3.0): install the client-base URL derivation
@@ -705,41 +738,9 @@ public final class VertxMain {
                                         nothing -> {
                                             slices.invalidateRepo(name);
                                             repos.config(name).ifPresent(cfg -> cfg.port().ifPresent(
-                                                prt -> {
-                                                    // Dedicated ports bypass MainSlice's
-                                                    // ApiRoutingSlice/SliceByPath pipeline
-                                                    // entirely, so the internal client-base
-                                                    // marker scrub has to be applied here
-                                                    // instead (see InternalHeaderScrubSlice).
-                                                    final Slice slice = new InternalHeaderScrubSlice(
-                                                        slices.slice(new Key.From(name), prt)
-                                                    );
-                                                    if (cfg.startOnHttp3()) {
-                                                        this.http3.computeIfAbsent(
-                                                            prt, key -> {
-                                                                final Http3Server server = new Http3Server(
-                                                                    new LoggingSlice(slice), prt,
-                                                                    new SslFactoryFromYaml(cfg.repoYaml()).build()
-                                                                );
-                                                                server.start();
-                                                                return server;
-                                                            }
-                                                        );
-                                                    } else {
-                                                        final boolean exists = this.servers
-                                                            .stream()
-                                                            .anyMatch(s -> s.port() == prt);
-                                                        if (!exists) {
-                                                            this.listenOn(
-                                                                slice,
-                                                                prt,
-                                                                VertxMain.this.vertx,
-                                                                settings.metrics(),
-                                                                settings.httpServerRequestTimeout()
-                                                            );
-                                                        }
-                                                    }
-                                                }
+                                                prt -> this.startRepoListener(
+                                                    name, cfg, prt, slices, settings
+                                                )
                                             ));
                                         }
                                     );
@@ -826,11 +827,37 @@ public final class VertxMain {
         // Deploy AsyncApiVerticle with multiple instances for CPU scaling
         // Use 2x CPU cores to handle concurrent API requests efficiently
         final int apiInstances = Runtime.getRuntime().availableProcessors() * 2;
+        // Admin cache tools reach the serving side through one shared bundle:
+        // repository topology, in-process requests through the live slices
+        // (the caller's own credentials, below the client entry point), and
+        // read-only breaker state. The hostname is resolved once, here.
+        final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics =
+            new com.auto1.pantera.api.v1.admin.AdminDiagnostics(
+                new com.auto1.pantera.api.v1.admin.RepoTopology.FromRepositories(repos),
+                new com.auto1.pantera.api.v1.admin.SliceRepoFetch(
+                    name -> slices.slice(new Key.From(name), this.port)
+                ),
+                new com.auto1.pantera.api.v1.admin.BreakerProbe() {
+                    @Override
+                    public String memberStatus(final String repo) {
+                        return slices.memberBreakerStatus(repo);
+                    }
+
+                    @Override
+                    public java.util.List<Upstream> upstreams(final String repo) {
+                        return slices.upstreamBreakers(repo);
+                    }
+                },
+                new com.auto1.pantera.api.v1.admin.AdminDiagnostics().node()
+            );
         final DeploymentOptions deployOpts = new DeploymentOptions()
             .setInstances(apiInstances);
         this.vertx.deployVerticle(
+            // Every API instance shares the slices' cooldown stack: a
+            // per-verticle stack made unblocks invisible to the serving path.
             () -> new AsyncApiVerticle(
-                settings, apiPort, null, sharedDs.orElse(null), jwtTokens
+                settings, apiPort, null, sharedDs.orElse(null), jwtTokens,
+                slices.cooldownService(), slices.cooldownMetadataService(), diagnostics
             ),
             deployOpts,
             result -> {
@@ -1313,8 +1340,15 @@ public final class VertxMain {
                         if (repo.startOnHttp3()) {
                             this.http3.computeIfAbsent(
                                 prt, key -> {
+                                    // EcsLoggingSlice is the client-facing entry
+                                    // wrapper: it drops client-sent internal headers
+                                    // (X-Pantera-Internal, pantera_login, X-Pantera-Ctx-*)
+                                    // and re-stamps the server-derived request context,
+                                    // exactly as the HTTP/1.1/2 listeners do via
+                                    // VertxSliceServer. Without it the dedicated HTTP/3
+                                    // listener would honour those forged headers.
                                     final Http3Server server = new Http3Server(
-                                        new LoggingSlice(slice), prt,
+                                        new EcsLoggingSlice(new LoggingSlice(slice)), prt,
                                         new SslFactoryFromYaml(repo.repoYaml()).build()
                                     );
                                     server.start();
@@ -1372,6 +1406,90 @@ public final class VertxMain {
                     .log();
             }
         }
+    }
+
+    /**
+     * Start the dedicated-port listener of a repository created or updated at
+     * runtime. Binding blocks until the socket is bound and the bind completes
+     * on an event loop, so it runs on a worker thread: running it on the
+     * event loop that delivered the repository event deadlocked that loop.
+     *
+     * @param name Repository name
+     * @param cfg Repository config
+     * @param prt Dedicated port
+     * @param slices Slices cache
+     * @param settings Settings
+     */
+    private void startRepoListener(
+        final String name,
+        final RepoConfig cfg,
+        final int prt,
+        final RepositorySlices slices,
+        final Settings settings
+    ) {
+        this.vertx.getDelegate().executeBlocking(
+            () -> {
+                // Dedicated ports bypass MainSlice's ApiRoutingSlice/SliceByPath
+                // pipeline entirely, so the internal client-base marker scrub has
+                // to be applied here instead (see InternalHeaderScrubSlice).
+                final Slice slice = new InternalHeaderScrubSlice(
+                    slices.slice(new Key.From(name), prt)
+                );
+                if (cfg.startOnHttp3()) {
+                    this.http3.computeIfAbsent(
+                        prt, key -> {
+                            // See startRepos: EcsLoggingSlice is the client-entry
+                            // wrapper that strips client-sent internal headers and
+                            // re-stamps request context, matching the HTTP/1.1/2 path.
+                            final Http3Server server = new Http3Server(
+                                new EcsLoggingSlice(new LoggingSlice(slice)), prt,
+                                new SslFactoryFromYaml(cfg.repoYaml()).build()
+                            );
+                            server.start();
+                            return server;
+                        }
+                    );
+                } else {
+                    synchronized (this.servers) {
+                        final boolean exists = this.servers.stream()
+                            .anyMatch(srv -> srv.port() == prt);
+                        if (!exists) {
+                            this.listenOn(
+                                slice, prt, this.vertx, settings.metrics(),
+                                settings.httpServerRequestTimeout()
+                            );
+                        }
+                    }
+                }
+                return prt;
+            },
+            false
+        ).onComplete(
+            res -> {
+                if (res.succeeded()) {
+                    EcsLogger.info("com.auto1.pantera")
+                        .message("Pantera repo was started on port")
+                        .eventCategory("web")
+                        .eventAction("repo_start")
+                        .eventOutcome("success")
+                        .field("repository.name", name)
+                        .field("destination.port", prt)
+                        .field("log.source", "application")
+                        .log();
+                } else {
+                    EcsLogger.error("com.auto1.pantera")
+                        .message("Failed to start the repository listener on its dedicated port")
+                        .eventCategory("web")
+                        .eventAction("repo_start")
+                        .eventOutcome("failure")
+                        .field("repository.name", name)
+                        .field("destination.port", prt)
+                        .error(res.cause())
+                        .field("log.source", "application")
+                        .log();
+                }
+            }
+        );
     }
 
     /**
@@ -1443,7 +1561,8 @@ public final class VertxMain {
             vertx,
             new BaseSlice(mctx, slice),
             opts,
-            requestTimeout
+            requestTimeout,
+            com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.maxRequestBodyBytes()
         );
         this.servers.add(server);
         return server.start();

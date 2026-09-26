@@ -1,7 +1,7 @@
 -- V116: Force password change flag for bootstrap admin
 --
--- Adds a boolean flag set to TRUE when the default admin user is
--- inserted on a fresh install (admin/admin). On first login Pantera
+-- Adds a boolean flag set to TRUE when the bootstrap admin user is
+-- inserted on a fresh install. On first login Pantera
 -- redirects the user to a forced password-change screen and refuses
 -- to clear the flag until a sufficiently complex password is set.
 --

@@ -101,6 +101,85 @@ class SearchSliceTest {
         );
     }
 
+    @Test
+    void reportsTheLatestVersionByPep440NotLexically() {
+        // B90: "0.9/..." sorts after "0.10/..." as a string, so search used
+        // to report 0.9 as LATEST.
+        new TestResource("pypi_repo/pantera-sample-0.2.tar.gz").saveTo(
+            this.storage, new Key.From("pantera-sample", "0.10", "pantera-sample-0.2.tar.gz")
+        );
+        new TestResource("pypi_repo/pantera-sample-2.1.tar.bz2").saveTo(
+            this.storage, new Key.From("pantera-sample", "0.9", "pantera-sample-2.1.tar.bz2")
+        );
+        final String body = new SearchSlice(this.storage).response(
+            new RequestLine(RqMethod.POST, "/"),
+            Headers.EMPTY,
+            new Content.From(this.xml("pantera-sample").getBytes())
+        ).join().body().asString();
+        MatcherAssert.assertThat(
+            "metadata must come from the 0.10 release directory",
+            body,
+            Matchers.containsString("<string>0.2</string>")
+        );
+    }
+
+    @Test
+    void escapesXmlInFoundValues() {
+        final String xml = new String(
+            SearchSlice.found(
+                new com.auto1.pantera.pypi.meta.PackageInfo.FromMetadata(
+                    "Name: a&b\nVersion: 1.0\nSummary: x < y & <b>z</b>\n"
+                )
+            ),
+            java.nio.charset.StandardCharsets.UTF_8
+        );
+        MatcherAssert.assertThat(
+            xml,
+            Matchers.containsString("<string>x &lt; y &amp; &lt;b&gt;z&lt;/b&gt;</string>")
+        );
+    }
+
+    @Test
+    void faultSliceAnswersSearchWithXmlRpcFault() {
+        // B90: groups/proxies answered pip search with an empty 405 and pip
+        // crashed with an AssertionError; an XML-RPC fault is what pip
+        // (and pypi.org, which disabled search) expects.
+        final com.auto1.pantera.http.Response response = new SearchFaultSlice(
+            (line, headers, body) -> java.util.concurrent.CompletableFuture.completedFuture(
+                com.auto1.pantera.http.ResponseBuilder.methodNotAllowed().build()
+            )
+        ).response(
+            new RequestLine(RqMethod.POST, "/"),
+            Headers.from(new Header("content-type", "text/xml")),
+            new Content.From(this.xml("anything").getBytes())
+        ).join();
+        MatcherAssert.assertThat(
+            "fault is a 200 XML-RPC response",
+            response.status(),
+            new org.hamcrest.core.IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "body is an XML-RPC fault",
+            response.body().asString(),
+            Matchers.containsString("<fault>")
+        );
+    }
+
+    @Test
+    void faultSlicePassesOtherRequestsThrough() {
+        final com.auto1.pantera.http.Response response = new SearchFaultSlice(
+            (line, headers, body) -> java.util.concurrent.CompletableFuture.completedFuture(
+                com.auto1.pantera.http.ResponseBuilder.noContent().build()
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/simple/"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            response.status(),
+            new org.hamcrest.core.IsEqual<>(RsStatus.NO_CONTENT)
+        );
+    }
+
     private String xml(final String name) {
         return String.join(
             "\n", "<?xml version='1.0'?>",

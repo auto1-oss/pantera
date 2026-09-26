@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.hm.RsHasStatus;
@@ -26,9 +27,11 @@ import org.cactoos.map.MapEntry;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.LinkedList;
 import java.util.Queue;
 
@@ -83,5 +86,54 @@ public final class SliceUploadTest {
             new RsHasStatus(RsStatus.CREATED)
         );
         MatcherAssert.assertThat("Event was added to queue", queue.size() == 1);
+    }
+
+    @Test
+    void uploadUnderAnExistingFileIsConflict(@TempDir final Path tmp) {
+        final Storage storage = new FileStorage(tmp);
+        SliceUploadTest.put(storage, "dir1/a.txt").join();
+        MatcherAssert.assertThat(
+            SliceUploadTest.put(storage, "dir1/a.txt/child.txt").join(),
+            new RsHasStatus(RsStatus.CONFLICT)
+        );
+    }
+
+    @Test
+    void uploadDeeperUnderAnExistingFileIsConflict(@TempDir final Path tmp) {
+        final Storage storage = new FileStorage(tmp);
+        SliceUploadTest.put(storage, "dir1/a.txt").join();
+        MatcherAssert.assertThat(
+            SliceUploadTest.put(storage, "dir1/a.txt/d/e.txt").join(),
+            new RsHasStatus(RsStatus.CONFLICT)
+        );
+    }
+
+    @Test
+    void uploadOntoAnExistingDirectoryIsConflict(@TempDir final Path tmp) {
+        final Storage storage = new FileStorage(tmp);
+        SliceUploadTest.put(storage, "dir1/a.txt").join();
+        MatcherAssert.assertThat(
+            SliceUploadTest.put(storage, "dir1").join(),
+            new RsHasStatus(RsStatus.CONFLICT)
+        );
+    }
+
+    @Test
+    void uploadToTheRootIsBadRequest() {
+        MatcherAssert.assertThat(
+            SliceUploadTest.put(new InMemoryStorage(), "/").join(),
+            new RsHasStatus(RsStatus.BAD_REQUEST)
+        );
+    }
+
+    private static java.util.concurrent.CompletableFuture<com.auto1.pantera.http.Response> put(
+        final Storage storage, final String path
+    ) {
+        final byte[] data = "x".getBytes(StandardCharsets.UTF_8);
+        return new SliceUpload(storage).response(
+            new RequestLine("PUT", path, "HTTP/1.1"),
+            Headers.from("Content-Length", Long.toString(data.length)),
+            new Content.From(Flowable.just(ByteBuffer.wrap(data)))
+        );
     }
 }

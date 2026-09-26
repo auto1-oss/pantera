@@ -18,6 +18,9 @@ import com.auto1.pantera.scheduling.ArtifactEvent;
 
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * Cache implementation of {@link Repo}.
@@ -60,6 +63,11 @@ public final class CacheRepo implements Repo {
     private final String upstreamUrl;
 
     /**
+     * Manifest cache copies in flight, shared per proxy repository.
+     */
+    private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -84,6 +92,27 @@ public final class CacheRepo implements Repo {
     public CacheRepo(String name, Repo origin, Repo cache,
                      Optional<Queue<ArtifactEvent>> events, String registryName,
                      Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl) {
+        this(
+            name, origin, cache, events, registryName, inspector, upstreamUrl,
+            new ConcurrentHashMap<>()
+        );
+    }
+
+    /**
+     * @param name Repository name
+     * @param origin Origin repository
+     * @param cache Cache repository
+     * @param events Artifact events
+     * @param registryName Pantera repository name
+     * @param inspector Cooldown inspector
+     * @param upstreamUrl Upstream URL for metrics
+     * @param inflight Manifest cache copies in flight, shared per proxy repository
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public CacheRepo(String name, Repo origin, Repo cache,
+                     Optional<Queue<ArtifactEvent>> events, String registryName,
+                     Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
+                     ConcurrentMap<String, CompletableFuture<Void>> inflight) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
@@ -91,6 +120,7 @@ public final class CacheRepo implements Repo {
         this.repoName = registryName;
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
+        this.inflight = inflight;
     }
 
     @Override
@@ -107,7 +137,8 @@ public final class CacheRepo implements Repo {
             this.events,
             this.repoName,
             this.inspector,
-            this.upstreamUrl
+            this.upstreamUrl,
+            this.inflight
         );
     }
 

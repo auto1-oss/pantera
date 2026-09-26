@@ -25,9 +25,15 @@ import javax.sql.DataSource;
 
 /**
  * DAO for user API tokens (user_tokens table).
+ *
+ * <p>Deliberately non-final since 2.2.9 so the token-lifecycle logic
+ * (JTI ownership, refresh rotation, bulk revocation) can be unit-tested
+ * against an in-memory subclass without a database — the project's
+ * unit-test doctrine forbids Docker/DB in {@code *Test} classes.</p>
+ *
  * @since 1.21.0
  */
-public final class UserTokenDao {
+public class UserTokenDao {
 
     /**
      * Database data source.
@@ -185,6 +191,35 @@ public final class UserTokenDao {
             return ps.executeUpdate();
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to revoke all tokens for user", ex);
+        }
+    }
+
+    /**
+     * Atomically consume a refresh token: mark it revoked iff it is a live
+     * refresh token owned by {@code username}. This is the rotation
+     * primitive behind {@code /auth/refresh} — the presented refresh JTI is
+     * consumed in the same statement that decides the outcome, so two
+     * concurrent presentations of one refresh token cannot both succeed and
+     * a replayed (already-consumed) refresh token is refused
+     * (SecOps token-revocation #23).
+     *
+     * @param id Presented refresh token UUID (jti)
+     * @param username Subject the token must belong to
+     * @return {@code true} iff the token was live, owned by the user, of
+     *  type refresh, and is now revoked
+     */
+    public boolean consumeRefresh(final UUID id, final String username) {
+        final String sql = String.join(" ",
+            "UPDATE user_tokens SET revoked = TRUE",
+            "WHERE id = ? AND username = ? AND token_type = 'refresh' AND revoked = FALSE"
+        );
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setObject(1, id);
+            ps.setString(2, username);
+            return ps.executeUpdate() > 0;
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to consume refresh token", ex);
         }
     }
 

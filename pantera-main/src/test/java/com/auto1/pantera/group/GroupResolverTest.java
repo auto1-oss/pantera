@@ -26,11 +26,18 @@ import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import com.auto1.pantera.index.ArtifactDocument;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.SearchResult;
+import io.reactivex.Flowable;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.reactivestreams.Subscriber;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -39,6 +46,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -72,11 +80,12 @@ final class GroupResolverTest {
         "/com/google/guava/guava/31.1/guava-31.1.jar";
     private static final String PARSED_NAME = "com.google.guava.guava";
     /**
-     * Version that {@link com.auto1.pantera.http.cache.NegativeCacheKey#fromPath}
-     * extracts from {@link #JAR_PATH}. GroupResolver populates the cache with
-     * this version so the admin UI shows it as a separate column.
+     * Version component GroupResolver writes to the negative cache for
+     * {@link #JAR_PATH}: the version {@link com.auto1.pantera.http.cache.NegativeCacheKey#fromPath}
+     * extracts plus the file name, so a 404 for one file never hides the
+     * other files of the same version.
      */
-    private static final String PARSED_VERSION = "31.1";
+    private static final String PARSED_VERSION = "31.1/guava-31.1.jar";
 
     // ---- PATH A: negativeCacheHit_returns404WithoutDbQuery ----
 
@@ -236,6 +245,71 @@ final class GroupResolverTest {
                 GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
         assertTrue(negCache.isKnown404(negKey),
             "a genuine all-members 404 (unmarked) must still be negative-cached");
+    }
+
+    // ---- 2.2.9: a member's cooldown verdict is authoritative and never negative-cached ----
+
+    @Test
+    void cooldownMarked404StopsTheWalkAndIsNotNegativeCached() {
+        // A proxy member's "all versions blocked" / blocked-tag answer is a
+        // 404 carrying X-Pantera-Cooldown. A later member must NOT serve the
+        // blocked artifact (cooldown bypass), and the 404 must not be cached
+        // or it would outlive the unblock.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final NegativeCache negCache = buildNegativeCache();
+        final AtomicInteger laterCalls = new AtomicInteger();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, cooldownSlice(RsStatus.NOT_FOUND, "all-blocked"));
+        slices.put(PROXY_B, countingSlice(laterCalls, RsStatus.OK));
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B), negCache, slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, resp.status().code(), "the cooldown verdict is relayed");
+        assertEquals(List.of("all-blocked"),
+            resp.headers().values("X-Pantera-Cooldown"), "marker preserved");
+        assertEquals(0, laterCalls.get(), "a later member must not serve a blocked artifact");
+        assertFalse(negCache.isKnown404(new com.auto1.pantera.http.cache.NegativeCacheKey(
+            GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION)),
+            "a cooldown 404 must never be negative-cached");
+    }
+
+    @Test
+    void cooldownForbiddenIsRelayedWithBody() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, cooldownSlice(RsStatus.FORBIDDEN, "blocked"));
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(403, resp.status().code(), "cooldown 403 is relayed");
+        assertEquals("{\"error\":\"version in cooldown\"}",
+            new String(resp.body().asBytes(), java.nio.charset.StandardCharsets.UTF_8),
+            "cooldown body is relayed");
+    }
+
+    @Test
+    void cooldownVerdictOnIndexedMemberIsNotTreatedAsDrift() {
+        // Index says PROXY_A holds the artifact; its cooldown 404 must be
+        // served as-is, not treated as TOCTOU drift and fanned out.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_A)));
+        final AtomicInteger otherCalls = new AtomicInteger();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, cooldownSlice(RsStatus.NOT_FOUND, "blocked"));
+        slices.put(PROXY_B, countingSlice(otherCalls, RsStatus.OK));
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B), buildNegativeCache(), slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, resp.status().code(), "cooldown verdict served");
+        assertEquals(0, otherCalls.get(), "no fan-out past a cooldown verdict");
     }
 
     // ---- WS8 Bug B5: the walk terminal must not discard a member's own honest 404 body ----
@@ -490,7 +564,7 @@ final class GroupResolverTest {
         final AtomicInteger hostedCount = new AtomicInteger(0);
         final NegativeCache negCache = buildNegativeCache();
         final Map<String, Slice> slices = new HashMap<>();
-        slices.put(HOSTED, countingSlice(hostedCount, RsStatus.OK));
+        slices.put(HOSTED, countingSlice(hostedCount, RsStatus.NOT_FOUND));
 
         final GroupResolver resolver = buildResolver(
             idx,
@@ -505,8 +579,9 @@ final class GroupResolverTest {
 
         assertEquals(404, resp.status().code(),
             "Index miss with no proxy members must return 404");
-        assertEquals(0, hostedCount.get(),
-            "Hosted member must NOT be queried on index miss (fully indexed)");
+        assertEquals(1, hostedCount.get(),
+            "Hosted member must be probed on index miss (the index is written "
+                + "asynchronously, a fresh upload may not be indexed yet)");
         final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
             new com.auto1.pantera.http.cache.NegativeCacheKey(GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
         assertTrue(negCache.isKnown404(negKey),
@@ -528,7 +603,7 @@ final class GroupResolverTest {
             List.of(HOSTED),
             Collections.emptySet(), // no proxy members
             negCache,
-            Map.of(HOSTED, okSlice())
+            Map.of(HOSTED, notFoundSlice())
         );
 
         final Response headResp = resolver.response(
@@ -613,6 +688,122 @@ final class GroupResolverTest {
                 .anyMatch(h -> h.getKey().equals(FaultTranslator.HEADER_FAULT)
                     && h.getValue().equals("storage-unavailable")),
             "Response must have X-Pantera-Fault: storage-unavailable");
+    }
+
+    // ---- Index hit on a proxy member: upstream fault, not storage fault ----
+
+    @Test
+    void indexHit_proxyMemberUpstreamFailure_isProxiesFailedNotStorage() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_A)));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, staticSlice(RsStatus.BAD_GATEWAY));
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "a proxy member's upstream failure is a 502",
+            resp.status(), new IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+        MatcherAssert.assertThat(
+            "the fault names the proxies, not the storage",
+            resp.headers().values(FaultTranslator.HEADER_FAULT).get(0).startsWith("proxies-failed"),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void indexHit_proxyMemberCircuitOpen_is503WithRetryAfter() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_A)));
+        final NegativeCache negCache = buildNegativeCache();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, circuitOpenSlice("17"));
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), negCache, slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "an open upstream circuit is temporary unavailability",
+            resp.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the breaker's Retry-After reaches the client",
+            resp.headers().values("Retry-After"), new IsEqual<>(List.of("17"))
+        );
+        MatcherAssert.assertThat(
+            "the answer carries the circuit-open marker",
+            resp.headers().values(
+                com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER
+            ).isEmpty(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "nothing is negative-cached",
+            negCache.isKnown404(new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION)),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void memberRejectingTheMethodIsSkippedWithoutConviction() {
+        final AutoBlockRegistry registry = new AutoBlockRegistry(
+            new AutoBlockSettings(
+                0.5, 1, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+        final MemberSlice proxy = new MemberSlice(
+            PROXY_A, staticSlice(RsStatus.METHOD_NOT_ALLOWED), registry, true
+        );
+        final GroupResolver resolver = new GroupResolver(
+            GROUP,
+            List.of(new MemberSlice(HOSTED, notFoundSlice(), false), proxy),
+            Collections.emptyList(),
+            Optional.of(new RecordingIndex(Optional.of(List.of(PROXY_A)))),
+            REPO_TYPE,
+            Set.of(PROXY_A),
+            buildNegativeCache(),
+            java.util.concurrent.ForkJoinPool.commonPool()
+        );
+        final Response resp = resolver.response(
+            new RequestLine("HEAD", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "a member that cannot answer the method is not a server fault",
+            resp.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "the member is not convicted for rejecting the method",
+            proxy.isCircuitOpen(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void membersAreResolvedPerRequestSoConfigChangesApply() {
+        final AtomicInteger generation = new AtomicInteger(0);
+        final SliceResolver resolver = (name, port, depth) -> {
+            final int gen = generation.get();
+            return (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.ok().textBody("gen-" + gen).build()
+            );
+        };
+        final GroupResolver group = new GroupResolver(
+            resolver, GROUP, List.of(PROXY_A), 8080, 0, 10L,
+            Collections.emptyList(), Optional.empty(), Set.of(PROXY_A), REPO_TYPE,
+            buildNegativeCache(), null, Runnable::run
+        );
+        group.response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY)
+            .join().body().asString();
+        generation.set(1);
+        MatcherAssert.assertThat(
+            "the group serves through the member's current slice",
+            group.response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY)
+                .join().body().asString(),
+            new IsEqual<>("gen-1")
+        );
     }
 
     // ---- No index configured: full two-phase fanout ----
@@ -1041,6 +1232,19 @@ final class GroupResolverTest {
         );
     }
 
+    /**
+     * A member answering with a cooldown verdict: the given status, the
+     * {@code X-Pantera-Cooldown} marker and a JSON reason body.
+     */
+    private static Slice cooldownSlice(final RsStatus status, final String marker) {
+        return (line, headers, body) -> CompletableFuture.completedFuture(
+            ResponseBuilder.from(status)
+                .header("X-Pantera-Cooldown", marker)
+                .jsonBody("{\"error\":\"version in cooldown\"}")
+                .build()
+        );
+    }
+
     private static Slice staticSlice(final RsStatus status) {
         return (line, headers, body) ->
             CompletableFuture.completedFuture(ResponseBuilder.from(status).build());
@@ -1142,6 +1346,161 @@ final class GroupResolverTest {
 
         @Override
         public void close() {
+        }
+    }
+
+    @Test
+    void nonReadRefusalDrainsTheBodyWithoutMaterialisingIt() {
+        final DeclaredHugeBody body = new DeclaredHugeBody();
+        final Response resp = buildResolver(
+            null, List.of(HOSTED), Collections.emptySet(),
+            buildNegativeCache(), Map.of(HOSTED, okSlice())
+        ).response(new RequestLine("PUT", JAR_PATH), Headers.EMPTY, body).join();
+        MatcherAssert.assertThat(
+            "a write to a group is refused", resp.status().code(), new IsEqual<>(405)
+        );
+        MatcherAssert.assertThat(
+            "the refusal must not pre-allocate the client's declared Content-Length",
+            body.materialised.get(), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the refusal still consumes the request body",
+            body.subscribed.get(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void groupGetStreamsWinningMemberBodyWithoutBuffering() {
+        // A group GET must relay the winning member's body straight through,
+        // never materialise it into a byte[]. Buffering here (the pre-fix
+        // requestDedup path) read a whole artifact — a multi-hundred-MB Docker
+        // layer included — into heap before a byte reached the client, causing
+        // memory pressure and upstream-stall 502s on large pulls.
+        final TrackingResponseBody memberBody =
+            new TrackingResponseBody("streamed-artifact".getBytes(StandardCharsets.UTF_8));
+        final Slice member = (line, headers, requestBody) ->
+            CompletableFuture.completedFuture(ResponseBuilder.ok().body(memberBody).build());
+        final Response resp = buildResolver(
+            null, List.of(HOSTED), Collections.emptySet(),
+            buildNegativeCache(), Map.of(HOSTED, member)
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+
+        MatcherAssert.assertThat(
+            "the group serves the member's 200", resp.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the group must stream the member body through, never buffer it via asBytesFuture()",
+            memberBody.materialised.get(), new IsEqual<>(false)
+        );
+        // The relayed body is still the member's own, fully consumable downstream.
+        MatcherAssert.assertThat(
+            "the streamed body is delivered intact when the client consumes it",
+            resp.body().asBytesFuture().join(),
+            new IsEqual<>("streamed-artifact".getBytes(StandardCharsets.UTF_8))
+        );
+    }
+
+    @Test
+    @Timeout(30)
+    void concurrentGroupGetsEachReceiveTheirOwnStreamedBody() throws Exception {
+        // With entrypoint buffering removed, concurrent same-path GETs no
+        // longer share one buffered byte[]; each resolves independently and
+        // must receive its own complete, subscribable body — no shared
+        // single-subscriber publisher, no deadlock, no 502.
+        final int callers = 32;
+        final byte[] payload = "streamed-artifact-bytes".getBytes(StandardCharsets.UTF_8);
+        final Slice member = (line, headers, requestBody) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(new TrackingResponseBody(payload.clone())).build()
+            );
+        final GroupResolver resolver = buildResolver(
+            null, List.of(HOSTED), Collections.emptySet(),
+            buildNegativeCache(), Map.of(HOSTED, member)
+        );
+        final List<CompletableFuture<Response>> futures = new ArrayList<>(callers);
+        for (int i = 0; i < callers; i++) {
+            futures.add(resolver.response(
+                new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+            ));
+        }
+        for (final CompletableFuture<Response> future : futures) {
+            final Response resp = future.get(10, TimeUnit.SECONDS);
+            MatcherAssert.assertThat(
+                "every concurrent group GET succeeds",
+                resp.status().code(), new IsEqual<>(200)
+            );
+            MatcherAssert.assertThat(
+                "every caller can read its own complete body",
+                resp.body().asBytesFuture().get(10, TimeUnit.SECONDS),
+                new IsEqual<>(payload)
+            );
+        }
+    }
+
+    /**
+     * Request body that declares ~2 GB but carries a few bytes, and records
+     * whether it was materialised with {@code asBytesFuture()} (which
+     * pre-allocates from the declared length) or merely drained.
+     */
+    private static final class DeclaredHugeBody implements Content {
+
+        private final AtomicBoolean materialised = new AtomicBoolean();
+
+        private final AtomicBoolean subscribed = new AtomicBoolean();
+
+        @Override
+        public Optional<Long> size() {
+            return Optional.of(2_000_000_000L);
+        }
+
+        @Override
+        public CompletableFuture<byte[]> asBytesFuture() {
+            this.materialised.set(true);
+            return Content.super.asBytesFuture();
+        }
+
+        @Override
+        public void subscribe(final Subscriber<? super ByteBuffer> subscriber) {
+            this.subscribed.set(true);
+            Flowable.just(
+                ByteBuffer.wrap("ten  bytes".getBytes(StandardCharsets.UTF_8))
+            ).subscribe(subscriber);
+        }
+    }
+
+    /**
+     * Response body that carries a real (small) payload and records whether it
+     * was materialised via {@code asBytesFuture()} (buffered) or merely
+     * subscribed to (streamed). Used to prove {@link GroupResolver} relays a
+     * member's body straight through instead of reading it into a byte[].
+     */
+    private static final class TrackingResponseBody implements Content {
+
+        private final byte[] payload;
+
+        private final AtomicBoolean materialised = new AtomicBoolean();
+
+        private final AtomicBoolean subscribed = new AtomicBoolean();
+
+        TrackingResponseBody(final byte[] payload) {
+            this.payload = payload.clone();
+        }
+
+        @Override
+        public Optional<Long> size() {
+            return Optional.of((long) this.payload.length);
+        }
+
+        @Override
+        public CompletableFuture<byte[]> asBytesFuture() {
+            this.materialised.set(true);
+            return CompletableFuture.completedFuture(this.payload.clone());
+        }
+
+        @Override
+        public void subscribe(final Subscriber<? super ByteBuffer> subscriber) {
+            this.subscribed.set(true);
+            Flowable.just(ByteBuffer.wrap(this.payload.clone())).subscribe(subscriber);
         }
     }
 }

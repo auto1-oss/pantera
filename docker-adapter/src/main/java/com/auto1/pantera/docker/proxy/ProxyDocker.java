@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.Catalog;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.misc.OfficialImageName;
 import com.auto1.pantera.docker.misc.Pagination;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
@@ -74,38 +75,9 @@ public final class ProxyDocker implements Docker {
 
     @Override
     public Repo repo(String name) {
-        // Normalize name for Docker Hub
-        String normalizedName = this.normalizeRepoName(name);
-        return new ProxyRepo(this.remote, normalizedName);
-    }
-    
-    /**
-     * Normalize repository name for Docker Hub.
-     * Docker Hub uses 'library/' prefix for official images.
-     * @param name Original repository name
-     * @return Normalized repository name
-     */
-    private String normalizeRepoName(String name) {
-        if (this.isDockerHub() && !name.contains("/")) {
-            // For Docker Hub, official images need 'library/' prefix
-            return "library/" + name;
-        }
-        return name;
-    }
-    
-    /**
-     * Check if remote registry is Docker Hub.
-     * @return true if Docker Hub, false otherwise
-     */
-    private boolean isDockerHub() {
-        if (this.remoteUri == null) {
-            return false;
-        }
-        String host = this.remoteUri.getHost();
-        return host != null && (
-            "registry-1.docker.io".equals(host) ||
-            "docker.io".equals(host) ||
-            "hub.docker.com".equals(host)
+        // Docker Hub official images need the 'library/' prefix upstream.
+        return new ProxyRepo(
+            this.remote, new OfficialImageName(this.remoteUri).normalize(name)
         );
     }
 

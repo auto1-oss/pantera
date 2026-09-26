@@ -76,11 +76,11 @@ public final class MavenProxy implements Slice {
         CooldownService cooldown, CooldownMetadataService cooldownMetadata
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
-        slice = new RaceSlice(
+        slice = new com.auto1.pantera.adapters.ReadOnlyProxySlice(new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> new MavenProxySlice(
                     client, remote.uri(),
-                    GenericAuthenticator.create(client, remote.username(), remote.pwd()),
+                    GenericAuthenticator.create(client, remote.uri(), remote.username(), remote.pwd()),
                     asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
                     asto.flatMap(ignored -> queue),
                     cfg.name(),
@@ -90,7 +90,7 @@ public final class MavenProxy implements Slice {
                     cooldownMetadata
                 )
             ).collect(Collectors.toList())
-        );
+        ));
     }
 
     @Override

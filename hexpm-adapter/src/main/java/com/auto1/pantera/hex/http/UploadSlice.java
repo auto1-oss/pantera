@@ -17,7 +17,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.OneTimePublisher;
 import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.hex.http.headers.HexContentType;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.hex.proto.generated.PackageOuterClass;
 import com.auto1.pantera.hex.proto.generated.SignedOuterClass;
 import com.auto1.pantera.hex.tarball.MetadataConfig;
@@ -27,7 +27,8 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -43,7 +44,9 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
@@ -58,14 +61,17 @@ import java.util.regex.Pattern;
  */
 public final class UploadSlice implements Slice {
     /**
-     * Path to publish.
+     * Path to publish: the legacy {@code /publish} endpoint and the release
+     * endpoint {@code mix hex.publish} uses ({@code /packages/<name>/releases}).
      */
-    static final Pattern PUBLISH = Pattern.compile("(/repos/)?(?<org>.+)?/publish");
+    static final Pattern PUBLISH = Pattern.compile(
+        "(/repos/)?(?<org>.+)?/publish|/packages/[^/]+/releases"
+    );
 
     /**
-     * Query to publish.
+     * Query to publish; {@code replace} defaults to false when absent.
      */
-    static final Pattern QUERY = Pattern.compile("replace=(?<replace>true|false)");
+    static final Pattern QUERY = Pattern.compile("(?:^|&)replace=(?<replace>true|false)(?:&|$)");
 
     /**
      * Repository type.
@@ -130,8 +136,9 @@ public final class UploadSlice implements Slice {
         final String query = Objects.nonNull(uri.getQuery()) ? uri.getQuery() : "";
         final Matcher querymatcher = UploadSlice.QUERY.matcher(query);
         final CompletableFuture<Response> res;
-        if (pathmatcher.matches() && querymatcher.matches()) {
-            final boolean replace = Boolean.parseBoolean(querymatcher.group("replace"));
+        if (pathmatcher.matches()) {
+            final boolean replace = querymatcher.find()
+                && Boolean.parseBoolean(querymatcher.group("replace"));
             final AtomicReference<String> name = new AtomicReference<>();
             final AtomicReference<String> version = new AtomicReference<>();
             final AtomicReference<String> innerchcksum = new AtomicReference<>();
@@ -142,30 +149,44 @@ public final class UploadSlice implements Slice {
             final AtomicReference<Key> packagekey = new AtomicReference<>();
             res = UploadSlice.asBytes(body)
                 .thenAccept(
-                    bytes -> UploadSlice.readVarsFromTar(
-                        bytes, name, version, innerchcksum,
-                        outerchcksum, tarcontent, packagekey
-                    )
+                    bytes -> {
+                        try {
+                            UploadSlice.readVarsFromTar(
+                                bytes, name, version, innerchcksum,
+                                outerchcksum, tarcontent, packagekey
+                            );
+                        } catch (final RuntimeException ex) {
+                            throw new IllegalArgumentException("Not a Hex package tarball", ex);
+                        }
+                    }
                 ).thenCompose(
-                    nothing -> this.storage.exists(packagekey.get())
-                ).thenCompose(
-                    packageExists -> this.readReleasesListFromStorage(
-                        packageExists,
-                        releases,
-                        packagekey
-                    ).thenAccept(
-                        nothing -> UploadSlice.handleReleases(releases, replace, version)
-                    ).thenApply(
-                        nothing -> UploadSlice.constructSignedPackage(
-                            name, version, innerchcksum, outerchcksum, releases
-                        )
-                    ).thenCompose(
-                        signedPackage -> this.saveSignedPackageToStorage(
-                            packagekey, signedPackage
-                        )
-                    ).thenCompose(
-                        nothing -> this.saveTarContentToStorage(
-                            name, version, tarcontent
+                    // The release list and the tarball are written under the
+                    // package's registry lock: concurrent publishes of one
+                    // package do not lose each other's release, and a
+                    // management-API delete never sees a listed release
+                    // whose tarball is not written yet.
+                    nothing -> new IndexUpdateLock(this.storage, packagekey.get()).run(
+                        locked -> locked.exists(packagekey.get()).thenCompose(
+                            packageExists -> this.readReleasesListFromStorage(
+                                packageExists,
+                                releases,
+                                packagekey
+                            ).thenAccept(
+                                ignored -> UploadSlice.handleReleases(releases, replace, version)
+                            ).thenApply(
+                                ignored -> UploadSlice.constructSignedPackage(
+                                    name, version, innerchcksum, outerchcksum, releases,
+                                    this.rname
+                                )
+                            ).thenCompose(
+                                signedPackage -> this.saveSignedPackageToStorage(
+                                    packagekey, signedPackage
+                                )
+                            ).thenCompose(
+                                ignored -> this.saveTarContentToStorage(
+                                    name, version, tarcontent
+                                )
+                            )
                         )
                     )
                 ).thenCompose(
@@ -186,7 +207,7 @@ public final class UploadSlice implements Slice {
                                 DownloadSlice.TARBALLS,
                                 String.format("%s-%s.tar", name.get(), version.get())
                             ).string()
-                        );
+                        ).withRequestContext(headers);
                         this.events.ifPresent(queue -> queue.add(event));
                         com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
                             .invalidateAfterUpload("hexpm", name.get());
@@ -195,15 +216,23 @@ public final class UploadSlice implements Slice {
                             .invalidateAfterUpload("hexpm", name.get());
                         // Block on the index UPSERT before returning 201 so
                         // the next group lookup sees the artifact.
-                        return this.syncIndex.recordSync(event).thenApply(ignored ->
-                            ResponseBuilder.created()
-                                .headers(new HexContentType(headers).fill())
-                                // todo https://github.com/pantera/pantera/issues/1435
-                                .header(new ContentLength(0))
-                                .build()
+                        return this.syncIndex.recordSync(event).thenApply(
+                            ignored -> UploadSlice.published(
+                                headers, name.get(), version.get(), outerchcksum.get()
+                            )
                         );
                     }
                 ).exceptionally(throwable -> {
+                    final Throwable cause = throwable instanceof java.util.concurrent.CompletionException
+                        && throwable.getCause() != null ? throwable.getCause() : throwable;
+                    if (cause instanceof IllegalArgumentException) {
+                        return UploadSlice.error(headers, RsStatus.BAD_REQUEST, cause.getMessage());
+                    }
+                    if (cause instanceof ReleaseExistsException) {
+                        return UploadSlice.error(
+                            headers, RsStatus.UNPROCESSABLE_ENTITY, cause.getMessage()
+                        );
+                    }
                     com.auto1.pantera.http.log.EcsLogger.error("com.auto1.pantera.hex")
                         .message("Failed to upload package")
                         .eventCategory("web")
@@ -212,9 +241,9 @@ public final class UploadSlice implements Slice {
                         .error(throwable)
                         .field("log.source", "application")
                         .log();
-                    return ResponseBuilder.internalError()
-                        .textBody("Failed to upload package")
-                        .build();
+                    return UploadSlice.error(
+                        headers, RsStatus.INTERNAL_ERROR, "Failed to upload package"
+                    );
                 }).toCompletableFuture();
         } else {
             res = ResponseBuilder.badRequest().completedFuture();
@@ -249,7 +278,12 @@ public final class UploadSlice implements Slice {
             }
         }
         if (versionexist && !replace) {
-            throw new PanteraException(String.format("Version %s already exists.", version.get()));
+            throw new ReleaseExistsException(
+                String.format(
+                    "Version %s already exists; publish with --replace to overwrite it",
+                    version.get()
+                )
+            );
         }
         if (replace) {
             releases.set(filtered);
@@ -343,14 +377,17 @@ public final class UploadSlice implements Slice {
      * @param innerchecksum Ref on package innerChecksum
      * @param outerchecksum Ref on package outerChecksum
      * @param releases Ref on list of releases
-     * @return Package wrapped in Signed
+     * @param repo Repository name the record names
+     * @return Package wrapped in Signed (signed when served, see DownloadSlice)
+     * @checkstyle ParameterNumberCheck (10 lines)
      */
     private static SignedOuterClass.Signed constructSignedPackage(
         final AtomicReference<String> name,
         final AtomicReference<String> version,
         final AtomicReference<String> innerchecksum,
         final AtomicReference<String> outerchecksum,
-        final AtomicReference<List<PackageOuterClass.Release>> releases
+        final AtomicReference<List<PackageOuterClass.Release>> releases,
+        final String repo
     ) {
         final PackageOuterClass.Release release;
         try {
@@ -364,7 +401,7 @@ public final class UploadSlice implements Slice {
         }
         final PackageOuterClass.Package pckg = PackageOuterClass.Package.newBuilder()
             .setName(name.get())
-            .setRepository("pantera")
+            .setRepository(repo)
             .addAllReleases(releases.get())
             .addReleases(release)
             .build();
@@ -421,5 +458,66 @@ public final class UploadSlice implements Slice {
             .to(SingleInterop.get())
             .thenApply(Remaining::new)
             .thenApply(Remaining::bytes);
+    }
+
+    /**
+     * Answer to a stored release: the release as the Hex client reads it
+     * ({@code mix hex.publish} prints {@code html_url}).
+     * @param headers Request headers
+     * @param name Package name
+     * @param version Release version
+     * @param checksum Outer checksum of the tarball
+     * @return Response
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private static Response published(final Headers headers, final String name,
+        final String version, final String checksum) {
+        final Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("name", name);
+        fields.put("version", version);
+        fields.put("checksum", checksum);
+        new ClientBaseUrl(headers).stamped().ifPresent(
+            base -> {
+                final String url = String.format(
+                    "%s/%s/%s-%s.tar",
+                    base.replaceAll("/+$", ""), DownloadSlice.TARBALLS, name, version
+                );
+                fields.put("url", url);
+                fields.put("html_url", url);
+            }
+        );
+        return new HexResponseBody(headers, fields).response(RsStatus.CREATED);
+    }
+
+    /**
+     * Error answer the Hex client prints ({@code message}).
+     * @param headers Request headers
+     * @param status Status
+     * @param message Message
+     * @return Response
+     */
+    private static Response error(final Headers headers, final RsStatus status,
+        final String message) {
+        final Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("status", status.code());
+        fields.put("message", message);
+        return new HexResponseBody(headers, fields).response(status);
+    }
+
+    /**
+     * The release exists and the upload does not replace it.
+     * @since 2.2.9
+     */
+    private static final class ReleaseExistsException extends PanteraException {
+
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Ctor.
+         * @param msg Message for the client
+         */
+        ReleaseExistsException(final String msg) {
+            super(msg);
+        }
     }
 }

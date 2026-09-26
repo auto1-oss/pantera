@@ -596,6 +596,48 @@ public final class MavenGroupSliceTest {
         );
     }
 
+    /**
+     * Every checksum sidecar of the group's {@code maven-metadata.xml}
+     * (sha1, md5, sha256, sha512) must be the digest of the exact bytes the
+     * group serves for the metadata itself — forwarding sha256/sha512 to a
+     * member returned the member's body (the XML) instead of a digest.
+     */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "sha1,SHA-1", "md5,MD5", "sha256,SHA-256", "sha512,SHA-512"
+    })
+    void metadataChecksumMatchesServedBody(final String ext, final String algo)
+        throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("central-proxy", new FakeMetadataSlice(
+            "<?xml version=\"1.0\"?><metadata><groupId>com.sum</groupId><artifactId>lib</artifactId><versioning><versions><version>1.0.0</version></versions></versioning></metadata>"
+        ));
+        final MavenGroupSlice slice = new MavenGroupSlice(
+            new FakeGroupSlice(),
+            "checksum-group-" + ext,
+            List.of("central-proxy"),
+            new MapResolver(members),
+            8080,
+            0
+        );
+        final String path = "/com/sum/lib-" + ext + "/maven-metadata.xml";
+        final byte[] metadata = slice.response(
+            new RequestLine("GET", path), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS).body().asBytes();
+        final Response checksum = slice.response(
+            new RequestLine("GET", path + "." + ext), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "checksum of the served metadata body",
+            new String(checksum.body().asBytes(), StandardCharsets.UTF_8),
+            new org.hamcrest.core.IsEqual<>(
+                java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance(algo).digest(metadata)
+                )
+            )
+        );
+    }
+
     private static final class MapResolver implements SliceResolver {
         private final Map<String, Slice> map;
         private MapResolver(Map<String, Slice> map) { this.map = map; }

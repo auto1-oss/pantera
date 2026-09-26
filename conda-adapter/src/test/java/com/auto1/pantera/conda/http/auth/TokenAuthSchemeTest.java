@@ -91,6 +91,35 @@ class TokenAuthSchemeTest {
         );
     }
 
+    @Test
+    void schemeLessHeaderIsTreatedAsNoCredentials() {
+        final AuthScheme.Result result = new TokenAuthScheme(new TestTokenAuth()).authenticate(
+            Headers.from(Authorization.NAME, "garbage"),
+            RequestLine.from("GET /any HTTP/1.1")
+        ).toCompletableFuture().join();
+        Assertions.assertSame(
+            AuthScheme.AuthStatus.NO_CREDENTIALS,
+            result.status(),
+            "a scheme-less Authorization header must count as no credentials"
+        );
+        Assertions.assertTrue(
+            result.user().isAnonymous(), "a scheme-less header must not name a user"
+        );
+    }
+
+    @Test
+    void schemeLessHeaderFallsBackToTheRequestLineToken() {
+        Assertions.assertSame(
+            AuthScheme.AuthStatus.AUTHENTICATED,
+            new TokenAuthScheme(new TestTokenAuth()).authenticate(
+                Headers.from(Authorization.NAME, "garbage"),
+                RequestLine.from(
+                    String.format("GET /t/%s/my-repo/repodata.json HTTP/1.1", TokenAuthSchemeTest.TKN)
+                )
+            ).toCompletableFuture().join().status()
+        );
+    }
+
     /**
      * Test token auth.
      * @since 0.5

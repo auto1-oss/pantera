@@ -1,0 +1,11 @@
+-- SECURITY (2.2.9): bind import idempotency keys to the authenticated caller.
+--
+-- import_sessions was keyed by idempotency_key alone. Combined with the
+-- store returning any terminal session for a matching key, a key created by
+-- one principal could be replayed by another (or against another target) to
+-- resume, short-circuit or inherit that session. The caller is now recorded
+-- at session creation and every subsequent use of the key must come from the
+-- same principal AND name the same repository/path (checked in
+-- ImportSessionStore.start). Existing rows have no caller and are matched on
+-- target only.
+ALTER TABLE import_sessions ADD COLUMN IF NOT EXISTS caller VARCHAR;

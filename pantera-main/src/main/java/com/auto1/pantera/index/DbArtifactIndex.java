@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.index;
 
+import com.auto1.pantera.db.IndexWriteFence;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.context.ContextualExecutorService;
@@ -56,7 +57,7 @@ import com.auto1.pantera.index.SearchQueryParser.MatchType;
  *
  * @since 1.20.13
  */
-public final class DbArtifactIndex implements ArtifactIndex {
+public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
 
     /**
      * Sort field enum — Fix 1: replaces raw String in buildOrderBy.
@@ -91,6 +92,21 @@ public final class DbArtifactIndex implements ArtifactIndex {
      */
     private static final String DELETE_SQL =
         "DELETE FROM artifacts WHERE repo_name = ? AND name = ?";
+
+    /**
+     * DELETE every row describing a deleted storage path: matched on the
+     * {@code name} (path-named formats) and on the {@code path_prefix}
+     * (formats whose name is a package identity), each as the path itself
+     * or a subtree, and for {@code path_prefix} also in the legacy
+     * leading-slash form maven local uploads wrote before 2.2.9.
+     */
+    private static final String REMOVE_BY_PATH_SQL = String.join(
+        " ",
+        "DELETE FROM artifacts WHERE repo_name = ? AND (",
+        "name = ? OR name LIKE ? ESCAPE '\\'",
+        "OR path_prefix = ? OR path_prefix = ?",
+        "OR path_prefix LIKE ? ESCAPE '\\' OR path_prefix LIKE ? ESCAPE '\\')"
+    );
 
     // Removed 2.2.0: the static SQL templates FTS_SEARCH_SQL,
     // PREFIX_FTS_SEARCH_SQL, and LIKE_SEARCH_SQL were kept only as
@@ -160,6 +176,13 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * Fallback total count SQL used when the materialized view is empty or unavailable.
      */
     private static final String TOTAL_COUNT_SQL = "SELECT COUNT(*) FROM artifacts";
+
+    /**
+     * Repo-scoped document count. Cannot use the materialized view (it has no
+     * repository dimension); an empty array matches nothing (deny-all → 0).
+     */
+    private static final String SCOPED_COUNT_SQL =
+        "SELECT COUNT(*) FROM artifacts WHERE repo_name = ANY(?)";
 
     /**
      * Bounded queue capacity for the default executor.
@@ -412,6 +435,95 @@ public final class DbArtifactIndex implements ArtifactIndex {
     }
 
     @Override
+    public CompletableFuture<Integer> removeByPath(final String repoName, final String path) {
+        final String clean = DbArtifactIndex.trimSlashes(path);
+        if (clean.isEmpty()) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException("path must not be empty")
+            );
+        }
+        final String slashed = "/" + clean;
+        return CompletableFuture.supplyAsync(() -> {
+            // Uploads still queued for this path must not re-create rows
+            // after the purge below (waits for a batch in flight).
+            IndexWriteFence.shared().fencePath(repoName, clean);
+            try (Connection conn = this.source.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(REMOVE_BY_PATH_SQL)) {
+                stmt.setString(1, repoName);
+                stmt.setString(2, clean);
+                stmt.setString(3, DbArtifactIndex.likeEscape(clean) + "/%");
+                stmt.setString(4, clean);
+                stmt.setString(5, slashed);
+                stmt.setString(6, DbArtifactIndex.likeEscape(clean) + "/%");
+                stmt.setString(7, DbArtifactIndex.likeEscape(slashed) + "/%");
+                return stmt.executeUpdate();
+            } catch (final SQLException ex) {
+                throw new IllegalStateException(
+                    String.format("Failed to remove path %s from %s", clean, repoName), ex
+                );
+            }
+        }, this.executor);
+    }
+
+    @Override
+    public CompletableFuture<Integer> removeRepo(final String repoName) {
+        if (repoName == null || repoName.isBlank()) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException("repoName must not be empty")
+            );
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            // Uploads still queued for this repository must not re-create
+            // rows after the purge below (waits for a batch in flight).
+            IndexWriteFence.shared().fenceRepository(repoName);
+            try (Connection conn = this.source.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(
+                     "DELETE FROM artifacts WHERE repo_name = ?"
+                 )) {
+                stmt.setString(1, repoName);
+                return stmt.executeUpdate();
+            } catch (final SQLException ex) {
+                throw new IllegalStateException(
+                    String.format("Failed to remove index rows of %s", repoName), ex
+                );
+            }
+        }, this.executor);
+    }
+
+    /**
+     * Escape LIKE wildcards so a path is matched literally ({@code \} is
+     * the ESCAPE character).
+     * @param value Raw value
+     * @return Escaped value
+     */
+    private static String likeEscape(final String value) {
+        return value
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_");
+    }
+
+    /**
+     * Strip leading and trailing slashes.
+     * @param path Path
+     * @return Path without surrounding slashes, never null
+     */
+    private static String trimSlashes(final String path) {
+        if (path == null) {
+            return "";
+        }
+        int from = 0;
+        int to = path.length();
+        while (from < to && path.charAt(from) == '/') {
+            from += 1;
+        }
+        while (to > from && path.charAt(to - 1) == '/') {
+            to -= 1;
+        }
+        return path.substring(from, to);
+    }
+
+    @Override
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc
@@ -433,6 +545,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * @param allowedRepos Allowed repository names; null means no restriction
      * @return Search result with matching documents
      */
+    @Override
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1559,6 +1672,19 @@ public final class DbArtifactIndex implements ArtifactIndex {
     }
 
     @Override
+    public CompletableFuture<SearchResult> searchScoped(
+        final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy,
+        final boolean sortAsc, final List<String> allowedRepos,
+        final List<FieldFilter> fieldFilters
+    ) {
+        return this.search(
+            query, maxResults, offset, repoType, repoName, sortBy, sortAsc,
+            allowedRepos, fieldFilters
+        );
+    }
+
+    @Override
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset
     ) {
@@ -1602,7 +1728,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
     @Override
     public CompletableFuture<List<String>> locate(final String artifactPath) {
         return CompletableFuture.supplyAsync(() -> {
-            final List<String> prefixes = pathPrefixes(artifactPath);
+            // Maven local uploads stored path_prefix with a leading slash
+            // before 2.2.9; match both forms so those rows stay locatable.
+            final List<String> bare = pathPrefixes(artifactPath);
+            final List<String> prefixes = new ArrayList<>(bare.size() * 2);
+            prefixes.addAll(bare);
+            for (final String prefix : bare) {
+                prefixes.add("/" + prefix);
+            }
             final String sql = buildLocateSql(prefixes.size());
             final List<String> repos = new ArrayList<>();
             try (Connection conn = this.source.getConnection();
@@ -1742,53 +1875,103 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     @Override
     public CompletableFuture<Map<String, Object>> getStats() {
+        return this.getStats(null);
+    }
+
+    @Override
+    public CompletableFuture<Map<String, Object>> getStats(final List<String> allowedRepos) {
         return CompletableFuture.supplyAsync(() -> {
             final Map<String, Object> stats = new HashMap<>(3);
-            long count = -1L;
-            // Bonus: try materialized view first (O(1)), fall back to COUNT(*) if empty
-            try (Connection conn = this.source.getConnection()) {
-                try (PreparedStatement stmt = conn.prepareStatement(MV_TOTAL_COUNT_SQL);
-                     ResultSet rs = stmt.executeQuery()) {
-                    if (rs.next()) {
-                        final long mvCount = rs.getLong(1);
-                        if (mvCount > 0) {
-                            count = mvCount;
-                        }
-                    }
-                } catch (final SQLException ex) {
-                    // View may not exist — fall through to COUNT(*)
-                    EcsLogger.warn("com.auto1.pantera.index")
-                        .message("mv_artifact_totals unavailable, falling back to COUNT(*)")
-                        .eventCategory("database")
-                        .eventAction("db_stats_mv_fallback")
-                        .error(ex)
-                        .field("log.source", "application")
-                        .log();
-                }
-                if (count < 0) {
-                    try (PreparedStatement stmt = conn.prepareStatement(TOTAL_COUNT_SQL);
-                         ResultSet rs = stmt.executeQuery()) {
-                        if (rs.next()) {
-                            count = rs.getLong(1);
-                        }
-                    }
-                }
-            } catch (final SQLException ex) {
-                EcsLogger.error("com.auto1.pantera.index")
-                    .message("Failed to get index stats")
-                    .eventCategory("database")
-                    .eventAction("db_stats")
-                    .eventOutcome("failure")
-                    .error(ex)
-                    .field("log.source", "application")
-                    .log();
-            }
-            stats.put("documents", count);
+            stats.put("documents", this.documentCount(allowedRepos));
             stats.put("warmedUp", true);
             stats.put("type", "postgresql");
             stats.put("searchEngine", "tsvector/GIN");
             return stats;
         }, this.executor);
+    }
+
+    /**
+     * Count indexed documents. A {@code null} scope returns the global total
+     * (O(1) materialized view, falling back to {@code COUNT(*)}); a non-null
+     * scope counts only the named repositories, and an empty scope is a
+     * genuine deny-all that returns {@code 0}.
+     * @param allowedRepos Readable repo names, or {@code null} for the total
+     * @return document count, or {@code -1} when it could not be read
+     */
+    private long documentCount(final List<String> allowedRepos) {
+        final long count;
+        if (allowedRepos == null) {
+            count = this.globalDocumentCount();
+        } else {
+            count = this.scopedDocumentCount(allowedRepos);
+        }
+        return count;
+    }
+
+    private long globalDocumentCount() {
+        long count = -1L;
+        // Bonus: try materialized view first (O(1)), fall back to COUNT(*) if empty
+        try (Connection conn = this.source.getConnection()) {
+            try (PreparedStatement stmt = conn.prepareStatement(MV_TOTAL_COUNT_SQL);
+                 ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    final long mvCount = rs.getLong(1);
+                    if (mvCount > 0) {
+                        count = mvCount;
+                    }
+                }
+            } catch (final SQLException ex) {
+                // View may not exist — fall through to COUNT(*)
+                EcsLogger.warn("com.auto1.pantera.index")
+                    .message("mv_artifact_totals unavailable, falling back to COUNT(*)")
+                    .eventCategory("database")
+                    .eventAction("db_stats_mv_fallback")
+                    .error(ex)
+                    .field("log.source", "application")
+                    .log();
+            }
+            if (count < 0) {
+                try (PreparedStatement stmt = conn.prepareStatement(TOTAL_COUNT_SQL);
+                     ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) {
+                        count = rs.getLong(1);
+                    }
+                }
+            }
+        } catch (final SQLException ex) {
+            EcsLogger.error("com.auto1.pantera.index")
+                .message("Failed to get index stats")
+                .eventCategory("database")
+                .eventAction("db_stats")
+                .eventOutcome("failure")
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+        }
+        return count;
+    }
+
+    private long scopedDocumentCount(final List<String> allowedRepos) {
+        long count = -1L;
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(SCOPED_COUNT_SQL)) {
+            stmt.setArray(1, conn.createArrayOf("text", allowedRepos.toArray(new String[0])));
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    count = rs.getLong(1);
+                }
+            }
+        } catch (final SQLException ex) {
+            EcsLogger.error("com.auto1.pantera.index")
+                .message("Failed to get scoped index stats")
+                .eventCategory("database")
+                .eventAction("db_stats")
+                .eventOutcome("failure")
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+        }
+        return count;
     }
 
     @Override

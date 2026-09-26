@@ -120,7 +120,8 @@ public final class RpmUpload implements Slice {
                                 } else {
                                     final AstoRepoAdd repo =
                                         new AstoRepoAdd(this.asto, this.config);
-                                    result = repo.performWithResult().thenCompose(list -> {
+                                    result = new RepodataQueue(this.asto)
+                                        .run(repo::performWithResult).thenCompose(list -> {
                                         final java.util.List<CompletableFuture<Void>> syncs =
                                             new java.util.ArrayList<>();
                                         list.forEach(info -> {
@@ -131,7 +132,7 @@ public final class RpmUpload implements Slice {
                                                 info.packageSize(),
                                                 System.currentTimeMillis(), null,
                                                 info.packagePath()
-                                            );
+                                            ).withRequestContext(headers);
                                             this.events.ifPresent(queue -> queue.add(event));
                                             syncs.add(this.syncIndex.recordSync(event));
                                             com.auto1.pantera.http.cache.NegativeCacheRegistry

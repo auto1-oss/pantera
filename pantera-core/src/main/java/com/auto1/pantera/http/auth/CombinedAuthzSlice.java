@@ -23,6 +23,8 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
 import org.slf4j.MDC;
 
+import java.util.ArrayList;
+import java.util.stream.Collectors;
 import java.util.Optional;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -87,58 +89,89 @@ public final class CombinedAuthzSlice implements Slice {
         return this.authenticate(headers)
             .toCompletableFuture()
             .thenCompose(
-                result -> {
-                    if (result.status() == AuthScheme.AuthStatus.AUTHENTICATED) {
-                        // Set MDC for downstream logging (cooldown, metrics, etc.)
-                        // This ensures Bearer/JWT authenticated users are tracked correctly
-                        final String userName = result.user().name();
-                        if (userName != null && !userName.isEmpty() && !result.user().isAnonymous()) {
-                            MDC.put(EcsMdc.USER_NAME, userName);
-                        }
-                        if (this.control.allowed(result.user())) {
-                            return this.origin.response(
-                                line,
-                                headers.copy().add(CombinedAuthzSlice.LOGIN_HDR, userName),
-                                body
-                            );
-                        }
-                        // Consume request body to prevent Vert.x request leak
-                        return body.asBytesFuture().thenApply(ignored ->
-                            ResponseBuilder.forbidden().build()
-                        );
-                    }
-                    if (result.status() == AuthScheme.AuthStatus.NO_CREDENTIALS) {
-                        try {
-                            final String challenge = result.challenge();
-                            if (challenge != null && !challenge.isBlank()) {
-                                return ResponseBuilder.unauthorized()
-                                    .header(new WwwAuthenticate(challenge))
-                                    .completedFuture();
-                            }
-                        } catch (final UnsupportedOperationException ex) {
-                            EcsLogger.debug("com.auto1.pantera.http.auth")
-                                .message("Auth scheme does not provide challenge")
-                                .error(ex)
-                                .field("log.source", "application")
-                                .log();
-                        }
-                        if (this.control.allowed(result.user())) {
-                            return this.origin.response(
-                                line,
-                                headers.copy().add(CombinedAuthzSlice.LOGIN_HDR, result.user().name()),
-                                body
-                            );
-                        }
-                        // Consume request body to prevent Vert.x request leak
-                        return body.asBytesFuture().thenApply(ignored2 ->
-                            ResponseBuilder.forbidden().build()
-                        );
-                    }
+                result -> this.respond(result, line, headers, body)
+                    // B55: carry the verified principal back to the access log
+                    // (replacing anything an origin put there).
+                    .thenApply(resp -> new VerifiedPrincipal(resp).stamped(CombinedAuthzSlice.verified(result)))
+        );
+    }
+
+    /**
+     * Authorize the authenticated request and produce the response.
+     * @param result Authentication result
+     * @param line Request line
+     * @param headers Request headers
+     * @param body Request body
+     * @return Response
+     */
+    private CompletableFuture<Response> respond(
+        final AuthScheme.Result result, final RequestLine line,
+        final Headers headers, final com.auto1.pantera.asto.Content body
+    ) {
+        if (result.status() == AuthScheme.AuthStatus.AUTHENTICATED) {
+            // Set MDC for downstream logging (cooldown, metrics, etc.)
+            // This ensures Bearer/JWT authenticated users are tracked correctly
+            final String userName = result.user().name();
+            if (userName != null && !userName.isEmpty() && !result.user().isAnonymous()) {
+                MDC.put(EcsMdc.USER_NAME, userName);
+            }
+            if (this.control.allowed(result.user())) {
+                return this.origin.response(
+                    line,
+                    CombinedAuthzSlice.withLogin(headers, userName),
+                    body
+                );
+            }
+            // Drain (never materialise) the body: prevents the
+            // Vert.x request leak without pre-allocating from the
+            // attacker-declared Content-Length (resource-dos F31).
+            return body.discard().thenApply(ignored ->
+                ResponseBuilder.forbidden().build()
+            );
+        }
+        if (result.status() == AuthScheme.AuthStatus.NO_CREDENTIALS) {
+            try {
+                final String challenge = result.challenge();
+                if (challenge != null && !challenge.isBlank()) {
                     return ResponseBuilder.unauthorized()
-                        .header(new WwwAuthenticate(result.challenge()))
+                        .header(new WwwAuthenticate(challenge))
                         .completedFuture();
                 }
-        );
+            } catch (final UnsupportedOperationException ex) {
+                EcsLogger.debug("com.auto1.pantera.http.auth")
+                    .message("Auth scheme does not provide challenge")
+                    .error(ex)
+                    .field("log.source", "application")
+                    .log();
+            }
+            if (this.control.allowed(result.user())) {
+                return this.origin.response(
+                    line,
+                    CombinedAuthzSlice.withLogin(headers, result.user().name()),
+                    body
+                );
+            }
+            // Drain (never materialise) — see the 403 path above.
+            return body.discard().thenApply(ignored2 ->
+                ResponseBuilder.forbidden().build()
+            );
+        }
+        return ResponseBuilder.unauthorized()
+            .header(new WwwAuthenticate(result.challenge()))
+            .completedFuture();
+    }
+
+    /**
+     * The verified (non-anonymous) principal of an authentication result.
+     * @param result Authentication result
+     * @return Username or {@code null}
+     */
+    private static String verified(final AuthScheme.Result result) {
+        if (result.status() == AuthScheme.AuthStatus.AUTHENTICATED
+            && !result.user().isAnonymous()) {
+            return result.user().name();
+        }
+        return null;
     }
 
     /**
@@ -207,6 +240,20 @@ public final class CombinedAuthzSlice implements Slice {
      */
     private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
+        try {
+            basic.username();
+            basic.password();
+        } catch (final IllegalArgumentException ex) {
+            // Undecodable Base64 or no ':' separator: a failed login (401),
+            // not a server error.
+            return CompletableFuture.completedFuture(
+                AuthScheme.result(
+                    Optional.empty(),
+                    String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
+                        BasicAuthScheme.NAME, BearerAuthScheme.NAME)
+                )
+            );
+        }
         final CompletionStage<Optional<AuthUser>> resolved;
         if (AuthWorkerPool.jwtShaped(basic.password())) {
             // Package-manager clients (mvn, npm, pip, …) submit API tokens
@@ -306,5 +353,24 @@ public final class CombinedAuthzSlice implements Slice {
                         BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                 )
             );
+    }
+
+    /**
+     * Request headers with {@code pantera_login} set to the authenticated
+     * user. Any value the client sent under that name (in any letter case)
+     * is dropped first: {@link com.auto1.pantera.http.headers.Login} reads
+     * the first value, so an appended header would leave a client-chosen
+     * principal in front of the real one.
+     *
+     * @param headers Request headers
+     * @param user Authenticated user name
+     * @return Headers carrying exactly one login header
+     */
+    private static Headers withLogin(final Headers headers, final String user) {
+        return new Headers(
+            headers.stream()
+                .filter(hdr -> !CombinedAuthzSlice.LOGIN_HDR.equalsIgnoreCase(hdr.getKey()))
+                .collect(Collectors.toCollection(ArrayList::new))
+        ).add(CombinedAuthzSlice.LOGIN_HDR, user);
     }
 }

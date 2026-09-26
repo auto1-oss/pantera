@@ -190,6 +190,23 @@ public interface Storage {
     }
 
     /**
+     * Removes the directories left empty in the subtree of {@code prefix}
+     * (the prefix directory itself included) and the empty directories above
+     * it, up to the storage root. Files are never touched.
+     *
+     * <p>Only filesystem storages have directories that outlive their files:
+     * deleting every key of a repository left its (possibly hidden) working
+     * directories behind. Object and in-memory storages have no directories,
+     * so the default does nothing.</p>
+     *
+     * @param prefix Subtree root
+     * @return Completion or error signal
+     */
+    default CompletableFuture<Void> deleteEmptyDirectories(final Key prefix) {
+        return CompletableFuture.completedFuture(null);
+    }
+
+    /**
      * Runs operation exclusively for specified key.
      *
      * @param key Key which is scope of operation.
@@ -305,6 +322,11 @@ public interface Storage {
         @Override
         public CompletableFuture<Void> deleteAll(final Key prefix) {
             return this.delegate.deleteAll(prefix);
+        }
+
+        @Override
+        public CompletableFuture<Void> deleteEmptyDirectories(final Key prefix) {
+            return this.delegate.deleteEmptyDirectories(prefix);
         }
 
         @Override

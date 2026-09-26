@@ -13,6 +13,7 @@ import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;
+import com.auto1.pantera.docker.cooldown.CooldownImageName;
 import com.auto1.pantera.docker.cooldown.DockerManifestByTagHandler;
 import com.auto1.pantera.docker.cooldown.DockerManifestByTagMetadataRequestDetector;
 import com.auto1.pantera.docker.cooldown.DockerMetadataRequestDetector;
@@ -21,17 +22,17 @@ import com.auto1.pantera.docker.http.DigestHeader;
 import com.auto1.pantera.docker.http.PathPatterns;
 import com.auto1.pantera.docker.http.manifest.ManifestRequest;
 import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.misc.OfficialImageName;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
-import org.slf4j.MDC;
 
 import javax.json.Json;
 import javax.json.JsonException;
@@ -103,6 +104,12 @@ public final class DockerProxyCooldownSlice implements Slice {
      */
     private final DockerManifestByTagMetadataRequestDetector manifestTagDetector;
 
+    /**
+     * Canonical cooldown artifact naming (repo prefix removed, Docker Hub
+     * official-image rule applied) shared by every docker cooldown path.
+     */
+    private final CooldownImageName names;
+
     public DockerProxyCooldownSlice(
         final Slice origin,
         final String repoName,
@@ -111,18 +118,46 @@ public final class DockerProxyCooldownSlice implements Slice {
         final DockerProxyCooldownInspector inspector,
         final Docker docker
     ) {
+        this(
+            origin, repoName, repoType, cooldown, inspector, docker,
+            new CooldownImageName(repoName, new OfficialImageName(false))
+        );
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param origin Docker slice
+     * @param repoName Repository name
+     * @param repoType Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
+     * @param docker Docker (for manifest config lookups)
+     * @param names Canonical cooldown artifact naming
+     */
+    public DockerProxyCooldownSlice(
+        final Slice origin,
+        final String repoName,
+        final String repoType,
+        final CooldownService cooldown,
+        final DockerProxyCooldownInspector inspector,
+        final Docker docker,
+        final CooldownImageName names
+    ) {
         this.origin = origin;
         this.repoName = repoName;
         this.repoType = repoType;
         this.cooldown = cooldown;
         this.inspector = inspector;
         this.docker = docker;
+        this.names = names;
         this.tagsHandler = new DockerTagsListHandler(
-            origin, cooldown, inspector, repoType, repoName
+            origin, cooldown, inspector, repoType, repoName, names
         );
         this.tagsDetector = new DockerMetadataRequestDetector();
         this.manifestTagHandler = new DockerManifestByTagHandler(
-            origin, cooldown, inspector, repoType, repoName
+            origin, cooldown, inspector, repoType, repoName, names,
+            this::recordTagRelease
         );
         this.manifestTagDetector = new DockerManifestByTagMetadataRequestDetector();
     }
@@ -135,9 +170,7 @@ public final class DockerProxyCooldownSlice implements Slice {
     ) {
         final String path = line.uri().getPath();
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext ctx = new AuditContext(headers);
         // GET /v2/<name>/tags/list — route through the tags-list filter
         // handler. This is where the Docker cooldown bundle registered
         // in CooldownWiring is actually consumed; without this dispatch
@@ -179,82 +212,169 @@ public final class DockerProxyCooldownSlice implements Slice {
                 if (!response.status().success()) {
                     return CompletableFuture.completedFuture(response);
                 }
-                final String artifact = request.name();
-                final String version = request.reference().digest();
-                final String user = new Login(headers).getValue();
-                final Optional<String> digest = this.digest(response.headers());
-                
                 // Buffer manifest body for cooldown evaluation.
                 // Docker manifests are small JSON (<50KB), not blob layers (which are GB-sized).
                 // This cooldown slice is only mounted on manifest endpoints, so buffering is safe.
-                final CompletableFuture<byte[]> bytesFuture = response.body().asBytesFuture();
-                return bytesFuture.thenCompose(bytes -> {
-                    final Response rebuilt = new Response(
-                        response.status(),
-                        response.headers(),
-                        new Content.From(bytes)
-                    );
-
-                    // Extract release date from headers first (fast path)
-                    final Optional<Instant> headerRelease = this.release(response.headers());
-                    
-                    // If we have release date from headers, use it immediately
-                    if (headerRelease.isPresent()) {
-                        this.inspector.recordRelease(artifact, version, headerRelease.get());
-                        digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, headerRelease.get()));
-                        this.inspector.register(
-                            artifact, version, headerRelease,
-                            user, this.repoName, digest
+                return response.body().asBytesFuture().handle((bytes, err) -> {
+                    if (err != null) {
+                        return CompletableFuture.completedFuture(
+                            this.unreadableManifest(request, err)
                         );
-                        
-                        // Evaluate cooldown with known release date
-                        final CooldownRequest cooldownRequest = new CooldownRequest(
-                            this.repoType, this.repoName,
-                            artifact, version, user, Instant.now()
-                        );
-                        return this.evaluateAndAudit(cooldownRequest, rebuilt, ctx, user);
                     }
-
-                    // No release date in headers - extract from manifest config
-                    // Check if we've seen this artifact before (cached from previous request)
-                    if (this.inspector.known(artifact, version)) {
-                        // Already cached - evaluate immediately
-                        final CooldownRequest cooldownRequest = new CooldownRequest(
-                            this.repoType, this.repoName,
-                            artifact, version, user, Instant.now()
-                        );
-                        return this.evaluateAndAudit(cooldownRequest, rebuilt, ctx, user);
-                    }
-
-                    // First time seeing this artifact - WAIT for extraction then evaluate
-                    return this.determineReleaseSync(request, response.headers(), bytes, artifact, version, digest)
-                        .thenCompose(release -> {
-                            this.inspector.register(
-                                artifact, version, release,
-                                user, this.repoName, digest
-                            );
-                            final CooldownRequest cooldownRequest = new CooldownRequest(
-                                this.repoType, this.repoName,
-                                artifact, version, user, Instant.now()
-                            );
-                            return this.evaluateAndAudit(cooldownRequest, rebuilt, ctx, user);
-                        });
-                }).exceptionally(ex -> {
-                    EcsLogger.warn("com.auto1.pantera.adapters.docker")
-                        .message("Failed to process manifest")
-                        .eventCategory("web")
-                        .eventAction("manifest_process")
-                        .eventOutcome("failure")
-                        .field("package.name", artifact)
-                        .field("package.version", version)
-                        .error(ex)
-                        .field("log.source", "application")
-                        .log();
-                    // Register with empty release date on error
-                    this.inspector.register(artifact, version, Optional.empty(), user, this.repoName, digest);
-                    return response;
-                });
+                    return this.evaluateDigestManifest(request, response, bytes, headers, ctx);
+                }).thenCompose(java.util.function.Function.identity());
             });
+    }
+
+    /**
+     * The upstream manifest body could not be read, so there is nothing to
+     * serve: answer a Registry v2 error instead of a response whose body is
+     * already broken.
+     */
+    private Response unreadableManifest(final ManifestRequest request, final Throwable err) {
+        EcsLogger.warn("com.auto1.pantera.adapters.docker")
+            .message("Failed to read upstream manifest body")
+            .eventCategory("web")
+            .eventAction("manifest_process")
+            .eventOutcome("failure")
+            .field("package.name", this.names.of(request.name()))
+            .field("package.version", request.reference().digest())
+            .error(err)
+            .field("log.source", "application")
+            .log();
+        return ResponseBuilder.badGateway()
+            .jsonBody(
+                "{\"errors\":[{\"code\":\"UNKNOWN\","
+                    + "\"message\":\"upstream manifest body could not be read\"}]}"
+            )
+            .build();
+    }
+
+    /**
+     * Evaluate cooldown for a digest-addressed manifest whose bytes are
+     * already buffered. Any failure while resolving the release date or
+     * evaluating falls back to serving the manifest: the upstream body was
+     * consumed into {@code bytes}, so the fallback MUST be rebuilt from them —
+     * handing back the original, drained response gave the client an empty
+     * body.
+     */
+    private CompletableFuture<Response> evaluateDigestManifest(
+        final ManifestRequest request,
+        final Response response,
+        final byte[] bytes,
+        final Headers headers,
+        final AuditContext ctx
+    ) {
+        final String artifact = this.names.of(request.name());
+        final String version = request.reference().digest();
+        final String user = new Login(headers).getValue();
+        final Optional<String> digest = this.digest(response.headers());
+        final Response rebuilt = rebuild(response, bytes);
+        final CompletableFuture<Response> evaluated;
+        try {
+            evaluated = this.resolveDigestRelease(request, response.headers(), bytes, artifact, version, digest, user)
+                .thenCompose(ignored -> this.evaluateAndAudit(
+                    new CooldownRequest(
+                        this.repoType, this.repoName, artifact, version, user, Instant.now()
+                    ),
+                    rebuilt, ctx, user
+                ));
+        } catch (final RuntimeException ex) {
+            return CompletableFuture.completedFuture(
+                this.manifestFallback(response, bytes, artifact, version, user, digest, ex)
+            );
+        }
+        return evaluated.exceptionally(
+            ex -> this.manifestFallback(response, bytes, artifact, version, user, digest, ex)
+        );
+    }
+
+    /**
+     * Make the release date of a digest-addressed manifest known to the
+     * inspector: from the {@code Last-Modified}/{@code Date} headers when
+     * present, else from the manifest config (first-time only).
+     */
+    private CompletableFuture<Void> resolveDigestRelease(
+        final ManifestRequest request,
+        final Headers respHeaders,
+        final byte[] bytes,
+        final String artifact,
+        final String version,
+        final Optional<String> digest,
+        final String user
+    ) {
+        final Optional<Instant> headerRelease = this.release(respHeaders);
+        if (headerRelease.isPresent()) {
+            this.inspector.recordRelease(artifact, version, headerRelease.get());
+            digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, headerRelease.get()));
+            this.inspector.register(artifact, version, headerRelease, user, this.repoName, digest);
+            return CompletableFuture.completedFuture(null);
+        }
+        if (this.inspector.known(artifact, version)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return this.determineReleaseSync(request.name(), respHeaders, bytes, artifact, version, digest)
+            .thenAccept(release -> this.inspector.register(
+                artifact, version, release, user, this.repoName, digest
+            ));
+    }
+
+    /**
+     * Serve the buffered manifest after a processing failure (fail open, as
+     * before), logging the failure.
+     */
+    private Response manifestFallback(
+        final Response response,
+        final byte[] bytes,
+        final String artifact,
+        final String version,
+        final String user,
+        final Optional<String> digest,
+        final Throwable ex
+    ) {
+        EcsLogger.warn("com.auto1.pantera.adapters.docker")
+            .message("Failed to process manifest for cooldown; serving it unevaluated")
+            .eventCategory("web")
+            .eventAction("manifest_process")
+            .eventOutcome("failure")
+            .field("package.name", artifact)
+            .field("package.version", version)
+            .error(ex)
+            .field("log.source", "application")
+            .log();
+        this.inspector.register(artifact, version, Optional.empty(), user, this.repoName, digest);
+        return rebuild(response, bytes);
+    }
+
+    /**
+     * Release-date recorder for manifest-by-tag requests: when the inspector
+     * has no date for the tag yet, resolve it synchronously from the manifest
+     * config and record it under the tag and the manifest digest, so the
+     * first evaluation of a fresh tag sees it (the cache layer records dates
+     * only after the response has been handed back).
+     */
+    private CompletableFuture<Void> recordTagRelease(
+        final String name,
+        final String artifact,
+        final String tag,
+        final Optional<String> digest,
+        final Headers respHeaders,
+        final byte[] bytes
+    ) {
+        if (this.inspector.known(artifact, tag)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return this.determineReleaseSync(name, respHeaders, bytes, artifact, tag, digest)
+            .thenAccept(release -> release.ifPresent(
+                when -> this.inspector.recordRelease(artifact, tag, when)
+            ));
+    }
+
+    /**
+     * Fresh response carrying buffered body bytes.
+     */
+    private static Response rebuild(final Response response, final byte[] bytes) {
+        return new Response(response.status(), response.headers(), new Content.From(bytes));
     }
 
     /**
@@ -301,17 +421,16 @@ public final class DockerProxyCooldownSlice implements Slice {
      * Waits for extraction to complete before returning.
      * Used on first request to properly evaluate cooldown.
      *
-     * @param request Manifest request
+     * @param name Image name as in the request path
      * @param headers Response headers
      * @param manifestBytes Manifest body bytes
-     * @param artifact Artifact name
+     * @param artifact Canonical cooldown artifact name
      * @param version Version/digest
      * @param digest Optional digest
-     * @param user Requesting user
      * @return CompletableFuture with optional release date
      */
     private CompletableFuture<Optional<Instant>> determineReleaseSync(
-        final ManifestRequest request,
+        final String name,
         final Headers headers,
         final byte[] manifestBytes,
         final String artifact,
@@ -319,20 +438,10 @@ public final class DockerProxyCooldownSlice implements Slice {
         final Optional<String> digest
     ) {
         final Optional<Manifest> manifest = this.manifestFrom(headers, manifestBytes);
-        if (manifest.isEmpty() || manifest.get().isManifestList()) {
+        if (manifest.isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        final Manifest doc = manifest.get();
-        
-        // Fetch config blob and extract created timestamp
-        return this.docker.repo(request.name()).layers().get(doc.config()).thenCompose(blob -> {
-            if (blob.isEmpty()) {
-                return CompletableFuture.completedFuture(Optional.<Instant>empty());
-            }
-            return blob.get().content()
-                .thenCompose(Content::asBytesFuture)
-                .thenApply(this::extractCreatedInstant);
-        }).whenComplete((release, error) -> {
+        return this.configCreated(name, manifest.get()).whenComplete((release, error) -> {
             if (error != null) {
                 EcsLogger.warn("com.auto1.pantera.adapters.docker")
                     .message("Failed to extract release date from config")
@@ -370,6 +479,41 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return Optional.empty();
+        });
+    }
+
+    /**
+     * The image config's {@code created} timestamp. For a manifest list /
+     * OCI index (multi-arch tags) there is no config, so the first child's is
+     * used — all children of one tag come from one build, the same rule
+     * {@code CacheManifests} applies when it records release dates.
+     *
+     * @param name Image name as in the request path
+     * @param doc Manifest
+     * @return Created timestamp, empty when unavailable
+     */
+    private CompletableFuture<Optional<Instant>> configCreated(final String name, final Manifest doc) {
+        if (doc.isManifestList()) {
+            final java.util.Collection<Digest> children = doc.manifestListChildren();
+            if (children.isEmpty()) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+            return this.docker.repo(name).manifests()
+                .get(com.auto1.pantera.docker.ManifestReference.from(children.iterator().next()))
+                .thenCompose(child -> {
+                    if (child.isEmpty() || child.get().isManifestList()) {
+                        return CompletableFuture.completedFuture(Optional.<Instant>empty());
+                    }
+                    return this.configCreated(name, child.get());
+                });
+        }
+        return this.docker.repo(name).layers().get(doc.config()).thenCompose(blob -> {
+            if (blob.isEmpty()) {
+                return CompletableFuture.completedFuture(Optional.<Instant>empty());
+            }
+            return blob.get().content()
+                .thenCompose(Content::asBytesFuture)
+                .thenApply(this::extractCreatedInstant);
         });
     }
 

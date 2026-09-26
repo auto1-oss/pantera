@@ -38,6 +38,7 @@ import com.auto1.pantera.http.hm.RsHasStatus;
 import com.auto1.pantera.http.hm.SliceHasResponse;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.slice.PathPrefixStripSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import java.nio.charset.StandardCharsets;
@@ -49,6 +50,7 @@ import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
@@ -165,6 +167,64 @@ class ProxySliceTest {
         );
         this.events.clear();
         Assertions.assertFalse(clients.invoked(), "Mirror client should not be used when cache hit");
+    }
+
+    @Test
+    void revalidateReplacesACachedIndexAndDropsItsEnvelopes() throws Exception {
+        final byte[] fresh = "<html><body><a href=\"x\">my-project-2.0.0.tar.gz</a></body></html>"
+            .getBytes(StandardCharsets.UTF_8);
+        this.storage.save(
+            new Key.From("my-project"),
+            new Content.From("<html>stale</html>".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        final com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry registry =
+            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance();
+        final Optional<com.auto1.pantera.cooldown.metadata.FilteredMetadataCache> prior =
+            registry.sharedCache();
+        final com.auto1.pantera.cooldown.metadata.FilteredMetadataCache envelopes =
+            new com.auto1.pantera.cooldown.metadata.FilteredMetadataCache(
+                100, java.time.Duration.ofMinutes(5), java.time.Duration.ofMinutes(5), null
+            );
+        envelopes.getEntry(
+            "pypi-proxy", "my-pypi-proxy", "default", "my-project",
+            () -> CompletableFuture.completedFuture(
+                com.auto1.pantera.cooldown.metadata.FilteredMetadataCache.CacheEntry
+                    .noBlockedVersions(new byte[]{1}, java.time.Duration.ofMinutes(5))
+            )
+        ).join();
+        registry.setSharedCache(envelopes);
+        try {
+            final String outcome = this.newProxySlice(
+                new SliceSimple(
+                    ResponseBuilder.ok().header(ContentType.mime("text/html")).body(fresh).build()
+                ),
+                new TestClientSlices(line -> ResponseBuilder.internalError().build()),
+                Optional.empty()
+            ).revalidate("My_Project").get(10, java.util.concurrent.TimeUnit.SECONDS);
+            MatcherAssert.assertThat(
+                "the cached HTML index was refreshed (the JSON variant was never cached)",
+                outcome, new IsEqual<>("refreshed,not_cached")
+            );
+            MatcherAssert.assertThat(
+                "the cached index now carries the upstream's new version",
+                new String(
+                    this.storage.value(new Key.From("my-project")).join().asBytes(),
+                    StandardCharsets.UTF_8
+                ),
+                Matchers.containsString("my-project-2.0.0.tar.gz")
+            );
+            MatcherAssert.assertThat(
+                "the project's filtered envelope was dropped",
+                envelopes.probe("my-pypi-proxy", "my-project").join().l1Present(),
+                new IsEqual<>(false)
+            );
+        } finally {
+            if (prior.isPresent()) {
+                registry.setSharedCache(prior.get());
+            } else {
+                registry.setSharedCache(null);
+            }
+        }
     }
 
     @Test
@@ -578,6 +638,125 @@ class ProxySliceTest {
                 this.authorization,
                 Content.EMPTY
             )
+        );
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "/my-pypi-proxy/requests/",
+        "/simple/requests/"
+    })
+    void indexResponsesVaryOnAccept(final String path) {
+        // The same index URL answers HTML or PEP 691 JSON depending on
+        // Accept, so shared caches must key on it (B93).
+        final String html =
+            "<html><body><a href=\"requests-1.0.0.tar.gz#sha256=abc\">r</a></body></html>";
+        final Response response = this.newProxySlice(
+            new SliceSimple(
+                ResponseBuilder.ok().htmlBody(html, StandardCharsets.UTF_8).build()
+            ),
+            new TestClientSlices(line -> ResponseBuilder.ok().build()),
+            Optional.of(this.events)
+        ).response(
+            new RequestLine(RqMethod.GET, path), this.authorization, Content.EMPTY
+        ).toCompletableFuture().join();
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            response.headers().values("Vary"),
+            new IsEqual<>(java.util.List.of("Accept"))
+        );
+    }
+
+    @ParameterizedTest
+    @CsvSource({"/simple/", "/simple", "/"})
+    void declinesTheRootProjectIndexWithoutFetchingUpstream(final String path) {
+        // The root /simple/ index lists every project upstream: pypi.org's
+        // is ~46 MB. It must be answered cheaply and consistently, never
+        // fetched, buffered or cached. Wired as in RepositorySlices, where
+        // the "simple" alias is stripped and the root reaches ProxySlice as "/".
+        final AtomicInteger upstream = new AtomicInteger();
+        final byte[] huge = new byte[11 * 1024 * 1024];
+        final Slice slice = new PathPrefixStripSlice(this.newProxySlice(
+            (line, headers, body) -> {
+                upstream.incrementAndGet();
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok().body(huge).build()
+                );
+            },
+            new TestClientSlices(
+                line -> {
+                    upstream.incrementAndGet();
+                    return ResponseBuilder.ok().body(huge).build();
+                }
+            ),
+            Optional.of(this.events)
+        ), "simple");
+        for (int attempt = 1; attempt <= 3; attempt += 1) {
+            final Response response = slice.response(
+                new RequestLine(RqMethod.GET, path), this.authorization, Content.EMPTY
+            ).toCompletableFuture().join();
+            MatcherAssert.assertThat(
+                String.format("request %d is declined with 404", attempt),
+                response.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+            );
+            MatcherAssert.assertThat(
+                String.format("request %d names the reason", attempt),
+                response.headers().values("X-Pantera-Reason"),
+                new IsEqual<>(java.util.List.of("not_implemented"))
+            );
+        }
+        MatcherAssert.assertThat(
+            "the upstream is never asked for the root index",
+            upstream.get(), new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "nothing is cached for the root index",
+            this.storage.list(Key.ROOT).join(), new IsEqual<>(java.util.List.of())
+        );
+    }
+
+    @Test
+    void proxiesPerVersionJsonApiToJsonUpstream() {
+        // /pypi/<pkg>/<ver>/json must be served by the PyPI JSON API
+        // upstream, not the simple mirror (which 404s it) (B92).
+        final byte[] json = ("{\"info\":{\"name\":\"six\",\"version\":\"1.16.0\"},"
+            + "\"urls\":[{\"filename\":\"six-1.16.0.tar.gz\","
+            + "\"upload_time_iso_8601\":\"2021-05-05T14:18:18.000000Z\"}]}")
+            .getBytes(StandardCharsets.UTF_8);
+        final ProxySlice slice = new ProxySlice(
+            new TestClientSlices(line -> ResponseBuilder.ok().build()),
+            Authenticator.ANONYMOUS,
+            new SliceSimple(ResponseBuilder.notFound().build()),
+            this.storage,
+            new FromStorageCache(this.storage),
+            Optional.of(this.events),
+            "my-pypi-proxy",
+            "pypi-proxy",
+            NoopCooldownService.INSTANCE,
+            new com.auto1.pantera.publishdate.RegistryBackedInspector(
+                "pypi", com.auto1.pantera.publishdate.PublishDateRegistries.instance()
+            ),
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                "/pypi/six/1.16.0/json".equals(line.uri().getPath())
+                    ? ResponseBuilder.ok().jsonBody(new String(json, StandardCharsets.UTF_8))
+                        .build()
+                    : ResponseBuilder.notFound().build()
+            )
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/pypi/six/1.16.0/json"),
+            this.authorization,
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "per-version JSON must be answered by the JSON API upstream",
+            response.status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the upstream document must be forwarded",
+            new String(response.body().asBytes(), StandardCharsets.UTF_8),
+            Matchers.containsString("\"version\":\"1.16.0\"")
         );
     }
 

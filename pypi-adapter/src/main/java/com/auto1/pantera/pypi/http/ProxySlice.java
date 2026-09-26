@@ -86,6 +86,13 @@ final class ProxySlice implements Slice {
     private static final String FORMATS = ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)";
 
     /**
+     * Key used for an empty last path segment (the root project index).
+     * The root index is declined in {@link #response}, so nothing is ever
+     * stored under it; normalised project names never contain {@code _}.
+     */
+    private static final Key ROOT_INDEX = new Key.From("_root_index");
+
+    /**
      * Wheel filename pattern.
      */
     private static final Pattern WHEEL_PATTERN =
@@ -127,6 +134,13 @@ final class ProxySlice implements Slice {
      * Authenticator to access upstream remotes.
      */
     private final Authenticator auth;
+
+    /**
+     * Which mirror hosts may receive {@link #auth}: the configured upstream
+     * host, its parent domain, or the allowlist. Unknown upstream (legacy
+     * ctors) = credentials never leave for a mirror (2.2.9).
+     */
+    private final com.auto1.pantera.http.client.auth.RealmTrust mirrorTrust;
 
     /**
      * Cache.
@@ -262,6 +276,38 @@ final class ProxySlice implements Slice {
         final CooldownInspector inspector,
         final Slice jsonApiUpstream,
         final Duration metadataTtl) {
+        this(clients, auth, origin, backend, cache, events, rname, rtype,
+            cooldown, inspector, jsonApiUpstream, metadataTtl, null);
+    }
+
+    /**
+     * Canonical ctor, aware of the configured upstream so mirror fetches can
+     * bind the upstream credentials to trusted hosts only.
+     * @param clients HTTP clients
+     * @param auth Authenticator
+     * @param origin Origin slice
+     * @param backend Backend storage
+     * @param cache Cache
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
+     * @param jsonApiUpstream Direct upstream slice for /pypi/{pkg}/{ver}/json
+     * @param metadataTtl TTL for index page cache
+     * @param upstream Configured upstream URI the credentials belong to (nullable)
+     */
+    ProxySlice(final ClientSlices clients, final Authenticator auth,
+        final Slice origin, final Storage backend, final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final CooldownService cooldown,
+        final CooldownInspector inspector,
+        final Slice jsonApiUpstream,
+        final Duration metadataTtl,
+        final java.net.URI upstream) {
+        this.mirrorTrust = com.auto1.pantera.http.client.auth.RealmTrust.forUpstream(upstream);
         this.origin = origin;
         this.clients = clients;
         this.auth = auth;
@@ -304,6 +350,43 @@ final class ProxySlice implements Slice {
         this.jsonHandler = new PypiJsonHandler(
             jsonApiUpstream, cooldown, rtype, rname
         );
+        // Admin "refresh package": revalidate a project's cached simple
+        // index through the same refresh path stale-while-revalidate uses.
+        com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance()
+            .register(rname, this::revalidate);
+    }
+
+    /**
+     * Revalidate a project's cached simple index (PEP 503 HTML and PEP 691
+     * JSON variants) against the upstream now, keeping the cached copy on
+     * any upstream failure. Variants not cached are left alone — the next
+     * client read fetches them fresh.
+     *
+     * @param project Project name, any spelling (normalised here)
+     * @return Future of the joined per-variant outcome
+     */
+    CompletableFuture<String> revalidate(final String project) {
+        final String normalized = new NormalizedProjectName.Simple(project).value();
+        final RequestLine line = new RequestLine(
+            com.auto1.pantera.http.rq.RqMethod.GET, String.format("/%s/", normalized)
+        );
+        final java.util.List<CompletableFuture<String>> variants = new java.util.ArrayList<>(2);
+        for (final SimpleApiFormat format : SimpleApiFormat.values()) {
+            final Key key = ProxySlice.keyFromPath(line, format);
+            variants.add(
+                this.asyncStorage.exists(key).thenCompose(exists -> {
+                    if (!exists) {
+                        return CompletableFuture.completedFuture("not_cached");
+                    }
+                    return this.refreshIndex(key, line, this.upstreamLine(line), format);
+                })
+            );
+        }
+        return CompletableFuture.allOf(variants.toArray(new CompletableFuture[0]))
+            .thenApply(ignored -> variants.stream()
+                .map(CompletableFuture::join)
+                .distinct()
+                .collect(java.util.stream.Collectors.joining(",")));
     }
 
     @Override
@@ -318,6 +401,9 @@ final class ProxySlice implements Slice {
         // resolver view. Matches the Go adapter dispatch pattern
         // established in commit 1eb53ceb.
         final String path = line.uri().getPath();
+        if (ProxySlice.isRootIndex(path)) {
+            return this.declineRootIndex(path, body);
+        }
         if (this.jsonHandler != null && this.jsonHandler.matches(path)) {
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Dispatching /pypi/<pkg>/json to cooldown JSON handler")
@@ -341,7 +427,8 @@ final class ProxySlice implements Slice {
                 .field("simple.format", clientWantsJson ? "json" : "html")
                 .field("log.source", "application")
                 .log();
-            return this.simpleHandler.handle(line, clientWantsJson, user, rqheaders);
+            return this.simpleHandler.handle(line, clientWantsJson, user, rqheaders)
+                .thenApply(resp -> SimpleApiFormat.negotiated(resp, rqheaders));
         }
 
         // For artifacts: CRITICAL FIX - Check cache FIRST before any network calls
@@ -356,8 +443,58 @@ final class ProxySlice implements Slice {
             return this.checkCacheFirst(line, info, user, ctx);
         }
 
-        // Non-artifacts (index pages, metadata): serve directly from cache/upstream
-        return this.serveNonArtifact(line, rqheaders, body, user);
+        // Non-artifacts (index pages, metadata): serve directly from cache/upstream.
+        // Their body is negotiated on Accept (HTML vs PEP 691 JSON).
+        return this.serveNonArtifact(line, rqheaders, body, user)
+            .thenApply(resp -> SimpleApiFormat.negotiated(resp, rqheaders));
+    }
+
+    /**
+     * Whether the path is the root project index. {@code /simple/} reaches
+     * this slice as {@code /} once the {@code simple} alias is stripped.
+     *
+     * @param path Request path
+     * @return True for the root project index
+     */
+    private static boolean isRootIndex(final String path) {
+        return new KeyLastPart(new KeyFromPath(path)).get().isEmpty();
+    }
+
+    /**
+     * Answer the root project index without contacting the upstream.
+     *
+     * <p>The upstream root index lists every project it hosts (pypi.org's is
+     * tens of megabytes) with host-absolute links, and pip never requests it:
+     * it always resolves {@code /simple/<project>/}. Fetching it would buffer
+     * the whole body per request, so it is declined cheaply and consistently
+     * with {@code 404} and {@code X-Pantera-Reason: not_implemented}, the
+     * same shape as other endpoints this registry does not implement.</p>
+     *
+     * @param path Request path
+     * @param body Request body, drained and never materialised
+     * @return 404 response
+     */
+    private CompletableFuture<Response> declineRootIndex(
+        final String path, final Content body
+    ) {
+        EcsLogger.debug("com.auto1.pantera.pypi")
+            .message("Root project index is not proxied; answering 404 not_implemented")
+            .eventCategory("web")
+            .eventAction("proxy_request")
+            .eventOutcome("failure")
+            .field("url.path", path)
+            .field("repository.name", this.rname)
+            .field("log.source", "application")
+            .log();
+        return body.discard().thenApply(
+            ignored -> ResponseBuilder.notFound()
+                .header("X-Pantera-Reason", "not_implemented")
+                .textBody(
+                    "The root project index is not implemented by this registry;"
+                        + " request /simple/<project>/ instead"
+                )
+                .build()
+        );
     }
 
     /**
@@ -780,115 +917,27 @@ final class ProxySlice implements Slice {
         }
         CompletableFuture.runAsync(() -> {
             try {
-                // Build request with conditional header if available
-                final String lm = this.lastModifiedCache.getIfPresent(keyStr);
-                Headers extra = lm != null
-                    ? Headers.from(new Header("If-Modified-Since", lm))
-                    : Headers.EMPTY;
-                // Include PEP 691 Accept header when client requested JSON
-                if (format == SimpleApiFormat.JSON) {
-                    extra = extra.copy().add(
-                        new Header("Accept", SimpleApiFormat.JSON.contentType())
-                    );
-                }
-                // Fetch from upstream
-                this.fetchFromUpstreamWithHeaders(line, upstream, extra)
-                    .thenCompose(response -> {
-                        if (response.status().code() == 304) {
-                            // Not modified — keep cached version
-                            EcsLogger.debug("com.auto1.pantera.pypi")
-                                .message(String.format("Background refresh: 304 Not Modified for key '%s'", keyStr))
-                                .eventCategory("database")
-                                .eventAction("stale_while_revalidate")
-                                .eventOutcome("success")
-                                .field("log.source", "application")
-                                .log();
-                            return CompletableFuture.completedFuture((Void) null);
-                        }
-                        if (!response.status().success()) {
-                            // Keep the stale index (fail-open), but say so:
-                            // before 2.2.7 a persistently failing upstream
-                            // (404/5xx) was swallowed here with no log at all
-                            // — the completion handler even reported success
-                            // — leaving silently frozen simple indexes with
-                            // zero ELK trace. The timestamp is NOT bumped, so
-                            // the next request retries.
-                            EcsLogger.warn("com.auto1.pantera.pypi")
-                                .message(String.format(
-                                    "Background refresh got non-success upstream status for key '%s' — keeping stale index, will retry",
-                                    keyStr
-                                ))
-                                .eventCategory("database")
-                                .eventAction("stale_while_revalidate")
-                                .eventOutcome("failure")
-                                .field("http.response.status_code", response.status().code())
-                                .field("log.source", "application")
-                                .log();
-                            return CompletableFuture.completedFuture((Void) null);
-                        }
-                        // Store new Last-Modified
-                        this.storeLastModified(key, response.headers());
-                        // Pre-rewrite and save
-                        final String path = line.uri().getPath();
-                        final CompletableFuture<Optional<Content>> rewritten;
-                        if (path != null && path.endsWith(".metadata")) {
-                            rewritten = CompletableFuture.completedFuture(
-                                Optional.of(response.body())
-                            );
-                        } else {
-                            rewritten = this.preRewriteContent(
-                                response.body(), response.headers(), line
-                            );
-                        }
-                        return rewritten.thenCompose(opt -> {
-                            if (opt.isPresent()) {
-                                return opt.get().asBytesFuture().thenCompose(bytes ->
-                                    this.asyncStorage.save(
-                                        key, new Content.From(bytes)
-                                    ).thenRun(() ->
-                                        // One INFO per genuine content refresh
-                                        // (at most once per index per TTL
-                                        // window) so refresh activity is
-                                        // visible in ELK — its total absence
-                                        // is what made the 2.2.6 stale-
-                                        // metadata incident undiagnosable.
-                                        EcsLogger.info("com.auto1.pantera.pypi")
-                                            .message(String.format(
-                                                "Background refresh replaced cached index for key '%s'",
-                                                keyStr
-                                            ))
-                                            .eventCategory("database")
-                                            .eventAction("stale_while_revalidate")
-                                            .eventOutcome("success")
-                                            .field("event.reason", "content_changed")
-                                            .field("log.source", "application")
-                                            .log()
-                                    )
-                                );
-                            }
-                            return CompletableFuture.completedFuture(null);
-                        });
-                    }).whenComplete((v, err) -> {
-                        this.refreshing.end(keyStr);
-                        if (err != null) {
-                            EcsLogger.warn("com.auto1.pantera.pypi")
-                                .message(String.format("Background refresh failed for key '%s'", keyStr))
-                                .eventCategory("database")
-                                .eventAction("stale_while_revalidate")
-                                .eventOutcome("failure")
-                                .error(err)
-                                .field("log.source", "application")
-                                .log();
-                        } else {
-                            EcsLogger.debug("com.auto1.pantera.pypi")
-                                .message(String.format("Background refresh completed for key '%s'", keyStr))
-                                .eventCategory("database")
-                                .eventAction("stale_while_revalidate")
-                                .eventOutcome("success")
-                                .field("log.source", "application")
-                                .log();
-                        }
-                    });
+                this.refreshIndex(key, line, upstream, format).whenComplete((outcome, err) -> {
+                    this.refreshing.end(keyStr);
+                    if (err != null) {
+                        EcsLogger.warn("com.auto1.pantera.pypi")
+                            .message(String.format("Background refresh failed for key '%s'", keyStr))
+                            .eventCategory("database")
+                            .eventAction("stale_while_revalidate")
+                            .eventOutcome("failure")
+                            .error(err)
+                            .field("log.source", "application")
+                            .log();
+                    } else {
+                        EcsLogger.debug("com.auto1.pantera.pypi")
+                            .message(String.format("Background refresh completed for key '%s'", keyStr))
+                            .eventCategory("database")
+                            .eventAction("stale_while_revalidate")
+                            .eventOutcome("success")
+                            .field("log.source", "application")
+                            .log();
+                    }
+                });
             } catch (final Exception ex) {
                 this.refreshing.end(keyStr);
                 EcsLogger.warn("com.auto1.pantera.pypi")
@@ -901,6 +950,149 @@ final class ProxySlice implements Slice {
                     .log();
             }
         }, ContextualExecutor.contextualize(ForkJoinPool.commonPool()));
+    }
+
+    /**
+     * Refresh one cached index page from the upstream: conditional request
+     * (If-Modified-Since) when a validator is known, keep the cached page on
+     * 304 or any non-success status, otherwise pre-rewrite and replace it.
+     * A replaced project page drops the cooldown-filtered envelopes of the
+     * project, so the new version list is served instead of the envelope
+     * computed from the stale page.
+     *
+     * @param key Storage key of the cached page
+     * @param line Client-shaped request line of the page
+     * @param upstream Upstream request line
+     * @param format Simple API serialization
+     * @return Future of the outcome: {@code not_modified},
+     *  {@code refreshed}, {@code unchanged} or {@code upstream_status_<code>}
+     */
+    private CompletableFuture<String> refreshIndex(
+        final Key key, final RequestLine line,
+        final RequestLine upstream, final SimpleApiFormat format
+    ) {
+        final String keyStr = key.string();
+        // Build request with conditional header if available
+        final String lm = this.lastModifiedCache.getIfPresent(keyStr);
+        Headers extra = lm != null
+            ? Headers.from(new Header("If-Modified-Since", lm))
+            : Headers.EMPTY;
+        // Include PEP 691 Accept header when client requested JSON
+        if (format == SimpleApiFormat.JSON) {
+            extra = extra.copy().add(
+                new Header("Accept", SimpleApiFormat.JSON.contentType())
+            );
+        }
+        return this.fetchFromUpstreamWithHeaders(line, upstream, extra)
+            .thenCompose(response -> {
+                if (response.status().code() == 304) {
+                    // Not modified — keep cached version
+                    EcsLogger.debug("com.auto1.pantera.pypi")
+                        .message(String.format("Background refresh: 304 Not Modified for key '%s'", keyStr))
+                        .eventCategory("database")
+                        .eventAction("stale_while_revalidate")
+                        .eventOutcome("success")
+                        .field("log.source", "application")
+                        .log();
+                    return response.body().asBytesFuture().thenApply(ignored -> "not_modified");
+                }
+                if (!response.status().success()) {
+                    // Keep the stale index (fail-open), but say so:
+                    // before 2.2.7 a persistently failing upstream
+                    // (404/5xx) was swallowed here with no log at all
+                    // — the completion handler even reported success
+                    // — leaving silently frozen simple indexes with
+                    // zero ELK trace. The timestamp is NOT bumped, so
+                    // the next request retries.
+                    EcsLogger.warn("com.auto1.pantera.pypi")
+                        .message(String.format(
+                            "Background refresh got non-success upstream status for key '%s' — keeping stale index, will retry",
+                            keyStr
+                        ))
+                        .eventCategory("database")
+                        .eventAction("stale_while_revalidate")
+                        .eventOutcome("failure")
+                        .field("http.response.status_code", response.status().code())
+                        .field("log.source", "application")
+                        .log();
+                    return response.body().asBytesFuture().thenApply(
+                        ignored -> "upstream_status_" + response.status().code()
+                    );
+                }
+                return this.replaceIndex(key, line, response);
+            });
+    }
+
+    /**
+     * Save a successfully refreshed index page (pre-rewritten) and drop the
+     * project's filtered-metadata envelopes.
+     *
+     * @param key Storage key of the cached page
+     * @param line Client-shaped request line of the page
+     * @param response Successful upstream response
+     * @return Future of {@code refreshed} or {@code unchanged}
+     */
+    private CompletableFuture<String> replaceIndex(
+        final Key key, final RequestLine line, final Response response
+    ) {
+        final String keyStr = key.string();
+        // Store new Last-Modified
+        this.storeLastModified(key, response.headers());
+        // Pre-rewrite and save
+        final String path = line.uri().getPath();
+        final boolean metadataFile = path != null && path.endsWith(".metadata");
+        final CompletableFuture<Optional<Content>> rewritten;
+        if (metadataFile) {
+            rewritten = CompletableFuture.completedFuture(
+                Optional.of(response.body())
+            );
+        } else {
+            rewritten = this.preRewriteContent(
+                response.body(), response.headers(), line
+            );
+        }
+        return rewritten.thenCompose(opt -> {
+            if (opt.isEmpty()) {
+                return CompletableFuture.completedFuture("unchanged");
+            }
+            return opt.get().asBytesFuture().thenCompose(bytes ->
+                this.asyncStorage.save(
+                    key, new Content.From(bytes)
+                ).thenApply(saved -> {
+                    // One INFO per genuine content refresh
+                    // (at most once per index per TTL
+                    // window) so refresh activity is
+                    // visible in ELK — its total absence
+                    // is what made the 2.2.6 stale-
+                    // metadata incident undiagnosable.
+                    EcsLogger.info("com.auto1.pantera.pypi")
+                        .message(String.format(
+                            "Background refresh replaced cached index for key '%s'",
+                            keyStr
+                        ))
+                        .eventCategory("database")
+                        .eventAction("stale_while_revalidate")
+                        .eventOutcome("success")
+                        .field("event.reason", "content_changed")
+                        .field("log.source", "application")
+                        .log();
+                    if (!metadataFile) {
+                        // Same contract as npm's packument-write hook: a
+                        // refreshed project page must not keep being served
+                        // through an envelope filtered from the stale page.
+                        final String project = new KeyLastPart(new KeyFromPath(path)).get();
+                        if (!project.isEmpty()) {
+                            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                                .instance().invalidateAfterProxyRefresh(
+                                    this.rtype,
+                                    new NormalizedProjectName.Simple(project).value()
+                                );
+                        }
+                    }
+                    return "refreshed";
+                })
+            );
+        });
     }
 
     /**
@@ -937,7 +1129,6 @@ final class ProxySlice implements Slice {
         final RequestLine line, final String user, final AuditContext ctx
     ) {
         final AtomicReference<Headers> remote = new AtomicReference<>(Headers.EMPTY);
-        final AtomicBoolean remoteSuccess = new AtomicBoolean(false);
         final Key key = ProxySlice.keyFromPath(line);
         final RequestLine upstream = this.upstreamLine(line);
         
@@ -999,7 +1190,6 @@ final class ProxySlice implements Slice {
                     return fetch.thenApply(response -> {
                         remote.set(response.headers());
                         if (response.status().success()) {
-                            remoteSuccess.set(true);
                             // Genuine cache miss + successful upstream fetch —
                             // the only branch that should publish. Bind the
                             // already-resolved context onto whatever thread
@@ -1020,10 +1210,9 @@ final class ProxySlice implements Slice {
                                         .recordDropped(ProxySlice.this.rname);
                                 }
                             });
-                            ProxySlice.this.auditArtifactAccess(
-                                ctx, line, user, response.body().size().orElse(0L),
-                                AuditLogger.OUTCOME_SUCCESS, null
-                            );
+                            // The access record is written once the body
+                            // is cached (below), where its size is known
+                            // even for a chunked upstream answer (R43).
                             return Optional.of(response.body());
                         }
                         return Optional.empty();
@@ -1042,16 +1231,14 @@ final class ProxySlice implements Slice {
                     }
                     return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
                 }
-                // Cache hit (remote fetch already audited+enqueued above when
-                // remoteSuccess is true). The artifact was already published
-                // to the DB the first time it was cached — this is a read,
-                // not a publish. No ProxyArtifactEvent here; audit as access.
-                if (!remoteSuccess.get()) {
-                    this.auditArtifactAccess(
-                        ctx, line, user, content.get().size().orElse(0L),
-                        AuditLogger.OUTCOME_SUCCESS, null
-                    );
-                }
+                // Cache hit or cache miss (a miss was enqueued as a publish
+                // above): either way this serve is an access. The size is
+                // the cached content's; a chunked upstream body does not
+                // know it, so fall back to the upstream Content-Length.
+                this.auditArtifactAccess(
+                    ctx, line, user, ProxySlice.accessSize(content.get(), remote.get()),
+                    AuditLogger.OUTCOME_SUCCESS, null
+                );
                 // Serve artifact content (cooldown already evaluated and passed)
                 return this.serveArtifactContent(line, content.get(), remote.get());
             }
@@ -1448,7 +1635,30 @@ final class ProxySlice implements Slice {
                 String.format("Unsupported mirror scheme: %s", scheme)
             );
         }
-        return new com.auto1.pantera.http.client.auth.AuthClientSlice(base, this.auth);
+        // SECURITY (2.2.9): the mirror host comes from an upstream-supplied
+        // index link. The configured upstream credentials are released only
+        // to a host the upstream is trusted for; any other mirror is fetched
+        // anonymously — never with another registry's credentials.
+        final Authenticator mirrorAuth;
+        if (this.mirrorTrust.trusts(uri)) {
+            mirrorAuth = this.auth;
+        } else {
+            mirrorAuth = Authenticator.ANONYMOUS;
+            if (this.auth != Authenticator.ANONYMOUS) {
+                EcsLogger.warn("com.auto1.pantera.pypi")
+                    .message("Mirror host is not the configured upstream; fetching anonymously")
+                    .eventCategory("network")
+                    .eventAction("mirror_credentials_withheld")
+                    .eventOutcome("success")
+                    .field("url.full", uri.toString())
+                    .field("destination.address", uri.getHost())
+                    .field("event.reason", "mirror_origin_untrusted")
+                    .field("repository.name", this.rname)
+                    .field("log.source", "application")
+                    .log();
+            }
+        }
+        return new com.auto1.pantera.http.client.auth.AuthClientSlice(base, mirrorAuth);
     }
 
     private void storeMirror(final String path, final URI upstream) {
@@ -1572,17 +1782,18 @@ final class ProxySlice implements Slice {
     }
 
     /**
-     * Build an {@link AuditContext} for the current request. Reads the
-     * internal {@code X-Pantera-Ctx-*} headers into MDC first (a no-op if
-     * already populated by {@code EcsLoggingSlice} on the request thread;
-     * a real restore on a worker thread that never had it).
+     * Build an {@link AuditContext} for the current request from its internal
+     * {@code X-Pantera-Ctx-*} headers, which are authoritative on any thread
+     * (the thread's MDC is never read: a pooled thread can hold another
+     * request's values). The headers are also bound to this thread's MDC for
+     * the application logs that follow.
      *
      * @param headers Inbound request headers
-     * @return Context carrying whatever trace id / client IP could be resolved
+     * @return Context carrying the request's trace id / client IP
      */
     private AuditContext captureAuditContext(final Headers headers) {
         RequestContextHeaders.bindToMdc(headers);
-        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
+        return new AuditContext(headers);
     }
 
     /**
@@ -1620,6 +1831,40 @@ final class ProxySlice implements Slice {
         AuditLogger.access(
             ctx, this.rtype, this.rname, artifactName, version, size, user, outcome, reason
         );
+    }
+
+    /**
+     * Size recorded in the {@code artifact_access} audit record of a served
+     * artifact: the served (cached) content's size, else the Content-Length
+     * the upstream announced (a chunked upstream body does not know its
+     * size), else 0.
+     * @param content Served content
+     * @param remote Upstream response headers (empty or null on a cache hit)
+     * @return Size in bytes
+     */
+    static long accessSize(final Content content, final Headers remote) {
+        return content.size().or(() -> ProxySlice.contentLength(remote)).orElse(0L);
+    }
+
+    /**
+     * The Content-Length an upstream response announced.
+     * @param headers Upstream response headers (may be null on a cache hit)
+     * @return Length, empty when absent or malformed
+     */
+    private static Optional<Long> contentLength(final Headers headers) {
+        Optional<Long> result = Optional.empty();
+        if (headers != null) {
+            for (final Header header : headers) {
+                if ("content-length".equalsIgnoreCase(header.getKey())) {
+                    try {
+                        result = Optional.of(Long.parseLong(header.getValue().trim()));
+                    } catch (final NumberFormatException ignored) {
+                        result = Optional.empty();
+                    }
+                }
+            }
+        }
+        return result;
     }
 
     private Optional<ArtifactCoordinates> extract(final RequestLine line) {
@@ -1747,7 +1992,12 @@ final class ProxySlice implements Slice {
         Key res = new KeyFromPath(uri.getPath());
         final String last = new KeyLastPart(res).get();
         final boolean artifactPath = uri.toString().matches(ProxySlice.FORMATS);
-        if (!artifactPath && !last.endsWith(".metadata")) {
+        if (last.isEmpty()) {
+            // The root project index names no project, so there is nothing
+            // to normalise. response() declines it before reaching here;
+            // this guard only keeps an empty segment from throwing a 500.
+            res = ProxySlice.ROOT_INDEX;
+        } else if (!artifactPath && !last.endsWith(".metadata")) {
             res = new Key.From(
                 res.string().replaceAll(
                     String.format("%s$", last), new NormalizedProjectName.Simple(last).value()

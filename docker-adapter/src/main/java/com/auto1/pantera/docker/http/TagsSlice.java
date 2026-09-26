@@ -12,6 +12,7 @@ package com.auto1.pantera.docker.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.error.NameUnknownError;
 import com.auto1.pantera.docker.misc.ImageRepositoryName;
 import com.auto1.pantera.docker.misc.Pagination;
 import com.auto1.pantera.docker.misc.RqByRegex;
@@ -20,9 +21,18 @@ import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.headers.ContentType;
 import com.auto1.pantera.http.rq.RequestLine;
 
+import javax.json.Json;
+import javax.json.JsonArray;
+import javax.json.JsonException;
+import javax.json.JsonReader;
+import javax.json.JsonString;
+import java.io.ByteArrayInputStream;
+import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -44,22 +54,96 @@ final class TagsSlice extends DockerActionSlice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
+        final Pagination page = Pagination.from(line.uri());
+        final String name = name(line);
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored ->
-            this.docker.repo(name(line))
+            this.docker.repo(name)
                 .manifests()
-                .tags(Pagination.from(line.uri()))
-                .thenApply(
-                    tags -> ResponseBuilder.ok()
-                        .header(ContentType.json())
-                        .body(tags.json())
-                        .build()
+                .tags(page)
+                .thenCompose(
+                    tags -> tags.json().asBytesFuture().thenApply(
+                        bytes -> TagsSlice.render(
+                            line, name, page, new Listing(tags.complete(), tags.known()), bytes
+                        )
+                    )
                 )
         );
+    }
+
+    /**
+     * Render the tags listing. An empty page means the repository holds no
+     * such name — 404 NAME_UNKNOWN (marked non-authoritative for the
+     * negative cache when a source could not be read) — when it is the
+     * first page, or whatever the page when the tag sources prove the name
+     * absent: an empty 200 for a cursor page of an image the repository
+     * does not hold would win a group walk over the member that holds it.
+     * A full page links to the next one.
+     *
+     * @param line Request line
+     * @param name Image name
+     * @param page Requested page
+     * @param listing What the tag sources told about the listing
+     * @param bytes Tags JSON
+     * @return Response
+     */
+    private static Response render(
+        final RequestLine line, final String name, final Pagination page,
+        final Listing listing, final byte[] bytes
+    ) {
+        final Optional<List<String>> listed = TagsSlice.parse(bytes);
+        final Response response;
+        if (listed.isPresent() && listed.get().isEmpty()
+            && (!listing.known() || page.last() == null && page.limit() > 0)) {
+            final ResponseBuilder missing = ResponseBuilder.notFound();
+            if (!listing.complete()) {
+                missing.header(NegativeCache.SKIP_HEADER, "true");
+            }
+            response = missing.jsonBody(new NameUnknownError(name).json()).build();
+        } else {
+            final ResponseBuilder found = ResponseBuilder.ok()
+                .header(ContentType.json())
+                .body(bytes);
+            listed.flatMap(names -> page.nextLink(line.uri().getPath(), names))
+                .ifPresent(link -> found.header("Link", link));
+            response = found.build();
+        }
+        return response;
+    }
+
+    /**
+     * Tag names of a tags JSON document.
+     *
+     * @param bytes Tags JSON
+     * @return Names, empty when the document does not parse (it is then
+     *  relayed as is)
+     */
+    private static Optional<List<String>> parse(final byte[] bytes) {
+        Optional<List<String>> names;
+        try (JsonReader reader = Json.createReader(new ByteArrayInputStream(bytes))) {
+            final JsonArray tags = reader.readObject().getJsonArray("tags");
+            names = Optional.of(
+                tags == null ? List.of()
+                    : tags.getValuesAs(JsonString.class).stream()
+                        .map(JsonString::getString).toList()
+            );
+        } catch (final JsonException | ClassCastException ex) {
+            names = Optional.empty();
+        }
+        return names;
     }
 
     private String name(RequestLine line) {
         return ImageRepositoryName.validate(new RqByRegex(line, PathPatterns.TAGS)
             .path().group("name"));
+    }
+
+    /**
+     * What the tag sources told about a listing.
+     *
+     * @param complete Whether every tag source answered
+     * @param known Whether a tag source holds the name
+     */
+    private record Listing(boolean complete, boolean known) {
     }
 }

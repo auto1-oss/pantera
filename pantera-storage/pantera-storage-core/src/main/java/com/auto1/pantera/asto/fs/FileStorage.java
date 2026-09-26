@@ -26,6 +26,7 @@ import com.auto1.pantera.asto.log.EcsLogger;
 import com.auto1.pantera.asto.metrics.StorageMetricsCollector;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileSystemException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
@@ -45,7 +46,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.cqfn.rio.file.File;
 
@@ -270,7 +270,7 @@ public final class FileStorage implements Storage {
                 final Path parent = path.getParent();
                 if (parent != null) {
                     try {
-                        Files.createDirectories(parent);
+                        new ParentDirs(parent).create();
                     } catch (final IOException iex) {
                         throw new PanteraIOException(iex);
                     }
@@ -341,6 +341,13 @@ public final class FileStorage implements Storage {
     }
 
     @Override
+    public CompletableFuture<Void> deleteEmptyDirectories(final Key prefix) {
+        return this.keyPath(prefix).thenAcceptAsync(
+            path -> new EmptyDirs(this.dir).pruneTree(path)
+        );
+    }
+
+    @Override
     public CompletableFuture<Void> delete(final Key key) {
         final long startNs = System.nanoTime();
         return this.keyPath(key).thenAcceptAsync(
@@ -348,7 +355,7 @@ public final class FileStorage implements Storage {
                 if (Files.exists(path) && !Files.isDirectory(path)) {
                     try {
                         Files.delete(path);
-                        this.deleteEmptyParts(path.getParent());
+                        new EmptyDirs(this.dir).pruneUp(path.getParent());
                     } catch (final IOException iex) {
                         throw new PanteraIOException(iex);
                     }
@@ -471,56 +478,6 @@ public final class FileStorage implements Storage {
     }
 
     /**
-     * Removes empty key parts (directories).
-     * Also cleans up the .tmp directory if it's empty.
-     * @param target Directory path
-     */
-    private void deleteEmptyParts(final Path target) {
-        final Path dirabs = this.dir.normalize().toAbsolutePath();
-        final Path path = target.normalize().toAbsolutePath();
-        if (!path.toString().startsWith(dirabs.toString()) || dirabs.equals(path)) {
-            // Clean up .tmp directory if it's empty
-            this.cleanupTmpDir();
-            return;
-        }
-        if (Files.isDirectory(path)) {
-            boolean again = false;
-            try {
-                try (Stream<Path> files = Files.list(path)) {
-                    if (!files.findFirst().isPresent()) {
-                        Files.deleteIfExists(path);
-                        again = true;
-                    }
-                }
-                if (again) {
-                    this.deleteEmptyParts(path.getParent());
-                }
-            } catch (final NoSuchFileException ex) {
-                this.deleteEmptyParts(path.getParent());
-            }
-            catch (final IOException err) {
-                throw new PanteraIOException(err);
-            }
-        }
-    }
-
-    /**
-     * Cleans up the .tmp directory if it exists and is empty.
-     */
-    private void cleanupTmpDir() {
-        final Path tmpDir = this.dir.resolve(".tmp");
-        if (Files.exists(tmpDir) && Files.isDirectory(tmpDir)) {
-            try (Stream<Path> files = Files.list(tmpDir)) {
-                if (!files.findFirst().isPresent()) {
-                    Files.deleteIfExists(tmpDir);
-                }
-            } catch (final IOException ignore) { // NOPMD EmptyCatchBlock - best-effort cleanup; any IO error is benign and recovered on next storage operation
-                // Ignore cleanup errors
-            }
-        }
-    }
-
-    /**
      * Moves file from source path to destination.
      *
      * @param source Source path.
@@ -531,7 +488,7 @@ public final class FileStorage implements Storage {
         return CompletableFuture.supplyAsync(
             () -> {
                 try {
-                    Files.createDirectories(dest.getParent());
+                    new ParentDirs(dest.getParent()).create();
                 } catch (final IOException iex) {
                     throw new PanteraIOException(iex);
                 }
@@ -540,12 +497,12 @@ public final class FileStorage implements Storage {
         ).thenAcceptAsync(
             dst -> {
                 try {
-                    Files.move(source, dst, StandardCopyOption.REPLACE_EXISTING);
-                } catch (final java.nio.file.NoSuchFileException nfe) {
+                    FileStorage.atomicReplace(source, dst);
+                } catch (final NoSuchFileException nfe) {
                     // Retry once: parent dir may have been removed by concurrent operation
                     try {
-                        Files.createDirectories(dst.getParent());
-                        Files.move(source, dst, StandardCopyOption.REPLACE_EXISTING);
+                        new ParentDirs(dst.getParent()).create();
+                        FileStorage.atomicReplace(source, dst);
                     } catch (final IOException retry) {
                         retry.addSuppressed(nfe);
                         throw new PanteraIOException(retry);
@@ -555,6 +512,46 @@ public final class FileStorage implements Storage {
                 }
             }
         );
+    }
+
+    /**
+     * Rename a completed temp file onto its final key, replacing any existing
+     * blob. The rename is ATOMIC, so a concurrent reader always observes
+     * either the whole previous blob or the whole new one — never a
+     * half-written or briefly-absent file. A plain {@code REPLACE_EXISTING}
+     * lets the JDK degrade a same-key replace to copy-then-delete on some
+     * filesystems, opening a window where {@code value()} sizes the file and
+     * then fails at {@code FileChannel.open} with {@code NoSuchFileException};
+     * requesting {@code ATOMIC_MOVE} closes that window (mirrors the S3
+     * disk-cache write path). The temp file always shares the storage root
+     * with its destination, so an atomic move is expected; a filesystem that
+     * cannot honour it (some network mounts) falls back to a plain replace —
+     * no worse than before this hardening.
+     *
+     * @param source Completed temp file
+     * @param dst Final destination key path
+     * @throws IOException On a move failure other than unsupported atomicity
+     */
+    private static void atomicReplace(final Path source, final Path dst) throws IOException {
+        try {
+            Files.move(
+                source, dst,
+                StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE
+            );
+        } catch (final FileSystemException recoverable) {
+            // Fall back to a plain replace when the atomic move cannot apply:
+            // the filesystem may not support ATOMIC_MOVE, or the destination is
+            // a directory — which an atomic rename reports as a bare
+            // FileSystemException ("Is a directory"), losing the
+            // DirectoryNotEmptyException / NotDirectoryException that the upload
+            // path-clash classifier turns into a 409. A plain replace restores
+            // that classifiable exception and, where atomicity is merely
+            // unsupported, is no worse than before this hardening; a missing
+            // parent re-surfaces here as NoSuchFileException for the caller's
+            // recreate-and-retry. The success path (a normal same-key replace,
+            // where the reader race matters) still moves atomically.
+            Files.move(source, dst, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     /**

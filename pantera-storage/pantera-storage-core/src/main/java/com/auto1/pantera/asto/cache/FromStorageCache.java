@@ -106,8 +106,11 @@ public final class FromStorageCache implements Cache {
             )
             .onErrorComplete()
             .switchIfEmpty(
-                // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
-                RxFuture.single(remote.get()).flatMap(
+                // Single.defer: remote.get() must run only on a cache miss.
+                // Evaluating it while the chain is assembled fired a hidden
+                // upstream request on every cache hit, whose response body
+                // was never consumed.
+                Single.defer(() -> RxFuture.single(remote.get())).flatMap(
                     content -> {
                         final Single<Optional<? extends Content>> res;
                         if (content.isPresent()) {

@@ -55,12 +55,15 @@ import java.util.List;
  * <p>{@code repository.type}, {@code repository.name}, {@code package.name},
  * {@code package.version}, {@code user.name}, {@code client.ip} and
  * {@code trace.id} are all declared MDC-owned in {@link
- * com.auto1.pantera.http.log.EcsMdc}. Passing them via {@link
- * EcsLogger#field(String, Object)} is safe: {@link EcsLogger#log()} drops a
- * field value whenever {@code ThreadContext} already carries that key (the
- * synchronous request-thread case) and keeps it otherwise (the async-thread
- * case this class exists to fix) — so there is no duplicate-key risk either
- * way.
+ * com.auto1.pantera.http.log.EcsMdc}, and {@link EcsLogger#log()} lets a
+ * key already present in {@code ThreadContext} win over a {@code field()}
+ * value. Audit records are often emitted on pooled threads whose context
+ * still holds an earlier, unrelated request's values, so every record is
+ * emitted through {@link AuditCorrelation}, which withholds those keys from
+ * the thread context for the duration of the emit (so the explicit values
+ * above are written, and an absent value stays absent) and restores the
+ * thread's context afterwards. A record therefore never inherits another
+ * request's trace id, client IP, user or package.
  *
  * @since 1.22.0
  */
@@ -142,7 +145,7 @@ public final class AuditLogger {
         if (OUTCOME_FAILURE.equals(outcome) && reason != null && !reason.isEmpty()) {
             logger.field("event.reason", reason);
         }
-        logger.log();
+        new AuditCorrelation(ctx).emit(logger);
     }
 
     /**
@@ -181,7 +184,7 @@ public final class AuditLogger {
         if (OUTCOME_FAILURE.equals(outcome) && reason != null && !reason.isEmpty()) {
             logger.field("event.reason", reason);
         }
-        logger.log();
+        new AuditCorrelation(ctx).emit(logger);
     }
 
     /**
@@ -216,7 +219,7 @@ public final class AuditLogger {
         if (OUTCOME_FAILURE.equals(outcome) && reason != null && !reason.isEmpty()) {
             logger.field("event.reason", reason);
         }
-        logger.log();
+        new AuditCorrelation(ctx).emit(logger);
     }
 
     /**
@@ -241,7 +244,7 @@ public final class AuditLogger {
     public static void resolution(final AuditContext ctx, final String repoType, final String repoName,
         final String packageName, final String owner, final List<String> filteredVersions) {
         final boolean changed = filteredVersions != null && !filteredVersions.isEmpty();
-        EcsLogger.info(LOGGER)
+        final EcsLogger logger = EcsLogger.info(LOGGER)
             .message(resolutionMessage(filteredVersions))
             .eventCategory("file")
             .eventAction("artifact_resolution")
@@ -253,8 +256,8 @@ public final class AuditLogger {
             .field("package.name", packageName)
             .field("user.name", owner)
             .field("client.ip", ctx.clientIp())
-            .field("trace.id", ctx.traceId())
-            .log();
+            .field("trace.id", ctx.traceId());
+        new AuditCorrelation(ctx).emit(logger);
     }
 
     /**
@@ -275,7 +278,7 @@ public final class AuditLogger {
      */
     public static void resolutionDetailUnknown(final AuditContext ctx, final String repoType,
         final String repoName, final String packageName, final String owner, final String detail) {
-        EcsLogger.info(LOGGER)
+        final EcsLogger logger = EcsLogger.info(LOGGER)
             .message(String.format(
                 "Metadata listing served via %s; cooldown filter detail unavailable for this serve",
                 detail
@@ -290,8 +293,8 @@ public final class AuditLogger {
             .field("package.name", packageName)
             .field("user.name", owner)
             .field("client.ip", ctx.clientIp())
-            .field("trace.id", ctx.traceId())
-            .log();
+            .field("trace.id", ctx.traceId());
+        new AuditCorrelation(ctx).emit(logger);
     }
 
     private static String publishMessage(final String outcome, final Long releaseDate, final String reason) {

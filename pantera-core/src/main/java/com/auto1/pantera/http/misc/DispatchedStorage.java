@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 
 import java.util.Collection;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
@@ -100,6 +101,11 @@ public final class DispatchedStorage implements Storage {
     }
 
     @Override
+    public CompletableFuture<Void> deleteEmptyDirectories(final Key prefix) {
+        return dispatch(this.delegate.deleteEmptyDirectories(prefix), StorageExecutors.WRITE);
+    }
+
+    @Override
     public <T> CompletionStage<T> exclusively(
         final Key key,
         final Function<Storage, CompletionStage<T>> operation
@@ -119,6 +125,11 @@ public final class DispatchedStorage implements Storage {
     @Override
     public String identifier() {
         return this.delegate.identifier();
+    }
+
+    @Override
+    public Optional<java.nio.file.Path> pathFor(final Key key) {
+        return this.delegate.pathFor(key);
     }
 
     /**

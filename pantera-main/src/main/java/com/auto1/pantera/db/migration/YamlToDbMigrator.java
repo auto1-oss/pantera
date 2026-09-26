@@ -23,9 +23,11 @@ import com.auto1.pantera.db.dao.SettingsDao;
 import com.auto1.pantera.db.dao.StorageAliasDao;
 import com.auto1.pantera.db.dao.UserDao;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -77,8 +79,8 @@ public final class YamlToDbMigrator {
      * but replaces the {@code config} JSONB entirely.
      *
      * <p>v6: bootstrap default {@code local} + {@code jwt-password}
-     * providers and (on empty users table) the default
-     * {@code admin/admin} user with {@code must_change_password = true}.
+     * providers and (when no admin exists) the {@code admin} user with
+     * {@code must_change_password = true}.
      */
     private static final int MIGRATION_VERSION = 6;
 
@@ -442,25 +444,91 @@ public final class YamlToDbMigrator {
     }
 
     /**
-     * Bootstrap a default {@code admin/admin} user with the {@code admin}
-     * role. Runs on every startup but is idempotent: it skips entirely if
-     * a user named {@code admin} already exists OR any other user already
-     * holds the {@code admin} role. This guarantees:
+     * Bootstrap the {@code admin} user (initial password from
+     * {@code PANTERA_BOOTSTRAP_ADMIN_PASSWORD}, else a random password
+     * written to an owner-only file) with the {@code admin} role. Runs on
+     * every startup but is idempotent: it skips entirely if a user named
+     * {@code admin} already exists OR any other user already holds the
+     * {@code admin} role. This guarantees:
      *
      * <ul>
-     *   <li>Fresh install (no users): admin/admin is created.</li>
+     *   <li>Fresh install (no users): the {@code admin} user is created.</li>
      *   <li>Existing install with {@code admin} user: untouched.</li>
      *   <li>Existing install with another user holding the admin role
      *       (e.g. an SSO-provisioned admin): untouched.</li>
      *   <li>Existing install with users but NO admin-role holder
-     *       (rescue scenario): admin/admin is created so the operator
-     *       can recover access.</li>
+     *       (rescue scenario): the {@code admin} user is created so the
+     *       operator can recover access.</li>
      * </ul>
      *
      * The admin user is created with {@code must_change_password = true},
      * forcing a password change on first login (Pantera blocks all other
      * API calls until that's done).
      */
+    /**
+     * Resolve the bootstrap admin password: the explicitly configured value
+     * (env {@code PANTERA_BOOTSTRAP_ADMIN_PASSWORD}) when set and non-blank,
+     * otherwise a securely-generated random password. Never the source-known
+     * literal {@code admin} (SecOps bootstrap-admin).
+     *
+     * @param configured Configured password (may be {@code null}/blank)
+     * @return Password to seed
+     */
+    String resolveBootstrapPassword(final String configured) {
+        if (configured != null && !configured.isBlank()) {
+            return configured;
+        }
+        final byte[] rnd = new byte[24];
+        new java.security.SecureRandom().nextBytes(rnd);
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(rnd);
+    }
+
+    /**
+     * Where a generated bootstrap admin password is written:
+     * {@code <pantera.home>/bootstrap-admin-password}, where
+     * {@code pantera.home} is the system property the server already uses
+     * for its data directory (default {@code /var/pantera}).
+     *
+     * @return Password file path
+     */
+    Path bootstrapPasswordFile() {
+        return Path.of(System.getProperty("pantera.home", "/var/pantera"))
+            .resolve("bootstrap-admin-password");
+    }
+
+    /**
+     * Write a generated bootstrap password to a file only its owner can read
+     * or write (0600). Any existing file is replaced, never appended to or
+     * reused with its old permissions.
+     *
+     * @param file Target file
+     * @param password Generated password
+     * @throws IOException When the file cannot be written
+     */
+    void writeBootstrapPassword(final Path file, final String password) throws IOException {
+        final Path parent = file.toAbsolutePath().getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Files.deleteIfExists(file);
+        try {
+            Files.createFile(
+                file,
+                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+            );
+        } catch (final UnsupportedOperationException nonPosix) {
+            Files.createFile(file);
+            final java.io.File plain = file.toFile();
+            if (!(plain.setReadable(false, false) && plain.setReadable(true, true)
+                && plain.setWritable(false, false) && plain.setWritable(true, true))) {
+                throw new IOException(
+                    String.format("Cannot restrict permissions of %s", file), nonPosix
+                );
+            }
+        }
+        Files.writeString(file, password + System.lineSeparator(), StandardCharsets.UTF_8);
+    }
+
     private void bootstrapDefaultAdmin() {
         try (Connection conn = this.source.getConnection()) {
             // 1a. Bail out if a user named 'admin' already exists.
@@ -495,10 +563,29 @@ public final class YamlToDbMigrator {
             ))) {
                 role.executeUpdate();
             }
-            // 3. Insert the admin user. Hash 'admin' with bcrypt and flag
-            //    must_change_password = true so first login is gated.
+            // 3. Insert the admin user. SECURITY (2.2.9, SecOps bootstrap-admin):
+            //    never seed the source-known password 'admin' — take
+            //    PANTERA_BOOTSTRAP_ADMIN_PASSWORD when set, else generate a
+            //    random one and write it to an owner-only (0600) file, never to
+            //    the log (which is shipped and retained centrally).
+            //    must_change_password is still TRUE so the operator rotates it.
+            final String configured = System.getenv("PANTERA_BOOTSTRAP_ADMIN_PASSWORD");
+            final boolean generated = configured == null || configured.isBlank();
+            final String bootstrapPassword = this.resolveBootstrapPassword(configured);
+            final Path passwordFile = this.bootstrapPasswordFile();
+            if (generated) {
+                try {
+                    this.writeBootstrapPassword(passwordFile, bootstrapPassword);
+                } catch (final IOException ex) {
+                    LOG.error("Default admin user NOT created: cannot write the generated "
+                        + "password to {}. Make that directory writable (or set the "
+                        + "pantera.home system property), or set "
+                        + "PANTERA_BOOTSTRAP_ADMIN_PASSWORD, and restart", passwordFile, ex);
+                    return;
+                }
+            }
             final String bcryptHash = org.mindrot.jbcrypt.BCrypt.hashpw(
-                "admin", org.mindrot.jbcrypt.BCrypt.gensalt()
+                bootstrapPassword, org.mindrot.jbcrypt.BCrypt.gensalt()
             );
             final int userId;
             try (PreparedStatement user = conn.prepareStatement(String.join(" ",
@@ -524,9 +611,15 @@ public final class YamlToDbMigrator {
                 assign.setInt(1, userId);
                 assign.executeUpdate();
             }
-            LOG.warn("Bootstrapped default admin user — username='<redacted>' "
-                + "password='<redacted>' (must_change_password=TRUE on first login). "
-                + "CHANGE THIS IMMEDIATELY in production.");
+            if (generated) {
+                LOG.warn("Bootstrapped admin user 'admin' with a generated password, written "
+                    + "to {} (readable by the server user only; must_change_password=TRUE). "
+                    + "Log in, change it, then delete the file. Set "
+                    + "PANTERA_BOOTSTRAP_ADMIN_PASSWORD to choose it instead.", passwordFile);
+            } else {
+                LOG.warn("Bootstrapped admin user 'admin' from PANTERA_BOOTSTRAP_ADMIN_PASSWORD "
+                    + "(must_change_password=TRUE). Change it after first login.");
+            }
         } catch (final Exception ex) {
             LOG.error("Failed to bootstrap default admin user", ex);
         }

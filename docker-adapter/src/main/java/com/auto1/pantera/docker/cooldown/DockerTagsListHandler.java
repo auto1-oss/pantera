@@ -19,18 +19,17 @@ import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
 import com.auto1.pantera.cooldown.metadata.MetadataRewriteException;
+import com.auto1.pantera.docker.misc.OfficialImageName;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.fasterxml.jackson.databind.JsonNode;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
-import org.slf4j.MDC;
 
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
@@ -139,6 +138,11 @@ public final class DockerTagsListHandler {
     private final DockerMetadataRewriter rewriter;
 
     /**
+     * Canonical cooldown artifact name for a request-path image name.
+     */
+    private final CooldownImageName names;
+
+    /**
      * Ctor.
      *
      * @param upstream Upstream Docker registry proxy slice
@@ -154,6 +158,31 @@ public final class DockerTagsListHandler {
         final String repoType,
         final String repoName
     ) {
+        this(
+            upstream, cooldown, inspector, repoType, repoName,
+            new CooldownImageName(repoName, new OfficialImageName(false))
+        );
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param upstream Upstream Docker registry proxy slice
+     * @param cooldown Cooldown evaluation service
+     * @param inspector Cooldown inspector
+     * @param repoType Repository type (e.g. {@code "docker-proxy"})
+     * @param repoName Repository name
+     * @param names Canonical cooldown artifact naming
+     */
+    public DockerTagsListHandler(
+        final Slice upstream,
+        final CooldownService cooldown,
+        final CooldownInspector inspector,
+        final String repoType,
+        final String repoName,
+        final CooldownImageName names
+    ) {
+        this.names = names;
         this.upstream = upstream;
         this.cooldown = cooldown;
         this.inspector = inspector;
@@ -191,14 +220,17 @@ public final class DockerTagsListHandler {
         final RequestLine line, final Headers headers, final String user
     ) {
         final String path = line.uri().getPath();
-        final String image = this.detector.extractPackageName(path).orElseThrow(
-            () -> new IllegalArgumentException("Not a /tags/list path: " + path)
+        final String image = this.names.of(
+            this.detector.extractPackageName(path).orElseThrow(
+                () -> new IllegalArgumentException("Not a /tags/list path: " + path)
+            )
         );
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+        final AuditContext ctx = new AuditContext(headers);
+        // Forward the inbound headers: the upstream is the auth-enforcing
+        // DockerSlice, so dropping them dropped Authorization and every
+        // authenticated tags/list answered 401 (B10).
+        return this.upstream.response(line, headers, Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->
@@ -208,8 +240,12 @@ public final class DockerTagsListHandler {
                             .build()
                     );
                 }
+                // Keep the page's Link: rel="next": the next page starts
+                // after this page's last upstream tag whether or not
+                // cooldown hid some of this page (R29).
+                final List<String> links = resp.headers().values("Link");
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, image, user, ctx)
+                    this.processUpstream(bytes, image, user, ctx, links)
                 );
             });
     }
@@ -224,7 +260,7 @@ public final class DockerTagsListHandler {
      */
     private CompletableFuture<Response> processUpstream(
         final byte[] upstreamBytes, final String image, final String user,
-        final AuditContext ctx
+        final AuditContext ctx, final List<String> links
     ) {
         final JsonNode parsed;
         try {
@@ -247,8 +283,7 @@ public final class DockerTagsListHandler {
                 "/tags/list parse fallback (unfiltered upstream bytes)"
             );
             return CompletableFuture.completedFuture(
-                ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
+                this.ok(links)
                     .body(upstreamBytes)
                     .build()
             );
@@ -262,8 +297,7 @@ public final class DockerTagsListHandler {
                 ctx, this.repoType, this.repoName, image, user, List.of()
             );
             return CompletableFuture.completedFuture(
-                ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
+                this.ok(links)
                     .body(upstreamBytes)
                     .build()
             );
@@ -274,8 +308,7 @@ public final class DockerTagsListHandler {
                 AuditLogger.resolution(
                     ctx, this.repoType, this.repoName, image, user, List.of()
                 );
-                return ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
+                return this.ok(links)
                     .body(upstreamBytes)
                     .build();
             }
@@ -297,8 +330,7 @@ public final class DockerTagsListHandler {
                 AuditLogger.resolution(
                     ctx, this.repoType, this.repoName, image, user, List.copyOf(blocked)
                 );
-                return ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
+                return this.ok(links)
                     .body(body)
                     .build();
             } catch (final MetadataRewriteException ex) {
@@ -320,12 +352,24 @@ public final class DockerTagsListHandler {
                     ctx, this.repoType, this.repoName, image, user,
                     "/tags/list rewrite fallback (unfiltered upstream bytes served)"
                 );
-                return ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
+                return this.ok(links)
                     .body(upstreamBytes)
                     .build();
             }
         });
+    }
+
+    /**
+     * A 200 tags answer carrying the upstream page's Link headers.
+     *
+     * @param links Link header values of the upstream page
+     * @return Response builder
+     */
+    private ResponseBuilder ok(final List<String> links) {
+        final ResponseBuilder res = ResponseBuilder.ok()
+            .header("Content-Type", this.rewriter.contentType());
+        links.forEach(link -> res.header("Link", link));
+        return res;
     }
 
     /**

@@ -16,8 +16,6 @@ import io.vertx.reactivex.core.Vertx;
 import io.vertx.reactivex.core.buffer.Buffer;
 import io.vertx.reactivex.ext.web.client.HttpResponse;
 import io.vertx.reactivex.ext.web.client.WebClient;
-import java.io.IOException;
-import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -75,7 +73,7 @@ final class VertxSliceServerErrorResponseTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        this.port = findFreePort();
+        this.port = 0;
         this.vertx = Vertx.vertx();
         this.client = WebClient.create(
             this.vertx,
@@ -182,7 +180,8 @@ final class VertxSliceServerErrorResponseTest {
             ),
             new HttpServerOptions().setPort(this.port)
         );
-        this.server.start();
+        // Ephemeral port, read back from start(): probing then binding races (-T8).
+        this.port = this.server.start();
     }
 
     /**
@@ -215,12 +214,6 @@ final class VertxSliceServerErrorResponseTest {
             return map.getData().get(key);
         }
         return null;
-    }
-
-    private static int findFreePort() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        }
     }
 
     /**

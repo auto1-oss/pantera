@@ -24,7 +24,7 @@
 14. [Adding Features](#14-adding-features)
     - [14.4 Adding a New Search Field](#144-adding-a-new-search-field)
     - [14.5 PagedResult and Server-Side Pagination](#145-pagedresult-and-server-side-pagination)
-    - [14.6 GroupSlice: Proxy-Only Fanout on Index Miss](#146-groupslice-proxy-only-fanout-on-index-miss)
+    - [14.6 GroupResolver: Index-Miss Fanout](#146-groupresolver-index-miss-fanout)
 15. [Testing](#15-testing)
 16. [Debugging](#16-debugging)
 
@@ -132,7 +132,7 @@ Maven, Gradle (Maven-layout), Docker, NPM, PyPI, Composer (PHP), Helm, Go, Gem (
 | `pantera-storage-s3` | AWS S3 storage with `DiskCacheStorage` (LRU/LFU on-disk read-through cache with watermark eviction). |
 | `vertx-server` | `VertxSliceServer` -- adapts a `Slice` into a Vert.x HTTP server handler. |
 | `http-client` | Jetty-based HTTP client (`JettyClientSlices`) used by proxy adapters to fetch from upstream registries. |
-| `pantera-backfill` | Standalone CLI tool (`BackfillCli`) for bulk re-indexing the `artifacts` database table from storage. |
+| `pantera-backfill` | Per-format storage scanners (`ScannerFactory`, `*Scanner`, `ArtifactRecord`) and the standalone CLI (`BackfillCli`) for bulk re-indexing the `artifacts` table from storage. The thin jar is a `pantera-main` dependency (the scanners behind `POST /api/v1/search/reindex`, package `com.auto1.pantera.index.reindex`); the runnable CLI is the shaded `pantera-backfill-<version>-cli.jar`. The CLI's `log4j2.xml` lives in `src/cli/resources` and goes only into the CLI jar, so it never shadows the server's logging config. |
 | `pantera-import-cli` | Migration tool for importing artifacts from external registries into Pantera. |
 
 ### Repository Adapters
@@ -316,7 +316,8 @@ Asynchronous batch event processor for artifact metadata:
 - Default: 2-second windows, 200 events per batch (env: `PANTERA_DB_BUFFER_SECONDS`, `PANTERA_DB_BATCH_SIZE`).
 - Events are sorted by `(repo_name, name, version)` before processing to ensure consistent lock ordering and prevent deadlocks.
 - Uses atomic `INSERT ... ON CONFLICT DO UPDATE` (UPSERT) for idempotent writes.
-- **Dead-letter queue:** After 3 consecutive batch failures, events are written to `.dead-letter` files under `/var/pantera/.dead-letter/` with exponential backoff (1s, 2s, 4s, max 8s).
+- **Dead-letter queue:** After 3 consecutive batch failures, events are written to `.dead-letter` files under `/var/pantera/.dead-letter/` with exponential backoff (1s, 2s, 4s, max 8s). An event that fails on its own while its batch commits is re-queued at most 3 times; a data exception (SQLSTATE class `22`, e.g. a NUL byte in a name) is dead-lettered at once (`event.action=event_dead_letter`).
+- **Delete fence:** `IndexWriteFence` keeps a repository or path delete from being undone by uploads still queued. `DbArtifactIndex.removeRepo`/`removeByPath` register a fence (waiting for batches in flight) before purging rows; the consumer drops insert events created before the fence (`ArtifactEvent.sequence()`). Fences are in-process and expire after 15 minutes.
 
 ### 5.3 DbArtifactIndex
 
@@ -402,11 +403,12 @@ The `type` claim is mandatory. Tokens missing the `type` claim are rejected rega
 
 **Access tokens** (not DB-stored) are invalidated via a blocklist:
 
-1. `POST /api/v1/admin/revoke-user/:username` writes a revocation record and publishes a `pantera:revoke:user:{username}` message on the Valkey pub/sub channel.
-3. On each access token validation, the cache is consulted. Tokens issued before the revocation timestamp are rejected.
-4. Without Valkey, nodes poll the `user_tokens` revocation table every 30 seconds.
+1. `POST /api/v1/admin/revoke-user/:username` (and every password change or reset) records a user-wide revocation: the local cache, a Valkey key `pantera:revoked:user:{username}` (value: revocation instant in epoch ms, TTL = revocation lifetime), a `revocation_blocklist` row when a database is configured, and a message on the `revocation` pub/sub channel carrying the revocation instant and expiry (`userat:<revokedMs>:<expiresMs>:<username>`), so peers hold the entry exactly as long as the sender.
+2. At boot, `ValkeyRevocationBlocklist.restore()` reloads every live entry from Valkey (cursor `SCAN`) and the `revocation_blocklist` table, so a restart does not forget revocations.
+3. On each access token validation, the cache is consulted. Tokens issued before the revocation instant are rejected, compared at millisecond precision via the `iat_ms` claim every Pantera-issued token carries (tokens with only the one-second `iat` are compared at their truncated second).
+4. Without Valkey, nodes poll the `revocation_blocklist` table every 5 seconds.
 
-The in-memory revocation cache has a TTL equal to the access token lifetime (default: 1 hour). After that period no access token from a revoked user can still be valid.
+Each entry lapses at the expiry it was issued with (7 days for a credential change). After that period no access token from before the revocation can still be valid.
 
 ### 6.4 Adding a New Protected Endpoint
 
@@ -958,29 +960,22 @@ The SQL uses `COUNT(*) OVER()` window functions so both the total count and the 
 - `pantera-main/src/main/java/com/auto1/pantera/api/v1/UserHandler.java`
 - `pantera-main/src/main/java/com/auto1/pantera/api/v1/RoleHandler.java`
 
-### 14.6 GroupSlice: Proxy-Only Fanout on Index Miss
+### 14.6 GroupResolver: Index-Miss Fanout
 
-When `GroupSlice` cannot resolve an artifact name from the URL (metadata endpoints, unknown paths), it falls back to direct fanout instead of querying the artifact index. As of v2.1.0, this fallback fans out only to **proxy members** of the group, not to hosted (local) repositories.
+`GroupResolver` (pantera-main `group/`) resolves a parsed artifact name through the artifact index. On an index hit it walks only the members the index names, in declared order. On an index miss, or when every targeted member answers 404 (index/storage drift), it runs the index-miss fanout in `indexMissFanout`: the **hosted members not already tried** in declared order, then the **proxy members** in declared order.
 
-The rationale: if the artifact index does not contain the artifact, it was never uploaded to a hosted member. Proxy members may still have it from upstream. Fanning out to hosted members wastes connections and generates 404 log noise.
+Hosted members are part of the index-miss fanout because the index is written asynchronously by `DbConsumer` (2 s / 200-event batches). A freshly uploaded artifact is served by its hosted member before its index row exists. Skipping hosted members on a miss made the group answer 404, and negative-cache it, for that window. Hosted reads are local storage lookups, so the probe is cheap.
 
-**Implementation:**
+Related invariants in the same class:
 
-```java
-// GroupSlice.java (~line 449)
-final List<MemberSlice> proxyOnly = this.members.stream()
-    .filter(m -> this.proxyMembers.contains(m.name()))
-    .collect(toList());
-if (proxyOnly.isEmpty()) {
-    // fall back to all members if no proxies are configured
-    return queryTargetedMembers(this.members, line, headers, body, ctx);
-}
-return queryTargetedMembers(proxyOnly, line, headers, body, ctx);
-```
+- The negative-cache key carries the file: `NegativeCacheKey(group, type, name, "<version>/<file>")`. Version-less (metadata) keys keep an empty version and are never cached.
+- The sibling pin (`memberPin`) is keyed by `name@version`, never set for version-less requests, and never renewed by a pin-routed hit. A pinned member with an open group breaker is not used (the pin is dropped before any request). Any other answer from the pinned member (404, a genuine failure, or the marked 503 of an open upstream circuit) drops the pin, and the normal resolution (index lookup, targeted read, index-miss fanout) continues with the pinned member excluded. The member is asked once per request, so one request records at most one breaker failure, and a marker 503 records none. The pinned outcome is folded into the terminal the same way the walk folds it: if no other member serves, a genuine failure answers the `AllProxiesFailed` (proxy) or `StorageUnavailable` (hosted) fault, and a circuit-open skip answers 503 + `Retry-After`. Only an authoritative 404 from the pinned member lets a final 404 be negative-cached.
+- A member `3xx` is skipped without `recordFailure()` and marks the walk unverified (no negative-cache write).
+- `pypi-group` rewrites `/simple/<name>/` to the PEP 503 normalised name before the walk.
+- `go-group` wraps the resolver in `GoGroupSlice`, which merges `<module>/@v/list` over the resolver's own `MemberSlice` list (shared `AutoBlockRegistry` per member). An open-circuit member gets only an `X-Pantera-Cache-Only` probe. A marked 502 is a skip without conviction. Genuine outcomes record success or failure. With no list, a failure answers `AllProxiesFailed`, all-skipped answers 503 + `Retry-After`, and only an all-404 result falls back to the walk.
+- `docker-group` wraps the resolver in `DockerGroupSlice`. It answers `/_catalog` itself: every member's catalog is fetched from the group cursor on (renamed to `<member>/<image>`), and the union is renamed to `<group>/<image>` and paged, with a `Link: rel="next"` header on a full page. Member handling follows `GoGroupSlice`: an open-circuit member or a marked 502 is a skip without conviction, and a genuine 5xx records a failure. Failed members leave a partial catalog. When no member contributes and one was unavailable, the answer is 503 + `Retry-After`. Every other request goes through the walk, and a `Link` header on the walk's answer (a full tags page) is rewritten from `/v2/<member>/...` to `/v2/<group>/...`.
 
-`proxyMembers` is a `Set<String>` injected at construction time by `RepositorySlices`, which classifies each member by its configured type.
-
-To ensure a new adapter type is included in proxy fanout, register it as a proxy type in `RepositorySlices` when building the `GroupSlice`.
+`proxyMembers` is a `Set<String>` injected at construction time by `RepositorySlices`, which classifies each member by its configured type. To ensure a new adapter type is treated as a proxy in the fanout, register it as a proxy type in `RepositorySlices` when building the `GroupResolver`.
 
 ---
 

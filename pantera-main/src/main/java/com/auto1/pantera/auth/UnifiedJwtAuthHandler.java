@@ -98,8 +98,51 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
             ? enabledCheck : UserEnabledCheck.ALWAYS_ENABLED;
     }
 
+    /**
+     * A fully validated token: the principal plus the verified purpose
+     * claim and JTI. Since 2.2.9 the {@code type} survives validation so the
+     * management-API filter can enforce token-type scope (a REFRESH token
+     * is not a Bearer credential for ordinary routes) and the refresh
+     * endpoint can rotate the exact JTI that was presented
+     * (SecOps jwt-token-confusion).
+     *
+     * @param user Authenticated principal
+     * @param type Verified token purpose
+     * @param jti Verified token id
+     */
+    public record ValidatedToken(AuthUser user, TokenType type, String jti) {
+    }
+
     @Override
     public CompletionStage<Optional<AuthUser>> user(final String token) {
+        // Repository credential (Bearer, or a JWT as the Basic password): a
+        // REFRESH token is only for minting access tokens on /auth/refresh
+        // and never authenticates a repository request (B46).
+        return this.validatedAsync(token)
+            .thenApply(opt -> opt.filter(valid -> valid.type() != TokenType.REFRESH)
+                .map(ValidatedToken::user));
+    }
+
+    /**
+     * Full validation returning the verified type and JTI alongside the
+     * principal. Same signature / expiry / JTI-ownership / blocklist /
+     * enabled checks as {@link #user(String)}.
+     *
+     * @param token JWT string
+     * @return Validated token, or empty when the token is not acceptable
+     */
+    public Optional<ValidatedToken> validated(final String token) {
+        return this.validate(token);
+    }
+
+    /**
+     * Asynchronous form of {@link #validated(String)}; the validation may
+     * touch the DB (JTI lookup) so it never runs on the event loop.
+     *
+     * @param token JWT string
+     * @return Future with the validated token, or empty
+     */
+    public CompletionStage<Optional<ValidatedToken>> validatedAsync(final String token) {
         return CompletableFuture.supplyAsync(
             () -> this.validate(token),
             ForkJoinPool.commonPool()
@@ -125,12 +168,27 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
     }
 
     /**
+     * Token issue time at the best precision it carries: the millisecond
+     * {@code iat_ms} claim Pantera stamps since 2.2.9, else the one-second
+     * JWT {@code iat} (B45).
+     * @param decoded Verified token
+     * @return Issue time, or {@code null} when the token has neither claim
+     */
+    private static java.time.Instant issuedAt(final DecodedJWT decoded) {
+        final Long millis = decoded.getClaim(AuthTokenRest.IAT_MS).asLong();
+        if (millis != null) {
+            return java.time.Instant.ofEpochMilli(millis);
+        }
+        return decoded.getIssuedAtAsInstant();
+    }
+
+    /**
      * Perform full token validation: signature, expiry, required claims, and
      * type-specific revocation/DB checks.
      * @param token JWT string
-     * @return Authenticated user if valid, empty otherwise
+     * @return Validated token if acceptable, empty otherwise
      */
-    private Optional<AuthUser> validate(final String token) {
+    private Optional<ValidatedToken> validate(final String token) {
         final DecodedJWT decoded;
         try {
             decoded = this.verifier.verify(token);
@@ -152,7 +210,8 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
         switch (type) {
             case ACCESS:
                 if (this.blocklist != null
-                    && (this.blocklist.isRevokedJti(jti) || this.blocklist.isRevokedUser(sub))) {
+                    && (this.blocklist.isRevokedJti(jti)
+                        || this.blocklist.isRevokedUser(sub, UnifiedJwtAuthHandler.issuedAt(decoded)))) {
                     EcsLogger.info("com.auto1.pantera.auth")
                         .message("Access token rejected: blocklisted")
                         .eventCategory("authentication")
@@ -205,6 +264,6 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                 .log();
             return Optional.empty();
         }
-        return Optional.of(new AuthUser(sub, context));
+        return Optional.of(new ValidatedToken(new AuthUser(sub, context), type, jti));
     }
 }

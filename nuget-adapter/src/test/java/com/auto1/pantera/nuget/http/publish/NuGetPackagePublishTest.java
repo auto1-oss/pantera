@@ -74,6 +74,14 @@ class NuGetPackagePublishTest {
             new RsHasStatus(RsStatus.CREATED)
         );
         MatcherAssert.assertThat("Events queue has one event", this.events.size() == 1);
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            this.events.peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-nuget")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            this.events.peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 
     @Test
@@ -134,7 +142,9 @@ class NuGetPackagePublishTest {
             new RequestLine(RqMethod.PUT, "/package"),
             Headers.from(
                 TestAuthentication.HEADER,
-                new Header("Content-Type", entity.getContentType())
+                new Header("Content-Type", entity.getContentType()),
+                new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-nuget"),
+                new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
             ),
             new Content.From(sink.toByteArray())
         ).join();

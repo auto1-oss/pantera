@@ -20,7 +20,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Shared support for every Basic-auth-capable scheme in this package
  * ({@link BasicAuthScheme}, {@link CombinedAuthScheme}, {@link CombinedAuthzSlice}):
- * one dedicated thread pool for the blocking DB/IdP password check, and the
+ * one dedicated thread pool for the blocking DB/IdP password check (also
+ * used by adapter login endpoints that validate a password carried in the
+ * request body, such as {@code npm login}), and the
  * JWT-shape heuristic used to decide whether a Basic password should be
  * tried as a token first.
  *
@@ -36,7 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * @since 2.2.2
  */
-final class AuthWorkerPool {
+public final class AuthWorkerPool {
 
     /**
      * Pool name for metrics identification and thread dumps.
@@ -46,7 +48,7 @@ final class AuthWorkerPool {
     /**
      * Shared executor for every scheme's blocking password check.
      */
-    static final ExecutorService AUTH_EXECUTOR = TraceContextExecutor.wrap(
+    public static final ExecutorService AUTH_EXECUTOR = TraceContextExecutor.wrap(
         Executors.newCachedThreadPool(
             new ThreadFactory() {
                 private final AtomicInteger counter = new AtomicInteger(0);

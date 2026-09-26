@@ -20,6 +20,8 @@ import com.auto1.pantera.scheduling.ArtifactEvent;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * Cache {@link Docker} implementation.
@@ -54,6 +56,12 @@ public final class CacheDocker implements Docker {
     private final String upstreamUrl;
 
     /**
+     * Manifest cache copies in flight for this proxy repository: concurrent
+     * first pulls of one tag store and publish it once.
+     */
+    private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
+
+    /**
      * @param origin Origin repository.
      * @param cache Cache repository.
      * @param events Artifact metadata events queue
@@ -85,6 +93,7 @@ public final class CacheDocker implements Docker {
         this.events = events;
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
+        this.inflight = new ConcurrentHashMap<>();
     }
 
     @Override
@@ -101,7 +110,8 @@ public final class CacheDocker implements Docker {
             this.events,
             registryName(),
             this.inspector,
-            this.upstreamUrl
+            this.upstreamUrl,
+            this.inflight
         );
     }
 

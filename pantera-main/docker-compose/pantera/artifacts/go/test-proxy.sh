@@ -28,12 +28,13 @@ echo "✓ Created test project"
 
 echo ""
 echo "2. Setting GOPROXY to use go_group..."
+# The go command sends credentials over https only and always verifies the
+# registry's certificate (GOINSECURE does not apply to GOPROXY): trust the
+# local nginx CA in the OS trust store, or on Linux point SSL_CERT_FILE at it.
 export GOPROXY="https://ayd:ayd@localhost:8443/test_prefix/api/go/go_group"
-export GOINSECURE="*"
 export GONOSUMDB="*"
-export GONOSUMCHECK="*"
 echo "   GOPROXY=$GOPROXY (with credentials)"
-echo "   GOINSECURE=* GONOSUMDB=* GONOSUMCHECK=*"
+echo "   GONOSUMDB=*"
 
 # Helper: download a module and track pass/fail
 download_module() {

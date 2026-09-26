@@ -25,6 +25,8 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -58,6 +60,25 @@ import static org.hamcrest.Matchers.is;
 final class ComposerPackageMetadataHandlerTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /**
+     * Composer v2 p2 document as packagist serves it: newest first, each
+     * entry carrying only what changed from the previous one.
+     */
+    private static final String MINIFIED = """
+        {"minified":"composer/2.0","packages":{"acme/foo":[\
+        {"name":"acme/foo","description":"Foo","version":"2.0.0",\
+        "version_normalized":"2.0.0.0","license":["MIT"],\
+        "time":"2026-09-20T10:00:00+00:00",\
+        "dist":{"type":"zip","url":"https://example.org/foo-2.0.0.zip","reference":"c200","shasum":""},\
+        "require":{"php":">=8.1"},"require-dev":{"phpunit/phpunit":"^10"}},\
+        {"version":"1.1.0","version_normalized":"1.1.0.0",\
+        "time":"2024-05-01T10:00:00+00:00",\
+        "dist":{"type":"zip","url":"https://example.org/foo-1.1.0.zip","reference":"c110","shasum":""}},\
+        {"version":"1.0.0","version_normalized":"1.0.0.0",\
+        "time":"2024-01-01T10:00:00+00:00",\
+        "dist":{"type":"zip","url":"https://example.org/foo-1.0.0.zip","reference":"c100","shasum":""},\
+        "require":{"php":">=7.4"},"require-dev":"__unset"}]}}""";
 
     private ScriptedSlice upstream;
     private ScriptedCooldown cooldown;
@@ -307,6 +328,91 @@ final class ComposerPackageMetadataHandlerTest {
         );
     }
 
+    @Test
+    void devFileEvaluatesCooldownUnderTheBasePackageName() throws Exception {
+        this.upstream.put(
+            "/p2/acme/foo~dev.json", perPackageJson("acme/foo", "dev-main", "1.x-dev")
+        );
+        this.cooldown.block("dev-main");
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/p2/acme/foo~dev.json"),
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
+        ).get();
+        MatcherAssert.assertThat(
+            "dev file still served", resp.status().success(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "blocked dev version dropped",
+            versionsOf(MAPPER.readTree(bodyToBytes(resp)), "acme/foo"),
+            new IsEqual<>(Set.of("1.x-dev"))
+        );
+        MatcherAssert.assertThat(
+            "cooldown keyed under the dist-download name",
+            this.cooldown.artifacts(), new IsEqual<>(Set.of("acme/foo"))
+        );
+    }
+
+    @Test
+    void minifiedMetadataKeepsInheritedFieldsWhenTheNewestIsBlocked() throws Exception {
+        this.upstream.put("/p2/acme/foo.json", MINIFIED);
+        this.cooldown.block("2.0.0");
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
+        ).get();
+        final JsonNode doc = MAPPER.readTree(bodyToBytes(resp));
+        final JsonNode versions = doc.get("packages").get("acme/foo");
+        MatcherAssert.assertThat(
+            "blocked newest entry removed", versions.size(), new IsEqual<>(2)
+        );
+        final JsonNode first = versions.get(0);
+        MatcherAssert.assertThat(
+            "1.1.0 now leads the list", first.get("version").asText(), new IsEqual<>("1.1.0")
+        );
+        MatcherAssert.assertThat(
+            "1.1.0 keeps the inherited name", first.path("name").asText(), new IsEqual<>("acme/foo")
+        );
+        MatcherAssert.assertThat(
+            "1.1.0 keeps the inherited require",
+            first.path("require").path("php").asText(), new IsEqual<>(">=8.1")
+        );
+        MatcherAssert.assertThat(
+            "1.1.0 keeps the inherited require-dev",
+            first.has("require-dev"), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "1.1.0 keeps its own dist",
+            first.path("dist").path("reference").asText(), new IsEqual<>("c110")
+        );
+        final JsonNode last = versions.get(1);
+        MatcherAssert.assertThat(
+            "1.0.0 overrides require", last.path("require").path("php").asText(),
+            new IsEqual<>(">=7.4")
+        );
+        MatcherAssert.assertThat(
+            "1.0.0 honours __unset of require-dev", last.has("require-dev"), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "1.0.0 keeps the inherited name", last.path("name").asText(), new IsEqual<>("acme/foo")
+        );
+        MatcherAssert.assertThat(
+            "served expanded, so the minified marker is gone",
+            doc.has("minified"), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void minifiedMetadataPassesThroughVerbatimWhenNothingIsBlocked() throws Exception {
+        this.upstream.put("/p2/acme/foo.json", MINIFIED);
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
+        ).get();
+        MatcherAssert.assertThat(
+            new String(bodyToBytes(resp), StandardCharsets.UTF_8), new IsEqual<>(MINIFIED)
+        );
+    }
+
     // ===== Helpers =====
 
     private static String perPackageJson(final String name, final String... versions) {
@@ -386,6 +492,7 @@ final class ComposerPackageMetadataHandlerTest {
     /** Scripted cooldown service: flags listed versions as blocked. */
     private static final class ScriptedCooldown implements CooldownService {
         private final Set<String> blocked = new HashSet<>();
+        private final Set<String> artifacts = new HashSet<>();
         private final Map<String, Optional<Instant>> knownDates = new HashMap<>();
         private int evaluateCalls;
         private int knownDateCalls;
@@ -394,6 +501,10 @@ final class ComposerPackageMetadataHandlerTest {
             for (final String v : versions) {
                 this.blocked.add(v);
             }
+        }
+
+        Set<String> artifacts() {
+            return this.artifacts;
         }
 
         int evaluateCalls() {
@@ -426,6 +537,7 @@ final class ComposerPackageMetadataHandlerTest {
         }
 
         private CompletableFuture<CooldownResult> decide(final CooldownRequest request) {
+            this.artifacts.add(request.artifact());
             if (!this.blocked.contains(request.version())) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }

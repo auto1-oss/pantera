@@ -15,20 +15,25 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * HTTP Range header parser and validator.
- * Supports byte ranges in format: "bytes=start-end"
- * 
+ * HTTP Range header parser and validator (RFC 9110 section 14.1.2).
+ * Supports a single byte range in one of the forms:
+ * <ul>
+ *   <li>{@code bytes=start-end} (end is clamped to the last byte),</li>
+ *   <li>{@code bytes=start-} (to the end of the representation),</li>
+ *   <li>{@code bytes=-N} (suffix range: the last N bytes).</li>
+ * </ul>
+ *
  * @since 1.0
  */
 public final class RangeSpec {
 
     /**
-     * Pattern for parsing Range header: "bytes=start-end"
+     * Pattern for parsing Range header: "bytes=start-end" or "bytes=-suffix".
      */
-    private static final Pattern RANGE_PATTERN = Pattern.compile("bytes=(\\d+)-(\\d*)");
+    private static final Pattern RANGE_PATTERN = Pattern.compile("bytes=(\\d*)-(\\d*)");
 
     /**
-     * Start byte (inclusive).
+     * Start byte (inclusive); ignored for a suffix range.
      */
     private final long start;
 
@@ -38,76 +43,116 @@ public final class RangeSpec {
     private final long end;
 
     /**
+     * Suffix length for {@code bytes=-N}, -1 when this is not a suffix range.
+     */
+    private final long suffix;
+
+    /**
      * Constructor.
      * @param start Start byte (inclusive)
      * @param end End byte (inclusive), -1 for end of file
      */
     public RangeSpec(final long start, final long end) {
+        this(start, end, -1L);
+    }
+
+    /**
+     * Primary constructor.
+     * @param start Start byte (inclusive)
+     * @param end End byte (inclusive), -1 for end of file
+     * @param suffix Suffix length, -1 when not a suffix range
+     */
+    private RangeSpec(final long start, final long end, final long suffix) {
         this.start = start;
         this.end = end;
+        this.suffix = suffix;
     }
 
     /**
      * Parse Range header.
-     * @param header Range header value (e.g., "bytes=0-1023")
-     * @return RangeSpec if valid, empty otherwise
+     * @param header Range header value (e.g., "bytes=0-1023" or "bytes=-500")
+     * @return RangeSpec if syntactically valid, empty otherwise
      */
     public static Optional<RangeSpec> parse(final String header) {
         if (header == null || header.isEmpty()) {
             return Optional.empty();
         }
-
         final Matcher matcher = RANGE_PATTERN.matcher(header.trim());
         if (!matcher.matches()) {
             return Optional.empty();
         }
-
+        final String first = matcher.group(1);
+        final String last = matcher.group(2);
+        Optional<RangeSpec> res = Optional.empty();
         try {
-            final long start = Long.parseLong(matcher.group(1));
-            final long end;
-            
-            final String endStr = matcher.group(2);
-            if (endStr == null || endStr.isEmpty()) {
-                end = -1; // To end of file
+            if (first.isEmpty()) {
+                if (!last.isEmpty()) {
+                    res = Optional.of(new RangeSpec(0L, -1L, Long.parseLong(last)));
+                }
             } else {
-                end = Long.parseLong(endStr);
+                final long from = Long.parseLong(first);
+                final long upto;
+                if (last.isEmpty()) {
+                    upto = -1L;
+                } else {
+                    upto = Long.parseLong(last);
+                }
+                if (upto == -1L || upto >= from) {
+                    res = Optional.of(new RangeSpec(from, upto));
+                }
             }
-
-            if (start < 0 || (end != -1 && end < start)) {
-                return Optional.empty();
-            }
-
-            return Optional.of(new RangeSpec(start, end));
-        } catch (NumberFormatException e) {
-            return Optional.empty();
+        } catch (final NumberFormatException ex) {
+            res = Optional.empty();
         }
+        return res;
     }
 
     /**
-     * Check if range is valid for given file size.
+     * Check if range is satisfiable for given file size.
+     * A range whose first byte is inside the representation is satisfiable;
+     * its end is clamped to the last byte. A suffix range is satisfiable
+     * when its length is positive and the representation is not empty.
      * @param fileSize Total file size in bytes
-     * @return True if valid
+     * @return True if satisfiable
      */
     public boolean isValid(final long fileSize) {
-        return this.start < fileSize
-            && !(this.end != -1 && this.end >= fileSize);
+        final boolean valid;
+        if (this.suffix >= 0) {
+            valid = this.suffix > 0 && fileSize > 0;
+        } else {
+            valid = this.start < fileSize;
+        }
+        return valid;
     }
 
     /**
-     * Get start byte position.
+     * Get start byte position for given file size.
+     * @param fileSize Total file size
      * @return Start byte (inclusive)
      */
-    public long start() {
-        return this.start;
+    public long start(final long fileSize) {
+        final long res;
+        if (this.suffix >= 0) {
+            res = Math.max(0L, fileSize - this.suffix);
+        } else {
+            res = this.start;
+        }
+        return res;
     }
 
     /**
-     * Get end byte position for given file size.
+     * Get end byte position for given file size, clamped to the last byte.
      * @param fileSize Total file size
      * @return End byte (inclusive)
      */
     public long end(final long fileSize) {
-        return this.end == -1 ? fileSize - 1 : this.end;
+        final long res;
+        if (this.suffix >= 0 || this.end == -1 || this.end >= fileSize) {
+            res = fileSize - 1;
+        } else {
+            res = this.end;
+        }
+        return res;
     }
 
     /**
@@ -116,7 +161,7 @@ public final class RangeSpec {
      * @return Number of bytes in range
      */
     public long length(final long fileSize) {
-        return end(fileSize) - this.start + 1;
+        return this.end(fileSize) - this.start(fileSize) + 1;
     }
 
     /**
@@ -127,14 +172,20 @@ public final class RangeSpec {
     public String toContentRange(final long fileSize) {
         return String.format(
             "bytes %d-%d/%d",
-            this.start,
-            end(fileSize),
+            this.start(fileSize),
+            this.end(fileSize),
             fileSize
         );
     }
 
     @Override
     public String toString() {
-        return String.format("bytes=%d-%s", this.start, this.end == -1 ? "" : this.end);
+        final String res;
+        if (this.suffix >= 0) {
+            res = String.format("bytes=-%d", this.suffix);
+        } else {
+            res = String.format("bytes=%d-%s", this.start, this.end == -1 ? "" : this.end);
+        }
+        return res;
     }
 }

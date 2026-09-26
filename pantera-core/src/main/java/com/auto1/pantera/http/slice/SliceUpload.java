@@ -96,6 +96,29 @@ public final class SliceUpload implements Slice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         final Key key = transform.apply(line.uri().getPath());
+        if (key.string().isEmpty()) {
+            // The repository root is a directory, never an artifact: a
+            // client error, not a storage failure.
+            return body.discard().thenApply(
+                ignored -> ResponseBuilder.badRequest()
+                    .textBody("Bad Request: cannot upload to the repository root")
+                    .build()
+            );
+        }
+        return this.upload(key, headers, body).exceptionally(
+            new PathClashResponse(key)::recover
+        );
+    }
+
+    /**
+     * Save the content and queue the upload event.
+     * @param key Storage key
+     * @param headers Request headers
+     * @param body Request body
+     * @return Response future
+     */
+    private CompletableFuture<Response> upload(final Key key, final Headers headers,
+        final Content body) {
         CompletableFuture<Void> res = this.storage.save(key, new ContentWithSize(body, headers));
         if (this.events.isPresent()) {
             res = res.thenCompose(

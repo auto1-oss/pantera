@@ -37,11 +37,11 @@ final class AstoDockerTest {
     void shouldReadCatalogs() {
         final Storage storage = new InMemoryStorage();
         storage.save(
-            new Key.From("repositories/my-alpine/something"),
+            new Key.From("repositories/my-alpine/_manifests/tags/1/current/link"),
             new Content.From("1".getBytes())
         ).join();
         storage.save(
-            new Key.From("repositories/test/foo/bar"),
+            new Key.From("repositories/test/foo/_manifests/tags/2/current/link"),
             new Content.From("2".getBytes())
         ).join();
         final Catalog catalog = new AstoDocker("test_registry", storage)
@@ -49,7 +49,7 @@ final class AstoDockerTest {
             .join();
         MatcherAssert.assertThat(
             catalog.json().asString(),
-            new IsEqual<>("{\"repositories\":[\"my-alpine\",\"test\"]}")
+            new IsEqual<>("{\"repositories\":[\"my-alpine\",\"test/foo\"]}")
         );
     }
 }

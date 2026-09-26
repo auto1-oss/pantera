@@ -75,4 +75,21 @@ describe('RepoDetailView', () => {
     const lastCall2 = getTreeMock.mock.calls[getTreeMock.mock.calls.length - 1]
     expect(lastCall2[1]).toMatchObject({ sort: 'size', sort_dir: 'desc' })
   })
+
+  it('offers Set Me Up for a repository type with a setup technology', async () => {
+    await router.push('/repositories/my-repo')
+    await router.isReady()
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="set-me-up-btn"]').exists()).toBe(true)
+  })
+
+  it('hides Set Me Up for a repository type without a setup technology', async () => {
+    vi.mocked(reposApi.getRepo).mockResolvedValueOnce({ repo: { type: 'binary', storage: {} } })
+    await router.push('/repositories/my-repo')
+    await router.isReady()
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="set-me-up-btn"]').exists()).toBe(false)
+  })
 })

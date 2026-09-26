@@ -83,6 +83,18 @@ If this returns your user info, the token is valid. If it returns 401, generate 
 
 ---
 
+## Path, Upload and Range Errors
+
+| Response | Cause | Fix |
+|----------|-------|-----|
+| `400 Bad Request` on any request | The path contains a `..` segment (also when sent percent-encoded as `%2e%2e`) | Send the artifact's real path; parent segments are never valid in a repository path |
+| `400 Bad Request` on any request | The path contains a control character, e.g. a percent-encoded NUL, CR or LF (`%00`, `%0D`, `%0A`) | Send the artifact's real path; no repository path contains control characters |
+| `400 Bad Request` on upload | The upload targets the repository root (`PUT /<repo>/`) | Include the file path after the repository name |
+| `409 Conflict` on upload | The path clashes with an existing entry: a directory already exists where the file should go, or any parent segment (at any depth, e.g. `a.txt` in `a.txt/d/e.txt`) is an existing file | Upload to a different path, or delete the existing entry first |
+| `416 Range Not Satisfiable` | The `Range` starts past the end of the file | Request a range inside the file; an end past the last byte is clamped (`206`), and suffix ranges (`bytes=-N`) return the last N bytes |
+
+---
+
 ## Token Expiry
 
 ### Default Expiry
@@ -155,6 +167,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | `SSLError` | Add `trusted-host = pantera-host` to pip.conf |
 | `No matching distribution found` | Ensure index-url ends with `/simple` |
 | Old version installed | Run with `--no-cache-dir` |
+| `400 File already exists` on upload (twine: `HTTPError: 400 Bad Request` followed by `File already exists`) | Published files are immutable; bump the version (an identical re-upload succeeds) |
 
 ### Composer
 
@@ -167,8 +180,12 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 
 | Issue | Fix |
 |-------|-----|
-| `proxyconnect tcp: tls: first record does not look like a TLS handshake` | Set `GOINSECURE=pantera-host:8080` |
-| `verifying module: checksum mismatch` | Set `GONOSUMCHECK=*` |
+| `refusing to pass credentials to insecure URL`, or `401 Unauthorized` with an `http://` `GOPROXY` | The `go` command never sends credentials over plain HTTP, and `GOINSECURE` does not apply to `GOPROXY`. Use the registry's `https://` URL with `~/.netrc` (see [Go guide](repositories/go.md#plain-http-registries)) |
+| `x509: certificate signed by unknown authority` | Trust the registry's CA certificate in the operating system trust store (`SSL_CERT_FILE` also works on Linux). `GOINSECURE` does not skip TLS verification for `GOPROXY` |
+| `proxyconnect tcp: tls: first record does not look like a TLS handshake` | Comes from `HTTPS_PROXY`/`HTTP_PROXY`, not `GOPROXY`: use an `http://` URL for an HTTP forward proxy in those variables |
+| `verifying module: checksum mismatch` | For a private module unknown to the public checksum database, add its path prefix to `GONOSUMDB` |
+| `SECURITY ERROR ... does NOT match an earlier download recorded in go.sum` | The version's content changed after `go.sum` recorded it. Do not bypass it with `GONOSUMDB`; the module owner must publish a new version |
+| `409 Conflict` when uploading a module file | That version's `.mod` or `.zip` is already stored with different content, or its `.zip` is stored and the `.info` differs; Go versions are immutable, so publish a new version. A publish that stopped before its `.zip` was stored can be rerun as is |
 
 ### Helm
 

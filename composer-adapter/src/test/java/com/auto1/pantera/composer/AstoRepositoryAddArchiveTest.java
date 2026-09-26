@@ -100,6 +100,27 @@ final class AstoRepositoryAddArchiveTest {
         );
     }
 
+    @Test
+    void distCarriesTheShasumOfTheStoredArchive() throws Exception {
+        this.saveZipArchive();
+        final byte[] stored = new BlockingStorage(this.storage)
+            .value(new Key.From("artifacts", this.name.full()));
+        final StringBuilder hex = new StringBuilder();
+        for (final byte bte : java.security.MessageDigest.getInstance("SHA-1").digest(stored)) {
+            hex.append(String.format("%02x", bte));
+        }
+        MatcherAssert.assertThat(
+            this.storage.value(new Key.From("p2/psr/log.json")).join()
+                .asJsonObject()
+                .getJsonObject("packages")
+                .getJsonObject("psr/log")
+                .getJsonObject(this.name.version())
+                .getJsonObject("dist")
+                .getString("shasum", ""),
+            new IsEqual<>(hex.toString())
+        );
+    }
+
     private void saveZipArchive() {
         new AstoRepository(this.storage, Optional.of("http://pantera:8080/"))
             .addArchive(

@@ -11,7 +11,6 @@
 package com.auto1.pantera.adapters.php;
 
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.group.SliceResolver;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -28,8 +27,12 @@ import javax.json.JsonReader;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Composer group repository slice.
@@ -41,9 +44,19 @@ import java.util.concurrent.CompletableFuture;
  *       {@code metadata-url} / {@code providers-url} fields are rewritten
  *       to point at the group's own basePath (so p2 fetches stay inside
  *       pantera), and the result is served.</li>
- *   <li>{@code /p2/...}: sequential trial across members.</li>
+ *   <li>{@code /p2/...}: local (hosted) members first, in declared order,
+ *       then proxy members — but a package name owned by a local member
+ *       (its stable or {@code ~dev} file exists there) is never looked up
+ *       on a proxy, so an upstream cannot add versions to a private package
+ *       and private names are not sent upstream.</li>
  *   <li>Everything else: delegated to {@code GroupResolver}.</li>
  * </ul>
+ *
+ * <p>Member answers follow {@code GroupResolver}: 200, 401/403 and a
+ * cooldown verdict are authoritative and relayed; 404 falls through; a
+ * member failure (5xx, exception) is remembered, and a walk that ends
+ * without an answer after a failure is 503 + {@code Retry-After}, never
+ * 404 (see {@link ComposerMemberWalk}).</p>
  *
  * <p><b>v2.2.0 BREAKING:</b> previously this slice fanned out to ALL members
  * in parallel and merged every member's {@code packages.json} into a
@@ -67,16 +80,19 @@ import java.util.concurrent.CompletableFuture;
 public final class ComposerGroupSlice implements Slice {
 
     /**
+     * Composer v2 per-package metadata path: stable file or {@code ~dev}
+     * file of {@code vendor/package}.
+     */
+    private static final Pattern P2_FILE = Pattern.compile(
+        "^(?<base>.*/p2/[^/]+/[^/~$]+)(?<dev>~dev)?\\.json$"
+    );
+
+    /**
      * Delegate group slice for non-packages.json requests.
      * Uses the standard GroupResolver with artifact index, proxy awareness,
      * circuit breaker, and error handling.
      */
     private final Slice delegate;
-
-    /**
-     * Slice resolver for getting member slices.
-     */
-    private final SliceResolver resolver;
 
     /**
      * Group repository name.
@@ -89,9 +105,14 @@ public final class ComposerGroupSlice implements Slice {
     private final List<String> members;
 
     /**
-     * Server port for resolving member slices.
+     * Members that are proxies (or groups containing proxies).
      */
-    private final int port;
+    private final Set<String> proxies;
+
+    /**
+     * Sequential member walk.
+     */
+    private final ComposerMemberWalk walk;
 
     /**
      * Base path for metadata-url (e.g. "/test_prefix/php_group").
@@ -101,23 +122,7 @@ public final class ComposerGroupSlice implements Slice {
     private final String basePath;
 
     /**
-     * Constructor with delegate slice for standard group behavior.
-     *
-     * @param delegate Delegate group slice (GroupResolver with index/proxy support)
-     * @param resolver Slice resolver
-     * @param group Group repository name
-     * @param members List of member repository names
-     * @param port Server port
-     * @param globalPrefix Global URL prefix (e.g. "test_prefix"), empty string if none
-     */
-    /**
-     * Constructor.
-     *
-     * <p>Cooldown is deliberately NOT a group concern here either — it is a
-     * proxy-repo feature (see {@code MavenGroupSlice} class javadoc for the
-     * full rationale). Each {@code -proxy} member filters its own metadata
-     * and records blocks under its own repo identity; this group only relays
-     * a member's already-filtered {@code packages.json}/p2 response.
+     * Constructor for a group whose members are all hosted.
      *
      * @param delegate Delegate group slice (GroupResolver with index/proxy support)
      * @param resolver Slice resolver
@@ -134,11 +139,40 @@ public final class ComposerGroupSlice implements Slice {
         final int port,
         final String globalPrefix
     ) {
+        this(delegate, resolver, group, members, port, globalPrefix, Set.of());
+    }
+
+    /**
+     * Constructor.
+     *
+     * <p>Cooldown is deliberately NOT a group concern here either — it is a
+     * proxy-repo feature (see {@code MavenGroupSlice} class javadoc for the
+     * full rationale). Each {@code -proxy} member filters its own metadata
+     * and records blocks under its own repo identity; this group only relays
+     * a member's already-filtered {@code packages.json}/p2 response.
+     *
+     * @param delegate Delegate group slice (GroupResolver with index/proxy support)
+     * @param resolver Slice resolver
+     * @param group Group repository name
+     * @param members List of member repository names
+     * @param port Server port
+     * @param globalPrefix Global URL prefix (e.g. "test_prefix"), empty string if none
+     * @param proxies Members that are proxies or groups containing proxies
+     */
+    public ComposerGroupSlice(
+        final Slice delegate,
+        final SliceResolver resolver,
+        final String group,
+        final List<String> members,
+        final int port,
+        final String globalPrefix,
+        final Set<String> proxies
+    ) {
         this.delegate = delegate;
-        this.resolver = resolver;
         this.group = group;
         this.members = members;
-        this.port = port;
+        this.proxies = Set.copyOf(proxies);
+        this.walk = new ComposerMemberWalk(resolver, port, group);
         if (globalPrefix != null && !globalPrefix.isEmpty()) {
             this.basePath = "/" + globalPrefix + "/" + group;
         } else {
@@ -159,9 +193,12 @@ public final class ComposerGroupSlice implements Slice {
 
         final String path = line.uri().getPath();
 
-        // For packages.json, merge responses from all members
+        // For packages.json, the first member that answers wins
         if (path.endsWith("/packages.json") || "/packages.json".equals(path)) {
-            return mergePackagesJson(line, headers, body);
+            return body.asBytesFuture().thenCompose(
+                ignored -> this.packagesJson(line, dropFullPathHeader(headers), 0,
+                    new ComposerMemberWalk.State())
+            );
         }
 
         // For p2 metadata requests, try each member directly.
@@ -169,7 +206,9 @@ public final class ComposerGroupSlice implements Slice {
         // not filesystem paths), so the delegate GroupResolver would skip local
         // members and return 404.
         if (path.contains("/p2/")) {
-            return tryMembersForP2(line, headers, body);
+            return body.asBytesFuture().thenCompose(
+                ignored -> this.p2(line, dropFullPathHeader(headers))
+            );
         }
 
         // For other requests (tarballs, artifacts), delegate to GroupResolver
@@ -178,42 +217,103 @@ public final class ComposerGroupSlice implements Slice {
     }
 
     /**
-     * Try each member sequentially for p2 metadata requests.
-     * Returns the first successful response, or 404 if all members fail.
+     * Resolve a p2 metadata file: hosted members first (declared order),
+     * then — only when no hosted member owns the package — proxy members.
+     *
+     * <p>A member's cooldown verdict (any response carrying
+     * {@code X-Pantera-Cooldown}, e.g. the all-versions-blocked
+     * 404) is authoritative, as in {@code GroupResolver}: it ends the walk
+     * and is relayed verbatim -- status, marker and reason body -- instead
+     * of being discarded for a bare 404 or, worse, letting a later member
+     * serve the blocked versions.</p>
+     *
+     * @param line Group request line
+     * @param headers Sanitised request headers
+     * @return Response
      */
-    private CompletableFuture<Response> tryMembersForP2(
+    private CompletableFuture<Response> p2(final RequestLine line, final Headers headers) {
+        final List<String> hosted = this.members.stream()
+            .filter(m -> !this.proxies.contains(m)).toList();
+        final List<String> proxied = this.members.stream()
+            .filter(this.proxies::contains).toList();
+        final ComposerMemberWalk.State state = new ComposerMemberWalk.State();
+        return this.walk.first(hosted, line, headers, state).thenCompose(local -> {
+            if (local.isPresent()) {
+                return CompletableFuture.completedFuture(local.get());
+            }
+            if (proxied.isEmpty()) {
+                return CompletableFuture.completedFuture(this.walk.exhausted(state, line));
+            }
+            if (state.failed()) {
+                // A hosted member could not answer: the package may be ours.
+                // Asking a proxy now could serve upstream versions of a
+                // private name, so report the outage instead.
+                this.proxiesSkipped(line, "a hosted member is unavailable");
+                return CompletableFuture.completedFuture(this.walk.exhausted(state, line));
+            }
+            return this.ownedLocally(line, headers, hosted, state).thenCompose(owned -> {
+                if (owned) {
+                    this.proxiesSkipped(line, "the package is owned by a hosted member");
+                    return CompletableFuture.completedFuture(this.walk.exhausted(state, line));
+                }
+                return this.walk.first(proxied, line, headers, state).thenApply(
+                    upstream -> upstream.orElseGet(() -> this.walk.exhausted(state, line))
+                );
+            });
+        });
+    }
+
+    /**
+     * Whether a hosted member owns the package of a p2 request through its
+     * other metadata file (the stable file for a {@code ~dev} request and
+     * vice versa). Unknown (a hosted member failed) counts as owned and is
+     * recorded in {@code state}.
+     *
+     * @param line Group request line
+     * @param headers Sanitised request headers
+     * @param hosted Hosted members
+     * @param state Walk state
+     * @return True when proxies must not be consulted
+     */
+    private CompletableFuture<Boolean> ownedLocally(
         final RequestLine line,
         final Headers headers,
-        final Content body
+        final List<String> hosted,
+        final ComposerMemberWalk.State state
     ) {
-        return body.asBytesFuture().thenCompose(requestBytes -> {
-            CompletableFuture<Response> chain = CompletableFuture.completedFuture(
-                ResponseBuilder.notFound().build()
-            );
-            for (final String member : this.members) {
-                chain = chain.thenCompose(prev -> {
-                    if (prev.status() == RsStatus.OK) {
-                        return CompletableFuture.completedFuture(prev);
-                    }
-                    final Slice memberSlice = this.resolver.slice(
-                        new Key.From(member), this.port, 0
-                    );
-                    final RequestLine rewritten = rewritePath(line, member);
-                    final Headers sanitized = dropFullPathHeader(headers);
-                    return memberSlice.response(rewritten, sanitized, Content.EMPTY)
-                        .thenCompose(resp -> {
-                            if (resp.status() == RsStatus.OK) {
-                                return CompletableFuture.completedFuture(resp);
-                            }
-                            // Drain non-OK response body to release upstream connection
-                            return resp.body().asBytesFuture()
-                                .thenApply(ignored -> prev);
-                        })
-                        .exceptionally(ex -> prev);
-                });
+        final Matcher matcher = P2_FILE.matcher(line.uri().getPath());
+        if (hosted.isEmpty() || !matcher.matches()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        final String sibling = matcher.group("dev") == null
+            ? matcher.group("base") + "~dev.json"
+            : matcher.group("base") + ".json";
+        return this.walk.first(
+            hosted, new RequestLine(line.method().value(), sibling, line.version()),
+            headers, state
+        ).thenCompose(answer -> {
+            if (answer.isEmpty()) {
+                return CompletableFuture.completedFuture(state.failed());
             }
-            return chain;
+            return answer.get().body().asBytesFuture().thenApply(drained -> true);
         });
+    }
+
+    /**
+     * Log that proxy members were deliberately not consulted.
+     *
+     * @param line Group request line
+     * @param reason Why
+     */
+    private void proxiesSkipped(final RequestLine line, final String reason) {
+        EcsLogger.info("com.auto1.pantera.adapters.php")
+            .message("Composer group did not consult proxy members: " + reason)
+            .eventCategory("web")
+            .eventAction("group_proxy_skip")
+            .field("repository.name", this.group)
+            .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
+            .log();
     }
 
     /**
@@ -221,101 +321,46 @@ public final class ComposerGroupSlice implements Slice {
      * member that returns 200 wins. The winning JSON is rewritten so
      * {@code metadata-url} / {@code providers-url} point at the group's own
      * basePath — without that, Composer would follow the upstream's URL and
-     * bypass pantera entirely (cooldown filter + cache + auth).
+     * bypass pantera entirely (cooldown filter + cache + auth). A member's
+     * 401/403 is relayed; a member whose 200 cannot be parsed counts as a
+     * member failure.
      *
      * <p>v2.2.0 sequential-first replacement for the previous fanout+merge —
      * see class javadoc.
      *
      * @param line Request line
-     * @param headers Headers
-     * @param body Body
+     * @param headers Sanitised headers
+     * @param idx Index of the member to try
+     * @param state Walk state
      * @return Single-member response, packages-url rewritten to group basePath
      */
-    private CompletableFuture<Response> mergePackagesJson(
+    private CompletableFuture<Response> packagesJson(
         final RequestLine line,
         final Headers headers,
-        final Content body
-    ) {
-        // CRITICAL: Consume original body to prevent OneTimePublisher errors.
-        // GET requests have empty bodies, but Content is still reference-counted.
-        return body.asBytesFuture().thenCompose(ignored ->
-            tryMembersForPackagesJson(line, headers, 0)
-        );
-    }
-
-    /**
-     * Sequentially try {@code members[idx]} for the {@code packages.json}
-     * path; on 200 parse + rewrite + return, on non-OK drain the body and
-     * recurse to the next member. Falls through to 404 once the index walks
-     * past the end.
-     */
-    private CompletableFuture<Response> tryMembersForPackagesJson(
-        final RequestLine line,
-        final Headers headers,
-        final int idx
+        final int idx,
+        final ComposerMemberWalk.State state
     ) {
         if (idx >= this.members.size()) {
-            EcsLogger.warn("com.auto1.pantera.adapters.php")
-                .message("No member returned packages.json")
-                .eventCategory("web")
-                .eventAction("packages_fetch")
-                .eventOutcome("failure")
-                .field("repository.name", this.group)
-                .field("log.source", "application")
-                .log();
-            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+            return CompletableFuture.completedFuture(this.walk.exhausted(state, line));
         }
         final String member = this.members.get(idx);
-        final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port, 0);
-        final RequestLine rewritten = rewritePath(line, member);
-        final Headers sanitized = dropFullPathHeader(headers);
-
-        EcsLogger.debug("com.auto1.pantera.adapters.php")
-            .message("Trying member for packages.json: " + member)
-            .eventCategory("web")
-            .eventAction("packages_fetch")
-            .field("repository.name", this.group)
-            .field("log.source", "application")
-            .log();
-
-        return memberSlice.response(rewritten, sanitized, Content.EMPTY)
-            .thenCompose(resp -> {
-                if (resp.status() == RsStatus.OK) {
-                    return resp.body().asBytesFuture()
-                        .thenApply(bytes -> rewritePackagesJson(member, bytes));
+        return this.walk.first(List.of(member), line, headers, state).thenCompose(answer -> {
+            if (answer.isEmpty()) {
+                return this.packagesJson(line, headers, idx + 1, state);
+            }
+            final Response resp = answer.get();
+            if (resp.status() != RsStatus.OK) {
+                return CompletableFuture.completedFuture(resp);
+            }
+            return resp.body().asBytesFuture().thenCompose(bytes -> {
+                final Optional<Response> rewritten = this.rewritePackagesJson(member, bytes);
+                if (rewritten.isPresent()) {
+                    return CompletableFuture.completedFuture(rewritten.get());
                 }
-                EcsLogger.debug("com.auto1.pantera.adapters.php")
-                    .message("Member '" + member + "' non-OK; trying next")
-                    .eventCategory("web")
-                    .eventAction("packages_fetch")
-                    .eventOutcome("failure")
-                    .field("http.response.status_code", resp.status().code())
-                    .field("repository.name", this.group)
-                    .field("log.source", "http")
-                    .log();
-                // Drain non-OK body to release upstream connection, then recurse.
-                return resp.body().asBytesFuture()
-                    .thenCompose(drained -> tryMembersForPackagesJson(line, headers, idx + 1));
-            })
-            .exceptionally(ex -> {
-                EcsLogger.warn("com.auto1.pantera.adapters.php")
-                    .message("Member '" + member + "' threw; trying next")
-                    .eventCategory("web")
-                    .eventAction("packages_fetch")
-                    .eventOutcome("failure")
-                    .field("error.message", ex.getMessage())
-                    .field("repository.name", this.group)
-                    .field("log.source", "application")
-                    .log();
-                return null;
-            })
-            .thenCompose(resp -> {
-                if (resp != null) {
-                    return CompletableFuture.completedFuture(resp);
-                }
-                // Exception path collapsed to null — try next.
-                return tryMembersForPackagesJson(line, headers, idx + 1);
+                state.fail(false, 0L);
+                return this.packagesJson(line, headers, idx + 1, state);
             });
+        });
     }
 
     /**
@@ -329,8 +374,12 @@ public final class ComposerGroupSlice implements Slice {
      * <p>UID injection on package versions is preserved: Composer v1 uses
      * the {@code uid} field for cache invalidation; we inject a stable UUID
      * if the upstream omitted it.</p>
+     *
+     * @param member Winning member
+     * @param bytes Member body
+     * @return Rewritten response, or empty when the body is not a JSON object
      */
-    private Response rewritePackagesJson(final String member, final byte[] bytes) {
+    private Optional<Response> rewritePackagesJson(final String member, final byte[] bytes) {
         final JsonObject json;
         try (JsonReader reader = Json.createReader(new ByteArrayInputStream(bytes))) {
             json = reader.readObject();
@@ -344,7 +393,7 @@ public final class ComposerGroupSlice implements Slice {
                 .field("repository.name", this.group)
                 .field("log.source", "application")
                 .log();
-            return ResponseBuilder.notFound().build();
+            return Optional.empty();
         }
 
         final JsonObjectBuilder out = Json.createObjectBuilder();
@@ -364,7 +413,7 @@ public final class ComposerGroupSlice implements Slice {
         if (hasSatisFormat) {
             // Satis format: copy provider table verbatim; rewrite providers-url
             // to the group basePath so client p2 lookups land back at this
-            // group slice (which routes through tryMembersForP2).
+            // group slice (which routes p2 lookups through p2()).
             out.add("packages", Json.createObjectBuilder());
             out.add("providers-url", this.basePath + "/p2/%package%.json");
             out.add("providers", json.getJsonObject("providers"));
@@ -420,35 +469,11 @@ public final class ComposerGroupSlice implements Slice {
         }
 
         final byte[] outBytes = out.build().toString().getBytes(StandardCharsets.UTF_8);
-        return ResponseBuilder.ok()
-            .header("Content-Type", "application/json")
-            .body(outBytes)
-            .build();
-    }
-
-
-    /**
-     * Rewrite request line to include member repository name in path.
-     *
-     * @param original Original request line
-     * @param member Member repository name
-     * @return Rewritten request line
-     */
-    private static RequestLine rewritePath(final RequestLine original, final String member) {
-        final String path = original.uri().getPath();
-        final String newPath = path.startsWith("/") 
-            ? "/" + member + path 
-            : "/" + member + "/" + path;
-        
-        final StringBuilder fullUri = new StringBuilder(newPath);
-        if (original.uri().getQuery() != null) {
-            fullUri.append('?').append(original.uri().getQuery());
-        }
-        
-        return new RequestLine(
-            original.method().value(),
-            fullUri.toString(),
-            original.version()
+        return Optional.of(
+            ResponseBuilder.ok()
+                .header("Content-Type", "application/json")
+                .body(outBytes)
+                .build()
         );
     }
 

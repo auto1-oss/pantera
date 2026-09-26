@@ -89,6 +89,14 @@ public final class CircuitBreakingClientSlice implements Slice {
     private static final RequestLine PROBE_LINE = new RequestLine(RqMethod.HEAD, "/");
 
     /**
+     * {@code 501 Not Implemented} to the HEAD probe: the upstream answered
+     * and only rejects the probe's method, so it counts as alive. Treating
+     * it as a failure kept the breaker open indefinitely for upstreams that
+     * do not implement HEAD, fast-failing every real request.
+     */
+    private static final int PROBE_METHOD_UNSUPPORTED = 501;
+
+    /**
      * Wrapped slice — the raw Jetty slice. The probe path calls this
      * directly to bypass our own open-check during recovery testing.
      */
@@ -375,7 +383,8 @@ public final class CircuitBreakingClientSlice implements Slice {
      * unconditionally (the window gate does not apply to probes — the
      * breaker already convicted this upstream, and the probe is the
      * only traffic there is); anything else — including a 404, which
-     * just means "the upstream is reachable but doesn't have /" —
+     * just means "the upstream is reachable but doesn't have /", and a
+     * 501, which means "reachable but HEAD is not implemented" —
      * closes the breaker.
      */
     private void onProbeResult(final Response response, final Throwable error) {
@@ -394,7 +403,8 @@ public final class CircuitBreakingClientSlice implements Slice {
             return;
         }
         final int status = response.status().code();
-        if (this.config.get().shouldTripOnStatus().test(status)) {
+        if (status != PROBE_METHOD_UNSUPPORTED
+            && this.config.get().shouldTripOnStatus().test(status)) {
             this.breaker.probeFailed(status);
             this.logProbeFailure("upstream status " + status);
             this.scheduleProbe();

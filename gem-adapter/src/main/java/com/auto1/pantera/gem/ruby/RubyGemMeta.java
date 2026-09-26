@@ -45,10 +45,20 @@ public final class RubyGemMeta implements GemMeta, SharedRuntime.RubyPlugin {
 
     @Override
     public MetaInfo info(final Path gem) {
-        final RubyObject spec = (RubyObject) JavaEmbedUtils.newRuntimeAdapter().eval(
-            this.ruby, String.format(
-                "Gem::Package.new('%s').spec", gem.toString()
-            )
+        // SECURITY (2.2.9): the gem path is an attacker-influenced stored key.
+        // It MUST be passed as a Ruby data object, never string-interpolated
+        // into eval'd source — the old `Gem::Package.new('<path>').spec` let a
+        // path containing a single quote inject arbitrary Ruby (RCE). Only the
+        // static class constant is evaluated; the path crosses as a String.
+        final IRubyObject pkgclass = JavaEmbedUtils.newRuntimeAdapter()
+            .eval(this.ruby, "Gem::Package");
+        final IRubyObject pkg = JavaEmbedUtils.invokeMethod(
+            this.ruby, pkgclass, "new",
+            new Object[]{JavaEmbedUtils.javaToRuby(this.ruby, gem.toString())},
+            IRubyObject.class
+        );
+        final RubyObject spec = (RubyObject) JavaEmbedUtils.invokeMethod(
+            this.ruby, pkg, "spec", new Object[0], IRubyObject.class
         );
         return new RubyMetaInfo(spec);
     }
@@ -85,7 +95,7 @@ public final class RubyGemMeta implements GemMeta, SharedRuntime.RubyPlugin {
 
         @Override
         public void print(final MetaFormat fmt) {
-            fmt.print("name", this.spec.getInstanceVariable("@name").asJavaString());
+            fmt.print("name", this.string("@name"));
             fmt.print(
                 "version",
                 this.spec.getInstanceVariable("@version")
@@ -93,17 +103,45 @@ public final class RubyGemMeta implements GemMeta, SharedRuntime.RubyPlugin {
                     .getInstanceVariable("@version")
                     .asJavaString()
             );
-            fmt.print("platform", this.spec.getInstanceVariable("@platform").asJavaString());
-            fmt.print(
-                "authors",
-                rubyToJavaStringArray(this.spec.getInstanceVariable("@authors").convertToArray())
-            );
-            fmt.print("info", this.spec.getInstanceVariable("@description").asJavaString());
-            fmt.print(
-                "licenses",
-                rubyToJavaStringArray(this.spec.getInstanceVariable("@licenses").convertToArray())
-            );
-            fmt.print("homepage_uri", this.spec.getInstanceVariable("@homepage").asJavaString());
+            fmt.print("platform", this.string("@platform"));
+            fmt.print("authors", this.strings("@authors"));
+            // description, homepage and licenses are optional in a gemspec:
+            // a nil value used to fail the whole upload with a TypeError.
+            fmt.print("info", this.string("@description"));
+            fmt.print("licenses", this.strings("@licenses"));
+            fmt.print("homepage_uri", this.string("@homepage"));
+        }
+
+        /**
+         * String spec attribute; empty when unset or nil.
+         * @param name Instance variable name
+         * @return Value
+         */
+        private String string(final String name) {
+            final IRubyObject val = this.spec.getInstanceVariable(name);
+            final String res;
+            if (val == null || val.isNil()) {
+                res = "";
+            } else {
+                res = val.asString().asJavaString();
+            }
+            return res;
+        }
+
+        /**
+         * String-list spec attribute; empty when unset or nil.
+         * @param name Instance variable name
+         * @return Values
+         */
+        private String[] strings(final String name) {
+            final IRubyObject val = this.spec.getInstanceVariable(name);
+            final String[] res;
+            if (val == null || val.isNil()) {
+                res = new String[0];
+            } else {
+                res = rubyToJavaStringArray(val.convertToArray());
+            }
+            return res;
         }
 
         /**
@@ -115,7 +153,11 @@ public final class RubyGemMeta implements GemMeta, SharedRuntime.RubyPlugin {
             final IRubyObject[] jarr = src.toJavaArray();
             final String[] res = new String[jarr.length];
             for (int id = 0; id < jarr.length; ++id) {
-                res[id] = jarr[id].asJavaString();
+                if (jarr[id].isNil()) {
+                    res[id] = "";
+                } else {
+                    res[id] = jarr[id].asString().asJavaString();
+                }
             }
             return res;
         }

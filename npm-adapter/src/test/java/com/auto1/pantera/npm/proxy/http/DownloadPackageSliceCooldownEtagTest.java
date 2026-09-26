@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.cooldown.metadata.AllVersionsBlockedException;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.cooldown.metadata.MetadataFilter;
 import com.auto1.pantera.cooldown.metadata.MetadataParser;
@@ -23,7 +24,6 @@ import com.auto1.pantera.cooldown.metadata.MetadataRewriter;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.slice.SliceSimple;
-import com.auto1.pantera.npm.RandomFreePort;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
@@ -67,7 +67,9 @@ final class DownloadPackageSliceCooldownEtagTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        this.port = new RandomFreePort().value();
+        // Bind to an ephemeral port and read the real one back from start():
+        // probing a free port and binding later races other tests (-T8).
+        this.port = 0;
     }
 
     @AfterAll
@@ -100,7 +102,7 @@ final class DownloadPackageSliceCooldownEtagTest {
                 this.port
             )
         ) {
-            server.start();
+            this.port = server.start();
             final String url = String.format(
                 "http://127.0.0.1:%d/ctx/%s", this.port, PKG
             );
@@ -152,6 +154,45 @@ final class DownloadPackageSliceCooldownEtagTest {
         }
     }
 
+    @Test
+    void allVersionsBlockedAnswersTaggedCooldownForbidden() {
+        // The tag is what lets CachedNpmProxySlice pass this 403 through
+        // instead of laundering it into a non-authoritative 404.
+        final Storage storage = new InMemoryStorage();
+        this.saveFilesToStorage(storage);
+        try (
+            VertxSliceServer server = new VertxSliceServer(
+                DownloadPackageSliceCooldownEtagTest.VERTX,
+                new DownloadPackageSlice(
+                    new NpmProxy(
+                        storage,
+                        new SliceSimple(ResponseBuilder.notFound().build())
+                    ),
+                    new PackagePath("ctx"),
+                    Optional.empty(),
+                    new AllBlockedFilterService(),
+                    "npm",
+                    "npm-proxy"
+                ),
+                this.port
+            )
+        ) {
+            this.port = server.start();
+            final HttpResponse<Buffer> response = WebClient
+                .create(DownloadPackageSliceCooldownEtagTest.VERTX)
+                .getAbs(String.format("http://127.0.0.1:%d/ctx/%s", this.port, PKG))
+                .rxSend().blockingGet();
+            MatcherAssert.assertThat(
+                "all-blocked packument answers 403",
+                response.statusCode(), new IsEqual<>(RsStatus.FORBIDDEN.code())
+            );
+            MatcherAssert.assertThat(
+                "and carries the cooldown marker",
+                response.getHeader("X-Pantera-Cooldown"), new IsEqual<>("all-blocked")
+            );
+        }
+    }
+
     /**
      * Minimal but valid packument body for the fixture package.
      *
@@ -191,6 +232,47 @@ final class DownloadPackageSliceCooldownEtagTest {
                     .getBytes(StandardCharsets.UTF_8)
             )
         ).join();
+    }
+
+    /**
+     * Cooldown service stub whose filter always reports every version blocked.
+     */
+    private static final class AllBlockedFilterService implements CooldownMetadataService {
+
+        @Override
+        public <T> CompletableFuture<byte[]> filterMetadata(
+            final String repoType,
+            final String repoName,
+            final String packageName,
+            final byte[] rawMetadata,
+            final MetadataParser<T> parser,
+            final MetadataFilter<T> filter,
+            final MetadataRewriter<T> rewriter
+        ) {
+            return CompletableFuture.failedFuture(
+                new AllVersionsBlockedException(packageName, java.util.Set.of("1.0.0"))
+            );
+        }
+
+        @Override
+        public void invalidate(final String repoType, final String repoName, final String packageName) {
+            // no-op stub
+        }
+
+        @Override
+        public void invalidateAll(final String repoType, final String repoName) {
+            // no-op stub
+        }
+
+        @Override
+        public void clearAll() {
+            // no-op stub
+        }
+
+        @Override
+        public String stats() {
+            return "AllBlockedFilterService";
+        }
     }
 
     /**

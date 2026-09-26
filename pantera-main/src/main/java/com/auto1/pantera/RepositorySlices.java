@@ -28,20 +28,25 @@ import com.auto1.pantera.composer.http.PhpComposer;
 import com.auto1.pantera.conan.ItemTokenizer;
 import com.auto1.pantera.conan.http.ConanSlice;
 import com.auto1.pantera.conda.http.CondaSlice;
+import com.auto1.pantera.conda.http.CondaUrlTokenSlice;
+import com.auto1.pantera.conda.http.UploadTickets;
 import com.auto1.pantera.debian.Config;
 import com.auto1.pantera.debian.http.DebianSlice;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.docker.asto.RegistryRoot;
 import com.auto1.pantera.docker.http.DockerSlice;
+import com.auto1.pantera.docker.http.OciErrorsSlice;
 import com.auto1.pantera.docker.http.TrimmedDocker;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSupport;
+import com.auto1.pantera.cooldown.RepoConfigCooldownOverrides;
 import com.auto1.pantera.files.FilesSlice;
 import com.auto1.pantera.gem.http.GemSlice;
 
 import com.auto1.pantera.helm.http.HelmSlice;
 import com.auto1.pantera.hex.http.HexSlice;
+import com.auto1.pantera.hex.http.RegistrySigner;
 import com.auto1.pantera.http.ContentLengthRestriction;
 import com.auto1.pantera.http.DockerRoutingSlice;
 import com.auto1.pantera.http.GoSlice;
@@ -75,6 +80,7 @@ import com.auto1.pantera.npm.http.RegistryInfoSlice;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.npm.proxy.http.NpmProxySlice;
 import com.auto1.pantera.nuget.http.NuGet;
+import com.auto1.pantera.nuget.http.NuGetApiKeySlice;
 import com.auto1.pantera.pypi.http.PySlice;
 import com.auto1.pantera.rpm.http.RpmSlice;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -170,6 +176,12 @@ public class RepositorySlices {
      * Cooldown metadata filtering service.
      */
     private final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata;
+
+    /**
+     * Per-repository cooldown windows from the repositories' own configs
+     * ({@code cooldown.duration}); nullable when there are no settings.
+     */
+    private final RepoConfigCooldownOverrides cooldownOverrides;
 
     /**
      * Shared Jetty HTTP clients keyed by settings signature.
@@ -274,12 +286,13 @@ public class RepositorySlices {
         this.tokens = tokens;
         this.cooldown = CooldownSupport.create(settings);
         this.cooldownMetadata = CooldownSupport.createMetadataService(this.cooldown, settings);
-        // Register per-repo cooldown durations from repo configurations
-        if (repos != null) {
+        // Register per-repo cooldown durations from repo configurations;
+        // kept in sync on every repository change by invalidateRepo().
+        this.cooldownOverrides = settings == null || settings.cooldown() == null
+            ? null : new RepoConfigCooldownOverrides(settings.cooldown());
+        if (repos != null && this.cooldownOverrides != null) {
             for (final RepoConfig cfg : repos.configs()) {
-                cfg.cooldownDuration().ifPresent(duration ->
-                    settings.cooldown().setRepoNameOverride(cfg.name(), true, duration)
-                );
+                this.cooldownOverrides.sync(cfg.name(), RepositorySlices.cooldownDuration(cfg));
             }
         }
         this.sharedClients = new SharedJettyClients();
@@ -419,9 +432,131 @@ public class RepositorySlices {
      * @param name Repository name
      */
     public void invalidateRepo(final String name) {
+        final Set<String> stale = new HashSet<>();
+        stale.add(name);
+        final Set<String> groups = this.groupsEmbedding(name);
+        stale.addAll(groups);
         this.slices.asMap().keySet().stream()
-            .filter(k -> k.name().string().equals(name))
+            .filter(k -> stale.contains(k.name().string()))
             .forEach(this.slices::invalidate);
+        // The rebuilt slice re-registers its raw-metadata revalidation hook;
+        // until then the admin refresh must not drive the stale instance.
+        com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance().remove(name);
+        if (!groups.isEmpty()) {
+            EcsLogger.info("com.auto1.pantera")
+                .message(
+                    "Repository changed; groups embedding it are rebuilt on next request: "
+                        + String.join(", ", new java.util.TreeSet<>(groups))
+                )
+                .eventCategory("configuration")
+                .eventAction("group_member_config_change")
+                .eventOutcome("success")
+                .field("repository.name", name)
+                .field("log.source", "application")
+                .log();
+        }
+        this.syncCooldownOverride(name);
+    }
+
+    /**
+     * Slice that serves through the repository's CURRENT slice, resolved on
+     * every request, so a group embedding it follows the repository's
+     * config changes.
+     *
+     * @param name Repository name
+     * @param port Server port
+     * @return Delegating slice
+     */
+    private Slice currentSlice(final String name, final int port) {
+        final Key key = new Key.From(name);
+        return (line, headers, body) -> this.slice(key, port, 0).response(line, headers, body);
+    }
+
+    /**
+     * Group repositories that embed {@code name}, directly or through
+     * nested groups. A group caches its flattened member list, so a nested
+     * group's membership change must rebuild every enclosing group.
+     *
+     * @param name Repository name
+     * @return Names of the enclosing groups
+     */
+    private Set<String> groupsEmbedding(final String name) {
+        final Set<String> found = new HashSet<>();
+        if (this.repos == null) {
+            return found;
+        }
+        final java.util.Deque<String> pending = new java.util.ArrayDeque<>();
+        pending.push(name);
+        while (!pending.isEmpty()) {
+            final String current = pending.pop();
+            for (final RepoConfig cfg : this.repos.configs()) {
+                if (cfg.type() != null && cfg.type().endsWith("-group")
+                    && cfg.members().contains(current) && found.add(cfg.name())) {
+                    pending.push(cfg.name());
+                }
+            }
+        }
+        found.remove(name);
+        return found;
+    }
+
+    /**
+     * Re-apply a repository's own {@code cooldown.duration} after it was
+     * created, edited, moved or deleted. When the effective window changes,
+     * cached cooldown decisions and the repository's filtered metadata are
+     * dropped so the new window applies to the next request.
+     * @param name Repository name
+     */
+    private void syncCooldownOverride(final String name) {
+        if (this.cooldownOverrides == null || this.repos == null) {
+            return;
+        }
+        final Optional<RepoConfig> cfg = this.repos.config(name);
+        final Optional<java.time.Duration> duration =
+            cfg.flatMap(RepositorySlices::cooldownDuration);
+        if (this.cooldownOverrides.sync(name, duration)) {
+            cfg.ifPresent(conf -> this.cooldownMetadata.invalidateAll(conf.type(), name));
+            final com.auto1.pantera.cooldown.cache.CooldownCache decisions =
+                CooldownSupport.extractCache(this.cooldown);
+            if (decisions != null) {
+                decisions.invalidateRepo(name);
+            }
+            EcsLogger.info("com.auto1.pantera")
+                .message(
+                    duration.map(
+                        value -> "Repository cooldown window set from its config: " + value
+                    ).orElse("Repository cooldown window from its config removed")
+                )
+                .eventCategory("configuration")
+                .eventAction("repo_cooldown_override_sync")
+                .eventOutcome("success")
+                .field("repository.name", name)
+                .field("log.source", "application")
+                .log();
+        }
+    }
+
+    /**
+     * A repository's configured cooldown window; an unparsable value is
+     * logged and ignored rather than failing the repository.
+     * @param cfg Repository config
+     * @return Duration, empty when absent or invalid
+     */
+    private static Optional<java.time.Duration> cooldownDuration(final RepoConfig cfg) {
+        try {
+            return cfg.cooldownDuration();
+        } catch (final java.time.format.DateTimeParseException bad) {
+            EcsLogger.warn("com.auto1.pantera")
+                .message("Ignoring invalid repository cooldown.duration")
+                .eventCategory("configuration")
+                .eventAction("repo_cooldown_override_sync")
+                .eventOutcome("failure")
+                .field("repository.name", cfg.name())
+                .error(bad)
+                .field("log.source", "application")
+                .log();
+            return Optional.empty();
+        }
     }
 
     public void enableJettyMetrics(final MeterRegistry registry) {
@@ -511,7 +646,6 @@ public class RepositorySlices {
         return this.cooldownMetadata;
     }
 
-
     /**
      * Pre-build slices for every configured repository so their shared Jetty
      * clients finish starting before request traffic begins. Without this,
@@ -594,6 +728,55 @@ public class RepositorySlices {
     }
 
     /**
+     * Group-member circuit-breaker status of a repository, read without
+     * creating breaker state (admin diagnostics).
+     *
+     * @param name Repository name
+     * @return {@code online}, {@code blocked} or {@code probing}
+     */
+    public String memberBreakerStatus(final String name) {
+        final AutoBlockRegistry registry = this.memberRegistries.get(name);
+        return registry == null ? "online" : registry.status(name);
+    }
+
+    /**
+     * Upstream HTTP circuit breakers of a proxy's remotes that already have
+     * state, read without creating any (admin diagnostics).
+     *
+     * @param name Repository name
+     * @return Breaker states
+     */
+    public java.util.List<com.auto1.pantera.api.v1.admin.BreakerProbe.Upstream> upstreamBreakers(
+        final String name
+    ) {
+        final Optional<RepoConfig> cfg = this.repos.config(name);
+        if (cfg.isEmpty() || !cfg.get().type().endsWith("-proxy")) {
+            return java.util.List.of();
+        }
+        final Optional<JettyClientSlices> client = this.sharedClients.peek(
+            cfg.get().httpClientSettings().orElseGet(this.settings::httpClientSettings)
+        );
+        if (client.isEmpty()) {
+            return java.util.List.of();
+        }
+        final java.util.List<com.auto1.pantera.api.v1.admin.BreakerProbe.Upstream> out =
+            new java.util.ArrayList<>();
+        for (final com.auto1.pantera.http.client.RemoteConfig remote : cfg.get().remotes()) {
+            final java.net.URI uri = remote.uri();
+            final boolean secure = "https".equalsIgnoreCase(uri.getScheme());
+            final int port = uri.getPort() > 0 ? uri.getPort() : (secure ? 443 : 80);
+            final String key = (secure ? "https://" : "http://") + uri.getHost() + ':' + port;
+            client.get().circuitBreakerRegistry().find(key).ifPresent(
+                breaker -> out.add(new com.auto1.pantera.api.v1.admin.BreakerProbe.Upstream(
+                    key, breaker.isOpen(),
+                    breaker.isOpen() ? Math.max(0L, breaker.timeRemaining().toSeconds()) : 0L
+                ))
+            );
+        }
+        return out;
+    }
+
+    /**
      * Cooldown service used by the proxy adapters.
      *
      * @return shared CooldownService.
@@ -633,15 +816,30 @@ public class RepositorySlices {
                         cfg.name(),
                         artifactEvents()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "file-proxy":
                 clientLease = jettyClientSlices(cfg);
                 clientSlices = clientLease.client();
-                final Slice fileProxySlice = new TimeoutSlice(
-                    new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown),
-                    settings.httpClientSettings().proxyTimeout()
+                // SECURITY (2.2.9): CombinedAuthzSliceWrap mirrors php-proxy /
+                // maven-proxy / go-proxy. file-proxy was the ONLY proxy type
+                // wired without it: the outer AnonymousAccessSlice gate only
+                // challenges requests with NO Authorization header and defers
+                // validation downstream, so `Authorization: Bearer garbage`
+                // sailed straight into the upstream fetch of a deny-by-default
+                // private mirror (read + cache population, no credentials).
+                final Slice fileProxySlice = new CombinedAuthzSliceWrap(
+                    new TimeoutSlice(
+                        new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown),
+                        settings.httpClientSettings().proxyTimeout()
+                    ),
+                    authentication(),
+                    tokens.auth(),
+                    new OperationControl(
+                        securityPolicy(),
+                        new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                    )
                 );
                 // Browsing disabled for proxy repos - files are fetched on-demand from upstream
                 slice = trimPathSlice(fileProxySlice);
@@ -658,7 +856,7 @@ public class RepositorySlices {
                         RepositorySlices.optionalUrl(cfg), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
                         this.settings.syncArtifactIndexer(), this.settings.artifactIndex()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "gem":
@@ -672,7 +870,7 @@ public class RepositorySlices {
                         artifactEvents(),
                         this.settings.syncArtifactIndexer()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "helm":
@@ -681,7 +879,7 @@ public class RepositorySlices {
                         cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
                         this.settings.syncArtifactIndexer()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "rpm":
@@ -690,7 +888,7 @@ public class RepositorySlices {
                         tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()),
                         artifactEvents(),
                         this.settings.syncArtifactIndexer()),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "php":
@@ -727,7 +925,7 @@ public class RepositorySlices {
                         ),
                         "direct-dists"
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "php-proxy":
@@ -768,7 +966,7 @@ public class RepositorySlices {
                         securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
                         this.settings.syncArtifactIndexer()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "gradle":
@@ -777,7 +975,7 @@ public class RepositorySlices {
                     new MavenSlice(cfg.storage(), securityPolicy(),
                         authentication(), tokens.auth(), cfg.name(), artifactEvents(),
                         this.settings.syncArtifactIndexer()),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "gradle-proxy":
@@ -817,7 +1015,7 @@ public class RepositorySlices {
                         artifactEvents(),
                         this.settings.syncArtifactIndexer()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "go-proxy":
@@ -867,21 +1065,12 @@ public class RepositorySlices {
                         ),
                         npmProxySlice
                     ),
-                    // Block login/adduser/whoami - proxy is read-only
+                    // npm login / whoami / profile get are answered by
+                    // Pantera itself (they concern the Pantera identity, not
+                    // the upstream); other user management is refused.
                     // NOTE: Do NOT block generic /auth paths - they conflict with scoped packages
                     // like @verdaccio/auth. Standard NPM auth uses /-/user/ and /-/v1/login.
-                    new com.auto1.pantera.http.rt.RtRulePath(
-                        new com.auto1.pantera.http.rt.RtRule.Any(
-                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
-                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/user/.*"),
-                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/whoami.*")
-                        ),
-                        new com.auto1.pantera.http.slice.SliceSimple(
-                            com.auto1.pantera.http.ResponseBuilder.forbidden()
-                                .textBody("User management not supported on proxy. Use local npm repository.")
-                                .build()
-                        )
-                    ),
+                    this.npmAccountRoute(cfg, "proxy"),
                     // WS-A: npm token/hook/team have no supported surface on
                     // this registry (any method); npm org is only declined
                     // for its write verbs -- GET (e.g. "npm org ls") is a
@@ -912,6 +1101,25 @@ public class RepositorySlices {
                             new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/org/.*")
                         ),
                         "npm organization management", Action.Standard.WRITE, cfg.name()
+                    ),
+                    // A proxy is read-only: publish, unpublish and dist-tag
+                    // writes answer 405 (as on a group), not a misleading 404.
+                    new com.auto1.pantera.http.rt.RtRulePath(
+                        new com.auto1.pantera.http.rt.RtRule.Any(
+                            com.auto1.pantera.http.rt.MethodRule.PUT,
+                            com.auto1.pantera.http.rt.MethodRule.DELETE
+                        ),
+                        new CombinedAuthzSliceWrap(
+                            new com.auto1.pantera.http.slice.MethodNotAllowedSlice(
+                                "GET, HEAD"
+                            ),
+                            authentication(),
+                            tokens.auth(),
+                            new OperationControl(
+                                securityPolicy(),
+                                new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                            )
+                        )
                     ),
                     // Downloads - require Keycloak JWT
                     new com.auto1.pantera.http.rt.RtRulePath(
@@ -946,9 +1154,10 @@ public class RepositorySlices {
                 // This is critical for vulnerability scanning - local repos return {},
                 // but proxy repos return actual vulnerabilities from upstream
                 // CRITICAL: Pass member NAMES so GroupAuditSlice can rewrite paths!
+                // The same member list backs the merged keys and search routes.
                 final java.util.List<String> auditMemberNames = cfg.members();
                 final java.util.List<Slice> auditMemberSlices = auditMemberNames.stream()
-                    .map(name -> this.slice(new Key.From(name), port, 0))
+                    .map(name -> this.currentSlice(name, port))
                     .collect(java.util.stream.Collectors.toList());
                 final Slice npmGroupAuditSlice = new com.auto1.pantera.npm.http.audit.GroupAuditSlice(
                     auditMemberNames, auditMemberSlices
@@ -964,21 +1173,12 @@ public class RepositorySlices {
                             ),
                             npmGroupAuditSlice
                         ),
-                        // Block login/adduser/whoami - group is read-only
+                        // npm login / whoami / profile get are answered by
+                        // Pantera itself (they concern the Pantera identity,
+                        // not any member); other user management is refused.
                         // NOTE: Do NOT block generic /auth paths - they conflict with scoped packages
                         // like @verdaccio/auth. Standard NPM auth uses /-/user/ and /-/v1/login.
-                        new com.auto1.pantera.http.rt.RtRulePath(
-                            new com.auto1.pantera.http.rt.RtRule.Any(
-                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
-                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/user/.*"),
-                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/whoami.*")
-                            ),
-                            new com.auto1.pantera.http.slice.SliceSimple(
-                                com.auto1.pantera.http.ResponseBuilder.forbidden()
-                                    .textBody("User management not supported on group. Use local npm repository.")
-                                    .build()
-                            )
-                        ),
+                        this.npmAccountRoute(cfg, "group"),
                         // WS-A: npm token/hook/team have no supported surface
                         // on this registry (any method); npm org is only
                         // declined for its write verbs -- GET (e.g. "npm org
@@ -1021,6 +1221,43 @@ public class RepositorySlices {
                             ),
                             new CombinedAuthzSliceWrap(
                                 new PingSlice(),
+                                authentication(),
+                                tokens.auth(),
+                                new OperationControl(
+                                    securityPolicy(),
+                                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                                )
+                            )
+                        ),
+                        // Signing keys and search are the UNION of every
+                        // member's answer (hosted keys + upstream keys, hosted
+                        // hits + upstream hits), not the first member's.
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            new com.auto1.pantera.http.rt.RtRule.All(
+                                com.auto1.pantera.http.rt.MethodRule.GET,
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/keys$")
+                            ),
+                            new CombinedAuthzSliceWrap(
+                                new com.auto1.pantera.npm.http.GroupKeysSlice(
+                                    cfg.name(), auditMemberNames, auditMemberSlices
+                                ),
+                                authentication(),
+                                tokens.auth(),
+                                new OperationControl(
+                                    securityPolicy(),
+                                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                                )
+                            )
+                        ),
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            new com.auto1.pantera.http.rt.RtRule.All(
+                                com.auto1.pantera.http.rt.MethodRule.GET,
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/v1/search$")
+                            ),
+                            new CombinedAuthzSliceWrap(
+                                new com.auto1.pantera.npm.http.GroupSearchSlice(
+                                    cfg.name(), auditMemberNames, auditMemberSlices
+                                ),
                                 authentication(),
                                 tokens.auth(),
                                 new OperationControl(
@@ -1082,7 +1319,11 @@ public class RepositorySlices {
                             composerDelegate,
                             this::slice, cfg.name(), cfg.members(), port,
                             this.settings.prefixes().prefixes().stream()
-                                .findFirst().orElse("")
+                                .findFirst().orElse(""),
+                            // Proxy (or proxy-containing) members are asked
+                            // for p2 metadata only after the hosted members
+                            // have been ruled out as owners of the name.
+                            proxyMembers(cfg.members())
                         ),
                         authentication(),
                         tokens.auth(),
@@ -1138,24 +1379,53 @@ public class RepositorySlices {
                     )
                 );
                 break;
-            case "gem-group":
             case "go-group":
+                // go-group merges <module>/@v/list across members (hosted
+                // private versions + upstream versions); every other request
+                // goes through the generic declared-order walk.
+                final List<String> goFlatMembers = flattenMembers(cfg.name());
+                slice = trimPathSlice(
+                    new CombinedAuthzSliceWrap(
+                        new com.auto1.pantera.group.GoGroupSlice(
+                            new GroupResolver(
+                                this::slice, cfg.name(), goFlatMembers, port, depth,
+                                cfg.groupMemberTimeout().orElse(120L),
+                                java.util.Collections.emptyList(),
+                                Optional.of(this.settings.artifactIndex()),
+                                proxyMembers(goFlatMembers),
+                                cfg.type(),
+                                this.sharedNegativeCache,
+                                this::getOrCreateMemberRegistry,
+                                getOrCreateBulkhead(cfg.name()).drainExecutor()
+                            )
+                        ),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
+                );
+                break;
+            case "gem-group":
             case "pypi-group":
             case "docker-group":
                 final List<String> genericFlatMembers = flattenMembers(cfg.name());
+                final GroupResolver genericResolver = new GroupResolver(
+                    this::slice, cfg.name(), genericFlatMembers, port, depth,
+                    cfg.groupMemberTimeout().orElse(120L),
+                    java.util.Collections.emptyList(),
+                    Optional.of(this.settings.artifactIndex()),
+                    proxyMembers(genericFlatMembers),
+                    cfg.type(),
+                    this.sharedNegativeCache,
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
+                );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new GroupResolver(
-                            this::slice, cfg.name(), genericFlatMembers, port, depth,
-                            cfg.groupMemberTimeout().orElse(120L),
-                            java.util.Collections.emptyList(),
-                            Optional.of(this.settings.artifactIndex()),
-                            proxyMembers(genericFlatMembers),
-                            cfg.type(),
-                            this.sharedNegativeCache,
-                            this::getOrCreateMemberRegistry,
-                            getOrCreateBulkhead(cfg.name()).drainExecutor()
-                        ),
+                        RepositorySlices.genericGroup(cfg.type(), genericResolver),
                         authentication(),
                         tokens.auth(),
                         new OperationControl(
@@ -1171,15 +1441,19 @@ public class RepositorySlices {
                 slice = trimPathSlice(
                     new PathPrefixStripSlice(
                         new CombinedAuthzSliceWrap(
-                            new TimeoutSlice(
-                                new PypiProxy(
-                                    clientSlices,
-                                    cfg,
-                                    settings.artifactMetadata()
-                                        .flatMap(queues -> queues.proxyEventQueues(cfg)),
-                                    this.cooldown
-                                ),
-                                settings.httpClientSettings().proxyTimeout()
+                            // pip search (XML-RPC POST) cannot be proxied:
+                            // answer an XML-RPC fault, not an empty 405.
+                            new com.auto1.pantera.pypi.http.SearchFaultSlice(
+                                new TimeoutSlice(
+                                    new PypiProxy(
+                                        clientSlices,
+                                        cfg,
+                                        settings.artifactMetadata()
+                                            .flatMap(queues -> queues.proxyEventQueues(cfg)),
+                                        this.cooldown
+                                    ),
+                                    settings.httpClientSettings().proxyTimeout()
+                                )
                             ),
                             authentication(),
                             tokens.auth(),
@@ -1237,10 +1511,17 @@ public class RepositorySlices {
                 );
                 break;
             case "conda":
-                slice = new CondaSlice(
-                    cfg.storage(), securityPolicy(), authentication(), tokens,
-                    cfg.url().toString(), cfg.name(), artifactEvents(),
-                    this.settings.syncArtifactIndexer()
+                // Conda routes are repository-relative: on the main port the
+                // repository name must be trimmed (package downloads looked
+                // up a key that included it and 404ed); a dedicated port
+                // serves the repository at its root.
+                slice = trimUnlessDedicatedPort(
+                    cfg,
+                    new CondaSlice(
+                        cfg.storage(), securityPolicy(), authentication(), tokens,
+                        cfg.url().toString(), cfg.name(), artifactEvents(),
+                        this.settings.syncArtifactIndexer(), this.condaUploadTickets()
+                    )
                 );
                 break;
             case "conan":
@@ -1250,19 +1531,25 @@ public class RepositorySlices {
                 // always wires a JwtTokens here (see VertxMain).
                 final com.auto1.pantera.auth.JwtTokens jwtTokens =
                     (com.auto1.pantera.auth.JwtTokens) tokens;
-                slice = new ConanSlice(
-                    cfg.storage(), securityPolicy(), authentication(), tokens,
-                    new ItemTokenizer(
-                        Vertx.vertx(), jwtTokens.publicKey(), jwtTokens.privateKey()
-                    ),
-                    cfg.name(), artifactEvents()
+                // Conan routes (/v1/ping, /v1/conans/...) are anchored at the
+                // repository root: trim the repository name on the main port,
+                // otherwise no route ever matched there.
+                slice = trimUnlessDedicatedPort(
+                    cfg,
+                    new ConanSlice(
+                        cfg.storage(), securityPolicy(), authentication(), tokens,
+                        new ItemTokenizer(
+                            Vertx.vertx(), jwtTokens.publicKey(), jwtTokens.privateKey()
+                        ),
+                        cfg.name(), artifactEvents()
+                    )
                 );
                 break;
             case "hexpm":
                 slice = trimPathSlice(
                     new HexSlice(cfg.storage(), securityPolicy(), authentication(),
                         artifactEvents(), cfg.name(),
-                        this.settings.syncArtifactIndexer())
+                        this.settings.syncArtifactIndexer(), this.hexRegistrySigner())
                 );
                 break;
             case "pypi":
@@ -1279,11 +1566,11 @@ public class RepositorySlices {
                 break;
             default:
                 throw new IllegalStateException(
-                    String.format("Unsupported repository type '%s", cfg.type())
+                    String.format("Unsupported repository type '%s'", cfg.type())
                 );
         }
         return new SliceValue(
-            wrapIntoCommonSlices(slice, cfg),
+            credentialsInClientForm(cfg, wrapIntoCommonSlices(slice, cfg)),
             Optional.ofNullable(clientLease)
         );
         } catch (final RuntimeException | Error ex) {
@@ -1325,9 +1612,60 @@ public class RepositorySlices {
         // any per-adapter logic runs. Policy defaults: proxies allow
         // anon read (curlable maven/npm clients); hosted repos require
         // auth for both directions.
-        return new AnonymousAccessSlice(
-            withContentLength, anonymousPolicy(cfg), cfg.name()
+        // A few client requests cannot carry an Authorization header and
+        // are validated downstream instead (see credentialBootstrap).
+        final Slice gated = new AnonymousAccessSlice(
+            withContentLength, anonymousPolicy(cfg), cfg.name(), credentialBootstrap(cfg)
         );
+        // Docker clients parse OCI error bodies and the adapter advertises
+        // a Basic+Bearer challenge: give the body-less 401/413 produced by
+        // the generic gates above the same shape.
+        return cfg.type().startsWith("docker") ? new OciErrorsSlice(gated) : gated;
+    }
+
+    /**
+     * Requests that pass the anonymous-access gate without an
+     * {@code Authorization} header because the client cannot send one and
+     * the adapter validates what they carry instead:
+     * <ul>
+     *   <li>npm login / adduser carry the credentials in the request body
+     *   (they are how a client without credentials obtains a token); npm's
+     *   web login is declined downstream.</li>
+     *   <li>anaconda-client HEADs the conda repository's base URL before
+     *   {@code anaconda login}, with no credentials yet, and gives up unless
+     *   it gets a 2xx; the adapter answers exactly that HEAD with an empty
+     *   200 and nothing else.</li>
+     *   <li>Conan 1.x sends no {@code Authorization} to an upload URL that
+     *   carries a {@code signature}; the adapter authorises the PUT by that
+     *   signature (issued to an authenticated writer of this repository).</li>
+     * </ul>
+     *
+     * @param cfg Repo config
+     * @return Credential-bootstrap rule
+     */
+    private static com.auto1.pantera.http.rt.RtRule credentialBootstrap(final RepoConfig cfg) {
+        final com.auto1.pantera.http.rt.RtRule res;
+        if (cfg.type().startsWith("npm")) {
+            res = com.auto1.pantera.npm.http.auth.OAuthLoginSlice.CREDENTIAL_BOOTSTRAP;
+        } else if ("conda".equals(cfg.type())) {
+            final java.util.regex.Pattern root;
+            if (cfg.port().isPresent()) {
+                root = CondaSlice.ROOT;
+            } else {
+                root = CondaSlice.PREFIXED_ROOT;
+            }
+            res = new com.auto1.pantera.http.rt.RtRule.All(
+                com.auto1.pantera.http.rt.MethodRule.HEAD,
+                new com.auto1.pantera.http.rt.RtRule.ByPath(root)
+            );
+        } else if ("conan".equals(cfg.type())) {
+            res = (line, headers) -> line.method() == com.auto1.pantera.http.rq.RqMethod.PUT
+                && new com.auto1.pantera.http.rq.RqParams(line.uri()).value("signature")
+                    .isPresent();
+        } else {
+            res = (line, headers) -> false;
+        }
+        return res;
     }
 
     /**
@@ -1397,12 +1735,130 @@ public class RepositorySlices {
         );
     }
 
+    /**
+     * Wrap a global maintenance origin (import / merge) so that each request
+     * is authenticated and authorized for a repository-scoped {@code WRITE}
+     * on the repository named in the request path.
+     *
+     * <p>Exposed so {@link com.auto1.pantera.http.MainSlice} can protect the
+     * {@code /.import} and {@code /.merge} routes with the same combined
+     * Basic/token authentication and repository-scoped authorization every
+     * adapter upload path already enforces — without leaking the private
+     * authentication / policy primitives.</p>
+     *
+     * @param origin Origin slice to protect
+     * @param repoInPath Pattern capturing the repository name in group 1
+     * @return Authenticating, repository-scoped-write decorator
+     */
+    public Slice repoScopedWrite(
+        final Slice origin, final java.util.regex.Pattern repoInPath
+    ) {
+        return new com.auto1.pantera.http.RepoScopedAuthSlice(
+            origin,
+            authentication(),
+            tokens.auth(),
+            securityPolicy(),
+            repoInPath,
+            com.auto1.pantera.security.perms.Action.Standard.WRITE
+        );
+    }
+
     private Authentication authentication() {
         return new LoggingAuth(settings.authz().authentication());
     }
 
     private Policy<?> securityPolicy() {
         return this.settings.authz().policy();
+    }
+
+    /**
+     * Account routes of an npm-proxy or npm-group repository. They concern
+     * the caller's Pantera identity, never a member or the upstream, so they
+     * are answered here: the legacy {@code npm login} / {@code npm adduser}
+     * PUT validates the password in its body and returns a Pantera API
+     * token; the web login is declined with a 404 (npm then falls back to
+     * the legacy login); {@code npm whoami} and {@code npm profile get}
+     * answer from the authenticated identity; {@code npm logout} is declined
+     * as on a local repository (404). Any other user-management
+     * request is refused with 403.
+     *
+     * @param cfg Repository config
+     * @param mode "proxy" or "group", for the refusal message
+     * @return Route matching every account path
+     */
+    private com.auto1.pantera.http.rt.RtRulePath npmAccountRoute(
+        final RepoConfig cfg, final String mode
+    ) {
+        final OperationControl read = new OperationControl(
+            securityPolicy(), new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+        );
+        return new com.auto1.pantera.http.rt.RtRulePath(
+            new com.auto1.pantera.http.rt.RtRule.Any(
+                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
+                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/user/.*"),
+                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/whoami.*"),
+                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/user$")
+            ),
+            new com.auto1.pantera.http.rt.SliceRoute(
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    com.auto1.pantera.npm.http.auth.OAuthLoginSlice.LEGACY_LOGIN,
+                    new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(
+                        authentication(), this.tokens
+                    )
+                ),
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    com.auto1.pantera.npm.http.auth.OAuthLoginSlice.WEB_LOGIN,
+                    new com.auto1.pantera.npm.http.auth.LoginBodyCapSlice(
+                        new com.auto1.pantera.npm.http.DeclinedEndpointSlice(
+                            "npm web login", "repositories/npm.md#logging-in-with-npm-login"
+                        )
+                    )
+                ),
+                // npm logout: declined exactly as on a local repository.
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    com.auto1.pantera.npm.http.auth.OAuthLoginSlice.LOGOUT,
+                    new CombinedAuthzSliceWrap(
+                        new com.auto1.pantera.npm.http.DeclinedEndpointSlice(
+                            "npm logout", "repositories/npm.md#unsupported-endpoints"
+                        ),
+                        authentication(), tokens.auth(), read
+                    )
+                ),
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    new com.auto1.pantera.http.rt.RtRule.All(
+                        com.auto1.pantera.http.rt.MethodRule.GET,
+                        new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/whoami$")
+                    ),
+                    new CombinedAuthzSliceWrap(
+                        new com.auto1.pantera.npm.http.auth.JwtWhoAmISlice(),
+                        authentication(), tokens.auth(), read
+                    )
+                ),
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    new com.auto1.pantera.http.rt.RtRule.All(
+                        com.auto1.pantera.http.rt.MethodRule.GET,
+                        new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/user$")
+                    ),
+                    new CombinedAuthzSliceWrap(
+                        new com.auto1.pantera.npm.http.auth.ProfileSlice(),
+                        authentication(), tokens.auth(), read
+                    )
+                ),
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    com.auto1.pantera.http.rt.RtRule.FALLBACK,
+                    new com.auto1.pantera.http.slice.SliceSimple(
+                        com.auto1.pantera.http.ResponseBuilder.forbidden()
+                            .textBody(
+                                String.format(
+                                    "User management not supported on %s. Use local npm repository.",
+                                    mode
+                                )
+                            )
+                            .build()
+                    )
+                )
+            )
+        );
     }
 
     /**
@@ -1452,8 +1908,117 @@ public class RepositorySlices {
         return this.sharedClients.acquire(effective);
     }
 
+    /**
+     * Format-specific front of a generic group walk. pip search is XML-RPC
+     * POST; a group cannot search, so it answers an XML-RPC fault instead of
+     * an empty 405 that crashes pip. A docker group answers its catalog
+     * itself (the union of its members under the group's name) and points
+     * tags-page links at the group.
+     *
+     * @param type Repository type
+     * @param resolver Group walk
+     * @return Group slice
+     */
+    private static Slice genericGroup(final String type, final GroupResolver resolver) {
+        final Slice res;
+        if ("pypi-group".equals(type)) {
+            res = new com.auto1.pantera.pypi.http.SearchFaultSlice(resolver);
+        } else if ("docker-group".equals(type)) {
+            res = new com.auto1.pantera.group.DockerGroupSlice(resolver);
+        } else {
+            res = resolver;
+        }
+        return res;
+    }
+
     private static Slice trimPathSlice(final Slice original) {
         return new TrimPathSlice(original, RepositorySlices.PATTERN);
+    }
+
+    /**
+     * Trim the repository name from the path unless the repository is served
+     * on its own port, where requests arrive at the root.
+     *
+     * @param cfg Repository config
+     * @param original Adapter slice with repository-relative routes
+     * @return Slice
+     */
+    private static Slice trimUnlessDedicatedPort(final RepoConfig cfg, final Slice original) {
+        final Slice res;
+        if (cfg.port().isPresent()) {
+            res = original;
+        } else {
+            res = trimPathSlice(original);
+        }
+        return res;
+    }
+
+    /**
+     * Present credentials some clients send outside the {@code Authorization}
+     * header as that header, so the anonymous-access gate (which only looks
+     * at it) lets them through to the adapter's own credential check:
+     * conda's {@code /t/<token>/} URL token and NuGet's
+     * {@code X-NuGet-ApiKey}. Nothing is granted here; the adapter still
+     * validates the credential.
+     *
+     * @param cfg Repository config
+     * @param gated Repository slice behind the anonymous-access gate
+     * @return Slice
+     */
+    private static Slice credentialsInClientForm(final RepoConfig cfg, final Slice gated) {
+        final Slice res;
+        if ("conda".equals(cfg.type())) {
+            res = new CondaUrlTokenSlice(gated, cfg.port().isEmpty());
+        } else if ("nuget".equals(cfg.type())) {
+            res = new NuGetApiKeySlice(gated);
+        } else {
+            res = gated;
+        }
+        return res;
+    }
+
+    /**
+     * Hex registry signer using the cluster-wide RSA key pair, so every node
+     * signs the registry with the key it serves at {@code /public_key}.
+     *
+     * @return Registry signer
+     */
+    private RegistrySigner hexRegistrySigner() {
+        final RegistrySigner res;
+        if (this.tokens instanceof com.auto1.pantera.auth.JwtTokens jwt) {
+            res = new RegistrySigner(jwt.privateKey(), jwt.publicKey());
+        } else {
+            res = new RegistrySigner();
+        }
+        return res;
+    }
+
+    /**
+     * Upload tickets for the anaconda-client form upload, signed with the
+     * cluster-wide RS256 key pair so every node accepts them. With Valkey the
+     * ticket nonce is consumed with {@code SET NX}, so a ticket is single-use
+     * across the cluster; without Valkey (single instance) the ledger is
+     * process-local.
+     *
+     * @return Upload tickets
+     */
+    private UploadTickets condaUploadTickets() {
+        final UploadTickets res;
+        if (this.tokens instanceof com.auto1.pantera.auth.JwtTokens jwt) {
+            res = this.settings.valkeyConnection()
+                .map(
+                    valkey -> new UploadTickets(
+                        jwt.privateKey(), jwt.publicKey(),
+                        new com.auto1.pantera.api.v1.download.ValkeyNonceStore(
+                            valkey, UploadTickets.TTL, "pantera:conda-upload-nonce:"
+                        )::consume
+                    )
+                )
+                .orElseGet(() -> new UploadTickets(jwt.privateKey(), jwt.publicKey()));
+        } else {
+            res = new UploadTickets();
+        }
+        return res;
     }
 
     /**
@@ -1465,9 +2030,23 @@ public class RepositorySlices {
      * @param storage Repository storage for directory listings
      * @return Slice chain: TrimPathSlice(BrowsableSlice(origin))
      */
-    private static Slice browsableTrimPathSlice(final Slice origin, final com.auto1.pantera.asto.Storage storage) {
+    private Slice browsableTrimPathSlice(final Slice origin, final RepoConfig cfg) {
+        // SECURITY (2.2.9): the directory listing is a repository READ and
+        // must be served only after credential VALIDATION — BrowsableSlice
+        // used to infer "auth passed" from an origin 404, which an
+        // unmatched route hands out before any auth slice runs.
+        final java.util.function.UnaryOperator<Slice> gate = browse ->
+            new CombinedAuthzSliceWrap(
+                browse,
+                authentication(),
+                tokens.auth(),
+                new OperationControl(
+                    securityPolicy(),
+                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                )
+            );
         return trimPathSlice(
-            new com.auto1.pantera.http.slice.BrowsableSlice(origin, storage)
+            new com.auto1.pantera.http.slice.BrowsableSlice(origin, cfg.storage(), gate)
         );
     }
 
@@ -1677,6 +2256,18 @@ public class RepositorySlices {
          */
         int cachedClientCount() {
             return this.clients.size();
+        }
+
+        /**
+         * The cached client for these settings, if one exists; never
+         * creates or retains one.
+         *
+         * @param settings HTTP client settings
+         * @return Client
+         */
+        Optional<JettyClientSlices> peek(final HttpClientSettings settings) {
+            return Optional.ofNullable(this.clients.get(HttpClientSettingsKey.from(settings)))
+                .map(holder -> holder.client);
         }
 
         Lease acquire(final HttpClientSettings settings) {

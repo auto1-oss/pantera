@@ -85,13 +85,45 @@ final class DownloadIndexSliceTest {
     }
 
     @Test
-    void returnsNotFound() {
+    void returnsNotFoundForMissingNestedIndex() {
         MatcherAssert.assertThat(
             new DownloadIndexSlice("http://localhost:8080", this.storage),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
-                new RequestLine(RqMethod.GET, "/index.yaml")
+                new RequestLine(RqMethod.GET, "/sub/index.yaml")
             )
+        );
+    }
+
+    @Test
+    void servesEmptyIndexForEmptyRepository() {
+        final Response resp = new DownloadIndexSlice("http://localhost:8080", this.storage)
+            .response(new RequestLine(RqMethod.GET, "/index.yaml"), Headers.EMPTY, Content.EMPTY)
+            .join();
+        MatcherAssert.assertThat("status", resp.status(), new IsEqual<>(RsStatus.OK));
+        MatcherAssert.assertThat(
+            "valid empty index",
+            new IndexYamlMapping(resp.body().asString()).entries().isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void servesIndexWhoseLastChartWasDeleted() {
+        this.storage.save(
+            new Key.From("index.yaml"),
+            new Content.From(
+                "apiVersion: v1\ngenerated: 2026-01-01T00:00:00Z\nentries: {}\n".getBytes()
+            )
+        ).join();
+        final Response resp = new DownloadIndexSlice("http://localhost:8080", this.storage)
+            .response(new RequestLine(RqMethod.GET, "/index.yaml"), Headers.EMPTY, Content.EMPTY)
+            .join();
+        MatcherAssert.assertThat("status", resp.status(), new IsEqual<>(RsStatus.OK));
+        MatcherAssert.assertThat(
+            "no entries",
+            new IndexYamlMapping(resp.body().asString()).entries().isEmpty(),
+            new IsEqual<>(true)
         );
     }
 

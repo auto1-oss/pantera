@@ -20,6 +20,7 @@ import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.debian.AstoGzArchive;
 import com.auto1.pantera.debian.Config;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.hm.RsHasStatus;
 import com.auto1.pantera.http.hm.SliceHasResponse;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -34,9 +35,12 @@ import org.cactoos.list.ListOf;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsNot;
+import org.hamcrest.core.StringContains;
 import org.hamcrest.text.StringContainsInOrder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Test for {@link UpdateSlice}.
@@ -83,7 +87,10 @@ class UpdateSliceTest {
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.OK),
                 new RequestLine(RqMethod.PUT, "/main/aglfn_1.7-3_amd64.deb"),
-                Headers.EMPTY,
+                Headers.from(
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-deb"),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
+                ),
                 new Content.From(new TestResource("aglfn_1.7-3_amd64.deb").asBytes())
             )
         );
@@ -108,6 +115,14 @@ class UpdateSliceTest {
             new IsNot<>(new IsEqual<>(0L))
         );
         MatcherAssert.assertThat("Artifact event added to queue", this.events.size() == 1);
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            this.events.peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-deb")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            this.events.peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 
     @Test
@@ -164,24 +179,48 @@ class UpdateSliceTest {
         MatcherAssert.assertThat("Artifact event added to queue", this.events.size() == 1);
     }
 
-    @Test
-    void returnsBadRequestAndRemovesItem() {
+    @ParameterizedTest
+    @ValueSource(strings = {"/main", "/pool/main/", "/", "/dists/my_repo/Release"})
+    void rejectsUploadToNonPackagePath(final String path) {
+        final Key release = new Key.From("dists/my_repo/Release");
+        this.asto.save(release, new Content.From("original".getBytes())).join();
         MatcherAssert.assertThat(
             "Response is bad request",
             new UpdateSlice(
                 this.asto,
-                new Config.FromYaml(
-                    "my_repo",
-                    UpdateSliceTest.SETTINGS,
-                    new InMemoryStorage()
-                ),
+                new Config.FromYaml("my_repo", UpdateSliceTest.SETTINGS, new InMemoryStorage()),
                 Optional.of(this.events)
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.BAD_REQUEST),
-                new RequestLine(RqMethod.PUT, "/main/aglfn_1.7-3_all.deb"),
+                new RequestLine(RqMethod.PUT, path),
                 Headers.EMPTY,
-                new Content.From(new TestResource("aglfn_1.7-3_all.deb").asBytes())
+                new Content.From(new TestResource("aglfn_1.7-3_amd64.deb").asBytes())
+            )
+        );
+        MatcherAssert.assertThat(
+            "Only the pre-existing Release is stored",
+            this.asto.list(Key.ROOT).join(),
+            new IsEqual<>(java.util.List.of(release))
+        );
+        MatcherAssert.assertThat(
+            "Release not overwritten",
+            this.asto.value(release).join().asString(),
+            new IsEqual<>("original")
+        );
+    }
+
+    @Test
+    void rejectsPackageOfOtherArchitectureWithReasonAndRemovesItem() {
+        final Response rsp = this.upload("aglfn_1.7-3_all.deb", new TestResource("aglfn_1.7-3_all.deb").asBytes());
+        MatcherAssert.assertThat(
+            "Response is bad request", rsp.status(), new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "Response tells why",
+            rsp.body().asString(),
+            new StringContains(
+                "Package architecture 'all' is not one of this repository's architectures (amd64)"
             )
         );
         MatcherAssert.assertThat(
@@ -189,35 +228,41 @@ class UpdateSliceTest {
             this.asto.exists(new Key.From("main/aglfn_1.7-3_all.deb")).join(),
             new IsEqual<>(false)
         );
-        MatcherAssert.assertThat("Artifact event was not added to queue", this.events.isEmpty());
+        MatcherAssert.assertThat(
+            "Artifact event was not added to queue", this.events.isEmpty(), new IsEqual<>(true)
+        );
     }
 
     @Test
-    void returnsErrorAndRemovesItem() {
+    void rejectsCorruptedPackageWithReasonAndRemovesItem() {
+        final Response rsp = this.upload("corrupted.deb", "abc123".getBytes());
         MatcherAssert.assertThat(
-            "Response is internal error",
-            new UpdateSlice(
-                this.asto,
-                new Config.FromYaml(
-                    "my_repo",
-                    UpdateSliceTest.SETTINGS,
-                    new InMemoryStorage()
-                ),
-                Optional.of(this.events)
-            ),
-            new SliceHasResponse(
-                new RsHasStatus(RsStatus.INTERNAL_ERROR),
-                new RequestLine(RqMethod.PUT, "/main/corrupted.deb"),
-                Headers.EMPTY,
-                new Content.From("abc123".getBytes())
-            )
+            "Response is bad request", rsp.status(), new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "Response tells why",
+            rsp.body().asString(), new StringContains("not a valid Debian package")
         );
         MatcherAssert.assertThat(
             "Debian package was not added",
             this.asto.exists(new Key.From("main/corrupted.deb")).join(),
             new IsEqual<>(false)
         );
-        MatcherAssert.assertThat("Artifact event was not added to queue", this.events.isEmpty());
+        MatcherAssert.assertThat(
+            "Artifact event was not added to queue", this.events.isEmpty(), new IsEqual<>(true)
+        );
+    }
+
+    private Response upload(final String name, final byte[] bytes) {
+        return new UpdateSlice(
+            this.asto,
+            new Config.FromYaml("my_repo", UpdateSliceTest.SETTINGS, new InMemoryStorage()),
+            Optional.of(this.events)
+        ).response(
+            new RequestLine(RqMethod.PUT, String.format("/main/%s", name)),
+            Headers.EMPTY,
+            new Content.From(bytes)
+        ).join();
     }
 
 }

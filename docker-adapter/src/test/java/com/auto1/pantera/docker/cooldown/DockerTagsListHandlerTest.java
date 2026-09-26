@@ -21,11 +21,13 @@ import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -136,6 +138,34 @@ final class DockerTagsListHandlerTest {
         );
     }
 
+    /**
+     * B10: the upstream here is the auth-enforcing DockerSlice. Dropping
+     * the inbound headers dropped {@code Authorization}, so every
+     * authenticated tags/list got a 401 from Pantera itself.
+     */
+    @Test
+    void forwardsInboundHeadersToUpstream() throws Exception {
+        final String body = tagsJson("library/nginx", "1.24");
+        final Slice authed = (line, headers, content) -> {
+            if (headers.values("Authorization").isEmpty()) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.unauthorized().build()
+                );
+            }
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(body.getBytes(StandardCharsets.UTF_8)).build()
+            );
+        };
+        final Response resp = new DockerTagsListHandler(
+            authed, this.cooldown, new NullInspector(), "docker-proxy", "docker-test"
+        ).handle(
+            new RequestLine(RqMethod.GET, "/v2/library/nginx/tags/list"),
+            Headers.from("Authorization", "Basic YWxpY2U6c2VjcmV0"),
+            "alice"
+        ).get();
+        assertThat(resp.status(), new IsEqual<>(RsStatus.OK));
+    }
+
     @Test
     void allTagsBlockedReturnsEmptyArrayNot404() throws Exception {
         // Docker clients expect {"name":..., "tags":[]} — NOT 404 — when
@@ -207,6 +237,40 @@ final class DockerTagsListHandlerTest {
         ).get();
         assertThat(resp.status().success(), is(true));
         assertThat(bodyToBytes(resp).length, equalTo(0));
+    }
+
+    /**
+     * R29: a full proxied tags page keeps the {@code Link: rel="next"} header
+     * the tags slice produced, whether or not cooldown filtered the page.
+     * Rebuilding the response from the body alone dropped it, so a client
+     * following Link stopped after the first page.
+     */
+    @Test
+    void keepsNextPageLink() throws Exception {
+        final String link = "</v2/docker-test/library/nginx/tags/list?n=2&last=1.25>; rel=\"next\"";
+        final Slice linked = (line, headers, body) -> CompletableFuture.completedFuture(
+            ResponseBuilder.ok()
+                .header("Link", link)
+                .body(tagsJson("library/nginx", "1.24", "1.25").getBytes(StandardCharsets.UTF_8))
+                .build()
+        );
+        final DockerTagsListHandler handler = new DockerTagsListHandler(
+            linked, this.cooldown, new NullInspector(), "docker-proxy", "docker-test"
+        );
+        final RequestLine line = new RequestLine(
+            RqMethod.GET, "/v2/docker-test/library/nginx/tags/list?n=2"
+        );
+        assertThat(
+            "Link kept on an unfiltered page",
+            handler.handle(line, Headers.EMPTY, "alice").get().headers().values("Link"),
+            new IsEqual<>(List.of(link))
+        );
+        this.cooldown.block("1.24");
+        assertThat(
+            "Link kept on a filtered page",
+            handler.handle(line, Headers.EMPTY, "alice").get().headers().values("Link"),
+            new IsEqual<>(List.of(link))
+        );
     }
 
     // ===== Helpers =====

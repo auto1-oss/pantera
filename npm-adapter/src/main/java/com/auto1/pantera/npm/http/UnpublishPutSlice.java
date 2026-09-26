@@ -30,6 +30,7 @@ import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonPatchBuilder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
@@ -48,6 +49,10 @@ import java.util.regex.Pattern;
  * dist-tag pointing at it — including {@code latest} — is dropped from the
  * sidecar. Falls back to a legacy {@code meta.json} patch for packages that
  * predate the per-version layout.</p>
+ *
+ * <p>The change runs only when the request's {@code /-rev/<rev>} segment is
+ * the package's current revision (see {@link RevisionGate}): 428 for an
+ * absent or malformed revision, 409 for a stale one.</p>
  */
 final class UnpublishPutSlice implements Slice {
     /**
@@ -91,17 +96,34 @@ final class UnpublishPutSlice implements Slice {
         final Content publisher
     ) {
         final String pkg = new PackageNameFromUrl(
-            RequestLine.from(line.toString().replaceFirst("/-rev/[^\\s]+", ""))
+            RequestLine.from(line.toString().replaceFirst("/-rev/[^\\s]*", ""))
         ).value();
+        final String sent = RevisionGate.revision(line.uri().getPath());
         final Key packageKey = new Key.From(pkg);
         final PerVersionLayout layout = new PerVersionLayout(this.asto);
-        return layout.hasVersions(packageKey).thenCompose(
-            hasVersions -> {
-                if (hasVersions) {
-                    return this.unpublishFromLayout(layout, packageKey, pkg, publisher);
+        // The body is read up front so that it is consumed on every path,
+        // refusals included (it was always buffered whole to parse it).
+        return publisher.asBytesFuture().thenCompose(
+            body -> layout.hasVersions(packageKey).thenCompose(
+                hasVersions -> {
+                    final CompletableFuture<Response> result;
+                    if (hasVersions) {
+                        // R24: like the DELETE leg, the PUT leg of an
+                        // unpublish runs only against the revision the
+                        // client read, so a stale packument cannot drop
+                        // versions published after it was read.
+                        result = new RevisionGate(this.asto).whenCurrent(
+                            pkg, sent,
+                            () -> this.unpublishFromLayout(
+                                layout, packageKey, pkg, new Content.From(body)
+                            )
+                        );
+                    } else {
+                        result = this.unpublishLegacy(pkg, sent, body);
+                    }
+                    return result;
                 }
-                return this.unpublishLegacy(pkg, publisher);
-            }
+            )
         ).toCompletableFuture();
     }
 
@@ -156,27 +178,33 @@ final class UnpublishPutSlice implements Slice {
      * existed: patch {@code meta.json} directly.
      *
      * @param pkg Package name
-     * @param publisher Request body
+     * @param sent Revision supplied by the client
+     * @param body Request body
      * @return Completion stage with the response
      */
-    private CompletableFuture<Response> unpublishLegacy(final String pkg, final Content publisher) {
+    private CompletableFuture<Response> unpublishLegacy(
+        final String pkg, final String sent, final byte[] body
+    ) {
         final Key key = new Key.From(pkg, "meta.json");
         return this.asto.exists(key).thenCompose(
             exists -> {
+                final CompletableFuture<Response> result;
                 if (exists) {
-                    return new Content.From(publisher).asJsonObjectFuture()
-                        .thenCompose(update -> this.updateMeta(update, key))
-                        .thenApply(
-                            ver -> {
-                                this.emitEvent(pkg, ver);
-                                return ResponseBuilder.ok().build();
-                            }
-                        );
+                    result = new RevisionGate(this.asto).whenCurrent(
+                        pkg, sent,
+                        () -> new Content.From(body).asJsonObjectFuture()
+                            .thenCompose(update -> this.updateMeta(update, key))
+                            .thenApply(
+                                ver -> {
+                                    this.emitEvent(pkg, ver);
+                                    return ResponseBuilder.ok().build();
+                                }
+                            ).toCompletableFuture()
+                    );
+                } else {
+                    result = ResponseBuilder.notFound().completedFuture();
                 }
-                // Consume request body to prevent Vert.x request leak
-                return new Content.From(publisher).asBytesFuture().thenApply(ignored ->
-                    ResponseBuilder.notFound().build()
-                );
+                return result;
             }
         );
     }
@@ -217,12 +245,18 @@ final class UnpublishPutSlice implements Slice {
                     if (source.getJsonObject("dist-tags").containsKey(diff)) {
                         patch.remove(String.format("/dist-tags/%s", diff));
                     }
-                    // Get latest STABLE version (exclude prereleases like alpha, beta, rc)
-                    final String latest = new DescSortedVersions(
-                        update.getJsonObject("versions"),
-                        true  // excludePrereleases = true
-                    ).value().get(0);
-                    patch.add("/dist-tags/latest", latest);
+                    // Highest stable version; the highest prerelease when no
+                    // stable version remains, so latest never disappears.
+                    final JsonObject remaining = update.getJsonObject("versions");
+                    final List<String> stable =
+                        new DescSortedVersions(remaining, true).value();
+                    final List<String> all =
+                        new DescSortedVersions(remaining, false).value();
+                    if (!stable.isEmpty()) {
+                        patch.add("/dist-tags/latest", stable.get(0));
+                    } else if (!all.isEmpty()) {
+                        patch.add("/dist-tags/latest", all.get(0));
+                    }
                     patch.add("/time/modified", new DateTimeNowStr().value());
                     return this.asto.save(
                         meta,

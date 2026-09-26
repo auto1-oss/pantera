@@ -21,6 +21,16 @@ import com.auto1.pantera.http.Response;
 public interface CooldownResponseFactory {
 
     /**
+     * Header every cooldown verdict carries, whatever its status (a 403 for a
+     * blocked artifact, a format-specific 404/403 when every version of a
+     * package is blocked). Its values are {@code blocked} and
+     * {@code all-blocked}. Wrapping slices and group walks key on it to treat
+     * the response as Pantera's own authoritative answer: relayed verbatim,
+     * never laundered into a non-authoritative miss, never negative-cached.
+     */
+    String HEADER = "X-Pantera-Cooldown";
+
+    /**
      * Build a 403 Forbidden response for a blocked artifact.
      *
      * @param block Block details
