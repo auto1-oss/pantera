@@ -10,6 +10,17 @@ This page covers the process for upgrading Pantera to a new version, including p
 
 ### Upgrading to 2.3.0
 
+**Coming from 2.2.8 or earlier: skip 2.2.9.** The 2.2.9 image cannot start against a database created by an earlier release: it shipped a comment edit inside the already-applied migration `V116`, and Flyway stops with `Migration checksum mismatch for migration version 116`. 2.3.0 restores the original file, so upgrade from 2.2.8 directly to 2.3.0 with no database action.
+
+**Coming from 2.2.9:** a database that first ran `V116` under 2.2.9 (a fresh 2.2.9 install, or one where the checksum was rewritten to get 2.2.9 started) recorded the 2.2.9 checksum and fails the same validation against 2.3.0. Before starting 2.3.0, set it back to the original value:
+
+```sql
+UPDATE flyway_schema_history SET checksum = -1980887255
+ WHERE version = '116' AND checksum = -1336931361;
+```
+
+The statement is a no-op on every other database. See [Troubleshooting](troubleshooting.md#startup-failure-migration-checksum-mismatch-for-migration-version-116).
+
 **No database migration.** 2.3.0 adds no Flyway migration (the highest version stays `V145`), and an existing `pantera.yml`, repository YAMLs and environment load unchanged. The storage and download features are opt-in per storage/repository:
 
 - **Index-accelerated S3 cache** (`cache.mode: index`) — serves cache hits from an in-memory index with async durable write-back and byte-bounded LRU/LFU eviction. Default is unchanged (`mode: disk`, the prior disk cache). See [Index Cache Mode](storage-backends.md#index-cache-mode-cachemode-index).

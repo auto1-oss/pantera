@@ -24,6 +24,7 @@
 
 ### 🔧 Bug fixes
 
+- **Upgrading from 2.2.8 or earlier no longer fails Flyway validation** — 2.2.9 shipped a comment edit inside the already-applied `V116` migration, so it could not start against an existing database (`Migration checksum mismatch for migration version 116`); the file is restored byte-for-byte. Upgrade from 2.2.8 directly to 2.3.0; a database that first ran `V116` under 2.2.9 needs the one-line checksum fix in the upgrade notes. ([@aydasraf](https://github.com/aydasraf))
 - **Clustered deployments no longer drop artifact events or proxy index/audit records** — the per-node event drain and the per-format proxy index/audit processors (Maven, npm, PyPI, Go, Composer) ran through cluster-shared Quartz, which could fire them on the wrong node or delete another node's job; they now run on each node's own scheduler. ([@aydasraf](https://github.com/aydasraf))
 - **Docker manifest `GET`/`HEAD` honour `Accept`** — a `406` when the client accepts none of the manifest's media types (wildcards respected), instead of an unparseable body. ([@aydasraf](https://github.com/aydasraf))
 - **Docker proxy caches manifests per negotiated `Accept`-variant** — the client's `Accept` is forwarded upstream and keys the cache, so a multi-variant tag no longer cross-serves the wrong media type. ([@aydasraf](https://github.com/aydasraf))
