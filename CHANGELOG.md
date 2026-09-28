@@ -1,5 +1,11 @@
 # Changelog
 
+## Version 2.2.10
+
+### 🔧 Bug fixes
+
+- **Upgrading from 2.2.8 or earlier no longer fails Flyway validation** — 2.2.9 shipped a comment edit inside the already-applied `V116` migration, so it could not start against an existing database (`Migration checksum mismatch for migration version 116`); the file is restored byte-for-byte. Upgrade from 2.2.8 directly to 2.2.10; a database that first ran `V116` under 2.2.9 needs the one-line checksum fix in the upgrade notes. ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.9
 
 This release contains security hardening and a broad set of bug fixes across formats. Upgrading is recommended. Some specifics of the hardening are intentionally withheld here to protect deployments that have not yet upgraded; the operational changes an administrator must be aware of are listed below. For coordinated-disclosure details, contact the maintainers.
