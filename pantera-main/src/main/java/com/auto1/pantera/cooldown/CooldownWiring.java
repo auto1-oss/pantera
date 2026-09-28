@@ -23,6 +23,7 @@ import com.auto1.pantera.docker.cooldown.DockerMetadataFilter;
 import com.auto1.pantera.docker.cooldown.DockerMetadataParser;
 import com.auto1.pantera.docker.cooldown.DockerMetadataRequestDetector;
 import com.auto1.pantera.docker.cooldown.DockerMetadataRewriter;
+import com.auto1.pantera.files.FileProxyCooldownResponseFactory;
 import com.auto1.pantera.http.cooldown.GoCooldownResponseFactory;
 import com.auto1.pantera.http.cooldown.GoMetadataFilter;
 import com.auto1.pantera.http.cooldown.GoMetadataParser;
@@ -66,6 +67,7 @@ import com.auto1.pantera.pypi.cooldown.PypiMetadataRewriter;
  *   <li>go, go-proxy &rarr; Go bundle</li>
  *   <li>php, php-proxy &rarr; Composer bundle</li>
  *   <li>gradle &rarr; reuses Maven bundle</li>
+ *   <li>file-proxy &rarr; 403 factory only (no metadata)</li>
  * </ul>
  *
  * @since 2.2.0
@@ -207,6 +209,12 @@ public final class CooldownWiring {
         responses.register(new ComposerCooldownResponseFactory(), "php", "php-proxy");
         adapters.register("php", composerBundle);
         adapters.register("php-proxy", composerBundle);
+
+        // --- file-proxy ---
+        // No metadata to filter (no version listing); only the 403 factory,
+        // used when FileProxySlice blocks a fetch. Without it a block threw
+        // IllegalStateException from getOrThrow and surfaced as a 5xx.
+        responses.register(new FileProxyCooldownResponseFactory());
 
         EcsLogger.info("com.auto1.pantera.cooldown")
             .message("Registered cooldown adapter bundles: " + adapters.registeredTypes()

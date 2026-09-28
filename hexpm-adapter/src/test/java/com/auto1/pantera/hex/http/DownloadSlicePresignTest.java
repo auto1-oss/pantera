@@ -19,29 +19,47 @@ import com.auto1.pantera.asto.blob.DownloadMode;
 import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.asto.blob.Presigner;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.hex.ResourceUtil;
+import com.auto1.pantera.hex.proto.generated.PackageOuterClass;
+import com.auto1.pantera.hex.proto.generated.SignedOuterClass;
+import com.auto1.pantera.hex.utils.Gzip;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.headers.Location;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
+import com.auto1.pantera.security.policy.Policy;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.StringStartsWith;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
  * WS1.7 presigned-direct-download tests for {@link DownloadSlice}: only the
  * {@code /tarballs/} package-byte route is redirect-eligible; the {@code
- * /packages/} registry-metadata route MUST keep streaming even under a {@link
- * DownloadMode#REDIRECT} policy with a presign-capable backend. Adapter-level
- * proof that registry metadata is never redirected.
+ * /packages/} registry-record route MUST keep streaming even under a {@link
+ * DownloadMode#REDIRECT} policy with a presign-capable backend -- and, when
+ * the repository signs its registry, the record served is the re-signed one,
+ * which a redirect would have bypassed. Adapter-level proof that registry
+ * metadata is never redirected.
  */
 @Timeout(15)
 final class DownloadSlicePresignTest {
@@ -49,15 +67,23 @@ final class DownloadSlicePresignTest {
     private static final String PRESIGNED =
         "https://blobs.example.test/tarballs/decimal-2.0.0.tar?sig=abc";
 
+    private static final String REPO = "presign-hex";
+
+    private static final String TARBALL = "tarballs/decimal-2.0.0.tar";
+
+    private static final String RECORD = "packages/decimal";
+
+    private static final DownloadPolicy REDIRECT =
+        new DownloadPolicy(DownloadMode.REDIRECT, 600L);
+
     @Test
     void tarballRedirectsButPackagesStream() {
         final PresigningStorage storage = new PresigningStorage(new InMemoryStorage());
-        storage.save(new Key.From("tarballs/decimal-2.0.0.tar"), content("tar")).join();
-        storage.save(new Key.From("packages/decimal"), content("registry")).join();
-        final DownloadSlice slice =
-            new DownloadSlice(storage, new DownloadPolicy(DownloadMode.REDIRECT, 600L));
+        storage.save(new Key.From(TARBALL), content("tar")).join();
+        storage.save(new Key.From(RECORD), content("registry")).join();
+        final DownloadSlice slice = new DownloadSlice(storage, REDIRECT);
 
-        final Response tarball = get(slice, "/tarballs/decimal-2.0.0.tar");
+        final Response tarball = get(slice, "/" + TARBALL);
         MatcherAssert.assertThat(
             "the package-tarball GET must redirect (302) under REDIRECT policy",
             tarball.status().code(), new IsEqual<>(302)
@@ -74,7 +100,7 @@ final class DownloadSlicePresignTest {
 
         MatcherAssert.assertThat(
             "the /packages/ registry-metadata route must stream (200), never redirect",
-            get(slice, "/packages/decimal").status().code(), new IsEqual<>(200)
+            get(slice, "/" + RECORD).status().code(), new IsEqual<>(200)
         );
         MatcherAssert.assertThat(
             "registry metadata must not have triggered any further presign attempts",
@@ -82,7 +108,112 @@ final class DownloadSlicePresignTest {
         );
     }
 
-    private static Response get(final DownloadSlice slice, final String path) {
+    @Test
+    void signedRegistryRecordStreamsResignedWhileTarballRedirects() throws Exception {
+        final PresigningStorage storage = new PresigningStorage(new InMemoryStorage());
+        storage.save(new Key.From(TARBALL), content("tar")).join();
+        storage.save(new Key.From(RECORD), resource(RECORD)).join();
+        final RegistrySigner signer = new RegistrySigner();
+        final DownloadSlice slice = new DownloadSlice(storage, REPO, signer, REDIRECT);
+
+        final Response record = get(slice, "/" + RECORD);
+        MatcherAssert.assertThat(
+            "a signed registry record must stream (200) under REDIRECT policy",
+            record.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the registry record must never be presigned",
+            storage.presignCalls.get(), new IsEqual<>(0)
+        );
+        final SignedOuterClass.Signed signed = SignedOuterClass.Signed.parseFrom(
+            new Gzip(record.body().asBytes()).decompress()
+        );
+        MatcherAssert.assertThat(
+            "the served record must be re-signed for this repository",
+            PackageOuterClass.Package.parseFrom(signed.getPayload()).getRepository(),
+            new IsEqual<>(REPO)
+        );
+        final Signature verifier = Signature.getInstance("SHA512withRSA");
+        verifier.initVerify(publicKey(signer));
+        verifier.update(signed.getPayload().toByteArray());
+        MatcherAssert.assertThat(
+            "the served record's signature must verify with the repository's public key",
+            verifier.verify(signed.getSignature().toByteArray()), new IsEqual<>(true)
+        );
+
+        MatcherAssert.assertThat(
+            "the tarball GET must still redirect (302) beside a configured signer",
+            get(slice, "/" + TARBALL).status().code(), new IsEqual<>(302)
+        );
+        MatcherAssert.assertThat(
+            "exactly one presign, for the tarball only",
+            storage.presignCalls.get(), new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void hexSliceWiresSignerAndPolicyTogether() throws Exception {
+        final PresigningStorage storage = new PresigningStorage(new InMemoryStorage());
+        storage.save(new Key.From(TARBALL), content("tar")).join();
+        storage.save(new Key.From(RECORD), resource(RECORD)).join();
+        final RegistrySigner signer = new RegistrySigner();
+        final HexSlice slice = new HexSlice(
+            storage, Policy.FREE,
+            (name, pass) -> Optional.of(new AuthUser(name, "test")),
+            Optional.empty(), REPO,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
+            signer, REDIRECT
+        );
+        final Headers auth = Headers.from(new Authorization.Basic("alice", "pw"));
+
+        final Response tarball = slice.response(
+            new RequestLine("GET", "/" + TARBALL), auth, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the tarball route must redirect (302) through HexSlice",
+            tarball.status().code(), new IsEqual<>(302)
+        );
+        MatcherAssert.assertThat(
+            "redirect must point at the presigned URL",
+            new RqHeaders.Single(tarball.headers(), Location.NAME).asString(),
+            new IsEqual<>(PRESIGNED)
+        );
+
+        final Response key = slice.response(
+            new RequestLine("GET", "/public_key"), auth, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "/public_key must serve the signer's PEM (200)",
+            key.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "/public_key body must be a PEM public key",
+            key.body().asString(), new StringStartsWith("-----BEGIN PUBLIC KEY-----")
+        );
+
+        final Response record = slice.response(
+            new RequestLine("GET", "/" + RECORD), auth, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the registry record must stream (200) through HexSlice",
+            record.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the served record must name this repository",
+            PackageOuterClass.Package.parseFrom(
+                SignedOuterClass.Signed.parseFrom(
+                    new Gzip(record.body().asBytes()).decompress()
+                ).getPayload()
+            ).getRepository(),
+            new IsEqual<>(REPO)
+        );
+        MatcherAssert.assertThat(
+            "exactly one presign, for the tarball only",
+            storage.presignCalls.get(), new IsEqual<>(1)
+        );
+    }
+
+    private static Response get(final Slice slice, final String path) {
         return slice.response(
             new RequestLine("GET", path), Headers.EMPTY, Content.EMPTY
         ).toCompletableFuture().join();
@@ -90,6 +221,19 @@ final class DownloadSlicePresignTest {
 
     private static Content content(final String value) {
         return new Content.From(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static Content resource(final String path) throws Exception {
+        return new Content.From(Files.readAllBytes(new ResourceUtil(path).asPath()));
+    }
+
+    private static PublicKey publicKey(final RegistrySigner signer) throws Exception {
+        final String pem = new String(signer.publicKeyPem(), StandardCharsets.US_ASCII)
+            .replace("-----BEGIN PUBLIC KEY-----", "")
+            .replace("-----END PUBLIC KEY-----", "")
+            .replaceAll("\\s", "");
+        return KeyFactory.getInstance("RSA")
+            .generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(pem)));
     }
 
     /** {@link Storage} that also presigns -- the "bare presigner" composition. */

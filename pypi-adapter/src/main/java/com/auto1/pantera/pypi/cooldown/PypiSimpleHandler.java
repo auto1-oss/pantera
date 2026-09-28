@@ -25,7 +25,6 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -36,7 +35,6 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
-import org.slf4j.MDC;
 
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
@@ -263,9 +261,7 @@ public final class PypiSimpleHandler {
         // continuations below, which may run on a worker thread that never
         // had MDC bound.
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext ctx = new AuditContext(headers);
         final String path = line.uri().getPath();
         // PEP 503 normalization (lowercase + collapse runs of [-_.] to single
         // '-'): the artifact-publish path stores release dates under the
@@ -675,7 +671,13 @@ public final class PypiSimpleHandler {
         if (clientWantsJson) {
             return ResponseBuilder.ok()
                 .header("Content-Type", JSON_CONTENT_TYPE)
-                .body(emptyJsonBody(pkg))
+                .body(javax.json.Json.createObjectBuilder()
+                    .add("meta", javax.json.Json.createObjectBuilder().add("api-version", "1.1"))
+                    .add("name", pkg)
+                    .add("versions", javax.json.Json.createArrayBuilder())
+                    .add("files", javax.json.Json.createArrayBuilder())
+                    .build().toString()
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8))
                 .build();
         }
         return ResponseBuilder.ok()

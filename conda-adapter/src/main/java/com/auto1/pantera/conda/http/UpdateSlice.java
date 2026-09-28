@@ -15,8 +15,8 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
-import com.auto1.pantera.asto.misc.UncheckedIOScalar;
 import com.auto1.pantera.asto.streams.ContentAsStream;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.conda.asto.AstoMergedJson;
 import com.auto1.pantera.conda.meta.InfoIndex;
 import com.auto1.pantera.http.Headers;
@@ -32,14 +32,20 @@ import io.reactivex.Flowable;
 import org.reactivestreams.Publisher;
 
 import javax.json.Json;
+import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
+import javax.json.JsonString;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -124,12 +130,21 @@ public final class UpdateSlice implements Slice {
                         .thenApply(JsonObjectBuilder::build)
                         .thenCompose(
                             json -> {
-                                CompletionStage<Void> action = new AstoMergedJson(
-                                    this.asto, new Key.From(matcher.group(2), "repodata.json")
-                                ).merge(
-                                    Collections.singletonMap(matcher.group(3), json)
-                                ).thenCompose(
-                                    ignored -> this.asto.move(temp, new Key.From(matcher.group(1)))
+                                // Merge and move under the repodata lock the
+                                // management-API delete prunes under: the
+                                // package is listed only once its file is
+                                // in place, and neither side loses the
+                                // other's change.
+                                final Key repodata =
+                                    new Key.From(matcher.group(2), "repodata.json");
+                                CompletionStage<Void> action = new IndexUpdateLock(
+                                    this.asto, repodata
+                                ).run(
+                                    locked -> new AstoMergedJson(locked, repodata).merge(
+                                        Collections.singletonMap(matcher.group(3), json)
+                                    ).thenCompose(
+                                        ignored -> locked.move(temp, main)
+                                    )
                                 );
                                 action = action.thenCompose(nothing -> {
                                     final String pkgName = json.getString("name", "<no name>");
@@ -149,7 +164,7 @@ public final class UpdateSlice implements Slice {
                                         json.getJsonNumber(UpdateSlice.SIZE).longValue(),
                                         System.currentTimeMillis(), null,
                                         matcher.group(1)
-                                    );
+                                    ).withRequestContext(headers);
                                     this.events.ifPresent(queue -> queue.add(event));
                                     com.auto1.pantera.http.cache.NegativeCacheRegistry
                                         .instance()
@@ -163,11 +178,60 @@ public final class UpdateSlice implements Slice {
                             }
                         ).thenApply(
                             ignored -> ResponseBuilder.created().build()
-                        )
+                        ).handle(
+                            (rsp, err) -> this.completed(temp, rsp, err)
+                        ).thenCompose(Function.identity())
                 )
             ).toCompletableFuture();
         }
         return ResponseBuilder.badRequest().completedFuture();
+    }
+
+    /**
+     * Finish an upload: on failure the temporary upload is removed, and a body
+     * that is not a conda package is answered with {@code 400} and the reason
+     * instead of {@code 500}.
+     * @param temp Temporary upload key
+     * @param rsp Response of a successful upload
+     * @param err Failure, null on success
+     * @return Response
+     */
+    private CompletionStage<Response> completed(final Key temp, final Response rsp,
+        final Throwable err) {
+        final CompletionStage<Response> res;
+        if (err == null) {
+            res = CompletableFuture.completedFuture(rsp);
+        } else {
+            final Throwable cause = UpdateSlice.cause(err);
+            res = this.asto.exists(temp).thenCompose(
+                present -> present ? this.asto.delete(temp)
+                    : CompletableFuture.<Void>completedFuture(null)
+            ).thenApply(
+                ignored -> {
+                    if (cause instanceof InvalidPackageException) {
+                        return ResponseBuilder.badRequest()
+                            .textBody(cause.getMessage())
+                            .build();
+                    }
+                    throw new CompletionException(cause);
+                }
+            );
+        }
+        return res;
+    }
+
+    /**
+     * Unwrap completion wrappers.
+     * @param err Error
+     * @return Underlying cause
+     */
+    private static Throwable cause(final Throwable err) {
+        Throwable res = err;
+        while ((res instanceof CompletionException || res instanceof ExecutionException)
+            && res.getCause() != null) {
+            res = res.getCause();
+        }
+        return res;
     }
 
     /**
@@ -199,11 +263,44 @@ public final class UpdateSlice implements Slice {
                     } else {
                         info = new InfoIndex.TarBz(input);
                     }
-                    return Json.createObjectBuilder(new UncheckedIOScalar<>(info::json).value())
+                    return Json.createObjectBuilder(UpdateSlice.index(info))
                         .add(UpdateSlice.SIZE, val.size().get());
                 }
             )
         );
+    }
+
+    /**
+     * Package metadata ({@code info/index.json}) of an uploaded package.
+     * @param info Package index reader
+     * @return Index json
+     * @throws InvalidPackageException If the upload is not a conda package or
+     *  its index lacks the name or version
+     */
+    private static JsonObject index(final InfoIndex info) {
+        final JsonObject json;
+        try {
+            json = info.json();
+        } catch (final IOException | RuntimeException ex) {
+            // Compressor, archive and JSON parsers all fail with their own
+            // exception types on a body that is not a package.
+            throw new InvalidPackageException(
+                String.format("The upload is not a valid conda package: %s", ex.getMessage()),
+                ex
+            );
+        }
+        for (final String field : new String[]{"name", "version"}) {
+            if (!(json.get(field) instanceof JsonString)) {
+                throw new InvalidPackageException(
+                    String.format(
+                        "The upload is not a valid conda package: info/index.json has no %s",
+                        field
+                    ),
+                    null
+                );
+            }
+        }
+        return json;
     }
 
     /**
@@ -238,5 +335,23 @@ public final class UpdateSlice implements Slice {
                 }
             )
         ).flatMap(part -> part);
+    }
+
+    /**
+     * The uploaded body is not a conda package.
+     * @since 2.2.9
+     */
+    private static final class InvalidPackageException extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Ctor.
+         * @param message Reason for the client
+         * @param cause Cause, may be null
+         */
+        InvalidPackageException(final String message, final Throwable cause) {
+            super(message, cause);
+        }
     }
 }

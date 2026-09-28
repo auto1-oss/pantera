@@ -73,32 +73,29 @@ final class FromStorageCacheTest {
     }
 
     @Test
-    void doesNotInvokeRemoteOnCacheHit() throws Exception {
-        // Regression test for the eager-remote.get()-on-every-call bug: remote.get()
-        // was a plain method-call argument to switchIfEmpty, so it fired even when
-        // the cache-hit chain above it was going to satisfy the request -- a
-        // side-effecting Remote (e.g. an upstream HTTP fetch) ran needlessly on
-        // every hit. Proven via invocation count, per CLAUDE.md doctrine, not
-        // wall-clock timing.
-        final Key key = new Key.From("key-lazy-hit");
-        final byte[] data = "cached-bytes".getBytes();
+    void cacheHitDoesNotInvokeRemote() throws Exception {
+        final Key key = new Key.From("hit", "lazy");
+        final byte[] data = "cached".getBytes();
         new BlockingStorage(this.storage).save(key, data);
-        final AtomicInteger remoteCalls = new AtomicInteger();
-        final Remote remote = () -> {
-            remoteCalls.incrementAndGet();
-            return CompletableFuture.completedFuture(
-                Optional.of(new Content.From("should-not-be-used".getBytes()))
-            );
-        };
-        final Optional<? extends Content> result = new FromStorageCache(this.storage)
-            .load(key, remote, CacheControl.Standard.ALWAYS)
-            .toCompletableFuture()
-            .get();
+        final AtomicInteger calls = new AtomicInteger();
+        final Content hit = new FromStorageCache(this.storage).load(
+            key,
+            () -> {
+                calls.incrementAndGet();
+                return CompletableFuture.completedFuture(
+                    Optional.of(new Content.From("remote".getBytes()))
+                );
+            },
+            CacheControl.Standard.ALWAYS
+        ).toCompletableFuture().get().get();
         MatcherAssert.assertThat(
-            "Remote must not be invoked when the cache already has the value",
-            remoteCalls.get(), Matchers.is(0)
+            "Cache hit must serve the stored bytes",
+            hit, new ContentIs(data)
         );
-        MatcherAssert.assertThat(result.get(), new ContentIs(data));
+        MatcherAssert.assertThat(
+            "Cache hit must not call the remote at all",
+            calls.get(), new org.hamcrest.core.IsEqual<>(0)
+        );
     }
 
     @Test

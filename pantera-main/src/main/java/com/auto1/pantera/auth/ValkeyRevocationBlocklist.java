@@ -11,53 +11,49 @@
 package com.auto1.pantera.auth;
 
 import com.auto1.pantera.asto.misc.Cleanable;
-import com.auto1.pantera.cache.CacheBroadcast;
+import com.auto1.pantera.cache.CacheInvalidationPubSub;
+import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.db.dao.RevocationDao;
-import com.auto1.pantera.db.dao.RevocationStore;
 import com.auto1.pantera.http.log.EcsLogger;
+import io.lettuce.core.KeyScanCursor;
+import io.lettuce.core.ScanArgs;
+import io.lettuce.core.ScanCursor;
+import io.lettuce.core.SetArgs;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
- * DB-durable, Valkey-accelerated revocation blocklist (WS2.1, 2.3.0).
- * <p>
- * Prior to 2.3.0 this class wrote revocations to Valkey only and never read
- * anything back: {@code isRevoked*} checked the local map alone, and a
- * restarted node started with an empty map — re-honoring already-revoked,
- * unexpired tokens for their full TTL. The DB (via {@link RevocationStore},
- * the same table {@link DbRevocationBlocklist} uses) is now the source of
- * truth on every path:
- * <ul>
- *   <li><b>Write</b> — {@link #revokeJti}/{@link #revokeUser} insert the DB
- *       row first, then publish over {@link CacheBroadcast} carrying the
- *       token's real remaining TTL (fixes the pre-2.3.0 fixed-2h peer TTL
- *       bug — a peer used to apply a flat default regardless of how long the
- *       revocation should actually last).</li>
- *   <li><b>Boot hydration</b> — the constructor performs an immediate,
- *       synchronous {@code pollSince(EPOCH)} read (boot thread only, mirrors
- *       {@code CacheInvalidationPubSub}'s own boot-blocking SUBSCRIBE), so a
- *       freshly-started node's local cache starts populated with every
- *       currently-active revocation instead of empty.</li>
- *   <li><b>Reconciliation</b> — every {@code isRevoked*} call triggers a
- *       throttled (5s) incremental re-poll of the DB, exactly mirroring
- *       {@link DbRevocationBlocklist#isRevokedJti}'s own poll-if-stale
- *       pattern. This is the backstop for a missed pub/sub message: within
- *       one poll interval, any revocation this node's pub/sub subscription
- *       dropped is picked up from the DB regardless.</li>
- * </ul>
- * Net effect: a Valkey outage degrades this class to "DB-poll speed"
- * (correct, bounded by the poll interval) — never to fail-open. Cross-node
- * fan-out for the common case is still near-instant, over the existing
- * {@link CacheBroadcast} channel (same channel {@code auth}/{@code filters}/
- * {@code policy} invalidation already uses, cache type {@code "revocation"}).
+ * Valkey pub/sub backed revocation blocklist.
  *
- * <p>Pub/sub message format (value published on the {@code "revocation"}
- * cache type): {@code jti:{jti}:{ttlSeconds}} / {@code user:{username}:
- * {ttlSeconds}}. A message without the trailing {@code :ttlSeconds} (a v1
- * payload from a pre-2.3.0 peer mid-rolling-upgrade, or a value that
- * legitimately contains no colon-separated suffix) falls back to
- * {@code defaultTtlSeconds} — rolling-upgrade compatible.
+ * <p>Stores revocation entries in Valkey with a TTL so they expire automatically.
+ * Uses the existing {@link CacheInvalidationPubSub} channel to propagate revocations
+ * to peer Pantera nodes in real time, so every node's local cache is updated within
+ * milliseconds of a revocation being issued on any node.
+ *
+ * <p>Durability (2.2.9, B47): the local cache used to be the only thing ever
+ * read — the Valkey entries were written but never loaded, so a restarted
+ * node forgot every revocation, and a peer applied a fixed 2-hour TTL and
+ * its own receipt time because the message carried neither. Now:
+ * <ul>
+ *   <li>{@link #restore()} (boot thread) loads every live entry from Valkey
+ *       and, when a database is wired, from the {@code revocation_blocklist}
+ *       table;</li>
+ *   <li>the pub/sub message carries the sender's revocation instant and
+ *       expiry ({@link RevocationMessage}), and is followed by the pre-2.2.9
+ *       form so nodes not yet upgraded keep receiving revocations during a
+ *       rolling upgrade;</li>
+ *   <li>revocations are also written to the database (when wired), so they
+ *       survive a Valkey flush or eviction.</li>
+ * </ul>
+ *
+ * <p>Valkey key format:
+ * <ul>
+ *   <li>{@code pantera:revoked:jti:{jti}} — value {@code 1}</li>
+ *   <li>{@code pantera:revoked:user:{username}} — value: revocation instant in
+ *       epoch milliseconds ({@code 1} before 2.2.9)</li>
+ * </ul>
  *
  * @since 2.1.0
  */
@@ -69,56 +65,59 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
     private static final String CACHE_TYPE = "revocation";
 
     /**
-     * Prefix for JTI revocation pub/sub messages and cache keys.
+     * Valkey key prefix for JTI revocation entries.
      */
-    private static final String JTI_PREFIX = "jti:";
+    private static final String VALKEY_JTI_KEY = "pantera:revoked:jti:";
 
     /**
-     * Prefix for user revocation pub/sub messages and cache keys.
+     * Valkey key prefix for user revocation entries.
      */
-    private static final String USER_PREFIX = "user:";
+    private static final String VALKEY_USER_KEY = "pantera:revoked:user:";
 
     /**
-     * DB entry-type constant for JTI-based revocations, matching
-     * {@link DbRevocationBlocklist}.
+     * DB entry type for JTI revocations (shared with {@link DbRevocationBlocklist}).
      */
     private static final String TYPE_JTI = "jti";
 
     /**
-     * DB entry-type constant for user-based revocations, matching
-     * {@link DbRevocationBlocklist}.
+     * DB entry type for user revocations (shared with {@link DbRevocationBlocklist}).
      */
     private static final String TYPE_USER = "username";
 
     /**
-     * Reconciliation poll throttle, matching
-     * {@link DbRevocationBlocklist}'s own interval.
+     * Per-command timeout for the boot-time restore.
      */
-    private static final long DEFAULT_POLL_INTERVAL_MS = 5_000L;
+    private static final long RESTORE_TIMEOUT_SECONDS = 10L;
+
+    /**
+     * Logger name.
+     */
+    private static final String LOGGER = "com.auto1.pantera.auth";
+
+    /**
+     * Valkey connection for async commands.
+     */
+    private final ValkeyConnection valkey;
 
     /**
      * Pub/sub for cross-node revocation propagation.
      */
-    private final CacheBroadcast pubSub;
+    private final CacheInvalidationPubSub pubSub;
 
     /**
-     * DB-durable store — source of truth.
-     */
-    private final RevocationStore dao;
-
-    /**
-     * Default TTL in seconds used when a remote invalidation arrives without
-     * a parseable embedded TTL (legacy v1 payload / malformed message).
+     * TTL in seconds applied to a pre-2.2.9 remote message (no expiry in it).
      */
     private final int defaultTtlSeconds;
 
     /**
-     * Reconciliation poll throttle in milliseconds. Package-private test
-     * seam so propagation tests don't need to wait out the production
-     * 5-second interval; production always uses
-     * {@link #DEFAULT_POLL_INTERVAL_MS}.
+     * Durable fallback store; {@code null} when no database is wired.
      */
-    private final long pollIntervalMs;
+    private final RevocationDao dao;
+
+    /**
+     * Decodes peer messages and drops the legacy echo of a current one.
+     */
+    private final RevocationInbox inbox;
 
     /**
      * Local cache: JTI → expiry instant.
@@ -126,58 +125,95 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
     private final ConcurrentHashMap<String, Instant> jtiCache;
 
     /**
-     * Local cache: username → expiry instant.
+     * Local cache: username → revocation (issued-at cutoff + expiry).
      */
-    private final ConcurrentHashMap<String, Instant> userCache;
+    private final ConcurrentHashMap<String, UserRevocation> userCache;
 
     /**
-     * Timestamp of the last successful DB poll.
-     */
-    private volatile Instant lastPoll;
-
-    /**
-     * Ctor. Hydrates the local caches from the DB before returning.
+     * Ctor without a database.
+     *
+     * @param valkey Valkey connection for storing revocation entries
      * @param pubSub Pub/sub channel for cross-node propagation
-     * @param dao DB-durable revocation store (source of truth)
-     * @param defaultTtlSeconds Fallback TTL for legacy/malformed pub/sub payloads
+     * @param defaultTtlSeconds TTL applied to a pre-2.2.9 remote message
      */
     public ValkeyRevocationBlocklist(
-        final CacheBroadcast pubSub,
-        final RevocationStore dao,
+        final ValkeyConnection valkey,
+        final CacheInvalidationPubSub pubSub,
         final int defaultTtlSeconds
     ) {
-        this(pubSub, dao, defaultTtlSeconds, ValkeyRevocationBlocklist.DEFAULT_POLL_INTERVAL_MS);
+        this(valkey, pubSub, defaultTtlSeconds, null);
     }
 
     /**
-     * Full ctor with an overridable poll interval (test seam).
+     * Ctor.
+     *
+     * @param valkey Valkey connection for storing revocation entries
      * @param pubSub Pub/sub channel for cross-node propagation
-     * @param dao DB-durable revocation store (source of truth)
-     * @param defaultTtlSeconds Fallback TTL for legacy/malformed pub/sub payloads
-     * @param pollIntervalMs Reconciliation poll throttle in milliseconds
+     * @param defaultTtlSeconds TTL applied to a pre-2.2.9 remote message
+     * @param dao Durable fallback store, or {@code null}
      */
-    ValkeyRevocationBlocklist(
-        final CacheBroadcast pubSub,
-        final RevocationStore dao,
+    public ValkeyRevocationBlocklist(
+        final ValkeyConnection valkey,
+        final CacheInvalidationPubSub pubSub,
         final int defaultTtlSeconds,
-        final long pollIntervalMs
+        final RevocationDao dao
     ) {
+        this.valkey = valkey;
         this.pubSub = pubSub;
-        this.dao = dao;
         this.defaultTtlSeconds = defaultTtlSeconds;
-        this.pollIntervalMs = pollIntervalMs;
+        this.dao = dao;
+        this.inbox = new RevocationInbox(java.time.Duration.ofMinutes(1));
         this.jtiCache = new ConcurrentHashMap<>();
         this.userCache = new ConcurrentHashMap<>();
-        this.lastPoll = Instant.EPOCH;
         pubSub.register(CACHE_TYPE, new RevocationCacheHandler());
-        // Boot hydration: forces an immediate pollSince(EPOCH) — the full
-        // active-revocation set — before this instance answers any check.
-        this.pollIfStale();
+    }
+
+    /**
+     * Load every live revocation from Valkey and the database into the local
+     * cache. Blocking — call on the boot thread, never the event loop.
+     *
+     * @return Number of entries loaded
+     */
+    public int restore() {
+        int loaded = 0;
+        try {
+            loaded += this.restoreFromValkey();
+        } catch (final Exception ex) {
+            EcsLogger.warn(LOGGER)
+                .message("Could not restore token revocations from Valkey")
+                .eventCategory("authentication")
+                .eventAction("revocation_blocklist_restore")
+                .eventOutcome("failure")
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+        }
+        if (this.dao != null) {
+            try {
+                loaded += this.restoreFromDb();
+            } catch (final Exception ex) {
+                EcsLogger.warn(LOGGER)
+                    .message("Could not restore token revocations from the database")
+                    .eventCategory("authentication")
+                    .eventAction("revocation_blocklist_restore")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .field("log.source", "application")
+                    .log();
+            }
+        }
+        EcsLogger.info(LOGGER)
+            .message("Restored " + loaded + " live token revocation entries")
+            .eventCategory("authentication")
+            .eventAction("revocation_blocklist_restore")
+            .eventOutcome("success")
+            .field("log.source", "application")
+            .log();
+        return loaded;
     }
 
     @Override
     public boolean isRevokedJti(final String jti) {
-        this.pollIfStale();
         final Instant exp = this.jtiCache.get(jti);
         if (exp == null) {
             return false;
@@ -190,86 +226,84 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
     }
 
     @Override
-    public boolean isRevokedUser(final String username) {
-        this.pollIfStale();
-        final Instant exp = this.userCache.get(username);
-        if (exp == null) {
+    public boolean isRevokedUser(final String username, final Instant issuedAt) {
+        final UserRevocation rev = this.userCache.get(username);
+        if (rev == null) {
             return false;
         }
-        if (Instant.now().isAfter(exp)) {
-            this.userCache.remove(username);
+        final Instant now = Instant.now();
+        if (rev.expired(now)) {
+            this.userCache.remove(username, rev);
             return false;
         }
-        return true;
+        return rev.revokes(issuedAt, now);
     }
 
     @Override
     public void revokeJti(final String jti, final int ttlSeconds) {
-        this.dao.insert(TYPE_JTI, jti, ttlSeconds);
-        this.jtiCache.put(jti, Instant.now().plusSeconds(ttlSeconds));
-        this.pubSub.publish(CACHE_TYPE, JTI_PREFIX + jti + ':' + ttlSeconds);
+        final Instant now = Instant.now();
+        final Instant expires = now.plusSeconds(ttlSeconds);
+        this.jtiCache.merge(jti, expires, ValkeyRevocationBlocklist::later);
+        this.broadcast(new RevocationMessage(false, jti, expires, expires));
+        this.valkey.async().setex(
+            VALKEY_JTI_KEY + jti,
+            ttlSeconds,
+            "1".getBytes(StandardCharsets.UTF_8)
+        );
+        this.persist(TYPE_JTI, jti, now, ttlSeconds);
     }
 
     @Override
     public void revokeUser(final String username, final int ttlSeconds) {
-        this.dao.insert(TYPE_USER, username, ttlSeconds);
-        this.userCache.put(username, Instant.now().plusSeconds(ttlSeconds));
-        this.pubSub.publish(CACHE_TYPE, USER_PREFIX + username + ':' + ttlSeconds);
+        final Instant now = Instant.now();
+        final UserRevocation rev = new UserRevocation(now, now.plusSeconds(ttlSeconds));
+        this.userCache.merge(username, rev, UserRevocation::merge);
+        this.broadcast(new RevocationMessage(true, username, rev.revokedAt(), rev.expiresAt()));
+        this.valkey.async().set(
+            VALKEY_USER_KEY + username,
+            Long.toString(now.toEpochMilli()).getBytes(StandardCharsets.UTF_8),
+            SetArgs.Builder.ex(ttlSeconds)
+        );
+        this.persist(TYPE_USER, username, now, ttlSeconds);
     }
 
     /**
-     * Poll the DB if more than {@link #pollIntervalMs} ms have elapsed since
-     * the last poll. Fetches only entries created after the last poll so the
-     * query stays lightweight. Called from every {@code isRevoked*} check
-     * (throttled) and once, forced, from the constructor (boot hydration,
-     * {@code lastPoll} starts at {@link Instant#EPOCH}).
+     * Publish a revocation to peers: the current form first, then the
+     * pre-2.2.9 form so nodes not yet upgraded during a rolling upgrade
+     * still apply it. Both go out on the same connection, so every peer
+     * receives them in this order; an upgraded peer drops the second one
+     * ({@link RevocationInbox}).
+     *
+     * @param msg Revocation
      */
-    private void pollIfStale() {
-        final Instant now = Instant.now();
-        if (now.toEpochMilli() - this.lastPoll.toEpochMilli() < this.pollIntervalMs) {
+    private void broadcast(final RevocationMessage msg) {
+        this.pubSub.publish(CACHE_TYPE, msg.encode());
+        this.pubSub.publish(CACHE_TYPE, msg.encodeLegacy());
+    }
+
+    /**
+     * Write-through to the durable fallback store. A failure is logged, not
+     * thrown: the revocation is already live locally, in Valkey and on peers.
+     *
+     * @param type Entry type
+     * @param value JTI or username
+     * @param now Revocation instant, the same one sent to Valkey and peers
+     * @param ttlSeconds Lifetime
+     */
+    private void persist(
+        final String type, final String value, final Instant now, final int ttlSeconds
+    ) {
+        if (this.dao == null) {
             return;
         }
-        final Instant pollFrom = this.lastPoll;
-        final boolean bootHydration = Instant.EPOCH.equals(pollFrom);
-        this.lastPoll = now;
         try {
-            final List<RevocationDao.RevocationEntry> entries = this.dao.pollSince(pollFrom);
-            for (final RevocationDao.RevocationEntry entry : entries) {
-                if (TYPE_JTI.equals(entry.entryType())) {
-                    this.jtiCache.put(entry.entryValue(), entry.expiresAt());
-                } else if (TYPE_USER.equals(entry.entryType())) {
-                    this.userCache.put(entry.entryValue(), entry.expiresAt());
-                }
-            }
-            if (bootHydration) {
-                EcsLogger.info("com.auto1.pantera.auth.ValkeyRevocationBlocklist")
-                    .message("Revocation blocklist hydrated from DB on boot (entries="
-                        + entries.size() + ")")
-                    .eventCategory("authentication")
-                    .eventAction("revocation_hydrate")
-                    .eventOutcome("success")
-                    .field("log.source", "application")
-                    .log();
-            } else if (!entries.isEmpty()) {
-                EcsLogger.warn("com.auto1.pantera.auth.ValkeyRevocationBlocklist")
-                    .message("Revocation reconciliation poll applied " + entries.size()
-                        + " entr(y/ies) not yet present locally (missed pub/sub message?)")
-                    .eventCategory("authentication")
-                    .eventAction("revocation_poll_reconcile")
-                    .eventOutcome("success")
-                    .field("log.source", "application")
-                    .log();
-            }
+            this.dao.insert(type, value, now, ttlSeconds);
         } catch (final Exception ex) {
-            EcsLogger.warn("com.auto1.pantera.auth.ValkeyRevocationBlocklist")
-                .message(
-                    bootHydration
-                        ? "Failed to hydrate revocation blocklist from DB on boot; "
-                            + "starting with an empty cache (self-heals on next poll)"
-                        : "Failed to poll revocation blocklist from DB"
-                )
+            EcsLogger.warn(LOGGER)
+                .message("Could not persist token revocation to the database;"
+                    + " it is held in Valkey only")
                 .eventCategory("authentication")
-                .eventAction(bootHydration ? "revocation_hydrate" : "revocation_poll_reconcile")
+                .eventAction("token_revoke")
                 .eventOutcome("failure")
                 .error(ex)
                 .field("log.source", "application")
@@ -278,61 +312,129 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
     }
 
     /**
-     * Parse a {@code value[:ttlSeconds]} suffix (the part of the wire
-     * message after the {@code "jti:"}/{@code "user:"} prefix). Falls back to
-     * the whole string with {@link #defaultTtlSeconds} when there is no
-     * parseable trailing TTL — a v1 (pre-2.3.0) peer payload during a
-     * rolling upgrade, or a value that legitimately contains no
-     * colon-separated numeric suffix.
-     * @param encoded The prefix-stripped wire value
-     * @return Parsed value and TTL
+     * SCAN both key families and load each live entry with its remaining TTL.
+     *
+     * @return Entries loaded
+     * @throws Exception On a Valkey failure or timeout
      */
-    private ParsedRevocation parseValueAndTtl(final String encoded) {
-        final int sep = encoded.lastIndexOf(':');
-        if (sep > 0) {
-            try {
-                return new ParsedRevocation(
-                    encoded.substring(0, sep),
-                    Integer.parseInt(encoded.substring(sep + 1))
-                );
-            } catch (final NumberFormatException ex) { // NOPMD EmptyCatchBlock - expected: no parseable trailing TTL, fall through to the whole-string + default-TTL case below
-                // Intentionally empty.
+    private int restoreFromValkey() throws Exception {
+        int loaded = 0;
+        for (final String key : this.scan(VALKEY_USER_KEY + "*")) {
+            final Long pttl = this.valkey.async().pttl(key)
+                .get(RESTORE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            final byte[] raw = this.valkey.async().get(key)
+                .get(RESTORE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (pttl == null || pttl <= 0 || raw == null) {
+                continue;
             }
+            final Instant now = Instant.now();
+            final Instant revoked = RevocationMessage.storedRevokedAt(
+                new String(raw, StandardCharsets.UTF_8), now
+            );
+            this.userCache.merge(
+                key.substring(VALKEY_USER_KEY.length()),
+                new UserRevocation(revoked, now.plusMillis(pttl)),
+                UserRevocation::merge
+            );
+            loaded += 1;
         }
-        return new ParsedRevocation(encoded, this.defaultTtlSeconds);
+        for (final String key : this.scan(VALKEY_JTI_KEY + "*")) {
+            final Long pttl = this.valkey.async().pttl(key)
+                .get(RESTORE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (pttl == null || pttl <= 0) {
+                continue;
+            }
+            this.jtiCache.merge(
+                key.substring(VALKEY_JTI_KEY.length()),
+                Instant.now().plusMillis(pttl),
+                ValkeyRevocationBlocklist::later
+            );
+            loaded += 1;
+        }
+        return loaded;
     }
 
     /**
-     * Parsed {@code value}/{@code ttlSeconds} pair from a wire message.
-     * @param value The JTI or username
-     * @param ttlSeconds Remaining TTL in seconds
+     * Load every live DB entry.
+     *
+     * @return Entries loaded
      */
-    private record ParsedRevocation(String value, int ttlSeconds) { }
+    private int restoreFromDb() {
+        int loaded = 0;
+        for (final RevocationDao.RevocationEntry entry : this.dao.pollSince(Instant.EPOCH)) {
+            if (TYPE_JTI.equals(entry.entryType())) {
+                this.jtiCache.merge(
+                    entry.entryValue(), entry.expiresAt(), ValkeyRevocationBlocklist::later
+                );
+                loaded += 1;
+            } else if (TYPE_USER.equals(entry.entryType())) {
+                this.userCache.merge(
+                    entry.entryValue(),
+                    new UserRevocation(entry.createdAt(), entry.expiresAt()),
+                    UserRevocation::merge
+                );
+                loaded += 1;
+            }
+        }
+        return loaded;
+    }
+
+    /**
+     * All keys matching a pattern (cursor SCAN, never KEYS).
+     *
+     * @param pattern Glob pattern
+     * @return Matching keys
+     * @throws Exception On a Valkey failure or timeout
+     */
+    private java.util.List<String> scan(final String pattern) throws Exception {
+        final java.util.List<String> keys = new java.util.ArrayList<>();
+        ScanCursor cursor = ScanCursor.INITIAL;
+        do {
+            final KeyScanCursor<String> page = this.valkey.async()
+                .scan(cursor, ScanArgs.Builder.matches(pattern).limit(500))
+                .get(RESTORE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            keys.addAll(page.getKeys());
+            cursor = page;
+        } while (!cursor.isFinished());
+        return keys;
+    }
+
+    /**
+     * The later of two instants.
+     *
+     * @param first First
+     * @param second Second
+     * @return Later instant
+     */
+    private static Instant later(final Instant first, final Instant second) {
+        return first.isAfter(second) ? first : second;
+    }
 
     /**
      * Handles remote cache invalidation messages for revocations.
      * When another Pantera node calls revokeJti/revokeUser, this handler
-     * receives the pub/sub message and updates the local caches on this node.
+     * receives the pub/sub message and updates the local caches on this node
+     * with the sender's revocation instant and expiry.
      */
     private final class RevocationCacheHandler implements Cleanable<String> {
 
         @Override
         public void invalidate(final String key) {
-            if (key.startsWith(JTI_PREFIX)) {
-                final ParsedRevocation parsed = ValkeyRevocationBlocklist.this.parseValueAndTtl(
-                    key.substring(JTI_PREFIX.length())
-                );
-                ValkeyRevocationBlocklist.this.jtiCache.put(
-                    parsed.value(), Instant.now().plusSeconds(parsed.ttlSeconds())
-                );
-            } else if (key.startsWith(USER_PREFIX)) {
-                final ParsedRevocation parsed = ValkeyRevocationBlocklist.this.parseValueAndTtl(
-                    key.substring(USER_PREFIX.length())
-                );
-                ValkeyRevocationBlocklist.this.userCache.put(
-                    parsed.value(), Instant.now().plusSeconds(parsed.ttlSeconds())
-                );
-            }
+            ValkeyRevocationBlocklist.this.inbox.accept(
+                key, Instant.now(), ValkeyRevocationBlocklist.this.defaultTtlSeconds
+            ).ifPresent(msg -> {
+                if (msg.user()) {
+                    ValkeyRevocationBlocklist.this.userCache.merge(
+                        msg.subject(),
+                        new UserRevocation(msg.revokedAt(), msg.expiresAt()),
+                        UserRevocation::merge
+                    );
+                } else {
+                    ValkeyRevocationBlocklist.this.jtiCache.merge(
+                        msg.subject(), msg.expiresAt(), ValkeyRevocationBlocklist::later
+                    );
+                }
+            });
         }
 
         @Override

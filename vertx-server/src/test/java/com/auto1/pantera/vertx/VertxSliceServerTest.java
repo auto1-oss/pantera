@@ -350,6 +350,56 @@ public final class VertxSliceServerTest {
     }
 
     @Test
+    void sendsTheRequestedReasonPhraseAndStripsTheInternalHeader() {
+        // R34: twine prints only the status line; PyPI answers
+        // "400 File already exists" to a reused filename.
+        this.start(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.badRequest()
+                    .header(new com.auto1.pantera.http.headers.ReasonPhrase("File already exists"))
+                    .textBody("File already exists: 'a.whl'")
+                    .build()
+            )
+        );
+        final HttpResponse<Buffer> response = this.client
+            .post(this.port, VertxSliceServerTest.HOST, "/upload")
+            .rxSend()
+            .blockingGet();
+        MatcherAssert.assertThat(
+            "status line carries the reason phrase",
+            response.statusMessage(), new IsEqual<>("File already exists")
+        );
+        MatcherAssert.assertThat(
+            "the internal header is not sent",
+            response.getHeader(com.auto1.pantera.http.headers.ReasonPhrase.NAME),
+            new IsEqual<>(null)
+        );
+    }
+
+    @Test
+    void dropsAReasonPhraseThatWouldBreakTheStatusLine() {
+        this.start(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.badRequest()
+                    .header(new com.auto1.pantera.http.headers.ReasonPhrase("a\r\nX-Evil: 1"))
+                    .build()
+            )
+        );
+        final HttpResponse<Buffer> response = this.client
+            .post(this.port, VertxSliceServerTest.HOST, "/upload")
+            .rxSend()
+            .blockingGet();
+        MatcherAssert.assertThat(
+            "no header is injected",
+            response.getHeader("X-Evil"), new IsEqual<>(null)
+        );
+        MatcherAssert.assertThat(
+            "the standard reason phrase is kept",
+            response.statusMessage(), new IsEqual<>("Bad Request")
+        );
+    }
+
+    @Test
     void doesNotCompressJarFiles() throws Exception {
         final byte[] jarContent = new byte[1024];
         java.util.Arrays.fill(jarContent, (byte) 'A');
@@ -490,8 +540,15 @@ public final class VertxSliceServerTest {
                 .rxSend()
                 .blockingGet()
         );
-        // Wait for the request to reach the slice
-        requestReceived.await(5, java.util.concurrent.TimeUnit.SECONDS);
+        // Wait for the request to reach the slice. Shutdown must not start
+        // before it is in flight: with nothing to drain the server closes at
+        // once and the "new request" below gets a connection reset instead of
+        // a 503. The bound is an order-of-magnitude guard for loaded CI runners
+        // (the request arrives in milliseconds on an idle machine).
+        Assertions.assertTrue(
+            requestReceived.await(60, java.util.concurrent.TimeUnit.SECONDS),
+            "The slow request must reach the slice before shutdown starts"
+        );
         // Initiate shutdown in background (will drain for up to 30s)
         final CompletableFuture<Void> shutdownFuture = CompletableFuture.runAsync(() -> srv.stop());
         // Poll for the shuttingDown flag instead of a fixed sleep: under load
@@ -870,8 +927,13 @@ public final class VertxSliceServerTest {
          */
         IsErrorResponse(final Throwable throwable) {
             this.status = new IsEqual<>(HttpURLConnection.HTTP_INTERNAL_ERROR);
-            // Check for exception class name - message format may vary depending on wrapping
-            this.body = new StringContains(false, throwable.getClass().getSimpleName());
+            // The body must disclose nothing about the failure: no exception
+            // class name, no message, no stack frames. Detail belongs in the
+            // ERROR log. Asserting the absence here makes these cases guards
+            // against a re-introduced leak.
+            this.body = new IsNot<>(
+                new StringContains(false, throwable.getClass().getSimpleName())
+            );
         }
 
         @Override

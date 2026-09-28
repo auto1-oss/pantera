@@ -40,6 +40,11 @@ final class S3HeadMeta implements Meta {
         Meta.OP_SIZE.put(raw, this.rsp.contentLength());
         // ETag is a quoted MD5 of blob content according to S3 docs
         Meta.OP_MD5.put(raw, this.rsp.eTag().replaceAll("\"", ""));
+        // Last-Modified is the time the object was last written: TTL-based
+        // proxy metadata freshness (composer, pypi, go) depends on it.
+        if (this.rsp.lastModified() != null) {
+            Meta.OP_UPDATED_AT.put(raw, this.rsp.lastModified());
+        }
         return opr.take(raw);
     }
 }

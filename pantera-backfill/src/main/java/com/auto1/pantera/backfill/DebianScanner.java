@@ -130,6 +130,7 @@ final class DebianScanner implements Scanner {
                 String pkg = null;
                 String version = null;
                 String arch = null;
+                String filename = null;
                 long size = 0L;
                 String line = reader.readLine();
                 while (line != null) {
@@ -145,7 +146,7 @@ final class DebianScanner implements Scanner {
                                     mtime,
                                     null,
                                     "system",
-                                    null
+                                    filename
                                 )
                             );
                         } else if (pkg != null || version != null) {
@@ -158,12 +159,17 @@ final class DebianScanner implements Scanner {
                         version = null;
                         arch = null;
                         size = 0L;
+                        filename = null;
                     } else if (line.startsWith("Package:")) {
                         pkg = line.substring("Package:".length()).trim();
                     } else if (line.startsWith("Version:")) {
                         version = line.substring("Version:".length()).trim();
                     } else if (line.startsWith("Architecture:")) {
                         arch = line.substring("Architecture:".length()).trim();
+                    } else if (line.startsWith("Filename:")) {
+                        // Pool-relative path of the .deb — the real storage
+                        // key, so the tree browser can open its directory.
+                        filename = line.substring("Filename:".length()).trim();
                     } else if (line.startsWith("Size:")) {
                         try {
                             size = Long.parseLong(
@@ -190,7 +196,7 @@ final class DebianScanner implements Scanner {
                             mtime,
                             null,
                             "system",
-                            null
+                            filename
                         )
                     );
                 }

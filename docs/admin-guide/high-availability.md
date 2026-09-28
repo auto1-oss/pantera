@@ -93,38 +93,13 @@ All nodes must connect to the same Valkey instance (or cluster) for cache invali
 4. Nodes B and C receive the message and evict the matching entry from their local Caffeine caches.
 5. Each node filters out its own messages (by instanceId) to avoid double-processing.
 
-Cache types broadcast this way: `auth` (credentials), `filters` (repository
-filter config), `policy` (roles/permissions — every `RoleHandler`/
-`UserHandler` mutation), `revocation` (token revocation, see below),
-`circuit-breaker-settings` / `upstream-breaker-settings` (admin-tunable
-breaker thresholds). The policy cache also carries a bounded
-`expireAfterWrite` (3 minutes) local backstop, so a node that misses a
-broadcast entirely still converges without a restart.
+### Repository lifecycle events (2.2.9)
 
-### Token Revocation
+Repository create / update / delete / move — including security-tightening changes such as revoking `anonymous_read` / `anonymous_write` and the bulk access-policy endpoint — are published on the `repo-config` namespace of the same channel. A peer re-injects the received event onto its local Vert.x event bus, so it reloads its repository snapshot, drops the cached slice for that repository and (re)starts any dedicated port exactly as the originating node does. Convergence is **eventual**: it takes one pub/sub round trip plus the peer's reload.
 
-Multi-node token revocation is **DB-durable and Valkey-accelerated**: the
-`revocation_blocklist` table is always the source of truth, and Valkey
-pub/sub is purely an acceleration layer on top of it — never the only copy
-of a revocation.
+Before 2.2.9 these events stayed on the originating node's local (non-clustered) event bus, so a security change applied on one node only until the others restarted.
 
-- **Revoke** writes the DB row first, then publishes over Valkey pub/sub
-  with the token's real remaining TTL embedded in the message (not a fixed
-  default), so peers expire the cached entry at the correct time.
-- **Boot** — a node hydrates its full active-revocation set from the DB
-  before serving any request. A node that boots after a revocation rejects
-  the token immediately; it does not depend on having been online to
-  receive the original pub/sub message.
-- **Reconciliation** — every revocation check also triggers a throttled
-  (5 s) incremental DB poll. A peer that missed a pub/sub message (a Valkey
-  blip, a dropped connection) still picks up the revocation within one poll
-  interval.
-- **Valkey outage** — revocation checks degrade to DB-poll speed. They never
-  fail open: a Valkey outage cannot cause an already-revoked token to be
-  honored again.
-- Single-instance deployments (no Valkey configured) use a DB-polling-only
-  blocklist with the same DB table and the same reconciliation semantics,
-  just without the pub/sub fast path.
+Limits: propagation requires Valkey. A multi-node deployment **without** Valkey has no cross-node repository-config propagation — peers pick up a change only on restart. A pub/sub message lost while a peer is disconnected is not replayed; re-saving the repository re-publishes it.
 
 ### L2 Cache
 
@@ -264,10 +239,7 @@ For AWS deployments:
 
 ## Quartz Scheduler Clustering
 
-In HA mode, Pantera uses Quartz JDBC job store for clustered scheduling.
-Genuinely shared, idempotent/DB-guarded background work (cleanup, reindex,
-etc.) is distributed across nodes through the shared `QRTZ_*` tables, with
-only one node executing a given firing at a time.
+In HA mode, Pantera uses Quartz JDBC job store for clustered scheduling. Background jobs (cleanup, etc.) are distributed across nodes with only one node executing each job at a time. The search index rebuild (`POST /api/v1/search/reindex`) is not a Quartz job: it runs on the node that accepted the request, and a PostgreSQL advisory lock keeps it to one node at a time.
 
 Quartz clustering requires:
 

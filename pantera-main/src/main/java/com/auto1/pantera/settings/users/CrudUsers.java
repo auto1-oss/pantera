@@ -64,4 +64,40 @@ public interface CrudUsers {
      */
     void alterPassword(String uname, JsonObject info);
 
+    /**
+     * Update an existing user and replace their password. Implementations
+     * backed by a transactional store apply both in one transaction; the
+     * default applies them in sequence.
+     *
+     * @param info Other fields to update (password fields are ignored)
+     * @param uname Existing username
+     * @param newPass New password (validated against the password policy)
+     */
+    default void updateWithPassword(final JsonObject info, final String uname,
+        final String newPass) {
+        final javax.json.JsonObjectBuilder rest = javax.json.Json.createObjectBuilder(info);
+        rest.remove("pass");
+        rest.remove("password");
+        rest.remove("type");
+        this.addOrUpdate(rest.build(), uname);
+        this.alterPassword(
+            uname,
+            javax.json.Json.createObjectBuilder()
+                .add("new_pass", newPass).add("new_type", "plain").build()
+        );
+    }
+
+    /**
+     * Whether {@code pass} is the user's current local password, checked
+     * against the stored credential only (never a token or an external
+     * identity provider). Stores that cannot check answer {@code false}.
+     *
+     * @param uname Username
+     * @param pass Candidate password
+     * @return True on a match
+     */
+    default boolean passwordMatches(final String uname, final String pass) {
+        return false;
+    }
+
 }

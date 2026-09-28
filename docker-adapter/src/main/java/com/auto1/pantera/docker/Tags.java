@@ -12,8 +12,6 @@ package com.auto1.pantera.docker;
 
 import com.auto1.pantera.asto.Content;
 
-import java.util.Optional;
-
 /**
  * Docker repository manifest tags.
  *
@@ -29,23 +27,28 @@ public interface Tags {
     Content json();
 
     /**
-     * Whether more tags exist beyond this page (pagination was truncated).
-     * Implementations that don't produce a bounded page (proxy pass-through,
-     * generic wrappers) default to {@code false}.
+     * Whether every source of this listing answered. A listing joined from
+     * sources where one could not be read (an upstream failure) is
+     * incomplete: an empty result is then not proof that the name is
+     * unknown.
      *
-     * @return True when a further page is available.
+     * @return False when at least one source failed
      */
-    default boolean hasNext() {
-        return false;
+    default boolean complete() {
+        return true;
     }
 
     /**
-     * Cursor (last tag on this page) to resume pagination from via the {@code last}
-     * query parameter. Present only when {@link #hasNext()} is {@code true}.
+     * Whether this source holds the repository name at all, independent of
+     * the requested page. A source that can tell (hosted storage: the image
+     * has tags) answers false for a name it does not hold, so a cursor page
+     * is 404 NAME_UNKNOWN instead of an empty 200. A source that cannot tell
+     * (a remote listing) answers true, and only an empty first page is taken
+     * as NAME_UNKNOWN.
      *
-     * @return Last tag of the current page.
+     * @return False when the source proves the name absent
      */
-    default Optional<String> nextCursor() {
-        return Optional.empty();
+    default boolean known() {
+        return true;
     }
 }

@@ -29,12 +29,14 @@ import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.Request;
 import org.eclipse.jetty.http.HttpFields;
 import org.eclipse.jetty.util.Callback;
+import org.eclipse.jetty.util.thread.Scheduler;
 import java.net.URI;
 import java.util.Locale;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * ClientSlices implementation using Jetty HTTP client as back-end.
@@ -496,8 +498,36 @@ final class JettyClientSlice implements Slice {
         }
         final Request request = this.client.newRequest(URI.create(url.toString()))
             .method(req.method().value());
+        // Bound ONLY connection acquisition (+ request send), never the whole
+        // exchange. Jetty's Request#timeout is a TOTAL deadline that also
+        // covers the response body, so using it as the acquire timeout capped
+        // every upstream transfer by wall-clock: a 1.75 GB Docker layer that
+        // needed >120 s died mid-stream at ~1.62 GB with "Total timeout 120000
+        // ms elapsed". Instead, schedule a one-shot abort that fires only
+        // while the request is still waiting for a connection, and cancel it
+        // once the request begins (connection acquired, bytes going out). A
+        // CAS guard makes the abort and the begin-cancel mutually exclusive,
+        // so a healthy in-flight transfer is never aborted. After acquisition
+        // the body streams unbounded; a stalled stream is caught by the idle
+        // timeout below.
         if (this.acquireTimeoutMillis > 0) {
-            request.timeout(this.acquireTimeoutMillis, TimeUnit.MILLISECONDS);
+            final AtomicBoolean settled = new AtomicBoolean(false);
+            final Scheduler.Task acquireTask = this.client.getScheduler().schedule(
+                () -> {
+                    if (settled.compareAndSet(false, true)) {
+                        request.abort(new TimeoutException(
+                            "Connection acquire timeout " + this.acquireTimeoutMillis
+                                + " ms elapsed"
+                        ));
+                    }
+                },
+                this.acquireTimeoutMillis, TimeUnit.MILLISECONDS
+            );
+            request.onRequestBegin(begun -> {
+                if (settled.compareAndSet(false, true)) {
+                    acquireTask.cancel();
+                }
+            });
         }
         // Per-request idle timeout, lifted from the HttpClient's configured
         // value. The client-level setIdleTimeout only catches *connection*

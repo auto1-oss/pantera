@@ -12,6 +12,7 @@ package com.auto1.pantera.pypi.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.hm.ResponseAssert;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -32,7 +33,7 @@ class RedirectSliceTest {
                     Headers.EMPTY, Content.EMPTY)
                 .join(),
             RsStatus.MOVED_PERMANENTLY,
-            new Header("Location", "/one/two/three-four")
+            new Header("Location", "/one/two/three-four/")
         );
     }
 
@@ -45,7 +46,7 @@ class RedirectSliceTest {
                 Content.EMPTY
             ).join(),
             RsStatus.MOVED_PERMANENTLY,
-            new Header("Location", "/one/two/three-four")
+            new Header("Location", "/one/two/three-four/")
         );
     }
 
@@ -58,7 +59,7 @@ class RedirectSliceTest {
                 Content.EMPTY
             ).join(),
             RsStatus.MOVED_PERMANENTLY,
-            new Header("Location", "/one/two/three/f-o-u-r")
+            new Header("Location", "/one/two/three/f-o-u-r/")
         );
     }
 
@@ -71,8 +72,31 @@ class RedirectSliceTest {
                 Content.EMPTY
             ).join(),
             RsStatus.MOVED_PERMANENTLY,
-            new Header("Location", "/One_Two/three/one-two")
+            new Header("Location", "/One_Two/three/one-two/")
         );
     }
 
+    @Test
+    void keepsTheClientFacingPrefixFromTheStampedBase() {
+        // B87: behind a global path prefix (and the /api/<type>/ route
+        // style) the redirect must point at the URL the client used, not
+        // at the prefix-stripped internal path.
+        ResponseAssert.check(
+            new RedirectSlice().response(
+                new RequestLine(RqMethod.GET, "/QA_Python.Foo_Bar/"),
+                Headers.from(
+                    new Header("X-FullPath", "/pypi/simple/QA_Python.Foo_Bar/"),
+                    new Header(
+                        ClientBaseUrl.HEADER, "http://localhost:8088/test_prefix/api/pypi"
+                    )
+                ),
+                Content.EMPTY
+            ).join(),
+            RsStatus.MOVED_PERMANENTLY,
+            new Header(
+                "Location",
+                "http://localhost:8088/test_prefix/api/pypi/simple/qa-python-foo-bar/"
+            )
+        );
+    }
 }

@@ -76,6 +76,20 @@ class AuthHandlerTest extends AsyncApiTestBase {
     }
 
     /**
+     * B100: a JSON null in an admin settings PUT answered 500 (NPE) after
+     * the keys before it had been written.
+     */
+    @Test
+    void settingsPutRefusesNullValue(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        request(vertx, ctx, HttpMethod.PUT, "/api/v1/admin/circuit-breaker-settings",
+            new JsonObject().putNull("circuit_breaker_failure_rate_threshold"),
+            res -> org.hamcrest.MatcherAssert.assertThat(
+                res.statusCode(), new org.hamcrest.core.IsEqual<>(400)
+            ));
+    }
+
+    /**
      * Regression: read-only users must see the same api_token_max_ttl_seconds
      * and api_token_allow_permanent values as admins. GET /admin/auth-settings
      * is admin-gated, so embedding the two public fields in /auth/me is the

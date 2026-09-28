@@ -59,9 +59,13 @@ public final class TokenAuthScheme implements AuthScheme {
         if (line == null) {
             throw new IllegalArgumentException("Request line cannot be null");
         }
+        // A scheme-less value (a raw token or key) cannot be parsed; it is
+        // treated as no Authorization header at all rather than throwing
+        // out of the auth chain as a 500 (B17).
         final CompletionStage<Optional<AuthUser>> fut = new RqHeaders(headers, Authorization.NAME)
             .stream()
             .findFirst()
+            .filter(header -> new Authorization(header).parseable())
             .map(this::user)
             .orElseGet(
                 () -> {

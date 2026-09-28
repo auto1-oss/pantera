@@ -31,7 +31,7 @@ versions are invisible to client resolvers) as of v2.2.0.
 | pypi-proxy         | `/simple/{pkg}/` and `/pypi/{pkg}/json`. `info.version` + `urls` rewritten using PEP 440 ordering. |
 | docker-proxy       | `/v2/{name}/tags/list` filters the tags array; `/v2/{name}/manifests/{tag}` returns `MANIFEST_UNKNOWN` (404) when the tag is blocked or resolves to a blocked digest. |
 | go-proxy           | `/{module}/@v/list` and `/{module}/@latest`. If `@latest` is blocked, the response is rewritten to the highest non-blocked version; 403 if every version is blocked. |
-| php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json`, and root `/packages.json` / `/repo.json`. Lazy-providers schemes pass through -- per-package documents are filtered when Composer fetches them. |
+| php-proxy (Composer) | `/packages/{vendor}/{pkg}.json` and `/p2/{vendor}/{pkg}.json`. The root `/packages.json` / `/repo.json` is served by the proxy itself and points Composer at `/p2/`, where versions are filtered. |
 | file-proxy         | **No metadata filtering.** See "file-proxy scope" below. |
 
 ### file-proxy scope: artifact-fetch layer only
@@ -39,9 +39,12 @@ versions are invisible to client resolvers) as of v2.2.0.
 `file-proxy` (generic / raw file proxies) has no version-resolution semantics
 -- no tag list, no version list, no packument -- so there is nothing to
 filter at the metadata layer. Cooldown for file-proxy applies **only at the
-artifact-fetch layer**: if the file's cached-at / remote last-modified
-timestamp falls within the cooldown window, the fetch is blocked with the
-standard 403 envelope. Everything else (unblock API, admin UI listing,
+artifact-fetch layer**: on a cache miss Pantera asks the upstream for the
+file's `Last-Modified` (a `HEAD` of the same path); if it falls within the
+cooldown window, the fetch is blocked with a `403` carrying `Retry-After`
+and `X-Pantera-Cooldown: blocked`. An upstream that sends no `Last-Modified`
+cannot be dated, so its files are allowed. Files already in the cache are
+served without evaluation. Everything else (unblock API, admin UI listing,
 retention) works the same as for other adapter types.
 
 ### Hosted-only adapters (out of scope)
@@ -78,11 +81,30 @@ meta:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `enabled` | boolean | `false` | Global enable/disable |
-| `minimum_allowed_age` | string | -- | Default quarantine duration |
+| `enabled` | boolean | `true` | Global enable/disable |
+| `minimum_allowed_age` | string | `72h` | Default quarantine duration |
 | `repo_types` | map | -- | Per-repository-type overrides |
 | `repo_types.<type>.enabled` | boolean | inherits global | Enable for this repo type |
 | `repo_types.<type>.minimum_allowed_age` | string | inherits global | Override duration for this type |
+
+### Per-repository window
+
+A proxy repository can carry its own window in its config (the admin UI's
+repository cooldown setting), which takes precedence over the type and global
+windows:
+
+```yaml
+repo:
+  type: npm-proxy
+  cooldown:
+    duration: P30D   # ISO-8601 duration
+```
+
+It applies as soon as the repository is created or edited through the REST
+API or the UI, without a restart; removing it (or deleting
+the repository) falls back to the type and global windows. Cached cooldown
+decisions and the repository's filtered metadata are dropped when the
+window changes.
 
 ---
 
@@ -152,6 +174,58 @@ curl -X POST http://pantera-host:8086/api/v1/repositories/npm-proxy/cooldown/unb
   -H "Authorization: Bearer $TOKEN"
 ```
 
+An unblock holds until the version's cooldown window would have ended on its
+own: the released entry leaves the blocked list immediately, is recorded in
+cooldown history as `MANUAL_UNBLOCK`, and the version is not blocked again by
+later requests. Clients see the version on their next metadata request (their
+own client-side cache aside, e.g. `npm cache clean --force`).
+
+How the blocked entries are named, per format where it is not obvious:
+
+| Proxy adapter | `artifact` | `version` |
+|---------------|------------|-----------|
+| maven-proxy, gradle-proxy | dotted `groupId.artifactId` (`software.amazon.awssdk.annotations`); the unblock endpoint also accepts `groupId:artifactId` and normalises it -- one entry covers the version's jar, pom, `.module` and classifier jars | version directory; a timestamped SNAPSHOT upload uses its timestamped version |
+| go-proxy | module path | canonical Go version with the leading `v` (`v1.2.3`) -- the same entry covers `@v/list`, `@latest` and the `.info`/`.mod`/`.zip` downloads |
+| docker-proxy | image name without the repository prefix; on a Docker Hub upstream a single-segment name is its official image (`nginx` and `library/nginx` are both `library/nginx`) | tag, or manifest digest (`sha256:…`) |
+| file-proxy | request path | `latest` |
+
+Unblocking a docker **tag** also releases the digests the tag points to at that
+moment -- its manifest digest and, for a multi-arch image, the per-platform
+child manifests -- so the pull succeeds end to end. Other digests of the same
+image are not released.
+
+### Inspect a Package
+
+When a version is unblocked but clients still cannot see it (or a blocked
+version still shows), inspect the package. For every proxy and group
+repository of the format it shows, per version, the cooldown state next to
+what each repository actually serves (fetched in-process, as a client would
+get it), plus the filtered-metadata envelope and negative-cache entries per
+repository, and flags each inconsistent version as a `mismatch`:
+
+```bash
+curl "http://pantera-host:8086/api/v1/cooldown/inspect?repoType=npm&package=lodash" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Refresh a Package
+
+Clears every layer that can keep a package stale, cluster-wide: the proxies'
+cached upstream metadata is revalidated (npm, pypi, maven; other formats are
+reported `unsupported`), the filtered-metadata envelopes and the package's
+negative-cache entries are dropped on every node. The response carries the
+inspection before and after:
+
+```bash
+curl -X POST http://pantera-host:8086/api/v1/cooldown/refresh-package \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"repoType":"npm","package":"lodash"}'
+```
+
+Both endpoints are admin only. In the UI they are the Cooldown page's
+**Inspect package** tab.
+
 ### View Cooldown Overview
 
 Shows per-repository block counts:
@@ -170,7 +244,7 @@ For the complete cooldown API specification, see the [REST API Reference](../res
 Cooldown state is persisted in the `artifact_cooldowns` PostgreSQL table. Monitor cooldown activity through:
 
 - **REST API** -- `GET /api/v1/cooldown/overview` for per-repo block counts and `GET /api/v1/cooldown/blocked` for individual blocked artifacts.
-- **Management UI** -- The Cooldown view in the Pantera UI (port 8090) provides a searchable, paginated list of blocked artifacts with one-click unblock.
+- **Management UI** -- The Cooldown view in the Pantera UI (port 8090) provides a searchable, paginated list of blocked artifacts with one-click unblock. Administrators also get an **Inspect package** tab — with type-ahead search on any part of the package name across the artifacts index and cooldown records — that shows, per version, the cooldown state next to the versions each repository actually serves, flags mismatches (released but still hidden) and offers **Refresh package** to clear stale cache layers (see [Management UI](../user-guide/ui-guide.md#inspect-package-administrators)).
 - **Database queries** -- Direct SQL queries against the `artifact_cooldowns` table for custom reporting.
 - **Logging** -- Cooldown block and unblock events are logged at INFO level under the `com.auto1.pantera` logger.
 
@@ -235,16 +309,20 @@ curl -s http://pantera-host:8080/go-proxy/github.com/gorilla/mux/@v/list
 # Go -- @latest (should rewrite to highest non-blocked when latest is blocked).
 curl -s http://pantera-host:8080/go-proxy/github.com/gorilla/mux/@latest | jq .
 
-# Docker -- tag list.
-curl -s http://pantera-host:8080/docker-proxy/v2/library/nginx/tags/list | jq .
+# Docker -- the path is /v2/<repo>/<image>/..., the same as in
+# "docker pull pantera-host:8080/docker-proxy/library/nginx:latest".
+# Tag list: blocked tags are absent.
+curl -s -u user:token http://pantera-host:8080/v2/docker-proxy/library/nginx/tags/list | jq .
 
 # Docker -- manifest by tag (expect 404 MANIFEST_UNKNOWN when tag is blocked).
-curl -sv http://pantera-host:8080/docker-proxy/v2/library/nginx/manifests/latest
+curl -sv -u user:token \
+  -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+  http://pantera-host:8080/v2/docker-proxy/library/nginx/manifests/latest
 
 # Composer -- per-package.
 curl -s http://pantera-host:8080/php-proxy/p2/monolog/monolog.json | jq '.packages."monolog/monolog" | keys'
 
-# Composer -- root aggregation (inline packages filtered; lazy-providers pass-through).
+# Composer -- repository root (metadata-url points at the proxy's /p2/ endpoint).
 curl -s http://pantera-host:8080/php-proxy/packages.json | jq .
 
 # Maven -- metadata rewriting.

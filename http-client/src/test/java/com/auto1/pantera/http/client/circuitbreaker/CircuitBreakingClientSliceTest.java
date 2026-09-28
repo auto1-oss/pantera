@@ -251,6 +251,36 @@ final class CircuitBreakingClientSliceTest {
     }
 
     @Test
+    void probeAnsweredNotImplementedProvesTheUpstreamIsAlive() throws InterruptedException {
+        final TestClock clock = new TestClock(Instant.parse("2026-05-14T12:00:00Z"));
+        final CircuitBreakerConfig config = hairTrigger(
+            Duration.ofMillis(50), Duration.ofMillis(500)
+        );
+        final UpstreamCircuitBreaker breaker = new UpstreamCircuitBreaker(
+            "packagist.example", config, clock
+        );
+        // The first GET fails; afterwards the upstream is back but does
+        // not implement HEAD, so every recovery probe answers 501.
+        final AtomicInteger gets = new AtomicInteger();
+        final Slice downstream = (line, headers, body) -> CompletableFuture.completedFuture(
+            line.method() == RqMethod.HEAD
+                ? ResponseBuilder.from(RsStatus.NOT_IMPLEMENTED).build()
+                : ResponseBuilder.from(
+                    gets.getAndIncrement() == 0 ? RsStatus.INTERNAL_ERROR : RsStatus.OK
+                ).build()
+        );
+        final CircuitBreakingClientSlice slice = new CircuitBreakingClientSlice(
+            downstream, "packagist.example", breaker, config, clock, this.probeExecutor
+        );
+        slice.response(GET, Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "a 501 to the HEAD probe closes the breaker: the upstream answered",
+            waitUntil(() -> !breaker.isOpen(), Duration.ofSeconds(3)),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
     void failedHeadProbeKeepsBreakerOpenAndSchedulesAnother() throws InterruptedException {
         final TestClock clock = new TestClock(Instant.parse("2026-05-14T12:00:00Z"));
         final CircuitBreakerConfig config = hairTrigger(

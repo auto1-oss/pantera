@@ -13,8 +13,10 @@ package com.auto1.pantera.auth;
 import com.auto1.pantera.cache.CacheInvalidationPubSub;
 import com.auto1.pantera.cache.ValkeyConnection;
 import java.time.Duration;
+import java.time.Instant;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,12 +25,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * Integration tests for {@link ValkeyRevocationBlocklist} against a real
- * Valkey pub/sub channel (Testcontainers). The DB side uses
- * {@link InMemoryRevocationStore} — real Postgres adds nothing here since
- * {@link com.auto1.pantera.db.dao.RevocationDao} is exercised on its own in
- * {@link DbRevocationBlocklistTest}; what this class needs covered against a
- * genuine Valkey server is the pub/sub fan-out.
+ * Integration tests for {@link ValkeyRevocationBlocklist}.
+ * Uses a Testcontainers Valkey container.
  *
  * @since 2.1.0
  */
@@ -55,11 +53,6 @@ final class ValkeyRevocationBlocklistTest {
     private CacheInvalidationPubSub pubSub;
 
     /**
-     * In-memory DB fake — source of truth.
-     */
-    private InMemoryRevocationStore store;
-
-    /**
      * Blocklist under test.
      */
     private ValkeyRevocationBlocklist blocklist;
@@ -70,8 +63,7 @@ final class ValkeyRevocationBlocklistTest {
         final int port = VALKEY.getMappedPort(6379);
         this.conn = new ValkeyConnection(host, port, Duration.ofSeconds(5));
         this.pubSub = new CacheInvalidationPubSub(this.conn);
-        this.store = new InMemoryRevocationStore();
-        this.blocklist = new ValkeyRevocationBlocklist(this.pubSub, this.store, 3600);
+        this.blocklist = new ValkeyRevocationBlocklist(this.conn, this.pubSub, 3600);
     }
 
     @AfterEach
@@ -108,7 +100,7 @@ final class ValkeyRevocationBlocklistTest {
         this.blocklist.revokeUser("alice", 3600);
         MatcherAssert.assertThat(
             "Revoked user must be reported as revoked",
-            this.blocklist.isRevokedUser("alice"),
+            this.blocklist.isRevokedUser("alice", Instant.now().minusSeconds(60)),
             Matchers.is(true)
         );
     }
@@ -118,43 +110,119 @@ final class ValkeyRevocationBlocklistTest {
         this.blocklist.revokeUser("bob", 3600);
         MatcherAssert.assertThat(
             "Non-revoked user must not be reported as revoked",
-            this.blocklist.isRevokedUser("carol"),
+            this.blocklist.isRevokedUser("carol", Instant.now().minusSeconds(60)),
             Matchers.is(false)
         );
     }
 
     @Test
-    void revokeWritesTheDbRowFirst() {
-        this.blocklist.revokeJti("db-durable-jti", 3600);
+    void acceptsTokenIssuedAfterUserRevocation() {
+        // Password change → revokeUser → the user signs in again. The fresh
+        // token (same second or later) must not be caught by the revocation.
+        this.blocklist.revokeUser("dave", 3600);
         MatcherAssert.assertThat(
-            "Revocation must be DB-durable — insert() called once",
-            this.store.insertCalls(),
-            Matchers.is(1)
+            this.blocklist.isRevokedUser("dave", Instant.now()),
+            new IsEqual<>(false)
         );
     }
 
     @Test
-    void peerOnAGenuineSecondValkeyConnectionObservesTheRevocation() {
-        // A real second "node": its own ValkeyConnection + pub/sub instance
-        // (distinct instanceId) pointed at the same Valkey server, its own
-        // DB fake. Sharing one CacheInvalidationPubSub between two
-        // blocklists would self-filter every message (same instanceId) and
-        // wouldn't prove anything about cross-node fan-out.
-        try (ValkeyConnection peerConn =
-            new ValkeyConnection(VALKEY.getHost(), VALKEY.getMappedPort(6379), Duration.ofSeconds(5));
-            CacheInvalidationPubSub peerPubSub = new CacheInvalidationPubSub(peerConn)) {
-            final ValkeyRevocationBlocklist peer = new ValkeyRevocationBlocklist(
-                peerPubSub, new InMemoryRevocationStore(), 3600
+    void revocationsSurviveARestart() {
+        // B47: entries were written to Valkey but never read back, so a
+        // restarted node forgot every revocation.
+        final Instant before = Instant.now().minusSeconds(60);
+        this.blocklist.revokeUser("henry", 3600);
+        this.blocklist.revokeJti("jti-restart", 3600);
+        final CacheInvalidationPubSub fresh = new CacheInvalidationPubSub(this.conn);
+        try {
+            final ValkeyRevocationBlocklist restarted =
+                new ValkeyRevocationBlocklist(this.conn, fresh, 3600);
+            // The writes are fire-and-forget; poll for their eventual state.
+            for (int attempt = 0; attempt < 50
+                && !(restarted.isRevokedJti("jti-restart")
+                    && restarted.isRevokedUser("henry", before)); attempt += 1) {
+                restarted.restore();
+                if (!restarted.isRevokedJti("jti-restart")) {
+                    java.util.concurrent.locks.LockSupport.parkNanos(100_000_000L);
+                }
+            }
+            MatcherAssert.assertThat(
+                "a user revocation must be restored after a restart",
+                restarted.isRevokedUser("henry", before),
+                new IsEqual<>(true)
             );
-            this.blocklist.revokeJti("cross-node-jti", 7200);
-            org.awaitility.Awaitility.await().atMost(5, java.util.concurrent.TimeUnit.SECONDS)
-                .untilAsserted(
-                    () -> MatcherAssert.assertThat(
-                        "Peer must observe the revocation via real Valkey pub/sub",
-                        peer.isRevokedJti("cross-node-jti"),
-                        Matchers.is(true)
-                    )
-                );
+            MatcherAssert.assertThat(
+                "the re-login after the revocation stays accepted",
+                restarted.isRevokedUser("henry", Instant.now()),
+                new IsEqual<>(false)
+            );
+            MatcherAssert.assertThat(
+                "a JTI revocation must be restored after a restart",
+                restarted.isRevokedJti("jti-restart"),
+                new IsEqual<>(true)
+            );
+        } finally {
+            fresh.close();
+        }
+    }
+
+    @Test
+    void preUpgradeUserEntryIsRestoredAsARevocation() throws Exception {
+        // B47 rolling upgrade: a 2.2.8 node stored the marker "1" with no
+        // instant; restoring it as epoch second 1 revoked nothing.
+        this.conn.async().setex(
+            "pantera:revoked:user:ivan", 3600,
+            "1".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        ).get(10, java.util.concurrent.TimeUnit.SECONDS);
+        final Instant issued = Instant.now().minusSeconds(60);
+        final CacheInvalidationPubSub fresh = new CacheInvalidationPubSub(this.conn);
+        try {
+            final ValkeyRevocationBlocklist restarted =
+                new ValkeyRevocationBlocklist(this.conn, fresh, 3600);
+            restarted.restore();
+            MatcherAssert.assertThat(
+                restarted.isRevokedUser("ivan", issued), new IsEqual<>(true)
+            );
+        } finally {
+            fresh.close();
+        }
+    }
+
+    @Test
+    void peersNotYetUpgradedStillReceiveRevocations() throws Exception {
+        // B47 rolling upgrade: a 2.2.8 node decodes only "user:<name>" and
+        // "jti:<jti>" and silently drops the current form.
+        final java.util.Queue<String> heard = new java.util.concurrent.ConcurrentLinkedQueue<>();
+        final CacheInvalidationPubSub old = new CacheInvalidationPubSub(this.conn);
+        try {
+            old.register("revocation", new com.auto1.pantera.asto.misc.Cleanable<String>() {
+                @Override
+                public void invalidate(final String key) {
+                    heard.add(key);
+                }
+
+                @Override
+                public void invalidateAll() {
+                    // Not used.
+                }
+            });
+            this.blocklist.revokeUser("judy", 3600);
+            this.blocklist.revokeJti("jti-judy", 3600);
+            for (int attempt = 0; attempt < 50
+                && !(heard.contains("user:judy") && heard.contains("jti:jti-judy"));
+                attempt += 1) {
+                java.util.concurrent.locks.LockSupport.parkNanos(100_000_000L);
+            }
+            MatcherAssert.assertThat(
+                "a pre-2.2.9 peer must receive the user revocation",
+                heard.contains("user:judy"), new IsEqual<>(true)
+            );
+            MatcherAssert.assertThat(
+                "a pre-2.2.9 peer must receive the JTI revocation",
+                heard.contains("jti:jti-judy"), new IsEqual<>(true)
+            );
+        } finally {
+            old.close();
         }
     }
 }

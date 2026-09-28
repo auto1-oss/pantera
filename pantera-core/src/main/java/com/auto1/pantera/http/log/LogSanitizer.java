@@ -72,6 +72,45 @@ public final class LogSanitizer {
     );
 
     /**
+     * Path segments that carry a credential by protocol: npm logout
+     * ({@code /-/user/token/<token>}) and the npm tokens API
+     * ({@code /-/npm/v1/tokens/token/<key>}).
+     */
+    private static final Pattern PATH_TOKEN_PATTERN = Pattern.compile(
+        "(/-/user/token/|/-/npm/v1/tokens/token/)[^/?#\\s]+"
+    );
+
+    /**
+     * Conda token-in-path ({@code /t/<token>/...}). Only segments that look like
+     * a credential (16+ token characters) are masked so ordinary short
+     * {@code /t/} directories in other formats stay readable.
+     */
+    private static final Pattern CONDA_TOKEN_PATTERN = Pattern.compile(
+        "(/t/)[A-Za-z0-9\\-._~+=%]{16,}(?=[/?#\\s]|$)"
+    );
+
+    /**
+     * A JWT, or any fragment of one, anywhere in the text. JWT header and
+     * payload are base64url JSON objects, so each starts with {@code eyJ}; a
+     * match is such a segment plus up to two dot-joined segments after it.
+     * This also catches the payload.signature tail left behind when a client
+     * splits a raw token at its first dot (conda moves it after the repository
+     * name, next to a {@code /t/} segment holding only the constant header).
+     * The segment must start at a token boundary so ordinary words that merely
+     * contain {@code eyJ} stay readable.
+     */
+    private static final Pattern JWT_PATTERN = Pattern.compile(
+        "(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{16,}(?:\\.[A-Za-z0-9_-]+){0,2}"
+    );
+
+    /**
+     * Userinfo in an absolute URL ({@code scheme://user:pass@host}).
+     */
+    private static final Pattern USERINFO_PATTERN = Pattern.compile(
+        "([A-Za-z][A-Za-z0-9+.-]*://)[^/@\\s?#]+@"
+    );
+
+    /**
      * Mask to use for sensitive data.
      */
     private static final String MASK = "***REDACTED***";
@@ -105,7 +144,8 @@ public final class LogSanitizer {
     }
 
     /**
-     * Sanitize a URL for logging by masking query parameters with sensitive names.
+     * Sanitize a URL for logging by masking query parameters with sensitive names
+     * and {@code /t/<token>/} path credentials.
      * 
      * @param url Original URL
      * @return Sanitized URL safe for logging
@@ -114,7 +154,9 @@ public final class LogSanitizer {
         if (url == null || url.isEmpty()) {
             return url;
         }
-        return URL_API_KEY_PATTERN.matcher(url).replaceAll("$1" + MASK);
+        return redactCredentials(
+            URL_API_KEY_PATTERN.matcher(url).replaceAll("$1" + MASK)
+        );
     }
 
     /**
@@ -171,7 +213,48 @@ public final class LogSanitizer {
             "(?i)(api[_-]?key|token|password|secret)[\"']?\\s*[:=]\\s*[\"']?[A-Za-z0-9\\-._~+/]+",
             "$1=" + MASK
         );
-        
+
+        return redactCredentials(result);
+    }
+
+    /**
+     * Mask credentials that a URL may carry (JWTs, token path segments,
+     * userinfo) inside free text such as a log message or an exception
+     * message. Unlike {@link #sanitizeMessage(String)} it does not rewrite
+     * {@code key=value} prose, so ordinary diagnostics stay intact.
+     *
+     * @param text Original text, may be null
+     * @return Text safe for logging
+     */
+    public static String sanitizeText(final String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        return redactCredentials(text);
+    }
+
+    /**
+     * Mask credentials carried in URL paths, userinfo and JWTs anywhere in the
+     * text. The cheap {@code contains} guards keep the common case (no
+     * credential) free of regex work.
+     *
+     * @param text Text to redact
+     * @return Redacted text
+     */
+    private static String redactCredentials(final String text) {
+        String result = text;
+        if (result.contains("eyJ")) {
+            result = JWT_PATTERN.matcher(result).replaceAll(MASK);
+        }
+        if (result.contains("/-/")) {
+            result = PATH_TOKEN_PATTERN.matcher(result).replaceAll("$1" + MASK);
+        }
+        if (result.contains("/t/")) {
+            result = CONDA_TOKEN_PATTERN.matcher(result).replaceAll("$1" + MASK);
+        }
+        if (result.indexOf('@') >= 0 && result.contains("://")) {
+            result = USERINFO_PATTERN.matcher(result).replaceAll("$1" + MASK + "@");
+        }
         return result;
     }
 

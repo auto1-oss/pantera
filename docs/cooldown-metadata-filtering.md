@@ -25,7 +25,7 @@ This two-layer design prevents build tools from resolving blocked versions
 while providing clear, format-appropriate error signalling when direct access
 is attempted.
 
-## Cooldown / negative-cache coherence (WS5.1)
+## Cooldown / negative-cache coherence (2.3.0)
 
 A "no versions available" outcome caused by cooldown (every version of a
 package currently blocked) is **never** written to the negative (404) cache.
@@ -58,10 +58,10 @@ and any unbounded-latest resolution endpoint the client can query.
 | maven-proxy        | `maven-metadata.xml` (rewrites `<versions>`, `<latest>`, `<release>`) |
 | gradle-proxy       | Same as maven-proxy (reuses Maven components) |
 | npm-proxy          | `GET /{pkg}` (packument -- full and abbreviated), `GET /{pkg}/latest` (dist-tag shortcut). `dist-tags.latest` is rewritten to the highest non-blocked version; other dist-tags pointing to blocked versions are dropped. |
-| pypi-proxy         | `/simple/{pkg}/` (PEP 503 HTML index), `/pypi/{pkg}/json` (JSON API). `info.version` and `urls` are rewritten to the highest non-blocked version using PEP 440 ordering. |
+| pypi-proxy         | `/simple/{pkg}/` (PEP 503 HTML index), `/pypi/{pkg}/json` and `/pypi/{pkg}/{ver}/json` (JSON API). `info.version` and `urls` are rewritten to the highest non-blocked version using PEP 440 ordering. |
 | docker-proxy       | `/v2/{name}/tags/list` (filters the `tags` array); `/v2/{name}/manifests/{tag}` (returns 404 `MANIFEST_UNKNOWN` when the tag resolves to a blocked digest or the tag itself is blocked). `/manifests/<digest>` continues through the existing digest-level cooldown check. |
 | go-proxy           | `/{module}/@v/list` (filters the version list); `/{module}/@latest` (rewrites `Version` to the highest non-blocked version if upstream latest is blocked; preserves `Origin`; returns 403 if every version is blocked). |
-| php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json` (per-package version filtering); `/packages.json`, `/repo.json` (root aggregation -- filters inline packages, passes through lazy-providers schemes unchanged). |
+| php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json` (per-package version filtering); `/packages.json`, `/repo.json` (the proxy serves its own root, whose `metadata-url` points at its `/p2/` endpoint, so versions are filtered per package; the upstream root is not fetched). |
 | file-proxy         | **No metadata filtering.** File / raw proxies have no version-resolution semantics -- no tags, no version lists, no packument. Cooldown applies only at the artifact-fetch layer, based on the file's cached-at / remote-modified timestamp relative to the cooldown window. See the dedicated section below. |
 
 ### Hosted-only adapters (out of scope)
@@ -111,11 +111,14 @@ Two metadata code paths are supported, with separate SPI implementations.
 **Direct artifact admission (`*.jar`, `*.pom`, `*.module`, `*.aar`, …):**
 
 - `CachedProxySlice.preProcess` routes primary artifacts through `verifyAndServePrimary`, which runs `cooldown.evaluate(...)` on the cache-miss path. Versions still within cooldown never enter cache; cache-hit serves are not re-evaluated (admission-gate model). Manual blocks of already-cached versions require cache eviction by an admin — `JdbcCooldownService.invalidateEnvelope` handles the metadata side; the storage side is the admin's tool.
-- For SNAPSHOT artifacts, `buildCooldownRequest` extracts the timestamped form from the filename so each timestamped binary gets its own admission decision (not one shared decision per base SNAPSHOT coordinate).
+- Every primary file of a version — `.jar`, `.pom`, Gradle `.module`, `.war`, `.aar`, classifier jars including `-sources` / `-javadoc` — is gated under the same `(artifact, version)` key as the main jar (`MavenVersionFile`), so one block covers the whole version and one unblock releases it. Checksum and signature sidecars (`.sha1`, `.md5`, `.sha256`, `.sha512`, `.asc`) are not gated; they follow their primary.
+- For SNAPSHOT artifacts, `buildCooldownRequest` derives the timestamped form from the directory's base version and the file name (`my-lib/1.0-SNAPSHOT/my-lib-1.0-20260519.090000-1.jar` → `1.0-20260519.090000-1`), so each timestamped binary gets its own admission decision and hyphenated artifactIds never mis-split.
 
 **ETag / Last-Modified contract.** Responses emit a Pantera-computed weak ETag (`W/"<sha256-base64-of-filtered-body>"`) and a fresh `Last-Modified` (HTTP-date now). Upstream `X-Checksum-*`, `CF-*`, `Age`, `X-Amz-*` are stripped — they would advertise checksums of the unfiltered upstream bytes that Pantera does not serve. Inbound `If-None-Match` matching the computed ETag returns `304` with empty body.
 
-**Filtered-output cache.** Materialised in `PerInputFilteredMetadataCache`, keyed by `(repoType, repoName, packageName, upstreamSha256)` plus a 1-hour `computedAtBucket`. When upstream metadata changes (new version landed), the cache key changes and the next request refilters. When the cooldown cutoff advances (versions age out of the window), the bucket rolls and the next request refilters. 50 K entries, in-memory only in v2.2.0; disk persistence deferred. Gradle uses the same components; Gradle Module Metadata (`.module`) files are admission-gated like any other primary artifact — they carry no version list of their own, so no filter rewriting applies.
+**Filtered-output cache.** The proxy keeps no private filtered-bytes cache: the filtered result is cached only in the shared envelope cache (`FilteredMetadataCache`), which every block, unblock, expiry, upstream refresh and upload invalidates. Both metadata levels are keyed by the dotted artifact package (`com.example.my-lib`) — the same name snapshot downloads record block rows under — and the snapshot-level envelope uses its own variant (`snapshot-1.0-SNAPSHOT`) so it never collides with the artifact-level envelope. When every version is blocked the proxy answers `403` with `X-Pantera-Cooldown: all-blocked`.
+
+**Groups.** A Maven/Gradle group relays the winning member's already-filtered `maven-metadata.xml` and caches it per node for 10 minutes. The cache listens for cooldown package-change events (delivered on every node) and drops that package's artifact- and snapshot-level entries, and everything on a policy change; there is no distributed primary tier. A member answer carrying `X-Pantera-Cooldown` (any status) ends the walk and is relayed verbatim — never cached, never replaced by the stale fallback — and the `.sha1` / `.md5` of such metadata relays the same answer. Gradle uses the same components; Gradle Module Metadata (`.module`) files are admission-gated like any other primary artifact — they carry no version list of their own, so no filter rewriting applies.
 
 ### SNAPSHOT classifier knob
 
@@ -166,6 +169,9 @@ Precedence (highest first): per-repo-name SNAPSHOT → per-repo-name (non-SNAPSH
 - **JSON API (`/pypi/{pkg}/json`):** Filters `releases` by version; rewrites
   `info.version` and the top-level `urls` array to reflect the highest
   non-blocked version using PEP 440 ordering.
+- **Per-version JSON API (`/pypi/{pkg}/{ver}/json`):** Proxied from the same
+  JSON API upstream; a version under cooldown answers `404` (with
+  `X-Pantera-Cooldown: blocked`), exactly like a version that does not exist.
 - Both endpoints are covered because package managers and browsers resolve
   unbounded `pip install foo` through different paths.
 - **HEAD support:** Hosted PySlice handles `HEAD` on both the file path
@@ -267,15 +273,15 @@ When metadata is fetched and parsed, release dates embedded in the metadata (e.g
 
 Version cooldown evaluation is pure-CPU on the calling thread — Caffeine L1 lookup, then on miss a synchronous `checkExistingBlockWithTimestamp` DB read via the existing executor, then `shouldBlockNewArtifact` against the release date already parsed out of the upstream packument. There is no per-version network I/O on the filter path: dates come from the in-memory `releaseDates` map populated by `MetadataParser.extractReleaseDates`. The previous dedicated 4-thread `cooldown-eval` executor was removed in v2.2.0 when the timeout-wall fix landed (see CHANGELOG); the per-request fan-out cost is now dominated by the bounded number of versions inside the cooldown window (`maxVersionsToEvaluate`, default 50), not by thread-pool dispatch.
 
-Per-endpoint handlers that sit outside `MetadataFilterService` apply the same bound directly (WS5.4, v2.3.0): `GoListHandler` (`/{module}/@v/list`) caps evaluation at the newest 50 versions (by semver), matching `GoLatestHandler`'s pre-existing cap; `ComposerRootPackagesHandler` (`/packages.json`, `/repo.json`) caps evaluation at the newest 50 versions **per package** (by release date, falling back to semver when a version's date is unknown) — a Satis snapshot inlining hundreds of versions for one package no longer fans out a cooldown-service call per version. In both cases, versions beyond the cap are never evaluated and are therefore served as allowed (never filtered), and the handler logs once per request when the cap actually truncated evaluation (`event.action` `list_filter_eval_cap` / `root_filter_eval_cap`) so the truncation is an observable event, not a silent drop.
+Per-endpoint handlers that sit outside `MetadataFilterService` apply the same bound directly (2.3.0): `GoListHandler` (`/{module}/@v/list`) caps evaluation at the newest 50 versions (by semver), matching `GoLatestHandler`'s pre-existing cap; `ComposerRootPackagesHandler` (`/packages.json`, `/repo.json`) caps evaluation at the newest 50 versions **per package** (by release date, falling back to semver when a version's date is unknown) — a Satis snapshot inlining hundreds of versions for one package no longer fans out a cooldown-service call per version. In both cases, versions beyond the cap are never evaluated and are therefore served as allowed (never filtered), and the handler logs once per request when the cap actually truncated evaluation (`event.action` `list_filter_eval_cap` / `root_filter_eval_cap`) so the truncation is an observable event, not a silent drop.
 
 ### H3: Stale-While-Revalidate (SWR) on FilteredMetadataCache
 
 When a cached metadata entry expires, the stale bytes are returned immediately to the caller while a background task re-evaluates the metadata. This eliminates tail latency spikes at cache expiry boundaries. The SWR grace period is 5 minutes beyond the logical TTL.
 
-**Cache coherence on background refresh (WS5.2, v2.3.0):** for npm, a background refresh that pulls a genuinely changed upstream packument (full re-fetch, or a conditional If-None-Match refresh whose ETag came back different — i.e. anything other than a 304) invalidates the `FilteredMetadataCache` envelope for that package via `FilteredMetadataCacheRegistry.invalidateAfterProxyRefresh` (mirrors the existing invalidation the local upload path already performed). Without this, a version published upstream during a background refresh stayed invisible behind the envelope's own TTL (up to 24h) stacked on top of the packument TTL (12h). A 304 (unchanged) response does not invalidate anything — there is nothing new to reveal.
+**Cache coherence on background refresh:** a background refresh that lands changed upstream metadata invalidates the package's `FilteredMetadataCache` envelope — see [Refresh- and Upload-Driven Invalidation (2.2.7)](#refresh--and-upload-driven-invalidation-227) below. For npm the trigger is the `packumentWriteHook`, fired after a full re-fetch or after a conditional `If-None-Match` refresh whose ETag came back different; a `304` (unchanged) response fires nothing — there is nothing new to reveal.
 
-**PyPI `/simple/` filtered-index cache (WS5.5, v2.3.0):** `PypiSimpleHandler` sits outside `MetadataFilterService`, so its parse + per-version cooldown fan-out + filter + rewrite used to run on **every** `/simple/{pkg}/` request, even when the upstream index was unchanged. It now materialises the cooldown-filtered index into the same shared `FilteredMetadataCache` under the standard `metadata:{repoType}:{repoName}:{packageName}` key, so the cost is paid once per (content, cutoff): a second identical request is served from cache without re-evaluating cooldown. Because the entry lives in the shared cache, every existing invalidation hook drops it — the JDBC block/unblock envelope invalidator, `invalidateAfterUpload`, cross-instance pub/sub, and the policy-change wipe — and the entry TTL is capped by the earliest `blockedUntil` so an aged-out version reappears on the next request after the window passes. Because the shared cache is keyed by package (not content), the handler additionally fingerprints (SHA-256) the upstream index bytes and self-busts the entry the instant the upstream content changes, so a proxy storage-cache refresh cannot leave a stale filtered view behind. The cached bytes are the filtered PEP 691 JSON (the production upstream shape); a PEP 503 HTML client is served the same filtered index re-rendered from cache without re-running cooldown.
+**PyPI `/simple/` filtered-index cache (2.3.0):** `PypiSimpleHandler` sits outside `MetadataFilterService`, so its parse + per-version cooldown fan-out + filter + rewrite used to run on **every** `/simple/{pkg}/` request, even when the upstream index was unchanged. It now materialises the cooldown-filtered index into the same shared `FilteredMetadataCache` under the standard `metadata:{repoType}:{repoName}:{variant}:{packageName}` key (variant `default`; see *Envelope Key Shape* below), so the cost is paid once per (content, cutoff): a second identical request is served from cache without re-evaluating cooldown. Because the entry lives in the shared cache, every existing invalidation hook drops it — the JDBC block/unblock envelope invalidator, `invalidateAfterUpload`, cross-instance pub/sub, and the policy-change wipe — and the entry TTL is capped by the earliest `blockedUntil` so an aged-out version reappears on the next request after the window passes. Because the shared cache is keyed by package (not content), the handler additionally fingerprints (SHA-256) the upstream index bytes and self-busts the entry the instant the upstream content changes, so a proxy storage-cache refresh cannot leave a stale filtered view behind. The cached bytes are the filtered PEP 691 JSON (the production upstream shape); a PEP 503 HTML client is served the same filtered index re-rendered from cache without re-running cooldown.
 
 ### H4: L1 Cache Capacity (50K entries)
 
@@ -311,7 +317,7 @@ lifecycle in a dedicated handler:
 - `GoListHandler` -- `/{module}/@v/list`
 - `GoLatestHandler` -- `/{module}/@latest`
 - `PypiSimpleHandler` -- `/simple/{pkg}/`
-- `PypiJsonHandler` -- `/pypi/{pkg}/json`
+- `PypiJsonHandler` -- `/pypi/{pkg}/json`, `/pypi/{pkg}/{ver}/json`
 - `DockerTagsListHandler` -- `/v2/{name}/tags/list`
 - `DockerManifestTagHandler` -- `/v2/{name}/manifests/{tag}`
 - `ComposerPackageMetadataHandler` -- `/packages/...`, `/p2/...`
@@ -366,22 +372,84 @@ the 403/404 response (format-appropriate).
 ### Unblock a Specific Version
 
 ```bash
-curl -X POST "http://pantera:8086/api/v1/cooldown/unblock" \
+curl -X POST "http://pantera:8086/api/v1/repositories/npm-proxy/cooldown/unblock" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"repo_type":"npm","repo_name":"npm-proxy","package":"lodash","version":"4.18.0"}'
+  -H "Content-Type: application/json" \
+  -d '{"artifact":"lodash","version":"4.18.0"}'
 ```
 
 On unblock:
-- The DB record is updated first
-- `FilteredMetadataCache` L1 + L2 are invalidated for the package
-- `CooldownCache` L1 + L2 are invalidated for the specific version
-- All invalidation futures complete synchronously before the 200 response
+- The block is archived to history (`MANUAL_UNBLOCK`) and the live row is
+  kept with `status = 'INACTIVE'`, `unblocked_at` / `unblocked_by` set and the
+  original `blocked_until`. An evaluation that misses the decision cache finds
+  the released row and allows the version; before 2.2.9 the row was deleted,
+  so the next evaluation re-created the block from the release date. Released
+  rows never appear in the blocked list or counts, and are deleted once
+  `blocked_until` has passed (see *Cleanup execution modes*).
+- `CooldownCache` L1 + L2 are set to "allowed" for the version.
+- `FilteredMetadataCache` L1 + L2 are invalidated for the package (every
+  variant, e.g. npm `full` and `abbreviated`).
+- All invalidations complete before the `204` response.
+- The REST API and the repository slices share one cooldown service and one
+  metadata service per process, so the unblock clears the caches clients are
+  served from (2.2.9; previously each API verticle built its own copies).
+- A filter computation already in flight when the unblock lands does not
+  write its pre-unblock result back into the cache, and an L1 envelope with
+  blocked versions is revalidated at least every L1 TTL even when its earliest
+  block ends days later, so a missed invalidation self-heals within minutes.
 
 ### Policy Change (Duration Update)
 
 When the cooldown duration is changed (e.g., 30d to 7d):
 - `FilteredMetadataCache.clearAll()` is called to flush all cached filtered metadata
 - Subsequent requests re-evaluate all versions against the new policy
+
+### Refresh- and Upload-Driven Invalidation (2.2.7)
+
+The filtered envelope is a materialisation of *(source metadata bytes ×
+block state)* — so it must also drop when the **source bytes** change, not
+only on block-state changes:
+
+- **Proxy refresh**: when a background stale-while-revalidate refresh lands
+  changed content (npm: the packument write hook; maven: the
+  `MetadataCache` refreshed-content hook), the adapter calls
+  `FilteredMetadataCacheRegistry.invalidateAfterProxyRefresh(type, package)`.
+- **Upload/publish**: every adapter's upload path calls
+  `invalidateAfterUpload(type, package)` so group/proxy envelopes stop
+  hiding a version just published to a member local repository.
+
+Both funnel into `FilteredMetadataCache.invalidateByPackageName`, which
+drops matching L1 entries, sweeps L2 (Valkey) by key pattern via cursor-based
+SCAN **independently of what L1 holds** (in L2-only mode L1 holds nothing),
+and broadcasts every dropped key on the `cooldown-envelope` pub/sub channel
+so peer nodes drop their L1 too. Outcomes are logged as
+`envelope_invalidate_on_refresh` / `envelope_invalidate_on_upload` (L1) and
+`envelope_invalidate_l2` (async L2 sweep).
+
+### Envelope Key Shape and L2 Transport (2.2.7)
+
+Envelope keys are `metadata:{repoType}:{repoName}:{variant}:{packageName}`.
+The **variant** names the body shape being cached — the npm proxy uses
+`full` and `abbreviated` (before the variant existed, both shapes shared
+one key and whichever was filtered first was served to both kinds of
+request); callers with a single shape use `default`. The package name is
+always the **last** segment: both by-package invalidation paths match on
+that suffix, so any key change must preserve its position. Block-state
+invalidation (`invalidate(type, name, pkg)`) drops **every** variant of the
+package.
+
+L2 values above 1 KB are stored gzip-compressed (packument JSON shrinks
+5–10x), which keeps even tens-of-MB envelopes inside the 500 ms L2 read
+timeout; raw pre-2.2.7 values are still readable (the decoder detects the
+gzip magic). Three consecutive failed L2 reads (timeout or transport
+error) open a 10-second read breaker (`envelope_l2_degraded` WARN) so a
+degraded Valkey never adds the read timeout to every metadata serve —
+serves fall through to a local recompute, and writes stay enabled.
+
+> Before 2.2.7 the L2 deletion only covered keys still present in L1, so a
+> refreshed packument could keep serving its pre-refresh filtered envelope
+> out of Valkey for the full L2 TTL — the "npm metadata never refreshes"
+> incident.
 
 ### Cache Invalidation
 
@@ -430,6 +498,12 @@ identifies the chosen mode:
 
 History retention is enforced daily by either mechanism (pg_cron job
 `purge-cooldown-history` or the fallback's hourly check-gated purge).
+
+Manually released (`INACTIVE`) rows whose `blocked_until` has passed are
+deleted every 10 minutes by the pg_cron job `purge-released-cooldowns`
+(migration V144) or, without pg_cron, by the Vertx fallback in the same tick
+as the expiry archive. They were archived at release time, so this writes no
+second history row.
 
 ## Permission model
 

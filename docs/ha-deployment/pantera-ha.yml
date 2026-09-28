@@ -76,7 +76,7 @@ meta:
     idle_timeout: 30000
     connection_timeout: 15000
     follow_redirects: true
-    connection_acquire_timeout: 120000
+    connection_acquire_timeout: 30000
 
   http_server:
     request_timeout: PT2M

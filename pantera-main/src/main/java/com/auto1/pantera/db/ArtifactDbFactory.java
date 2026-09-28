@@ -706,6 +706,12 @@ public final class ArtifactDbFactory {
             statement.executeUpdate(
                 "CREATE INDEX IF NOT EXISTS idx_import_sessions_repo_path ON import_sessions(repo_name, artifact_path)"
             );
+            // NOTE: managed by Flyway V143 (import idempotency keys bound to
+            // the authenticated caller). Mirrored here for code paths that
+            // bypass Flyway (e.g. tests hitting a bare DB).
+            statement.executeUpdate(
+                "ALTER TABLE import_sessions ADD COLUMN IF NOT EXISTS caller VARCHAR"
+            );
         } catch (final SQLException error) {
             throw new PanteraException(error);
         }

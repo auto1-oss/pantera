@@ -256,7 +256,7 @@ docker exec -it pantera-db psql -U pantera -d pantera \
 | Cause | Solution |
 |-------|----------|
 | PostgreSQL under-resourced | Increase CPU and memory for the database |
-| Search index stale | Run `POST /api/v1/search/reindex` to rebuild |
+| Search index stale | Run `POST /api/v1/search/reindex` to rebuild; follow it with `GET /api/v1/search/reindex` (see [Database](database.md#rebuilding-the-search-index)) |
 | LIKE fallback timeout | Increase `PANTERA_SEARCH_LIKE_TIMEOUT_MS` (default: 3000 ms) |
 | Deep pagination | Limit page depth; pages > 100 degrade performance |
 | Missing indexes | Run `V104__performance_indexes.sql` or upgrade to apply it |
@@ -400,10 +400,72 @@ docker exec -it pantera-db psql -U pantera -d pantera \
 
 **Resolution:**
 
-1. Wait for the negative cache TTL to expire (default: 24 hours).
-2. Restart the Pantera node to clear the L1 Caffeine cache.
-3. If Valkey is configured, the L2 entry will also need to expire or be cleared.
+1. In the Management UI, open **Administration > Troubleshoot** and enter the failing URL. It lists every negative-cache key the request maps to (the group's key and each member's) with its L1/L2 state, and offers a one-click fix that clears them on every node.
+2. Alternatively open **Administration > Negative Cache**, use **Check a URL** to see which keys shadow the URL, and clear them (per key, or **Clear package** for every entry of the package).
+3. Without the UI, use the API: `GET /api/v1/admin/troubleshoot?url=<client URL>` to diagnose, or clear every entry of the package, in all scopes and tiers, on every node with `POST /api/v1/admin/neg-cache/invalidate-package` and `{"artifactName": "<package>", "repoType": "<format>"}`.
 4. To reduce future impact, lower the negative cache TTL in `meta.caches.negative.ttl`.
+
+Restarting a node is not a fix: with Valkey the entry lives on in L2 and is
+promoted back into the restarted node's L1 on the next request. See the
+[REST API Reference](../rest-api-reference.md#19-admin-cache-tools).
+
+### Emitted Links Point at the Wrong Hostname
+
+**Symptoms:** Clients reaching Pantera on one hostname receive absolute links
+(npm `dist.tarball`, Composer provider URLs, Helm chart URLs) pointing at a
+different host -- often a previous registry's hostname, or one of two DNS names
+serving the same instance. `npm install` then fetches tarballs from the wrong
+host, and strict clients (corepack) reject the response outright.
+
+**Cause:** The repository has an explicit `url:` in its config. That is tier 1
+of the base-URL chain: it beats the `client_base_url` admin setting *and*
+`Host`/`X-Forwarded-*` derivation, for every client, whatever hostname they
+used. A `url:` carried over by an import from another registry keeps pointing
+at the old host indefinitely.
+
+**Resolution:**
+
+1. Find the pinned repositories -- reports only, changes nothing:
+
+   ```bash
+   scripts/audit-repo-base-urls.sh --stale-host old-registry.example.com
+   ```
+
+2. Clear the ones that can be cleared (the script refuses `helm`, `php`,
+   `nuget` and `conda`, whose adapters still require a `url:`, and writes a
+   revert script before touching anything):
+
+   ```bash
+   scripts/audit-repo-base-urls.sh --stale-host old-registry.example.com --apply
+   ```
+
+   The same field is editable per repository in the admin UI, under the
+   repository's "Client-Facing Base URL" card.
+
+3. Decide what the base should be derived from instead:
+
+   - **One hostname:** set `client_base_url` (Settings -> Client-Facing Base
+     URL). It is enforced for every repository without its own `url:`, and
+     `Host`/`X-Forwarded-*` are then not consulted at all.
+   - **Several hostnames:** leave `client_base_url` empty, set
+     `trust_forwarded_headers` to `true`, and list every hostname you serve in
+     `client_base_host_allowlist`. Host-only derivation forces scheme `http`,
+     so HTTPS clients need the forwarded headers -- which means the fronting
+     proxy MUST overwrite `X-Forwarded-Proto` and `X-Forwarded-Host` on every
+     inbound request, or a client can steer the emitted links itself.
+
+4. Verify against the backend directly (bypassing any caching proxy):
+
+   ```bash
+   curl -s -H 'Host: packages.example.com' \
+     http://localhost:8088/api/npm/<repo>/<package> \
+     | jq -r '.versions[].dist.tarball' | head -3
+   ```
+
+Responses that embed a derived base carry `Vary: Host` (plus the
+`X-Forwarded-*` triplet when forwarded headers are trusted), so a shared cache
+in front of Pantera must honour `Vary` or it will cross-serve one hostname's
+links to the other.
 
 ---
 

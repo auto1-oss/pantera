@@ -57,14 +57,14 @@ public final class PypiProxy implements Slice {
         
         // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own PyProxySlice, evaluated in priority order
-        this.slice = new RaceSlice(
+        this.slice = new com.auto1.pantera.adapters.ReadOnlyProxySlice(new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> {
                     // Create PyProxySlice for this remote
                     final Slice pyProxySlice = new PyProxySlice(
                         client,
                         remote.uri(),
-                        GenericAuthenticator.create(client, remote.username(), remote.pwd()),
+                        GenericAuthenticator.create(client, remote.uri(), remote.username(), remote.pwd()),
                         storage,
                         queue,
                         cfg.name(),
@@ -84,7 +84,7 @@ public final class PypiProxy implements Slice {
                     );
                 }
             ).collect(Collectors.toList())
-        );
+        ));
     }
 
     @Override

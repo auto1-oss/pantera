@@ -241,18 +241,14 @@ public final class UploadSlice implements Slice {
         }
         
         final String keyPath = key.string();
-        // Captured before any async hop, per CLAUDE.md — used by the
+        // Captured before any async hop (CLAUDE.md audit rules) — used by the
         // checksum-mismatch / release-immutability / pgp-verification-failed
         // audit paths below.
         final AuditContext auditCtx = this.captureAuditContext(headers);
 
-        // Special handling for maven-metadata.xml - fix it BEFORE saving
-        if (isMetadataXmlContent(keyPath)) {
-            return this.handleMetadataUpload(key, body, headers, owner, size, keyPath);
-        }
-
-        // For maven-metadata.xml checksums, SKIP them - we generated our own
-        if (isMetadataXmlChecksum(keyPath)) {
+        // For maven-metadata.xml checksums, SKIP them - we generate our own
+        // from the (normalised) metadata we actually store.
+        if (keyPath.contains("maven-metadata.xml") && isChecksum(keyPath)) {
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Skipping Maven-uploaded checksum for metadata (using generated checksums)")
                 .eventCategory("web")
@@ -260,173 +256,321 @@ public final class UploadSlice implements Slice {
                 .field("package.path", keyPath)
                 .field("log.source", "application")
                 .log();
-            // Don't save Maven's checksums - we already generated correct ones
-            return CompletableFuture.completedFuture(ResponseBuilder.created().build());
+            return new ContentWithSize(body, headers).asBytesFuture()
+                .thenApply(ignored -> ResponseBuilder.created().build());
         }
 
-        // WS4-maven.5: a checksum sidecar for a real (non-metadata) primary —
-        // verify against the server-computed digest of the ALREADY-STORED
-        // primary before persisting the client's claimed value.
-        if (isChecksumSidecar(keyPath)) {
-            return this.handleChecksumSidecarUpload(key, keyPath, body, headers, owner, size, auditCtx);
+        // Special handling for maven-metadata.xml - fix it BEFORE saving
+        if (keyPath.contains("maven-metadata.xml")) {
+            EcsLogger.debug("com.auto1.pantera.maven")
+                .message("Intercepting maven-metadata.xml upload for fixing")
+                .eventCategory("web")
+                .eventAction("metadata_upload")
+                .field("package.path", keyPath)
+                .field("log.source", "application")
+                .log();
+            return new ContentWithSize(body, headers).asBytesFuture().thenCompose(
+                bytes -> this.fixMetadataBytes(bytes).thenCompose(
+                    fixedBytes -> {
+                        // Save the FIXED metadata
+                        return this.storage.save(key, new Content.From(fixedBytes)).thenCompose(
+                            nothing -> {
+                                EcsLogger.debug("com.auto1.pantera.maven")
+                                    .message("Saved fixed maven-metadata.xml, generating checksums")
+                                    .eventCategory("web")
+                                    .eventAction("metadata_upload")
+                                    .field("package.path", keyPath)
+                                    .field("log.source", "application")
+                                    .log();
+                                // Generate checksums for the fixed content
+                                return this.generateChecksums(key);
+                            }
+                        );
+                    }
+                )
+            ).thenCompose(
+                sha256 -> this.addEvent(key, owner, size, sha256, headers)
+                    .thenApply(ignored -> ResponseBuilder.created().build())
+            ).exceptionally(
+                throwable -> {
+                    EcsLogger.error("com.auto1.pantera.maven")
+                        .message("Failed to save artifact")
+                        .eventCategory("web")
+                        .eventAction("artifact_upload")
+                        .eventOutcome("failure")
+                        .error(throwable)
+                        .field("package.path", keyPath)
+                        .field("log.source", "application")
+                        .log();
+                    return ResponseBuilder.internalError().build();
+                }
+            );
         }
 
-        // WS4-maven.2 (hosted half): verify `.asc`/`.sig` against the
-        // already-stored primary when verifyPgp is enabled for this repo.
+        // Artifact checksums: the server generates them from the stored
+        // bytes, so a client checksum is only verified, never trusted.
+        if (isChecksum(keyPath)) {
+            return this.uploadChecksum(key, body, headers, owner, size, auditCtx);
+        }
+
+        // WS4-maven.2 (hosted half): verify `.asc`/`.sig` against the stored
+        // or quarantined primary when verifyPgp is enabled for this repo.
         if (this.policy.verifyPgp() && isSignatureSidecar(keyPath)) {
             return this.handleSignatureUpload(key, keyPath, body, headers, owner, size, auditCtx);
         }
 
-        return this.handlePrimaryUpload(key, keyPath, body, headers, owner, size, auditCtx);
+        // Published release files are immutable: an identical re-upload
+        // (CI retry) is idempotent, different bytes are a 409 Conflict.
+        // SNAPSHOT directories stay writable. A repository opts out with
+        // releaseImmutable: false (WS4-maven.6).
+        if (this.policy.releaseImmutable() && isReleaseFile(keyPath)) {
+            return this.storage.exists(key).thenCompose(
+                exists -> {
+                    if (exists) {
+                        return this.redeploy(key, body, headers, owner, size, auditCtx);
+                    }
+                    return this.publish(key, keyPath, body, headers, owner, size, auditCtx);
+                }
+            );
+        }
+        return this.publish(key, keyPath, body, headers, owner, size, auditCtx);
     }
 
     /**
-     * The client-uploaded {@code maven-metadata.xml} itself (not one of its
-     * checksum sidecars). Normalises {@code <latest>}/{@code <lastUpdated>}
-     * via {@link #fixMetadataBytes(byte[])} — unchanged from pre-2.3.0.
-     * The GA-level {@code <versions>} listing this file advertises is
-     * superseded on the next primary-artifact deploy for the same GA by
-     * {@link #regenerateMetadataIfPrimary(String)}, which is the source of
-     * truth WS4-maven.4 establishes; a bare metadata-only PUT (no
-     * accompanying primary in the same request — e.g. an import script)
-     * is still accepted and normalised so it degrades gracefully.
+     * Store a primary or companion file at its servable key — or, when
+     * {@code verifyPgp} is enabled, quarantine it until a matching verified
+     * signature promotes it (WS4-maven.2, H1; see
+     * {@link #stagePrimaryForVerification}). Without {@code verifyPgp} this
+     * is the plain hosted write, {@link #save}.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
-    private CompletableFuture<Response> handleMetadataUpload(
-        final Key key, final Content body, final Headers headers,
-        final String owner, final long size, final String keyPath
+    private CompletableFuture<Response> publish(
+        final Key key, final String keyPath, final Content body, final Headers headers,
+        final String owner, final long size, final AuditContext auditCtx
     ) {
-        EcsLogger.debug("com.auto1.pantera.maven")
-            .message("Intercepting maven-metadata.xml upload for fixing")
-            .eventCategory("web")
-            .eventAction("metadata_upload")
-            .field("package.path", keyPath)
-            .field("log.source", "application")
-            .log();
-        return new ContentWithSize(body, headers).asBytesFuture().thenCompose(
-            bytes -> this.fixMetadataBytes(bytes).thenCompose(
-                fixedBytes -> this.storage.save(key, new Content.From(fixedBytes)).thenCompose(
-                    nothing -> {
-                        EcsLogger.debug("com.auto1.pantera.maven")
-                            .message("Saved fixed maven-metadata.xml, generating checksums")
-                            .eventCategory("web")
-                            .eventAction("metadata_upload")
-                            .field("package.path", keyPath)
-                            .field("log.source", "application")
-                            .log();
-                        return this.generateChecksums(key);
-                    }
-                )
-            )
-        ).thenCompose(
-            sha256 -> this.addEvent(key, owner, size, sha256)
-                .thenApply(ignored -> ResponseBuilder.created().build())
-        ).exceptionally(
-            throwable -> {
-                EcsLogger.error("com.auto1.pantera.maven")
-                    .message("Failed to save artifact")
-                    .eventCategory("web")
-                    .eventAction("artifact_upload")
-                    .eventOutcome("failure")
-                    .error(throwable)
-                    .field("package.path", keyPath)
-                    .field("log.source", "application")
-                    .log();
-                return ResponseBuilder.internalError().build();
+        if (this.policy.verifyPgp()) {
+            return this.stagePrimaryForVerification(key, keyPath, body, headers, owner, size, auditCtx);
+        }
+        return this.save(key, body, headers, owner, size);
+    }
+
+    /**
+     * Upload of an artifact checksum sidecar ({@code .sha1}, {@code .md5},
+     * {@code .sha256}, {@code .sha512}). When the file it describes is
+     * stored, the claimed digest is compared with the digest of the stored
+     * bytes (see {@link #storedDigest}): a match stores the canonical server-computed value (201), a
+     * mismatch is refused with 400 and the generated checksum is kept.
+     * Without a stored primary the checksum is saved as sent; the primary's
+     * upload regenerates it from the real bytes.
+     *
+     * @param key Checksum key
+     * @param body Request body
+     * @param headers Request headers
+     * @param owner Uploader
+     * @param size Declared size
+     * @param auditCtx Audit context captured at the top of the request
+     * @return Response future
+     */
+    private CompletableFuture<Response> uploadChecksum(
+        final Key key, final Content body, final Headers headers,
+        final String owner, final long size, final AuditContext auditCtx
+    ) {
+        final String path = key.string();
+        final int dot = path.lastIndexOf('.');
+        final Key primary = new Key.From(path.substring(0, dot));
+        final String alg = path.substring(dot + 1);
+        return this.storage.exists(primary).thenCompose(
+            exists -> {
+                if (!exists) {
+                    return this.save(key, body, headers, owner, size);
+                }
+                return new ContentWithSize(body, headers).asBytesFuture().thenCompose(
+                    bytes -> this.storedDigest(primary, alg).thenCompose(
+                        expected -> this.verifiedChecksum(
+                            key, primary, expected, bytes, owner, size, auditCtx
+                        )
+                    )
+                );
             }
         );
     }
 
     /**
-     * A primary artifact (jar/pom/war/aar/...) or a companion file that
-     * isn't a checksum/signature sidecar (sources/javadoc jars). Applies
-     * WS4-maven.6 release-redeploy immutability (checked against the real,
-     * already-published key regardless of {@code verifyPgp} — a verified
-     * release already served is still immutable), then either:
-     * <ul>
-     *   <li>{@code verifyPgp} enabled (H1 fix): quarantines the primary —
-     *       see {@link #stagePrimaryForVerification} — instead of saving it
-     *       to its servable location; it is promoted only once a matching
-     *       verified {@code .asc}/{@code .sig} lands.</li>
-     *   <li>{@code verifyPgp} disabled: saves, generates checksums,
-     *       regenerates the GA {@code maven-metadata.xml} (WS4-maven.4),
-     *       and records the {@link ArtifactEvent} — byte-identical to
-     *       pre-2.3.0/pre-H1 behaviour.</li>
-     * </ul>
-     * @checkstyle ParameterNumberCheck (5 lines)
+     * Compare a client checksum with the server-computed digest.
+     *
+     * @param key Checksum key
+     * @param primary Stored primary the checksum describes
+     * @param expected Server-computed lower-case hex digest of the primary
+     * @param claimed Uploaded checksum file bytes
+     * @param owner Uploader
+     * @param size Declared size
+     * @param auditCtx Audit context captured at the top of the request
+     * @return 201 after storing the canonical value, or 400 on mismatch
      */
-    private CompletableFuture<Response> handlePrimaryUpload(
-        final Key key, final String keyPath, final Content body, final Headers headers,
+    private CompletableFuture<Response> verifiedChecksum(
+        final Key key, final Key primary, final String expected, final byte[] claimed,
         final String owner, final long size, final AuditContext auditCtx
     ) {
-        final boolean snapshot = keyPath.contains("SNAPSHOT");
-        final CompletableFuture<Optional<Response>> immutabilityCheck =
-            this.policy.releaseImmutable() && !snapshot
-                ? this.rejectIfReleaseExists(key, keyPath, owner, size, auditCtx)
-                : CompletableFuture.completedFuture(Optional.empty());
-        return immutabilityCheck.thenCompose(rejected -> {
-            if (rejected.isPresent()) {
-                return CompletableFuture.completedFuture(rejected.get());
-            }
-            if (this.policy.verifyPgp()) {
-                return this.stagePrimaryForVerification(key, keyPath, body, headers, owner, size, auditCtx);
-            }
-            return this.saveAndRegenerate(key, keyPath, body, headers, owner, size);
-        });
+        final String text = new String(claimed, StandardCharsets.UTF_8).trim();
+        final String token = text.isEmpty() ? "" : text.split("\\s+", 2)[0];
+        if (expected.equalsIgnoreCase(token)) {
+            return this.storage.save(
+                key, new Content.From(expected.getBytes(StandardCharsets.UTF_8))
+            ).thenApply(ignored -> ResponseBuilder.created().build());
+        }
+        EcsLogger.warn("com.auto1.pantera.maven")
+            .message("Rejected checksum upload that does not match the stored artifact")
+            .eventCategory("web")
+            .eventAction("checksum_upload")
+            .eventOutcome("failure")
+            .field("event.reason", "checksum_mismatch")
+            .field("repository.name", this.rname)
+            .field("url.path", "/" + key.string())
+            .field("log.source", "application")
+            .log();
+        final GavCoordinates gav = GavCoordinates.parse(primary.string()).orElse(null);
+        AuditLogger.publish(
+            auditCtx, "maven", this.rname,
+            gav != null ? gav.artifactName() : primary.string(),
+            gav != null ? gav.version() : null,
+            size, owner, null, null,
+            AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_CHECKSUM_MISMATCH
+        );
+        return CompletableFuture.completedFuture(
+            ResponseBuilder.badRequest()
+                .textBody(
+                    "Checksum does not match the stored artifact; the "
+                        + "server-generated checksum was kept"
+                )
+                .build()
+        );
     }
 
     /**
-     * WS4-maven.6: 409 + audit when {@code releaseImmutable} is on, the
-     * path is a release (non-SNAPSHOT) coordinate, and the key already
-     * exists — otherwise {@link Optional#empty()} (proceed with the save).
-     * @checkstyle ParameterNumberCheck (5 lines)
+     * Re-upload of an existing release file, compared by SHA-256 with the
+     * stored file (see {@link #storedDigest}): identical bytes are an
+     * idempotent 201 (nothing rewritten, no new publish event), different
+     * bytes are refused with 409 Conflict.
+     *
+     * @param key File key
+     * @param body Request body
+     * @param headers Request headers
+     * @param owner Uploader
+     * @param size Declared size
+     * @param auditCtx Audit context captured at the top of the request
+     * @return Response future
      */
-    private CompletableFuture<Optional<Response>> rejectIfReleaseExists(
-        final Key key, final String keyPath, final String owner, final long size,
-        final AuditContext auditCtx
+    private CompletableFuture<Response> redeploy(
+        final Key key, final Content body, final Headers headers,
+        final String owner, final long size, final AuditContext auditCtx
     ) {
-        return this.storage.exists(key).thenApply(exists -> {
-            if (!exists) {
-                return Optional.<Response>empty();
-            }
-            final GavCoordinates gav = GavCoordinates.parse(keyPath).orElse(null);
-            EcsLogger.warn("com.auto1.pantera.maven")
-                .message("Rejected release redeploy: releaseImmutable is enabled and "
-                    + keyPath + " already exists")
-                .eventCategory("file")
-                .eventAction("release_redeploy_rejected")
-                .eventOutcome("failure")
-                .field("repository.name", this.rname)
-                .field("package.path", keyPath)
-                .field("log.source", "application")
-                .log();
-            AuditLogger.publish(
-                auditCtx, "maven", this.rname,
-                gav != null ? gav.artifactName() : keyPath,
-                gav != null ? gav.version() : null,
-                size, owner, null, null,
-                AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_CHECKSUM_MISMATCH
-            );
-            return Optional.of(
-                ResponseBuilder.from(com.auto1.pantera.http.RsStatus.CONFLICT).build()
-            );
-        });
+        return new ContentDigest(new ContentWithSize(body, headers), Digests.SHA256).hex()
+            .thenCompose(
+                incoming -> this.storedDigest(key, "sha256")
+                    .thenApply(
+                        existing -> this.redeployResponse(
+                            key, incoming, existing, owner, size, auditCtx
+                        )
+                    )
+            ).toCompletableFuture();
     }
 
     /**
-     * Save the primary, generate its checksums, regenerate the GA metadata
-     * (primary-artifact paths only), and record the {@link ArtifactEvent}.
-     * Only reached when {@code verifyPgp} is disabled for this repo — the
-     * {@code verifyPgp}-enabled path quarantines instead (see
-     * {@link #stagePrimaryForVerification}), promoting into this same
-     * checksums/metadata/event tail via {@link #publishPrimary} once a
-     * verified signature commits it.
-     * @checkstyle ParameterNumberCheck (5 lines)
+     * Lower-case hex digest of a stored file. Read from the checksum
+     * sidecar that {@link #save} generated from the stored bytes, so the
+     * file itself is not streamed again; the file is hashed only when that
+     * sidecar is missing or does not hold a well-formed digest.
+     *
+     * @param file Stored file key
+     * @param alg Checksum extension: {@code sha1}, {@code md5},
+     *  {@code sha256} or {@code sha512}
+     * @return Digest future
      */
-    private CompletableFuture<Response> saveAndRegenerate(
-        final Key key, final String keyPath, final Content body, final Headers headers,
+    private CompletableFuture<String> storedDigest(final Key file, final String alg) {
+        final Digests digest = Digests.valueOf(alg.toUpperCase(Locale.US));
+        final Key sidecar = new Key.From(String.format("%s.%s", file.string(), alg));
+        return this.storage.exists(sidecar).thenCompose(
+            present -> {
+                if (!present) {
+                    return CompletableFuture.completedFuture("");
+                }
+                return this.storage.value(sidecar).thenCompose(Content::asStringFuture);
+            }
+        ).thenCompose(
+            text -> {
+                final String hex = text.trim().toLowerCase(Locale.US);
+                if (hex.length() == digest.get().getDigestLength() * 2
+                    && hex.chars().allMatch(chr -> Character.digit(chr, 16) >= 0)) {
+                    return CompletableFuture.completedFuture(hex);
+                }
+                return this.storage.value(file)
+                    .thenCompose(content -> new ContentDigest(content, digest).hex())
+                    .toCompletableFuture();
+            }
+        );
+    }
+
+    /**
+     * Response for a release re-upload.
+     *
+     * @param key File key
+     * @param incoming SHA-256 of the uploaded bytes
+     * @param existing SHA-256 of the stored bytes
+     * @param owner Uploader
+     * @param size Declared size
+     * @param auditCtx Audit context captured at the top of the request
+     * @return 201 for identical bytes, 409 otherwise
+     */
+    private Response redeployResponse(
+        final Key key, final String incoming, final String existing,
+        final String owner, final long size, final AuditContext auditCtx
+    ) {
+        if (incoming.equals(existing)) {
+            return ResponseBuilder.created().build();
+        }
+        EcsLogger.warn("com.auto1.pantera.maven")
+            .message("Rejected re-deploy of a published release file with different content")
+            .eventCategory("web")
+            .eventAction("artifact_upload")
+            .eventOutcome("failure")
+            .field("event.reason", "release_immutable")
+            .field("repository.name", this.rname)
+            .field("url.path", "/" + key.string())
+            .field("log.source", "application")
+            .log();
+        final GavCoordinates gav = GavCoordinates.parse(key.string()).orElse(null);
+        AuditLogger.publish(
+            auditCtx, "maven", this.rname,
+            gav != null ? gav.artifactName() : key.string(),
+            gav != null ? gav.version() : null,
+            size, owner, null, null,
+            AuditLogger.OUTCOME_FAILURE, "release_immutable"
+        );
+        return ResponseBuilder.from(com.auto1.pantera.http.RsStatus.CONFLICT)
+            .textBody(
+                "Release file /" + key.string() + " already exists with different "
+                    + "content. Published release versions are immutable: deploy a "
+                    + "new version, or delete the existing one first."
+            )
+            .build();
+    }
+
+    /**
+     * Save an uploaded file, generate its checksums, regenerate the GA-level
+     * {@code maven-metadata.xml} (WS4-maven.4) and emit the artifact event.
+     *
+     * @param key File key
+     * @param body Request body
+     * @param headers Request headers
+     * @param owner Uploader
+     * @param size Declared size
+     * @return Response future
+     */
+    private CompletableFuture<Response> save(
+        final Key key, final Content body, final Headers headers,
         final String owner, final long size
     ) {
+        final String keyPath = key.string();
         return this.storage.save(key, new ContentWithSize(body, headers)).thenCompose(
             nothing -> {
                 EcsLogger.debug("com.auto1.pantera.maven")
@@ -437,8 +581,22 @@ public final class UploadSlice implements Slice {
                     .field("package.size", size)
                     .field("log.source", "application")
                     .log();
-                return this.publishPrimary(key, keyPath, owner, size);
+
+                // For non-metadata/checksum files, generate checksums, then
+                // regenerate the GA-level maven-metadata.xml so concurrent or
+                // stale deploys converge on the true version set (WS4-maven.4).
+                if (this.shouldGenerateChecksums(key)) {
+                    return this.generateChecksums(key).thenCompose(
+                        sha256 -> this.regenerateMetadataIfPrimary(keyPath)
+                            .thenApply(ignored -> sha256)
+                    );
+                } else {
+                    return CompletableFuture.<String>completedFuture(null);
+                }
             }
+        ).thenCompose(
+            sha256 -> this.addEvent(key, owner, size, sha256, headers)
+                .thenApply(ignored -> ResponseBuilder.created().build())
         ).exceptionally(
             throwable -> {
                 EcsLogger.error("com.auto1.pantera.maven")
@@ -469,10 +627,12 @@ public final class UploadSlice implements Slice {
      * @param keyPath Same key as a path string (avoids re-deriving it)
      * @param owner Uploading user
      * @param size Artifact size, for the audit/event record
+     * @param headers Request headers carrying the request context
      * @return Completable future yielding the 201 Created response
      */
     private CompletableFuture<Response> publishPrimary(
-        final Key key, final String keyPath, final String owner, final long size
+        final Key key, final String keyPath, final String owner, final long size,
+        final Headers headers
     ) {
         final CompletableFuture<String> checksums = this.shouldGenerateChecksums(key)
             ? this.generateChecksums(key)
@@ -480,7 +640,7 @@ public final class UploadSlice implements Slice {
         return checksums.thenCompose(
             sha256 -> this.regenerateMetadataIfPrimary(keyPath).thenApply(ignored -> sha256)
         ).thenCompose(
-            sha256 -> this.addEvent(key, owner, size, sha256)
+            sha256 -> this.addEvent(key, owner, size, sha256, headers)
                 .thenApply(ignored -> ResponseBuilder.created().build())
         );
     }
@@ -518,85 +678,6 @@ public final class UploadSlice implements Slice {
                     .log();
                 return null;
             });
-    }
-
-    /**
-     * WS4-maven.5: verify an uploaded checksum sidecar against the digest
-     * of the already-stored primary. When the primary is absent (checksum
-     * arrived first — not the normal Maven ordering, but tolerated),
-     * verification is skipped and the sidecar is saved as-is. Reads the
-     * uploaded bytes and the primary exactly once each.
-     * @checkstyle ParameterNumberCheck (5 lines)
-     */
-    private CompletableFuture<Response> handleChecksumSidecarUpload(
-        final Key key, final String keyPath, final Content body, final Headers headers,
-        final String owner, final long size, final AuditContext auditCtx
-    ) {
-        final String algorithm = checksumAlgorithm(keyPath);
-        final Key primaryKey = new Key.From(
-            keyPath.substring(0, keyPath.length() - algorithm.length() - 1)
-        );
-        return new ContentWithSize(body, headers).asBytesFuture().thenCompose(
-            uploadedBytes -> this.storage.exists(primaryKey).thenCompose(primaryExists -> {
-                if (!primaryExists) {
-                    return this.storage.save(key, new Content.From(uploadedBytes))
-                        .thenApply(nothing -> ResponseBuilder.created().build());
-                }
-                return this.storage.value(primaryKey).thenCompose(
-                    primary -> new ContentDigest(primary, Digests.valueOf(algorithm.toUpperCase(Locale.US))).hex()
-                ).thenCompose(expectedHex -> {
-                    final String uploadedHex = new String(uploadedBytes, StandardCharsets.UTF_8)
-                        .trim().split("\\s+")[0].toLowerCase(Locale.ROOT);
-                    if (expectedHex.equalsIgnoreCase(uploadedHex)) {
-                        return this.storage.save(key, new Content.From(uploadedBytes))
-                            .thenApply(nothing -> ResponseBuilder.created().build());
-                    }
-                    return this.rejectChecksumMismatch(primaryKey, keyPath, owner, size, auditCtx);
-                });
-            })
-        ).exceptionally(throwable -> {
-            EcsLogger.error("com.auto1.pantera.maven")
-                .message("Failed to verify/save checksum sidecar")
-                .eventCategory("web")
-                .eventAction("checksum_upload")
-                .eventOutcome("failure")
-                .error(throwable)
-                .field("package.path", keyPath)
-                .field("log.source", "application")
-                .log();
-            return ResponseBuilder.internalError().build();
-        });
-    }
-
-    /**
-     * Log + audit a checksum-mismatch rejection. Does not delete the
-     * (already-verified, previously-stored) primary — only the *claimed*
-     * checksum was wrong, so the bytes it describes are left exactly as
-     * they were before this sidecar upload.
-     * @checkstyle ParameterNumberCheck (5 lines)
-     */
-    private CompletableFuture<Response> rejectChecksumMismatch(
-        final Key primaryKey, final String sidecarPath, final String owner, final long size,
-        final AuditContext auditCtx
-    ) {
-        final GavCoordinates gav = GavCoordinates.parse(primaryKey.string()).orElse(null);
-        EcsLogger.warn("com.auto1.pantera.maven")
-            .message("Checksum verification failed for uploaded sidecar: " + sidecarPath)
-            .eventCategory("file")
-            .eventAction("checksum_verification_failed")
-            .eventOutcome("failure")
-            .field("repository.name", this.rname)
-            .field("package.path", sidecarPath)
-            .field("log.source", "application")
-            .log();
-        AuditLogger.publish(
-            auditCtx, "maven", this.rname,
-            gav != null ? gav.artifactName() : sidecarPath,
-            gav != null ? gav.version() : null,
-            size, owner, null, null,
-            AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_CHECKSUM_MISMATCH
-        );
-        return CompletableFuture.completedFuture(ResponseBuilder.badRequest().build());
     }
 
     /**
@@ -638,7 +719,7 @@ public final class UploadSlice implements Slice {
                     );
                 }
                 return this.verifyAgainstStagedOrDefer(
-                    primaryKey, primaryKey.string(), key, sigBytes, owner, size, auditCtx
+                    primaryKey, primaryKey.string(), key, sigBytes, owner, size, auditCtx, headers
                 );
             })
         ).exceptionally(throwable -> {
@@ -691,14 +772,14 @@ public final class UploadSlice implements Slice {
      */
     private CompletableFuture<Response> verifyAgainstStagedOrDefer(
         final Key primaryKey, final String primaryPath, final Key sigKey, final byte[] sigBytes,
-        final String owner, final long size, final AuditContext auditCtx
+        final String owner, final long size, final AuditContext auditCtx, final Headers headers
     ) {
         return this.storage.exists(this.stagingKey(primaryKey)).thenCompose(staged -> {
             if (staged) {
                 return this.storage.value(this.stagingKey(primaryKey)).thenCompose(Content::asBytesFuture)
                     .thenCompose(primaryBytes -> this.verifyStagedPrimary(
                         primaryKey, primaryPath, primaryBytes, sigBytes, owner, size, auditCtx,
-                        () -> this.storage.save(sigKey, new Content.From(sigBytes))
+                        headers, () -> this.storage.save(sigKey, new Content.From(sigBytes))
                     ));
             }
             return this.storage.save(this.stagingKey(sigKey), new Content.From(sigBytes))
@@ -749,7 +830,7 @@ public final class UploadSlice implements Slice {
                 .thenCompose(primaryBytes -> this.storage.value(stagedSigKey).thenCompose(Content::asBytesFuture)
                     .thenCompose(sigBytes -> this.verifyStagedPrimary(
                         key, keyPath, primaryBytes, sigBytes, owner, size, auditCtx,
-                        () -> this.storage.move(stagedSigKey, unstagedKey(stagedSigKey))
+                        headers, () -> this.storage.move(stagedSigKey, unstagedKey(stagedSigKey))
                     )));
         }).exceptionally(throwable -> {
             EcsLogger.error("com.auto1.pantera.maven")
@@ -787,14 +868,16 @@ public final class UploadSlice implements Slice {
     private CompletableFuture<Response> verifyStagedPrimary(
         final Key primaryKey, final String primaryPath, final byte[] primaryBytes, final byte[] sigBytes,
         final String owner, final long size, final AuditContext auditCtx,
-        final Supplier<CompletableFuture<Void>> landSignature
+        final Headers headers, final Supplier<CompletableFuture<Void>> landSignature
     ) {
         final PgpVerifier.Result result = new PgpVerifier(KeyringStoreRegistry.active())
             .verify(primaryBytes, sigBytes);
         if (result == PgpVerifier.Result.VERIFIED) {
             return this.storage.move(this.stagingKey(primaryKey), primaryKey)
                 .thenCompose(nothing -> landSignature.get())
-                .thenCompose(nothing -> this.publishPrimary(primaryKey, primaryPath, owner, size));
+                .thenCompose(
+                    nothing -> this.publishPrimary(primaryKey, primaryPath, owner, size, headers)
+                );
         }
         return this.rejectStagedPgp(primaryKey, primaryPath, result, owner, size, auditCtx);
     }
@@ -963,57 +1046,10 @@ public final class UploadSlice implements Slice {
 
     /**
      * @param path Upload path
-     * @return True when this is the {@code maven-metadata.xml} content
-     *         itself (not one of its checksum sidecars) — matches the
-     *         original pre-2.3.0 routing exactly (only {@code .sha1}/
-     *         {@code .md5} are excluded here; see {@link #isMetadataXmlChecksum}
-     *         for the historical {@code .sha256}/{@code .sha512} nuance)
-     */
-    private static boolean isMetadataXmlContent(final String path) {
-        return path.contains("maven-metadata.xml")
-            && !path.endsWith(".sha1") && !path.endsWith(".md5");
-    }
-
-    /**
-     * @param path Upload path
-     * @return True for a {@code maven-metadata.xml.{md5,sha1,sha256,sha512}}
-     *         upload. Reachable in practice only for {@code .sha1}/
-     *         {@code .md5} — {@link #isMetadataXmlContent} already claims
-     *         {@code .sha256}/{@code .sha512} metadata-checksum paths, a
-     *         pre-existing quirk kept byte-identical (out of WS4-maven's
-     *         scope to change).
-     */
-    private static boolean isMetadataXmlChecksum(final String path) {
-        return path.contains("maven-metadata.xml")
-            && (path.endsWith(".sha1") || path.endsWith(".md5")
-                || path.endsWith(".sha256") || path.endsWith(".sha512"));
-    }
-
-    /**
-     * @param path Upload path (not metadata.xml — callers check that first)
-     * @return True for a {@code .md5}/{@code .sha1}/{@code .sha256}/
-     *         {@code .sha512} checksum sidecar of a real primary artifact
-     */
-    private static boolean isChecksumSidecar(final String path) {
-        return path.endsWith(".md5") || path.endsWith(".sha1")
-            || path.endsWith(".sha256") || path.endsWith(".sha512");
-    }
-
-    /**
-     * @param path Upload path
      * @return True for a {@code .asc}/{@code .sig} detached signature sidecar
      */
     private static boolean isSignatureSidecar(final String path) {
         return path.endsWith(".asc") || path.endsWith(".sig");
-    }
-
-    /**
-     * @param checksumPath A path known to satisfy {@link #isChecksumSidecar}
-     * @return The checksum algorithm token ({@code md5}/{@code sha1}/
-     *         {@code sha256}/{@code sha512})
-     */
-    private static String checksumAlgorithm(final String checksumPath) {
-        return checksumPath.substring(checksumPath.lastIndexOf('.') + 1);
     }
 
     /**
@@ -1175,11 +1211,29 @@ public final class UploadSlice implements Slice {
      * @return True if checksums should be generated
      */
     private boolean shouldGenerateChecksums(final Key key) {
-        final String path = key.string();
-        return !path.endsWith(".md5") 
-            && !path.endsWith(".sha1") 
-            && !path.endsWith(".sha256") 
-            && !path.endsWith(".sha512");
+        return !isChecksum(key.string());
+    }
+
+    /**
+     * Whether a path is a checksum sidecar.
+     * @param path File path
+     * @return True for {@code .md5}, {@code .sha1}, {@code .sha256}, {@code .sha512}
+     */
+    private static boolean isChecksum(final String path) {
+        return CHECKSUM_ALGS.stream().anyMatch(alg -> path.endsWith("." + alg));
+    }
+
+    /**
+     * Whether a path is a file inside a release (non-SNAPSHOT) version
+     * directory of the Maven layout {@code group/artifact/version/file}.
+     * Metadata and checksums are handled before this check.
+     * @param path Key path, without leading slash
+     * @return True when the file belongs to an immutable release version
+     */
+    private static boolean isReleaseFile(final String path) {
+        final String[] segments = path.split("/");
+        return segments.length >= 4
+            && !segments[segments.length - 2].endsWith("-SNAPSHOT");
     }
 
     /**
@@ -1233,9 +1287,12 @@ public final class UploadSlice implements Slice {
      * @param key Artifact key
      * @param owner Owner
      * @param size Artifact size
+     * @param sha256 SHA-256 digest, or {@code null}
+     * @param headers Request headers carrying the request context
      */
     private CompletableFuture<Void> addEvent(
-        final Key key, final String owner, final long size, final String sha256
+        final Key key, final String owner, final long size, final String sha256,
+        final Headers headers
     ) {
         final String path = key.string().startsWith("/") ? key.string() : "/" + key.string();
 
@@ -1252,7 +1309,7 @@ public final class UploadSlice implements Slice {
 
         // pkg = "{groupId}/{artifactId}/{version}" (everything before the filename)
         final String pkg = path.substring(0, path.lastIndexOf('/'));
-        return this.createAndAddEvent(pkg, owner, size, sha256);
+        return this.createAndAddEvent(pkg, owner, size, sha256, headers);
     }
 
     /**
@@ -1300,9 +1357,12 @@ public final class UploadSlice implements Slice {
      * @param pkg Package path (group/artifact/version)
      * @param owner Owner
      * @param size Artifact size
+     * @param sha256 SHA-256 digest, or {@code null}
+     * @param headers Request headers carrying the request context
      */
     private CompletableFuture<Void> createAndAddEvent(
-        final String pkg, final String owner, final long size, final String sha256
+        final String pkg, final String owner, final long size, final String sha256,
+        final Headers headers
     ) {
         // Extract version (last directory before the file)
         final String[] parts = pkg.split("/");
@@ -1320,12 +1380,15 @@ public final class UploadSlice implements Slice {
         final String artifactName = MavenSlice.EVENT_INFO.formatArtifactName(groupArtifact);
 
         // Drop any cached 404 for this artifact so a request that 404'd
-        // before the upload (e.g. via a group fanout) does not keep
-        // returning 404 once the artifact is live. Uses the URL-form
-        // groupArtifact (slashes), matching what the proxy / group
-        // slices write to the negative cache via NegativeCacheKey.fromPath.
+        // before the upload does not keep returning 404 once the artifact
+        // is live. Both name forms are invalidated: proxy slices key the
+        // negative cache by the URL-form groupArtifact (slashes, via
+        // NegativeCacheKey.fromPath), group resolvers by the dotted
+        // ArtifactNameParser name (same as artifactName below).
         com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
             .invalidateAfterUpload("maven", groupArtifact);
+        com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+            .invalidateAfterUpload("maven", artifactName);
         // Drop any cached cooldown-filtered envelope. The envelope cache
         // is keyed by the dotted artifactName (MavenSlice.EVENT_INFO
         // format) — same form the cooldown filter writes when caching
@@ -1341,8 +1404,14 @@ public final class UploadSlice implements Slice {
             version,
             size,
             System.currentTimeMillis(),
-            (Long) null  // No release date for uploads
-        );
+            null,  // No release date for uploads
+            // The version directory, matching what MavenProxyPackageProcessor
+            // records and what the UI browses to verbatim. Deliberately not
+            // the file key: for maven the browse target is the directory.
+            // Repository-relative, without the request path's leading slash:
+            // search/locate match path_prefix against slash-less prefixes.
+            pkg.startsWith("/") ? pkg.substring(1) : pkg
+        ).withRequestContext(headers);
         final ArtifactEvent event = sha256 == null ? base : base.withChecksum(sha256);
         // Async path: queue for audit/metrics consumers (DbConsumer batches).
         this.events.ifPresent(queue -> queue.add(event));

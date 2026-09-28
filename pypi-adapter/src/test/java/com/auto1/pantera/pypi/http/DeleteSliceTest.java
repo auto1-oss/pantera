@@ -59,4 +59,24 @@ public class DeleteSliceTest {
                 )
         );
     }
+
+    @Test
+    void dropsTheCachedIndexOfTheDeletedPackage() {
+        // B21: the pre-generated simple index kept listing a deleted file,
+        // so pip picked it and failed with a 404.
+        this.asto.save(
+            new Key.From("pkg", "0.0.2", "pkg-0.0.2-py3-none-any.whl"),
+            new Content.From(new byte[]{1})
+        ).join();
+        final Key index = new Key.From(".pypi", "pkg", "pkg.html");
+        this.asto.save(index, new Content.From("<a>pkg-0.0.2</a>".getBytes())).join();
+        new DeleteSlice(this.asto).response(
+            new RequestLine(RqMethod.DELETE, "/pkg/0.0.2/pkg-0.0.2-py3-none-any.whl"),
+            com.auto1.pantera.http.Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            this.asto.exists(index).join(),
+            new org.hamcrest.core.IsEqual<>(false)
+        );
+    }
 }

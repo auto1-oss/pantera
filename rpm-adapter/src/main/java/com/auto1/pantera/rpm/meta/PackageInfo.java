@@ -42,6 +42,11 @@ public final class PackageInfo {
     private final long size;
 
     /**
+     * Repo-relative storage path of the package, or null when unknown.
+     */
+    private final String path;
+
+    /**
      * Ctor.
      *
      * @param pname Package name
@@ -49,9 +54,23 @@ public final class PackageInfo {
      * @param size Package size
      */
     public PackageInfo(final String pname, final String vers, final long size) {
+        this(pname, vers, size, null);
+    }
+
+    /**
+     * Primary ctor.
+     *
+     * @param pname Package name
+     * @param vers Package version
+     * @param size Package size
+     * @param path Repo-relative storage path, or null when unknown
+     */
+    public PackageInfo(final String pname, final String vers, final long size,
+        final String path) {
         this.pname = pname;
         this.vers = vers;
         this.size = size;
+        this.path = path;
     }
 
     /**
@@ -72,6 +91,20 @@ public final class PackageInfo {
      */
     public PackageInfo(final HeaderTags tags, final long size) {
         this(String.join(PackageInfo.DELIMITER, tags.name(), tags.arch()), tags.version(), size);
+    }
+
+    /**
+     * Creates package info item from {@link HeaderTags} with its storage path.
+     *
+     * @param tags Package tags meta info
+     * @param size Package size
+     * @param path Repo-relative storage path
+     */
+    public PackageInfo(final HeaderTags tags, final long size, final String path) {
+        this(
+            String.join(PackageInfo.DELIMITER, tags.name(), tags.arch()),
+            tags.version(), size, path
+        );
     }
 
     /**
@@ -96,6 +129,14 @@ public final class PackageInfo {
      */
     public long packageSize() {
         return this.size;
+    }
+
+    /**
+     * Repo-relative storage path of the package.
+     * @return The storage path, or null when the source did not record one
+     */
+    public String packagePath() {
+        return this.path;
     }
 
     @Override

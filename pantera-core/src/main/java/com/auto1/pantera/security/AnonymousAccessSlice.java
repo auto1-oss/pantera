@@ -19,8 +19,10 @@ import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.WwwAuthenticate;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.rt.RtRule;
 
 import java.util.Locale;
 import java.util.Set;
@@ -144,6 +146,15 @@ public final class AnonymousAccessSlice implements Slice {
     private final String repoName;
 
     /**
+     * Requests that carry their own credentials in the request itself
+     * (e.g. the {@code npm login} PUT, whose body holds the user name and
+     * password) and are validated by the downstream slice. They are passed
+     * through without an {@code Authorization} header, because they are how
+     * a client without credentials obtains one.
+     */
+    private final RtRule selfAuthenticating;
+
+    /**
      * Construct an enforcement decorator.
      *
      * @param origin   Wrapped slice (typically the per-adapter slice).
@@ -153,16 +164,33 @@ public final class AnonymousAccessSlice implements Slice {
     public AnonymousAccessSlice(
         final Slice origin, final Policy policy, final String repoName
     ) {
+        this(origin, policy, repoName, (line, headers) -> false);
+    }
+
+    /**
+     * Construct an enforcement decorator with credential-bootstrap routes.
+     *
+     * @param origin   Wrapped slice (typically the per-adapter slice).
+     * @param policy   Per-repo policy.
+     * @param repoName Repository name for log correlation.
+     * @param selfAuthenticating Requests that validate credentials carried
+     *     in the request themselves and are passed through unchanged.
+     */
+    public AnonymousAccessSlice(
+        final Slice origin, final Policy policy, final String repoName,
+        final RtRule selfAuthenticating
+    ) {
         this.origin = origin;
         this.policy = policy;
         this.repoName = repoName;
+        this.selfAuthenticating = selfAuthenticating;
     }
 
     @Override
     public CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
     ) {
-        if (hasAuthorization(headers)) {
+        if (hasAuthorization(headers) || this.selfAuthenticating.apply(line, headers)) {
             return this.origin.response(line, headers, body);
         }
         final boolean isRead = isRead(line);
@@ -184,14 +212,16 @@ public final class AnonymousAccessSlice implements Slice {
                 ? "anonymous_read_disabled"
                 : "anonymous_write_disabled")
             .field("http.request.method", line.method().value())
-            .field("url.path", line.uri().getPath())
+            .field("url.path", LogSanitizer.sanitizeUrl(line.uri().getPath()))
             .field("repository.name", this.repoName)
             .field("http.response.status_code", 401)
             .field("log.source", "http")
             .log();
-        // Consume the body so Vert.x doesn't leak the request publisher
-        // (same contract as AuthzSlice's 403 path).
-        return body.asBytesFuture().thenApply(ignored ->
+        // Drain (never materialise) the body so Vert.x doesn't leak the
+        // request publisher. asBytesFuture() here pre-allocated from the
+        // attacker-declared Content-Length before the 401 was even written
+        // (resource-dos F31, 2.2.9).
+        return body.discard().thenApply(ignored ->
             ResponseBuilder.unauthorized()
                 .header(new WwwAuthenticate(CHALLENGE))
                 .build()

@@ -231,6 +231,56 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
     }
 
     /**
+     * B21: deleting a maven version folder through the REST API must drop
+     * the version from the artifact's maven-metadata.xml -- otherwise a
+     * version range still resolves to it and the build fails on a 404.
+     */
+    @Test
+    void deletingAMavenVersionUpdatesItsMetadata(@TempDir final Path root,
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        final JsonObject body = new JsonObject().put(
+            "repo",
+            new JsonObject().put("type", "maven")
+                .put("storage", new JsonObject().put("type", "fs").put("path", root.toString()))
+        );
+        Assertions.assertEquals(200, client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/mvn-del")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS)
+            .statusCode(), "repository must be created");
+        final Path lib = root.resolve("mvn-del").resolve("com/qa/lib");
+        for (final String ver : new String[] {"0.0.1", "0.0.2"}) {
+            Files.createDirectories(lib.resolve(ver));
+            Files.write(lib.resolve(ver).resolve("lib-" + ver + ".jar"), new byte[]{1});
+        }
+        Files.writeString(
+            lib.resolve("maven-metadata.xml"),
+            "<metadata><groupId>com.qa</groupId><artifactId>lib</artifactId><versioning>"
+                + "<latest>0.0.2</latest><release>0.0.2</release><versions>"
+                + "<version>0.0.1</version><version>0.0.2</version></versions>"
+                + "</versioning></metadata>"
+        );
+        final HttpResponse<Buffer> del = client
+            .delete(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/mvn-del/packages")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put("path", "com/qa/lib/0.0.2"))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(204, del.statusCode(), "delete must succeed");
+        final String meta = Files.readString(lib.resolve("maven-metadata.xml"));
+        Assertions.assertFalse(
+            meta.contains("0.0.2"), "the deleted version must leave the metadata: " + meta
+        );
+        Assertions.assertTrue(
+            meta.contains("<version>0.0.1</version>"), "the other version must stay: " + meta
+        );
+        ctx.completeNow();
+    }
+
+    /**
      * Size is a valid sort key — request with sort=size&sort_dir=desc
      * must round-trip both values in the response envelope.
      */

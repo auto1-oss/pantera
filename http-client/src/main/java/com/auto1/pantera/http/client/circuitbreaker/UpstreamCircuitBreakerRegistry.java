@@ -41,6 +41,17 @@ public interface UpstreamCircuitBreakerRegistry {
     UpstreamCircuitBreaker breakerFor(String host);
 
     /**
+     * The breaker of a host if one exists, without creating it — for
+     * read-only diagnostics.
+     *
+     * @param host Breaker key ({@code scheme://host:port})
+     * @return Breaker, empty when the host has none yet
+     */
+    default java.util.Optional<UpstreamCircuitBreaker> find(final String host) {
+        return java.util.Optional.empty();
+    }
+
+    /**
      * Default in-memory registry. One instance per JVM, held by
      * {@link com.auto1.pantera.http.client.jetty.JettyClientSlices}.
      */
@@ -103,6 +114,11 @@ public interface UpstreamCircuitBreakerRegistry {
                     return breaker;
                 }
             );
+        }
+
+        @Override
+        public java.util.Optional<UpstreamCircuitBreaker> find(final String host) {
+            return java.util.Optional.ofNullable(this.breakers.get(normalise(host)));
         }
 
         private static String normalise(final String host) {

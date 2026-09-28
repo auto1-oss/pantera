@@ -38,6 +38,8 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
 
 /**
@@ -86,6 +88,13 @@ public final class CacheManifests implements Manifests {
     private final String upstreamUrl;
 
     /**
+     * Cache copies in flight, keyed by image and reference, shared by every
+     * {@link CacheManifests} of one proxy repository so concurrent first
+     * pulls of a tag store it (and publish it) once.
+     */
+    private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -110,6 +119,27 @@ public final class CacheManifests implements Manifests {
     public CacheManifests(String name, Repo origin, Repo cache,
         Optional<Queue<ArtifactEvent>> events, String registryName,
         Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl) {
+        this(
+            name, origin, cache, events, registryName, inspector, upstreamUrl,
+            new ConcurrentHashMap<>()
+        );
+    }
+
+    /**
+     * @param name Repository name.
+     * @param origin Origin repository.
+     * @param cache Cache repository.
+     * @param events Artifact metadata events
+     * @param registryName Pantera repository name
+     * @param inspector Cooldown inspector
+     * @param upstreamUrl Upstream URL for metrics
+     * @param inflight Cache copies in flight, shared per proxy repository
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public CacheManifests(String name, Repo origin, Repo cache,
+        Optional<Queue<ArtifactEvent>> events, String registryName,
+        Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
+        ConcurrentMap<String, CompletableFuture<Void>> inflight) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
@@ -117,6 +147,7 @@ public final class CacheManifests implements Manifests {
         this.rname = registryName;
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
+        this.inflight = inflight;
     }
 
     @Override
@@ -186,7 +217,9 @@ public final class CacheManifests implements Manifests {
                             Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_LIST_SCHEMA2.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_OCI_INDEX.equals(manifest.mediaType())) {
-                            this.copy(ref, variant, requestOwner, requestTraceId, requestClientIp);
+                            this.copy(
+                                ref, variant, manifest, requestOwner, requestTraceId, requestClientIp
+                            );
                             result = CompletableFuture.completedFuture(original);
                         } else {
                             EcsLogger.warn("com.auto1.pantera.docker")
@@ -250,11 +283,18 @@ public final class CacheManifests implements Manifests {
     }
 
     /**
-     * Copy manifest by reference from original to cache.
+     * Copy the manifest the origin just returned into the cache, unless the
+     * cache already holds this reference at the same digest. Concurrent
+     * copies of the same reference (and {@code Accept}-variant) share one
+     * run, so a burst of first pulls stores (and publishes) the tag once.
      *
      * @param ref Manifest reference.
-     * @param variant Negotiated {@code Accept}-variant; re-fetched from origin
-     *                and used to key the cache entry so variants stay separate.
+     * @param variant Negotiated {@code Accept}-variant (WS4-docker.7): the
+     *                cache entry is keyed by
+     *                {@link ManifestReference#withVariant(ManifestVariant)},
+     *                so distinct variants of one tag are stored, checked and
+     *                deduplicated independently.
+     * @param manifest Manifest returned by the origin.
      * @param owner Authenticated user login captured from request thread.
      * @param traceId Request {@code trace.id} captured from MDC on the
      *                request thread; threaded through to the downstream
@@ -265,13 +305,27 @@ public final class CacheManifests implements Manifests {
      * @return Copy completion.
      */
     private CompletionStage<Void> copy(
-        final ManifestReference ref, final ManifestVariant variant, final String owner,
-        final String traceId, final String clientIp
+        final ManifestReference ref, final ManifestVariant variant, final Manifest manifest,
+        final String owner, final String traceId, final String clientIp
     ) {
-        return this.origin.manifests().get(ref, variant)
-            .thenApply(Optional::get)
-            .thenCompose(manifest ->
-                this.copySequentially(ref, variant, manifest, owner, traceId, clientIp))
+        final ManifestReference stored = ref.withVariant(variant);
+        final String key = this.name + '@' + stored.link().string();
+        final CompletableFuture<Void> mine = new CompletableFuture<>();
+        final CompletableFuture<Void> running = this.inflight.putIfAbsent(key, mine);
+        if (running != null) {
+            return running;
+        }
+        this.cache.manifests().get(stored)
+            .exceptionally(ignored -> Optional.empty())
+            .thenCompose(cached -> {
+                if (cached.isPresent()
+                    && cached.get().digest().string().equals(manifest.digest().string())) {
+                    // Already cached at this digest: a cache refresh, not a
+                    // fetch-and-store — no rewrite, no publish record.
+                    return CompletableFuture.<Void>completedFuture(null);
+                }
+                return this.copySequentially(ref, variant, manifest, owner, traceId, clientIp);
+            })
             .handle(
                 (ignored, ex) -> {
                     if (ex != null) {
@@ -289,7 +343,12 @@ public final class CacheManifests implements Manifests {
                     }
                     return null;
                 }
-            );
+            )
+            .whenComplete((ignored, err) -> {
+                this.inflight.remove(key, mine);
+                mine.complete(null);
+            });
+        return mine;
     }
 
     /**
@@ -375,45 +434,85 @@ public final class CacheManifests implements Manifests {
                 : CompletableFuture.completedFuture(
                     manifest.layers().stream().mapToLong(ManifestLayer::size).sum()
                 );
-            return sizeFuture.thenCompose(size -> {
-                this.events.filter(q -> ImageTag.valid(ref.digest())).ifPresent(queue -> {
-                    final long created = System.currentTimeMillis();
-                    // Get owner: 1. From inspector cache (skip UNKNOWN), 2. From request thread, 3. Default
-                    // Inspector may store UNKNOWN when DockerProxyCooldownSlice resolves the user
-                    // from pre-auth headers (Bearer token users have no pantera_login there).
-                    // Filter out UNKNOWN so we fall through to requestOwner from MDC.
-                    String effectiveOwner = this.inspector
-                        .flatMap(inspector -> inspector.ownerFor(this.rname, ref.digest()))
-                        .filter(o -> !ArtifactEvent.DEF_OWNER.equals(o))
-                        .orElse(null);
-                    if (effectiveOwner == null || effectiveOwner.isEmpty()) {
-                        if (owner != null && !owner.isEmpty() && !"anonymous".equals(owner)) {
-                            effectiveOwner = owner;
-                        } else {
-                            effectiveOwner = ArtifactEvent.DEF_OWNER;
-                        }
-                    }
-                    // Bind request-thread context onto the event so the
-                    // audit log written from DbConsumer (on a worker
-                    // thread with empty MDC) carries trace.id + client.ip.
-                    queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
-                        new ArtifactEvent(
-                            CacheManifests.REPO_TYPE,
-                            this.rname,
-                            effectiveOwner,
-                            this.name,
-                            ref.digest(),
-                            size,
-                            created,
-                            effectiveRelease.orElse(null)
-                        ).withContext(traceId, clientIp)
-                    );
-                });
-                return this.cache.manifests()
-                    .putUnchecked(ref.withVariant(variant), manifest.content())
-                    .thenApply(ignored -> null);
-            });
+            // WS4-docker.7: stored under the variant-scoped link so distinct
+            // Accept-variants of one tag do not overwrite each other.
+            final ManifestReference stored = ref.withVariant(variant);
+            return sizeFuture.thenCompose(
+                size -> this.cache.manifests().putUnchecked(stored, manifest.content())
+                    .thenAccept(
+                        // Queued only once the manifest is in the cache: the
+                        // publish record describes a completed fetch-and-store.
+                        done -> this.events.filter(q -> ImageTag.valid(ref.digest()))
+                            .ifPresent(
+                                queue -> this.queuePublish(
+                                    queue, ref, stored, size, effectiveRelease, owner, traceId,
+                                    clientIp
+                                )
+                            )
+                    )
+            );
         });
+    }
+
+    /**
+     * Queue the artifact_publish event of a completed fetch-and-store.
+     *
+     * @param queue Events queue
+     * @param ref Manifest reference (a tag)
+     * @param stored Reference the manifest was cached under (the tag's
+     *  variant-scoped link), whose storage key the event records
+     * @param size Image size in bytes
+     * @param release Release timestamp, if known
+     * @param owner Authenticated user login captured from request thread
+     * @param traceId Request trace.id, nullable
+     * @param clientIp Request client.ip, nullable
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private void queuePublish(
+        final Queue<ArtifactEvent> queue, final ManifestReference ref,
+        final ManifestReference stored, final long size,
+        final Optional<Long> release, final String owner, final String traceId,
+        final String clientIp
+    ) {
+        final long created = System.currentTimeMillis();
+        // Get owner: 1. From inspector cache (skip UNKNOWN), 2. From request thread, 3. Default
+        // Inspector may store UNKNOWN when DockerProxyCooldownSlice resolves the user
+        // from pre-auth headers (Bearer token users have no pantera_login there).
+        // Filter out UNKNOWN so we fall through to requestOwner from MDC.
+        String effectiveOwner = this.inspector
+            .flatMap(inspector -> inspector.ownerFor(this.rname, ref.digest()))
+            .filter(o -> !ArtifactEvent.DEF_OWNER.equals(o))
+            .orElse(null);
+        if (effectiveOwner == null || effectiveOwner.isEmpty()) {
+            if (owner != null && !owner.isEmpty() && !"anonymous".equals(owner)) {
+                effectiveOwner = owner;
+            } else {
+                effectiveOwner = ArtifactEvent.DEF_OWNER;
+            }
+        }
+        // Bind request-thread context onto the event so the
+        // audit log written from DbConsumer (on a worker
+        // thread with empty MDC) carries trace.id + client.ip.
+        queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
+            new ArtifactEvent(
+                CacheManifests.REPO_TYPE,
+                this.rname,
+                effectiveOwner,
+                this.name,
+                ref.digest(),
+                size,
+                created,
+                release.orElse(null),
+                // Relative to the adapter's SubStorage
+                // (RegistryRoot.V2) — restore the prefix so the key
+                // resolves from the repository root.
+                new com.auto1.pantera.asto.Key.From(
+                    com.auto1.pantera.docker.asto.RegistryRoot.V2,
+                    com.auto1.pantera.docker.asto.Layout
+                        .manifest(this.name, stored)
+                ).string()
+            ).withContext(traceId, clientIp)
+        );
     }
 
     private CompletionStage<Optional<Long>> releaseTimestamp(final Manifest manifest) {

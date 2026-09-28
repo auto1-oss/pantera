@@ -22,17 +22,16 @@ import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.ContentDisposition;
 import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.headers.ReasonPhrase;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.multipart.RqMultipart;
 import com.auto1.pantera.http.RsStatus;
-import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.pypi.NormalizedProjectName;
 import com.auto1.pantera.pypi.meta.Metadata;
 import com.auto1.pantera.pypi.meta.PackageInfo;
@@ -44,7 +43,6 @@ import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.Single;
 import org.reactivestreams.Publisher;
-import org.slf4j.MDC;
 
 import java.nio.ByteBuffer;
 import java.time.Instant;
@@ -122,9 +120,9 @@ final class WheelSlice implements Slice {
         final Content publisher
     ) {
         RequestContextHeaders.bindToMdc(iterable);
-        final AuditContext auditCtx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        // Captured at slice entry, before any async hop: the pooled threads
+        // that run the continuations below never had this request's MDC.
+        final AuditContext auditCtx = new AuditContext(iterable);
         final String owner = new Login(iterable).getValue();
         final Key.From key = new Key.From(UUID.randomUUID().toString());
         return this.filePart(iterable, publisher, key).thenCompose(
@@ -133,7 +131,7 @@ final class WheelSlice implements Slice {
                     input -> new Metadata.FromArchive(input, uploaded.filename()).readWithMetadata()
                 )
             ).thenCompose(
-                extracted -> this.handleParsed(line, iterable, key, uploaded, extracted, auditCtx, owner)
+                extracted -> this.validated(key, uploaded, extracted, iterable, auditCtx, owner)
             )
         ).handle(
             (response, throwable) -> {
@@ -146,204 +144,281 @@ final class WheelSlice implements Slice {
     }
 
     /**
-     * Handle a parsed archive: reject an invalid filename outright, otherwise
-     * verify the declared digest and the no-overwrite invariant before persisting.
-     * @param line Request line
-     * @param headers Request headers
-     * @param key Temp key holding the saved content bytes
+     * Check the parsed upload before publishing it: the filename must match
+     * the name and version the archive declares about itself, and the saved
+     * bytes must match the {@code sha256_digest} twine declared for them
+     * (when it declared one). Either violation deletes the temporary upload
+     * and answers 400; nothing is stored.
+     *
+     * @param temp Temporary key holding the upload
      * @param uploaded Uploaded file descriptor (filename + declared digest)
-     * @param extracted Parsed package info plus raw PEP 658 metadata bytes
-     * @param auditCtx Request correlation context
-     * @param owner Uploading user
-     * @return HTTP response
-     */
-    private CompletionStage<Response> handleParsed(
-        final RequestLine line, final Headers headers, final Key key,
-        final UploadedFile uploaded, final Metadata.Extracted extracted,
-        final AuditContext auditCtx, final String owner
-    ) {
-        final CompletionStage<RsStatus> status;
-        if (new ValidFilename(extracted.info(), uploaded.filename()).valid()) {
-            status = this.persistOrReject(line, headers, key, uploaded, extracted, auditCtx, owner);
-        } else {
-            status = this.storage.delete(key).thenApply(nothing -> RsStatus.BAD_REQUEST);
-        }
-        return status.thenApply(s -> ResponseBuilder.from(s).build());
-    }
-
-    /**
-     * Verify the declared digest (when present) and the no-overwrite invariant,
-     * rejecting the upload on either violation; persist otherwise.
-     * @param line Request line
+     * @param extracted Package metadata read from the archive
      * @param headers Request headers
-     * @param key Temp key holding the saved content bytes
-     * @param uploaded Uploaded file descriptor (filename + declared digest)
-     * @param extracted Parsed package info plus raw PEP 658 metadata bytes
-     * @param auditCtx Request correlation context
+     * @param auditCtx Request correlation context captured at slice entry
      * @param owner Uploading user
-     * @return Resulting HTTP status
-     */
-    private CompletionStage<RsStatus> persistOrReject(
-        final RequestLine line, final Headers headers, final Key key,
-        final UploadedFile uploaded, final Metadata.Extracted extracted,
-        final AuditContext auditCtx, final String owner
-    ) {
-        final PackageInfo info = extracted.info();
-        final String packageName = new NormalizedProjectName.Simple(info.name()).value();
-        final Key name = new Key.From(
-            new KeyFromPath(line.uri().toString()), packageName, info.version(), uploaded.filename()
-        );
-        return this.digestMatches(key, uploaded.declaredSha256()).thenCompose(
-            matches -> matches
-                ? this.checkDuplicateAndPersist(
-                    line, headers, key, name, packageName, extracted, uploaded.filename()
-                )
-                : this.rejectChecksumMismatch(key, packageName, info.version(), auditCtx, owner)
-        );
-    }
-
-    /**
-     * Reject a re-upload of an already-present distribution filename with 409;
-     * persist otherwise.
+     * @return Response
      * @checkstyle ParameterNumberCheck (5 lines)
      */
-    private CompletionStage<RsStatus> checkDuplicateAndPersist(
-        final RequestLine line, final Headers headers, final Key key, final Key name,
-        final String packageName, final Metadata.Extracted extracted, final String filename
+    private CompletionStage<Response> validated(
+        final Key temp, final UploadedFile uploaded, final Metadata.Extracted extracted,
+        final Headers headers, final AuditContext auditCtx, final String owner
     ) {
-        return this.storage.exists(name).thenCompose(
-            exists -> exists
-                ? this.rejectDuplicate(key, packageName, extracted.info().version(), filename)
-                : this.persistUpload(line, headers, key, name, packageName, extracted, filename)
-        );
+        final PackageInfo info = extracted.info();
+        final String filename = uploaded.filename();
+        final CompletionStage<Response> res;
+        if (new ValidFilename(info, filename).valid()) {
+            res = this.digestMatches(temp, uploaded.declaredSha256()).thenCompose(
+                matches -> {
+                    final CompletionStage<Response> next;
+                    if (matches) {
+                        next = this.publish(temp, filename, extracted, headers);
+                    } else {
+                        next = this.rejectChecksumMismatch(temp, info, filename, auditCtx, owner);
+                    }
+                    return next;
+                }
+            );
+        } else {
+            res = this.storage.delete(temp).thenApply(
+                nothing -> ResponseBuilder.badRequest()
+                    .textBody(
+                        String.format(
+                            "Filename '%s' does not match the package metadata"
+                                + " (name '%s', version '%s')",
+                            filename, info.name(), info.version()
+                        )
+                    )
+                    .build()
+            );
+        }
+        return res;
     }
 
     /**
-     * Compare the client-declared {@code sha256_digest} (when present) against
-     * the SHA-256 of the bytes actually saved to {@code key}. Absent declared
-     * digest is treated as a pass-through (no verification requested).
-     * @param key Temp key holding the saved content bytes
-     * @param declaredSha256 Client-declared SHA-256 hex digest, or null/blank
-     * @return True if there is no declared digest or it matches
+     * Compare the client-declared {@code sha256_digest} (when present)
+     * against the SHA-256 of the bytes actually saved to {@code temp}. An
+     * absent declared digest is a pass (no verification was requested).
+     *
+     * @param temp Temporary key holding the upload
+     * @param declared Client-declared SHA-256 hex digest, or null/blank
+     * @return True when there is no declared digest or it matches
      */
-    private CompletionStage<Boolean> digestMatches(final Key key, final String declaredSha256) {
+    private CompletionStage<Boolean> digestMatches(final Key temp, final String declared) {
         final CompletionStage<Boolean> result;
-        if (declaredSha256 == null || declaredSha256.isBlank()) {
+        if (declared == null || declared.isBlank()) {
             result = CompletableFuture.completedFuture(true);
         } else {
-            result = this.storage.value(key).thenCompose(
-                value -> new ContentDigest(value, Digests.SHA256).hex()
-            ).thenApply(actual -> actual.equalsIgnoreCase(declaredSha256.trim()));
+            result = this.sha256(temp).thenApply(
+                actual -> actual.equalsIgnoreCase(declared.trim())
+            );
         }
         return result;
     }
 
     /**
-     * Delete the temp upload and emit the {@code artifact_publish}/{@code
-     * failure}/{@code checksum_mismatch} audit record.
+     * Refuse an upload whose bytes do not match the digest the client
+     * declared for them: delete the temporary upload, emit the
+     * {@code artifact_publish}/{@code failure}/{@code checksum_mismatch}
+     * audit record and answer 400.
+     *
+     * @param temp Temporary key holding the upload
+     * @param info Package metadata read from the archive
+     * @param filename Uploaded filename
+     * @param auditCtx Request correlation context captured at slice entry
+     * @param owner Uploading user
+     * @return 400 response
      * @checkstyle ParameterNumberCheck (5 lines)
      */
-    private CompletionStage<RsStatus> rejectChecksumMismatch(
-        final Key key, final String packageName, final String version,
+    private CompletionStage<Response> rejectChecksumMismatch(
+        final Key temp, final PackageInfo info, final String filename,
         final AuditContext auditCtx, final String owner
     ) {
-        return this.storage.delete(key).thenApply(nothing -> {
-            AuditLogger.publish(
-                auditCtx, TYPE, this.rname, packageName, version, 0L, owner, null, null,
-                AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_CHECKSUM_MISMATCH
-            );
-            return RsStatus.BAD_REQUEST;
-        });
+        final String packageName = new NormalizedProjectName.Simple(info.name()).value();
+        return this.storage.delete(temp).thenApply(
+            nothing -> {
+                EcsLogger.warn("com.auto1.pantera.pypi")
+                    .message("Refused upload whose bytes do not match the declared sha256_digest")
+                    .eventCategory("web")
+                    .eventAction("artifact_upload")
+                    .eventOutcome("failure")
+                    .field("event.reason", "checksum_mismatch")
+                    .field("repository.name", this.rname)
+                    .field("file.name", filename)
+                    .field("log.source", "application")
+                    .log();
+                AuditLogger.publish(
+                    auditCtx, WheelSlice.TYPE, this.rname, packageName, info.version(), 0L,
+                    owner, null, null,
+                    AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_CHECKSUM_MISMATCH
+                );
+                return ResponseBuilder.badRequest()
+                    // twine prints only the status line: say why there, as PyPI does.
+                    .header(new ReasonPhrase("Digest mismatch"))
+                    .textBody(
+                        String.format(
+                            "The sha256_digest supplied for '%s' does not match a digest"
+                                + " calculated from the uploaded file.",
+                            filename
+                        )
+                    )
+                    .build();
+            }
+        );
     }
 
     /**
-     * Delete the temp upload and log the duplicate-filename rejection.
+     * Publish a validated upload.
+     *
+     * <p>The target key is always {@code <normalized-name>/<version>/<file>}
+     * relative to the repository root, whatever sub-path the client posted
+     * to (twine's conventional {@code /legacy/} included): the storage key,
+     * the sidecar and both indexes must agree on one layout, or the package
+     * index is rebuilt from the wrong prefix and hides every earlier
+     * release.</p>
+     *
+     * <p>A released file is immutable (PyPI file-name reuse policy): an
+     * identical re-upload is an idempotent 200, a different file under an
+     * existing name is refused with 400 "File already exists" so pinned
+     * hashes keep verifying.</p>
+     *
+     * @param temp Temporary key holding the upload
+     * @param filename Uploaded filename
+     * @param extracted Package metadata read from the archive
+     * @param headers Request headers
+     * @return Response
      */
-    private CompletionStage<RsStatus> rejectDuplicate(
-        final Key key, final String packageName, final String version, final String filename
-    ) {
-        return this.storage.delete(key).thenApply(nothing -> {
-            EcsLogger.warn("com.auto1.pantera.pypi")
-                .message("PyPI upload rejected: distribution file already exists")
-                .eventCategory("file")
-                .eventAction("upload")
-                .eventOutcome("failure")
-                .field("event.reason", "duplicate_filename")
-                .field("repository.name", this.rname)
-                .field("package.name", packageName)
-                .field("package.version", version)
-                .field("file.name", filename)
-                .field("log.source", "application")
-                .log();
-            return RsStatus.CONFLICT;
-        });
-    }
-
-    /**
-     * Move the verified, non-duplicate upload into place, persist the PEP 658
-     * {@code .metadata} sidecar file, and regenerate the package/repo indices.
-     * @checkstyle ParameterNumberCheck (5 lines)
-     */
-    private CompletionStage<RsStatus> persistUpload(
-        final RequestLine line, final Headers headers, final Key key, final Key name,
-        final String packageName, final Metadata.Extracted extracted, final String filename
+    private CompletionStage<Response> publish(
+        final Key temp, final String filename, final Metadata.Extracted extracted,
+        final Headers headers
     ) {
         final PackageInfo info = extracted.info();
-        CompletionStage<Void> move = this.storage.move(key, name);
-        if (this.events.isPresent()) {
-            move = move.thenCompose(
-                ignored -> this.putArtifactToQueue(name, info, headers)
+        final String packageName = new NormalizedProjectName.Simple(info.name()).value();
+        final Key name = new Key.From(packageName, info.version(), filename);
+        return this.storage.exists(name).thenCompose(
+            exists -> {
+                final CompletionStage<Response> res;
+                if (exists) {
+                    res = this.existing(temp, name, filename);
+                } else {
+                    res = this.store(temp, name, packageName, extracted, headers)
+                        .thenApply(ignored -> ResponseBuilder.from(RsStatus.CREATED).build());
+                }
+                return res;
+            }
+        );
+    }
+
+    /**
+     * Answer an upload whose target file already exists.
+     *
+     * @param temp Temporary key holding the upload
+     * @param name Existing file key
+     * @param filename Uploaded filename
+     * @return 200 when the bytes are identical, 400 otherwise
+     */
+    private CompletionStage<Response> existing(
+        final Key temp, final Key name, final String filename
+    ) {
+        return this.sha256(temp).thenCombine(this.sha256(name), String::equals)
+            .thenCompose(
+                same -> this.storage.delete(temp).thenApply(
+                    nothing -> {
+                        final Response response;
+                        if (same) {
+                            response = ResponseBuilder.ok().build();
+                        } else {
+                            EcsLogger.warn("com.auto1.pantera.pypi")
+                                .message(
+                                    "Refused re-upload of an existing file with different content"
+                                )
+                                .eventCategory("web")
+                                .eventAction("artifact_upload")
+                                .eventOutcome("failure")
+                                .field("event.reason", "file_exists")
+                                .field("repository.name", this.rname)
+                                .field("file.name", filename)
+                                .field("log.source", "application")
+                                .log();
+                            response = ResponseBuilder.badRequest()
+                                // twine prints only the status line: say why there,
+                                // as PyPI does.
+                                .header(new ReasonPhrase("File already exists"))
+                                .textBody(
+                                    String.format(
+                                        "File already exists: '%s'. A published file cannot be"
+                                            + " replaced; publish a new version instead.",
+                                        filename
+                                    )
+                                )
+                                .build();
+                        }
+                        return response;
+                    }
+                )
             );
+    }
+
+    /**
+     * SHA-256 of a stored value.
+     * @param key Key
+     * @return Hex digest
+     */
+    private CompletionStage<String> sha256(final Key key) {
+        return this.storage.value(key).thenCompose(
+            value -> new ContentDigest(value, Digests.SHA256).hex()
+        );
+    }
+
+    /**
+     * Move the upload into place, record it, persist its PEP 658
+     * {@code .metadata} file, write its sidecar and rebuild the package and
+     * repository indexes.
+     *
+     * @param temp Temporary key holding the upload
+     * @param name Target key
+     * @param packageName Normalized package name
+     * @param extracted Package metadata read from the archive
+     * @param headers Request headers
+     * @return Completion
+     */
+    private CompletionStage<Void> store(
+        final Key temp, final Key name, final String packageName,
+        final Metadata.Extracted extracted, final Headers headers
+    ) {
+        final PackageInfo info = extracted.info();
+        CompletionStage<Void> move = this.storage.move(temp, name);
+        if (this.events.isPresent()) {
+            move = move.thenCompose(ignored -> this.putArtifactToQueue(name, info, headers));
         }
         // PEP 658: persist the distribution's core metadata as a sibling
-        // "<file>.metadata" file so it can be served without downloading
-        // the wheel body, then record its sha256 in the sidecar so the
-        // index can advertise data-core-metadata / core-metadata.
+        // "<file>.metadata" so resolvers can read it without downloading the
+        // archive, then record its digest in the sidecar so the index can
+        // advertise it as data-core-metadata / core-metadata (PEP 714).
+        final byte[] metadata = extracted.rawMetadata();
         final Key metadataKey = new Key.From(name.string() + ".metadata");
-        final CompletableFuture<String> metadataSha256 = this.storage.save(
-            metadataKey, new Content.From(extracted.rawMetadata())
+        return move.thenCompose(
+            ignored -> this.storage.save(metadataKey, new Content.From(metadata))
         ).thenCompose(
-            ignored -> this.storage.value(metadataKey)
+            ignored -> new ContentDigest(new Content.From(metadata), Digests.SHA256).hex()
         ).thenCompose(
-            value -> new ContentDigest(value, Digests.SHA256).hex()
-        ).toCompletableFuture();
-        move = move.thenCompose(ignored -> metadataSha256).thenCompose(
             sha256 -> PypiSidecar.write(
                 this.storage,
-                new Key.From(packageName, info.version(), filename),
+                name,
                 info.requiresPython(),
                 Instant.now().truncatedTo(ChronoUnit.MICROS),
                 sha256
             )
-        );
-        // Regenerate package-level index.html after upload
-        final Key packageKey = new Key.From(
-            new KeyFromPath(line.uri().toString()),
-            packageName
-        );
-        move = move.thenCompose(
+        ).thenCompose(
             ignored -> new IndexGenerator(
-                this.storage,
-                packageKey,
-                line.uri().getPath()
+                this.storage, new Key.From(packageName), "/"
             ).generate()
+        ).thenCompose(
+            ignored -> new IndexGenerator(this.storage, Key.ROOT, "/").generateRepoIndex()
         );
-        // Regenerate repository-level index.html
-        final Key repoKey = new KeyFromPath(line.uri().toString());
-        move = move.thenCompose(
-            ignored -> new IndexGenerator(
-                this.storage,
-                repoKey,
-                line.uri().getPath()
-            ).generateRepoIndex()
-        );
-        return move.thenApply(ignored -> RsStatus.CREATED);
     }
 
     /**
-     * File part from multipart body. Captures the {@code content} part
-     * (saved to {@code temp}) and, when present, twine's {@code
-     * sha256_digest} form field for later integrity verification.
+     * File part from multipart body.
      * @param headers Request headers
      * @param body Request body
      * @param temp Temp key to save the part
@@ -456,8 +531,11 @@ final class WheelSlice implements Slice {
                     new Login(headers).getValue(),
                     normalized,
                     info.version(),
-                    size
-                );
+                    size,
+                    System.currentTimeMillis(),
+                    null,
+                    key.string()
+                ).withRequestContext(headers);
                 this.events.ifPresent(queue -> queue.add(event));
                 // Drop any cached 404 for this package so requests that
                 // 404'd before publish do not keep returning 404.

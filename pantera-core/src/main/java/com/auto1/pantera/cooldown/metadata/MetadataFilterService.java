@@ -198,6 +198,25 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final AuditContext auditCtx,
         final String owner
     ) {
+        return this.filterMetadata(
+            repoType, repoName, FilteredMetadataCache.DEFAULT_VARIANT,
+            packageName, rawMetadata, parser, filter, rewriter, auditCtx, owner
+        );
+    }
+
+    @Override
+    public <T> CompletableFuture<byte[]> filterMetadata(
+        final String repoType,
+        final String repoName,
+        final String variant,
+        final String packageName,
+        final byte[] rawMetadata,
+        final MetadataParser<T> parser,
+        final MetadataFilter<T> filter,
+        final MetadataRewriter<T> rewriter,
+        final AuditContext auditCtx,
+        final String owner
+    ) {
         // Check if cooldown is enabled for this repo identity.
         // Precedence: per-repo-name override → per-repo-type override → global.
         // Mirrors JdbcCooldownService.effectiveEnabled so the metadata-filter
@@ -232,6 +251,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
         return this.metadataCache.getEntry(
             repoType,
             repoName,
+            variant,
             packageName,
             () -> this.computeFilteredMetadata(
                 repoType, repoName, packageName, rawMetadata,

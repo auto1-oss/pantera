@@ -19,6 +19,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Stream;
 import javax.json.Json;
 import javax.json.JsonException;
@@ -131,7 +132,7 @@ final class GoScanner implements Scanner {
                     final String pathPrefix = this.repoType.endsWith("-proxy")
                         ? modulePath + "/@v/" + stripped : null;
                     records.add(new ArtifactRecord(
-                        this.repoType, repoName, modulePath, stripped,
+                        this.repoType, repoName, GoScanner.decoded(modulePath), stripped,
                         size, createdDate, null, "system", pathPrefix
                     ));
                 });
@@ -192,7 +193,7 @@ final class GoScanner implements Scanner {
                     new ArtifactRecord(
                         this.repoType,
                         repoName,
-                        modulePath,
+                        GoScanner.decoded(modulePath),
                         stripped,
                         size,
                         createdDate,
@@ -226,7 +227,7 @@ final class GoScanner implements Scanner {
                         final String pathPrefix = this.repoType.endsWith("-proxy")
                             ? modulePath + "/@v/" + stripped : null;
                         records.add(new ArtifactRecord(
-                            this.repoType, repoName, modulePath, stripped,
+                            this.repoType, repoName, GoScanner.decoded(modulePath), stripped,
                             size, createdDate, null, "system", pathPrefix
                         ));
                     });
@@ -237,6 +238,38 @@ final class GoScanner implements Scanner {
             }
         }
         return records.stream();
+    }
+
+    /**
+     * The real module path of an escaped storage path: {@code !x} decoded to
+     * {@code X}, as the go adapters' {@code ModulePath.decoded()} does. A
+     * dangling or non-letter escape is kept. Duplicated here because the
+     * backfill CLI does not depend on go-adapter.
+     *
+     * @param escaped Escaped module path, as stored on disk
+     * @return Decoded module path
+     */
+    private static String decoded(final String escaped) {
+        if (escaped.indexOf('!') < 0) {
+            return escaped;
+        }
+        final StringBuilder out = new StringBuilder(escaped.length());
+        int idx = 0;
+        while (idx < escaped.length()) {
+            final char chr = escaped.charAt(idx);
+            if (chr == '!' && idx + 1 < escaped.length()
+                && Character.isLowerCase(escaped.charAt(idx + 1))) {
+                out.append(
+                    String.valueOf(escaped.charAt(idx + 1))
+                        .toUpperCase(Locale.ROOT)
+                );
+                idx += 2;
+            } else {
+                out.append(chr);
+                idx += 1;
+            }
+        }
+        return out.toString();
     }
 
     /**

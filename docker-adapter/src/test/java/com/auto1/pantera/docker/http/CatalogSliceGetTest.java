@@ -19,16 +19,17 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.ContentLength;
 import com.auto1.pantera.http.headers.ContentType;
-import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.hm.ResponseAssert;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
-import org.hamcrest.collection.IsEmptyCollection;
+import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.StringContains;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -44,6 +45,27 @@ class CatalogSliceGetTest {
         ResponseAssert.check(
             TestDockerAuth.slice(new FakeDocker(() -> new Content.From(catalog)))
                 .response(new RequestLine(RqMethod.GET, "/v2/_catalog"), TestDockerAuth.headers(), Content.EMPTY)
+                .join(),
+            RsStatus.OK,
+            catalog,
+            new ContentLength(catalog.length),
+            ContentType.json()
+        );
+    }
+
+    /**
+     * B78: in path-routed mode the repository name is the first path
+     * segment, so the catalog is reachable at {@code /v2/<repo>/_catalog}.
+     */
+    @Test
+    void shouldReturnCatalogUnderRepositoryPrefix() {
+        final byte[] catalog = "{...}".getBytes();
+        ResponseAssert.check(
+            TestDockerAuth.slice(new FakeDocker(() -> new Content.From(catalog)))
+                .response(
+                    new RequestLine(RqMethod.GET, "/v2/docker-local/_catalog"),
+                    TestDockerAuth.headers(), Content.EMPTY
+                )
                 .join(),
             RsStatus.OK,
             catalog,
@@ -78,55 +100,91 @@ class CatalogSliceGetTest {
     }
 
     /**
-     * WS4-docker.4: a truncated page must carry {@code Link: <...>; rel="next"}.
+     * R32: a {@code last} cursor outside the repository's own namespace is a
+     * client error (400 NAME_INVALID), not a 500.
      */
-    @Test
-    void shouldEmitNextLinkWhenTruncated() {
-        final byte[] body = "{\"repositories\":[\"bar\",\"busybox\"]}".getBytes();
-        final Catalog catalog = new Catalog() {
-            @Override
-            public Content json() {
-                return new Content.From(body);
-            }
-
-            @Override
-            public boolean hasNext() {
-                return true;
-            }
-
-            @Override
-            public Optional<String> nextCursor() {
-                return Optional.of("busybox");
-            }
-        };
-        final Response response = TestDockerAuth.slice(new FakeDocker(catalog)).response(
-            new RequestLine(RqMethod.GET, "/v2/_catalog?n=2"),
-            TestDockerAuth.headers(),
-            Content.EMPTY
+    @ParameterizedTest
+    @CsvSource({"zzz", "other/x", "docker-local", "docker-local/UPPER"})
+    void rejectsForeignLastCursor(final String last) {
+        final Response response = TestDockerAuth.slice(
+            new TrimmedDocker(new FakeDocker(() -> Content.EMPTY), "docker-local")
+        ).response(
+            new RequestLine(RqMethod.GET, "/v2/docker-local/_catalog?last=" + last),
+            TestDockerAuth.headers(), Content.EMPTY
         ).join();
-        ResponseAssert.check(
-            response, RsStatus.OK,
-            new Header("Link", "</v2/_catalog?n=2&last=busybox>; rel=\"next\"")
+        MatcherAssert.assertThat(
+            "Status is 400",
+            response.status(),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "Body carries NAME_INVALID",
+            response.body().asString(),
+            new StringContains("NAME_INVALID")
         );
     }
 
     /**
-     * WS4-docker.4: the last (non-truncated) page must not carry a {@code Link} header.
+     * R32: a malformed page size is 400 PAGINATION_NUMBER_INVALID, not 500.
+     */
+    @ParameterizedTest
+    @CsvSource({"abc", "-1", "99999999999999"})
+    void rejectsMalformedPageSize(final String size) {
+        final Response response = TestDockerAuth.slice(new FakeDocker(() -> Content.EMPTY))
+            .response(
+                new RequestLine(RqMethod.GET, "/v2/docker-local/_catalog?n=" + size),
+                TestDockerAuth.headers(), Content.EMPTY
+            ).join();
+        MatcherAssert.assertThat(
+            "Status is 400",
+            response.status(),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "Body carries PAGINATION_NUMBER_INVALID",
+            response.body().asString(),
+            new StringContains("PAGINATION_NUMBER_INVALID")
+        );
+    }
+
+    /**
+     * A full catalog page links to the next one, like a full tags page.
      */
     @Test
-    void shouldOmitNextLinkWhenNotTruncated() {
-        final byte[] body = "{\"repositories\":[\"bar\"]}".getBytes();
-        final Catalog catalog = () -> new Content.From(body);
-        final Response response = TestDockerAuth.slice(new FakeDocker(catalog)).response(
-            new RequestLine(RqMethod.GET, "/v2/_catalog"),
-            TestDockerAuth.headers(),
-            Content.EMPTY
+    void linksNextPageWhenPageIsFull() {
+        final Response response = TestDockerAuth.slice(
+            new FakeDocker(
+                () -> new Content.From(
+                    "{\"repositories\":[\"docker-local/a\",\"docker-local/b/c\"]}".getBytes()
+                )
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/v2/docker-local/_catalog?n=2"),
+            TestDockerAuth.headers(), Content.EMPTY
         ).join();
-        ResponseAssert.check(response, RsStatus.OK);
         MatcherAssert.assertThat(
-            "No Link header expected when the page is not truncated",
-            response.headers().find("Link"),
-            new IsEmptyCollection<>()
+            response.headers().values("Link"),
+            new IsEqual<>(
+                java.util.List.of(
+                    "</v2/docker-local/_catalog?n=2&last=docker-local%2Fb%2Fc>; rel=\"next\""
+                )
+            )
+        );
+    }
+
+    @Test
+    void doesNotLinkWhenPageIsNotFull() {
+        final Response response = TestDockerAuth.slice(
+            new FakeDocker(
+                () -> new Content.From("{\"repositories\":[\"docker-local/a\"]}".getBytes())
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/v2/docker-local/_catalog?n=2"),
+            TestDockerAuth.headers(), Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            response.headers().values("Link").isEmpty(),
+            new IsEqual<>(true)
         );
     }
 

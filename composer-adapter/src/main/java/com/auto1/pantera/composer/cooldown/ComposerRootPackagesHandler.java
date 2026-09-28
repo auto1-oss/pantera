@@ -12,16 +12,12 @@ package com.auto1.pantera.composer.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
-import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
 import com.auto1.pantera.cooldown.metadata.VersionComparators;
-import com.auto1.pantera.composer.http.proxy.MetadataUrlRewriter;
-import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -35,7 +31,6 @@ import io.reactivex.Flowable;
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -44,6 +39,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -71,36 +67,29 @@ import java.util.concurrent.CompletableFuture;
  * <p>Flow:</p>
  * <ol>
  *   <li>Fetch {@code /packages.json} or {@code /repo.json} from the
- *       <b>raw upstream</b> — not the package-merge cache path, which
- *       has no notion of a root document and 404s on it (there is no
- *       single package name to key the cache/merge on).</li>
+ *       configured upstream slice (in the proxy wiring this is the
+ *       proxy's own root, whose {@code metadata-url} points back at the
+ *       proxy — see {@code ComposerProxySlice}).</li>
  *   <li>On non-2xx, forward status + body unchanged.</li>
  *   <li>Parse as JSON. On parse failure, pass upstream bytes through
  *       unchanged.</li>
  *   <li>If the root uses the lazy-providers / metadata-url scheme
- *       (no inline {@code packages} version data), rewrite every
- *       top-level URL field via {@link MetadataUrlRewriter#rewriteRoot}
- *       and return — per-package filtering handles the version data.</li>
+ *       (no inline {@code packages} version data), return upstream
+ *       bytes verbatim — per-package filtering handles it.</li>
  *   <li>For inline shapes, collect every
  *       {@code (package, version)} pair and evaluate each against
- *       cooldown in parallel.</li>
+ *       cooldown in parallel — capped at the newest
+ *       {@value #MAX_VERSIONS_TO_EVALUATE_PER_PACKAGE} versions per
+ *       package (WS5.4); versions beyond the cap are served without an
+ *       explicit evaluation.</li>
  *   <li>Run {@link ComposerRootPackagesFilter#filter} with the
- *       collected blocked set; rewrite every top-level URL field via
- *       {@link MetadataUrlRewriter#rewriteRoot}; re-serialise as JSON.</li>
+ *       collected blocked set; re-serialise as JSON.</li>
  *   <li>Root aggregations always return 200 — even when every
  *       package is blocked — because the root <em>shape</em> is
  *       always valid with an empty {@code packages}, and a 404 at
  *       the repository root would confuse Composer clients more
  *       than an empty aggregation.</li>
  * </ol>
- *
- * <p>Every branch that serves a 200 rewrites top-level URL fields
- * ({@code metadata-url}, {@code providers-url}, {@code search},
- * {@code list}, {@code available-packages-url},
- * {@code security-advisories.api-url}) to Pantera-local equivalents
- * and drops {@code notify}/{@code notify-batch} — otherwise a client
- * that follows any of those URLs would bypass Pantera's cache,
- * cooldown, and auth entirely.</p>
  *
  * @since 2.2.0
  */
@@ -123,32 +112,22 @@ public final class ComposerRootPackagesHandler {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /**
-     * Default Pantera base URL used when no explicit base is threaded
-     * through — mirrors the default used elsewhere in the Composer
-     * proxy wiring (e.g. {@code ComposerProxySlice}'s simple ctor).
+     * Maximum versions evaluated per package (WS5.4). A Satis snapshot
+     * root can inline hundreds of versions for a single package;
+     * cooldown only ever targets recent releases, so evaluating every
+     * one of them unbounded wastes cooldown-service calls for a large
+     * root without changing the outcome for old versions. Mirrors
+     * {@code MetadataFilterService.DEFAULT_MAX_VERSIONS} and the Go
+     * {@code @v/list} cap ({@code GoListHandler}). Versions beyond the
+     * cap are treated as not-blocked and still served — only the
+     * <em>evaluation</em> fan-out is bounded, never the served list.
      */
-    private static final String DEFAULT_BASE_URL = "http://localhost:8080";
+    private static final int MAX_VERSIONS_TO_EVALUATE_PER_PACKAGE = 50;
 
     /**
-     * Upstream slice — the raw remote, NOT the cache/rewrite slice.
-     * Root aggregation must fetch the genuine upstream document (there
-     * is no per-package name to route through the metadata-merge cache
-     * path); rewriting happens in this handler via
-     * {@link MetadataUrlRewriter#rewriteRoot}. Used directly only when
-     * {@link #baseLoader} is absent (no cache/storage configured —
-     * preserves the pre-WS6.3 unconditional-fetch behaviour for callers,
-     * e.g. unit tests, that construct this handler without them).
+     * Upstream slice shared with the main Composer proxy.
      */
     private final Slice upstream;
-
-    /**
-     * Cache-backed, TTL, single-flighted, serve-stale-on-outage loader for
-     * the root document (WS6.3 — brings this resolution surface under the
-     * same contract as Maven metadata / Go {@code @v/list} / the PyPI JSON
-     * API). {@code null} when no cache/storage was supplied, in which case
-     * {@link #upstream} is hit directly on every request.
-     */
-    private final ComposerRootBaseLoader baseLoader;
 
     /**
      * Cooldown evaluation service.
@@ -166,14 +145,6 @@ public final class ComposerRootPackagesHandler {
     private final String repoName;
 
     /**
-     * Pantera-local base URL every top-level root URL is rewritten to
-     * point at (via {@link MetadataUrlRewriter#rewriteRoot}), so a
-     * client following {@code metadata-url} / {@code search} / etc.
-     * never escapes to the upstream host.
-     */
-    private final String baseUrl;
-
-    /**
      * Path detector for root aggregation endpoints.
      */
     private final ComposerRootPackagesRequestDetector detector;
@@ -184,10 +155,9 @@ public final class ComposerRootPackagesHandler {
     private final ComposerRootPackagesFilter filter;
 
     /**
-     * Convenience ctor defaulting {@code baseUrl} — used by call sites
-     * that do not (yet) thread a Pantera base URL through.
+     * Ctor.
      *
-     * @param upstream Upstream Composer proxy slice (raw remote)
+     * @param upstream Upstream Composer proxy slice
      * @param cooldown Cooldown evaluation service
      * @param repoType Repository type (e.g. {@code "php"})
      * @param repoName Repository name
@@ -198,101 +168,12 @@ public final class ComposerRootPackagesHandler {
         final String repoType,
         final String repoName
     ) {
-        this(upstream, cooldown, repoType, repoName, DEFAULT_BASE_URL);
-    }
-
-    /**
-     * Full ctor without a resolution-surface cache — the root document is
-     * fetched from {@code upstream} unconditionally on every request, with
-     * no TTL, single-flighting, or serve-stale-on-outage. Kept for callers
-     * (tests) that have no repository storage to back a cache with; the
-     * cache-backed constructor below is what production wiring
-     * ({@code ComposerProxySlice}) uses.
-     *
-     * @param upstream Upstream Composer proxy slice (raw remote)
-     * @param cooldown Cooldown evaluation service
-     * @param repoType Repository type (e.g. {@code "php"})
-     * @param repoName Repository name
-     * @param baseUrl Pantera-local base URL to rewrite root URLs to
-     */
-    public ComposerRootPackagesHandler(
-        final Slice upstream,
-        final CooldownService cooldown,
-        final String repoType,
-        final String repoName,
-        final String baseUrl
-    ) {
-        this(upstream, null, null, cooldown, repoType, repoName, baseUrl);
-    }
-
-    /**
-     * Full ctor with a cache-backed resolution-surface loader (WS6.3): the
-     * root document is TTL-cached, single-flighted, and served stale on an
-     * upstream outage rather than fetched unconditionally on every
-     * request.
-     *
-     * @param upstream Upstream Composer root slice (raw remote)
-     * @param cache Storage-backed cache for the root document
-     * @param storage Backing storage (TTL + stale fallback)
-     * @param cooldown Cooldown evaluation service
-     * @param repoType Repository type (e.g. {@code "php"})
-     * @param repoName Repository name
-     * @param baseUrl Pantera-local base URL to rewrite root URLs to
-     * @checkstyle ParameterNumberCheck (5 lines)
-     */
-    public ComposerRootPackagesHandler(
-        final Slice upstream,
-        final Cache cache,
-        final Storage storage,
-        final CooldownService cooldown,
-        final String repoType,
-        final String repoName,
-        final String baseUrl
-    ) {
         this.upstream = upstream;
-        this.baseLoader = cache == null || storage == null
-            ? null : new ComposerRootBaseLoader(upstream, cache, storage, repoName);
         this.cooldown = cooldown;
         this.repoType = repoType;
         this.repoName = repoName;
-        this.baseUrl = baseUrl;
         this.detector = new ComposerRootPackagesRequestDetector();
         this.filter = new ComposerRootPackagesFilter();
-    }
-
-    /**
-     * Fetch the root document at {@code line}'s path — through
-     * {@link #baseLoader} when configured (WS6.3: cached, single-flighted,
-     * serve-stale-on-outage), or directly from {@link #upstream} otherwise.
-     * Normalises both paths to a plain {@link Response} so {@link #handle}
-     * doesn't need to know which path served it.
-     */
-    private CompletableFuture<Response> fetchUpstream(final RequestLine line) {
-        if (this.baseLoader == null) {
-            return this.upstream.response(line, Headers.EMPTY, Content.EMPTY);
-        }
-        return this.baseLoader.load(line.uri().getPath()).thenApply(outcome -> {
-            if (outcome.isAvailable()) {
-                return ResponseBuilder.ok().body(outcome.body()).build();
-            }
-            final ResponseBuilder unavailable = ResponseBuilder.from(outcome.status())
-                .body(outcome.errorBody());
-            if (outcome.circuitOpen()) {
-                // Preserve the circuit-open marker through this funnel — a
-                // group resolver wrapping this handler must treat a
-                // breaker fast-fail as "member skipped", never "member
-                // failed" (see UpstreamCircuitOpenException).
-                unavailable.header(
-                    com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true"
-                );
-                if (outcome.retryAfterSeconds() > 0) {
-                    unavailable.header(
-                        "Retry-After", Long.toString(outcome.retryAfterSeconds())
-                    );
-                }
-            }
-            return unavailable.build();
-        });
     }
 
     /**
@@ -316,7 +197,7 @@ public final class ComposerRootPackagesHandler {
     public CompletableFuture<Response> handle(
         final RequestLine line, final String user, final AuditContext auditCtx
     ) {
-        return this.fetchUpstream(line)
+        return this.upstream.response(line, auditCtx.requestHeaders(), Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->
@@ -395,10 +276,8 @@ public final class ComposerRootPackagesHandler {
         if (entries.isEmpty()) {
             // Lazy-providers / metadata-url scheme, or empty packages.
             // Per-package filtering via ComposerPackageMetadataHandler
-            // handles the actual version-map lookups. Top-level URL
-            // fields are still rewritten to Pantera-local equivalents —
-            // otherwise a client following e.g. metadata-url/search
-            // bypasses Pantera's cache/cooldown/auth entirely.
+            // handles the actual version-map lookups. Serve upstream
+            // bytes verbatim to preserve exact top-level field ordering.
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Root packages: lazy-providers scheme, no inline versions")
                 .eventCategory("web")
@@ -415,17 +294,17 @@ public final class ComposerRootPackagesHandler {
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
-                    .body(this.rewriteRootUrls(upstreamBytes))
+                    .body(upstreamBytes)
                     .build()
             );
         }
         return this.blockedVersions(entries, user).thenApply(blocked -> {
             if (blocked.isEmpty()) {
-                // Nothing blocked; forward upstream bytes, top-level URLs rewritten.
+                // Nothing blocked; forward upstream bytes verbatim.
                 this.auditResolutions(entries, blocked, user, auditCtx);
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
-                    .body(this.rewriteRootUrls(upstreamBytes))
+                    .body(upstreamBytes)
                     .build();
             }
             final JsonNode filtered = this.filter.filter(
@@ -450,7 +329,7 @@ public final class ComposerRootPackagesHandler {
                 this.auditResolutions(entries, blocked, user, auditCtx);
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
-                    .body(this.rewriteRootUrls(body))
+                    .body(body)
                     .build();
             } catch (final com.fasterxml.jackson.core.JsonProcessingException ex) {
                 EcsLogger.warn("com.auto1.pantera.composer")
@@ -465,54 +344,11 @@ public final class ComposerRootPackagesHandler {
                 this.auditResolutions(entries, blocked, user, auditCtx);
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
-                    .body(this.rewriteRootUrls(upstreamBytes))
+                    .body(upstreamBytes)
                     .build();
             }
         });
     }
-
-    /**
-     * Rewrite every top-level root URL field to a Pantera-local
-     * equivalent via {@link MetadataUrlRewriter#rewriteRoot}. Called on
-     * every 200 branch in {@link #processUpstream} so no served root
-     * ever leaks an upstream-absolute URL, regardless of whether the
-     * body came verbatim from upstream or was re-serialised after
-     * cooldown filtering. {@code bytes} must already be known-parseable
-     * JSON (the caller has successfully parsed it upstream of this
-     * call); on any unexpected rewrite failure the original bytes are
-     * served rather than failing the whole request.
-     */
-    private byte[] rewriteRootUrls(final byte[] bytes) {
-        try {
-            return new MetadataUrlRewriter(this.baseUrl).rewriteRoot(
-                new String(bytes, StandardCharsets.UTF_8), this.baseUrl
-            );
-        } catch (final Exception ex) {
-            EcsLogger.warn("com.auto1.pantera.composer")
-                .message("Root URL rewrite failed — serving unrewritten upstream body")
-                .eventCategory("web")
-                .eventAction("root_filter")
-                .eventOutcome("failure")
-                .field("repository.name", this.repoName)
-                .error(ex)
-                .field("log.source", "application")
-                .log();
-            return bytes;
-        }
-    }
-
-    /**
-     * Maximum versions evaluated per package (WS5.4). A Satis snapshot
-     * root can inline hundreds of versions for a single package;
-     * cooldown only ever targets recent releases, so evaluating every
-     * one of them unbounded wastes cooldown-service calls for a large
-     * root without changing the outcome for old versions. Mirrors
-     * {@code MetadataFilterService.DEFAULT_MAX_VERSIONS} and the Go
-     * {@code @v/list} cap (WS4-go.5, {@code GoListHandler}). Versions
-     * beyond the cap are treated as not-blocked and still served — only
-     * the *evaluation* fan-out is bounded, never the served list.
-     */
-    private static final int MAX_VERSIONS_TO_EVALUATE_PER_PACKAGE = 50;
 
     /**
      * Evaluate every candidate (pkg, version) against cooldown in
@@ -640,7 +476,7 @@ public final class ComposerRootPackagesHandler {
         final CooldownRequest req = new CooldownRequest(
             this.repoType,
             this.repoName,
-            pkg,
+            pkg.toLowerCase(Locale.ROOT),
             version,
             user == null ? "composer-root" : user,
             Instant.now()

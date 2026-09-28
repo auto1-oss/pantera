@@ -10,13 +10,18 @@ This page covers the process for upgrading Pantera to a new version, including p
 
 ### Upgrading to 2.3.0
 
-**No breaking changes.** All 2.3.0 features are opt-in and backward-compatible: an existing `pantera.yml`, repo YAMLs, and environment work unchanged, and the Flyway migrations apply automatically. The new capabilities are opt-in per storage/repository:
+**No database migration.** 2.3.0 adds no Flyway migration (the highest version stays `V145`), and an existing `pantera.yml`, repository YAMLs and environment load unchanged. The storage and download features are opt-in per storage/repository:
 
-- **Index-accelerated S3 cache** (`cache.mode: index`) — serves cache hits from an in-memory index with async durable write-back and byte-bounded LRU/LFU eviction. Default is unchanged (the prior disk cache). See the "Index Cache Mode" section of [Storage Backends](storage-backends.md).
-- **S3-API-compatible backends** — the S3 backend now also targets MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS, or GCS's S3-interop endpoint via `endpoint`/`region`/`path-style`/`credentials`. See the "S3-API-Compatible Object Stores" section of [Storage Backends](storage-backends.md).
-- **Presigned direct-download** — a per-repository `download-mode` (`stream` / `redirect` / `auto`) can `302` binary artifact GETs to a time-limited object-store URL, removing Pantera from the byte path; metadata is never redirected, and it falls back to streaming when the object is not durably stored or presigning is not configured. See the "Presigned Direct-Download" section of [Storage Backends](storage-backends.md).
+- **Index-accelerated S3 cache** (`cache.mode: index`) — serves cache hits from an in-memory index with async durable write-back and byte-bounded LRU/LFU eviction. Default is unchanged (`mode: disk`, the prior disk cache). See [Index Cache Mode](storage-backends.md#index-cache-mode-cachemode-index).
+- **S3-API-compatible backends** — the S3 backend also targets MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS Gateway, or GCS's S3-interop endpoint via `endpoint`/`region`/`path-style`/`credentials`; `storage-class` selects the object storage class. See [S3-API-Compatible Object Stores](storage-backends.md#s3-api-compatible-object-stores).
+- **Presigned direct-download** — a per-repository `download-mode` (`stream` default / `redirect` / `auto`) can `302` binary artifact GETs on hosted repositories to a time-limited object-store URL (`presign-ttl-seconds`, default `600`), removing Pantera from the byte path; metadata is never redirected, `conan` and all proxy/group repositories keep streaming, and a redirect falls back to streaming when the object is not durably stored or the storage has no presigner. Clients must be able to reach the object store directly before you enable it. See [Presigned Direct-Download](storage-backends.md#presigned-direct-download-ws17).
 
-None of these require a configuration or schema migration to keep the current behavior — leave the keys unset to upgrade with no functional change.
+Leave these keys unset to upgrade with no functional change. Behavior that changes without any configuration:
+
+- **Hosted Maven/Gradle releases are immutable by default.** Re-deploying an existing non-SNAPSHOT coordinate with different bytes is rejected with `409 Conflict` (an identical re-deploy is an idempotent `201`); a client checksum sidecar that does not match the stored primary is rejected with `400`. Pipelines that overwrite release versions must either publish new versions or set `releaseImmutable: false` on that repository. `verifyPgp` (PGP-verified quarantine against the `/api/v1/admin/pgp-keys` keyring) stays off unless enabled.
+- **Docker registry API deletes work on hosted repositories.** `DELETE /v2/<name>/manifests/<reference>` and `DELETE /v2/<name>/blobs/<digest>` answer `202` on a `docker` repository (previously `405`); proxy and group repositories still answer `405 UNSUPPORTED`. Manifest `GET`/`HEAD` now honour the client's `Accept` header and answer `406` when the stored manifest's media type is not acceptable; an absent `Accept` or `*/*` is unaffected.
+- **`go-proxy` proxies the Go checksum database** (`/sumdb/...`) to its upstream, so clients can keep `GOSUMDB` at its default; `go` and `go-group` repositories answer `404` for `/sumdb/`.
+- **Per-node event draining.** Each node drains its own artifact-events queue and proxy package processors on a local scheduler instead of the cluster-shared Quartz job store; a Quartz firing that lands on a node without the job's dependencies is skipped and logged (`event.action=job_skip_unresolved`) rather than deleting the job. No operator action is required.
 
 ---
 
@@ -162,6 +167,8 @@ For zero-downtime upgrades in HA deployments:
 
 Database migrations run on the first node that starts with the new version. Subsequent nodes detect that migrations have already been applied and skip them.
 
+**Token revocations while versions are mixed (upgrading to 2.2.9 from an earlier release).** Revocations (sign-out, password change, `revoke-user`, API-token revoke) keep propagating in both directions during the rollout: a 2.2.9 node publishes each revocation in both the 2.2.9 message format and the earlier one, and it still applies messages from nodes not yet upgraded. The earlier release handles what it receives its own way: it records the revocation at the time it receives the message and keeps it for 2 hours, and it rejects every session of a revoked user on that node for those 2 hours, including one opened after the revocation. When a 2.2.9 node restarts, it reloads each user revocation that an earlier release wrote to Valkey as a revocation of every token issued before the restart. To keep this window short, finish the rollout promptly.
+
 ---
 
 ## Database Migrations
@@ -282,6 +289,17 @@ New versions may introduce new configuration keys with sensible defaults. Existi
 > **Breaking change in v2.1.0:** JWT signing has switched from HS256 (shared secret) to RS256 (asymmetric key pair). All existing tokens are invalidated on upgrade. See the [JWT Migration Steps](#jwt-migration-hs256-to-rs256) section below for the required configuration changes.
 
 > **v2.2.5 requires a DB migration and a UI redeploy.** `V137__client_base_url_settings.sql` adds the `trust_forwarded_headers` / `client_base_host_allowlist` admin settings (additive; runs automatically at startup like any other Flyway migration). `pantera-ui` must be redeployed alongside the backend — the new Settings page card (forwarded-header trust / host allowlist) requires the matching UI build; running the 2.2.5 backend against an older UI build simply hides the new card, it is not unsafe, but the setting is only reachable via the raw `GET`/`PUT /api/v1/admin/client-base-url-settings` API until the UI catches up.
+
+
+> **v2.2.6 needs no migration, but redeploy `pantera-ui` with the backend.** The
+> repository form previously rebuilt each repo's config from the fields it
+> modelled, so saving a repository through the old UI dropped keys it did not
+> show (`url`, `path`, the `deb`/`rpm` `settings` block) -- an older UI build
+> against a 2.2.6 backend still does. Redeploying the UI is the fix; to find
+> repositories whose `url:` was lost or points at a stale host, run
+> `scripts/audit-repo-base-urls.sh` (reports by default, `--apply` to clear).
+> Hosted `npm` repositories no longer require `url:` -- existing ones keep
+> working unchanged, since a configured `url:` still wins.
 
 ---
 

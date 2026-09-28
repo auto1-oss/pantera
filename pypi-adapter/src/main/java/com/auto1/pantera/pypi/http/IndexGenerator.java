@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.asto.rx.RxFuture;
+import com.auto1.pantera.http.html.HtmlEscape;
 import com.auto1.pantera.pypi.meta.PypiSidecar;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
@@ -89,32 +90,31 @@ public final class IndexGenerator {
         private final String relativeHref;
         /** Hex SHA-256 of the file content. */
         private final String sha256;
-        /** File size in bytes (PEP 700). */
-        private final long size;
-        /**
-         * Distribution version, derived from the version-folder segment
-         * of the storage layout; {@code null} for the legacy no-version-
-         * folder edge case, which is then excluded from the top-level
-         * {@code versions[]} array (PEP 700).
-         */
-        private final String version;
         /** Sidecar metadata (may be empty for legacy uploads). */
         private final Optional<PypiSidecar.Meta> meta;
+        /** File size in bytes (PEP 700), negative when unknown. */
+        private final long size;
+        /**
+         * Version directory the file lives in; {@code null} for a file
+         * stored flat under the package directory (the PEP 700
+         * {@code versions[]} array then derives it from the filename).
+         */
+        private final String version;
 
         Entry(
             final String filename,
             final String relativeHref,
             final String sha256,
+            final Optional<PypiSidecar.Meta> meta,
             final long size,
-            final String version,
-            final Optional<PypiSidecar.Meta> meta
+            final String version
         ) {
             this.filename = filename;
             this.relativeHref = relativeHref;
             this.sha256 = sha256;
+            this.meta = meta;
             this.size = size;
             this.version = version;
-            this.meta = meta;
         }
     }
 
@@ -154,9 +154,7 @@ public final class IndexGenerator {
                                 .toList();
                             final List<CompletableFuture<Entry>> futures = new ArrayList<>();
                             if (subKeys.isEmpty()) {
-                                // Key is a file directly under the package dir.
-                                // No version folder to derive a version from —
-                                // excluded from the PEP 700 versions[] array.
+                                // Key is a file directly under the package dir
                                 futures.add(buildEntry(key, new KeyLastPart(key).get(), null));
                             } else {
                                 // Key is a version dir; iterate files
@@ -208,34 +206,28 @@ public final class IndexGenerator {
 
     /**
      * Build an {@link Entry} from a storage key by reading the file
-     * content for the SHA-256 digest, its size, and the sidecar metadata.
-     * @param key Storage key of the distribution file
-     * @param relativeHref Relative href for the HTML anchor / JSON url
-     * @param version Distribution version derived from the storage layout,
-     *                or {@code null} for the no-version-folder edge case
+     * content for the SHA-256 digest and size, and the sidecar metadata.
      */
     private CompletableFuture<Entry> buildEntry(
         final Key key, final String relativeHref, final String version
     ) {
         return this.storage.value(key).thenCompose(
-            value -> new ContentDigest(value, Digests.SHA256).hex()
-        ).thenCompose(
-            hex -> this.storage.metadata(key).thenCompose(
-                fileMeta -> {
-                    final long size = fileMeta.read(com.auto1.pantera.asto.Meta.OP_SIZE)
-                        .map(Long.class::cast).orElse(0L);
-                    return PypiSidecar.read(this.storage, key).thenApply(
-                        optMeta -> new Entry(
-                            new KeyLastPart(key).get(),
-                            relativeHref,
-                            hex,
-                            size,
-                            version,
-                            optMeta
+            value -> {
+                final long size = value.size().orElse(-1L);
+                return new ContentDigest(value, Digests.SHA256).hex()
+                    .thenCompose(
+                        hex -> PypiSidecar.read(this.storage, key).thenApply(
+                            optMeta -> new Entry(
+                                new KeyLastPart(key).get(),
+                                relativeHref,
+                                hex,
+                                optMeta,
+                                size,
+                                version
+                            )
                         )
                     );
-                }
-            )
+            }
         ).toCompletableFuture();
     }
 
@@ -265,9 +257,15 @@ public final class IndexGenerator {
         for (final Entry entry : entries) {
             final String attrs = entry.meta
                 .map(IndexGenerator::buildHtmlAttributes).orElse("");
+            // SECURITY: href and filename are untrusted (upload/upstream);
+            // entity-escape them at render. attrs is already escaped by
+            // PypiHtmlAttributes — do not double-escape it.
             body.append(String.format(
                 "<a href=\"%s#sha256=%s\"%s>%s</a><br/>",
-                entry.relativeHref, entry.sha256, attrs, entry.filename
+                HtmlEscape.escape(entry.relativeHref),
+                HtmlEscape.escape(entry.sha256),
+                attrs,
+                HtmlEscape.escape(entry.filename)
             ));
         }
         return String.format(
@@ -406,26 +404,8 @@ public final class IndexGenerator {
      * @return Space-prefixed attribute string, or empty string if no attributes apply
      */
     private static String buildHtmlAttributes(final PypiSidecar.Meta meta) {
-        final StringBuilder attrs = new StringBuilder();
-        if (meta.requiresPython() != null && !meta.requiresPython().isEmpty()) {
-            attrs.append(String.format(
-                " data-requires-python=\"%s\"",
-                meta.requiresPython().replace(">", "&gt;").replace("<", "&lt;")
-            ));
-        }
-        if (meta.yanked()) {
-            final String reason = meta.yankedReason().orElse("");
-            attrs.append(String.format(" data-yanked=\"%s\"", reason));
-        }
-        if (meta.distInfoMetadata().isPresent()) {
-            // PEP 714 renamed this HTML attribute to data-core-metadata;
-            // data-dist-info-metadata is retained for legacy clients that
-            // haven't picked up the rename yet. Same value, both names.
-            attrs.append(String.format(
-                " data-core-metadata=\"sha256=%s\" data-dist-info-metadata=\"sha256=%s\"",
-                meta.distInfoMetadata().get(), meta.distInfoMetadata().get()
-            ));
-        }
-        return attrs.toString();
+        // SECURITY (2.2.9): every value is untrusted; the shared renderer
+        // entity-escapes all of them (the yank reason used to be emitted raw).
+        return PypiHtmlAttributes.of(meta);
     }
 }

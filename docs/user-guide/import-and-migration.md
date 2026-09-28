@@ -39,15 +39,15 @@ curl -X PUT \
 
 | Header | Description |
 |--------|-------------|
-| `X-Pantera-Artifact-Name` | Logical artifact name |
-| `X-Pantera-Artifact-Version` | Artifact version string |
+| `X-Pantera-Artifact-Name` | Logical artifact name. When absent, the name a native publish of the format records is derived from the artifact path (for example `groupId.artifactId` for Maven) |
+| `X-Pantera-Artifact-Version` | Artifact version. When absent, derived from the artifact path like the name; `UNKNOWN` when the path carries none |
 | `X-Pantera-Artifact-Size` | Size in bytes (falls back to Content-Length) |
-| `X-Pantera-Artifact-Owner` | Owner/publisher name |
+| `X-Pantera-Artifact-Owner` | Ignored. The artifact owner and the audit `user.name` are always the authenticated caller |
 | `X-Pantera-Artifact-Created` | Created timestamp (milliseconds since epoch) |
 | `X-Pantera-Checksum-Sha256` | Expected SHA-256 checksum for verification |
 | `X-Pantera-Checksum-Sha1` | Expected SHA-1 checksum |
 | `X-Pantera-Checksum-Md5` | Expected MD5 checksum |
-| `X-Pantera-Checksum-Mode` | Checksum policy: `VERIFY` (default), `STORE`, or `NONE` |
+| `X-Pantera-Checksum-Mode` | Checksum policy: `COMPUTE` (default), `METADATA`, or `SKIP` |
 | `X-Pantera-Metadata-Only` | If `true`, only index metadata without storing bytes |
 
 ### Response Codes
@@ -56,8 +56,8 @@ curl -X PUT \
 |--------|---------|
 | `201 Created` | New artifact imported successfully |
 | `200 OK` | Artifact already exists (idempotent replay) |
-| `409 Conflict` | Checksum mismatch -- provided checksum does not match uploaded content |
-| `400 Bad Request` | Missing required headers or invalid metadata |
+| `409 Conflict` | Checksum mismatch, or the path already holds a different published file (releases are immutable; identical bytes replay as `200`) |
+| `400 Bad Request` | Missing required headers, invalid metadata, or the target is a proxy/group repository (imports may only target local repositories) |
 | `503 Service Unavailable` | Import queue is full; retry after a few seconds |
 
 ### Example Response (201 Created)
@@ -112,7 +112,7 @@ done
 
 ## Backfill CLI Tool
 
-The `pantera-backfill` CLI tool scans existing artifact directories on disk and populates the PostgreSQL metadata database. This is useful when:
+The `pantera-backfill` CLI tool scans existing artifact directories on disk and populates the PostgreSQL metadata database. The runnable jar is built as `pantera-backfill/target/pantera-backfill-<version>-cli.jar`; the examples below call it `pantera-backfill.jar`. A running server can do the same from its own repository configuration with `POST /api/v1/search/reindex`, which also removes rows for deleted repositories and deleted files (see the [REST API Reference](../rest-api-reference.md#post-apiv1searchreindex)). This is useful when:
 
 - You have copied artifacts directly to storage (filesystem or S3) and need to index them.
 - The database was rebuilt and needs to be repopulated from existing storage.
@@ -156,6 +156,30 @@ java -jar pantera-backfill.jar \
 | `--db-password` | Database password | -- |
 | `--batch-size` | Insert batch size | 1000 |
 | `--log-interval` | Progress log interval (rows) | 10000 |
+
+### Re-running to repair browse links
+
+Search results carry the artifact's real storage key so the UI can open its
+directory. Rows indexed before 2.2.8 by a writer that did not record one browse
+to the repository root instead of the artifact's folder. Re-running the backfill
+against a repository repairs those rows: the scanner reads the key back off
+disk, and the insert uses `COALESCE`, so a re-run never clears a key another
+writer already recorded.
+
+This applies to repositories indexed before 2.2.8 for the generic-file, helm,
+debian and docker types.
+
+**Conan, RPM and NuGet** have no scanner at all, so the backfill cannot
+re-index them. Their rows are repaired by re-uploading the artifact, which
+records the key on the upload path.
+
+The backfill derives an artifact's version from its parent directory, while
+the server derives it from the artifact name. The two agree whenever the
+artifact sits in a version directory. Where they disagree — a version that
+appears only in the filename, such as `foo/bar/thing-2.0.jar` — the upsert key
+does not match the existing row, so the re-run inserts a second row instead of
+repairing the first. Use `--dry-run` and compare row counts before committing
+to a large re-index.
 
 ---
 

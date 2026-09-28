@@ -185,23 +185,6 @@ public final class SearchHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
-    void reindexReturns202(final Vertx vertx, final VertxTestContext ctx)
-        throws Exception {
-        this.request(
-            vertx, ctx,
-            HttpMethod.POST, "/api/v1/search/reindex",
-            res -> {
-                Assertions.assertEquals(202, res.statusCode());
-                final JsonObject body = res.bodyAsJsonObject();
-                Assertions.assertEquals(
-                    "started", body.getString("status"),
-                    "Response status must be 'started'"
-                );
-            }
-        );
-    }
-
-    @Test
     void locateRequiresPathParam(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
         this.request(

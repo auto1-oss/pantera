@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -328,6 +329,41 @@ final class GoScannerTest {
             "Size should be 500",
             records.get(0).size(),
             Matchers.is(500L)
+        );
+    }
+
+    @Test
+    void recordsTheRealPathOfAMixedCaseModule(@TempDir final Path temp)
+        throws IOException {
+        final Path atv = temp.resolve("github.com/!burnt!sushi/toml/@v");
+        Files.createDirectories(atv);
+        Files.writeString(atv.resolve("list"), "v1.3.2\n", StandardCharsets.UTF_8);
+        Files.write(atv.resolve("v1.3.2.zip"), new byte[10]);
+        final List<ArtifactRecord> records = new GoScanner("go-proxy")
+            .scan(temp, "go-proxy-repo").collect(Collectors.toList());
+        MatcherAssert.assertThat(
+            "Name should be the decoded module path",
+            records.get(0).name(),
+            new IsEqual<>("github.com/BurntSushi/toml")
+        );
+        MatcherAssert.assertThat(
+            "Path prefix should keep the escaped storage path",
+            records.get(0).pathPrefix(),
+            new IsEqual<>("github.com/!burnt!sushi/toml/@v/1.3.2")
+        );
+    }
+
+    @Test
+    void keepsDanglingAndNonLetterEscapes(@TempDir final Path temp)
+        throws IOException {
+        final Path atv = temp.resolve("example.com/a!1b/c!/@v");
+        Files.createDirectories(atv);
+        Files.write(atv.resolve("v0.1.0.zip"), new byte[10]);
+        final List<ArtifactRecord> records = new GoScanner()
+            .scan(temp, "go-repo").collect(Collectors.toList());
+        MatcherAssert.assertThat(
+            records.get(0).name(),
+            new IsEqual<>("example.com/a!1b/c!")
         );
     }
 }

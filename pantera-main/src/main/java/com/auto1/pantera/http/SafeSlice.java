@@ -48,7 +48,7 @@ final class SafeSlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(ResponseBuilder.internalError()
-                .textBody("Failed to respond to request: " + err.getMessage())
+                .textBody("Failed to respond to request")
                 .build()
             );
         }

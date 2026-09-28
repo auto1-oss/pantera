@@ -11,7 +11,13 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.pypi.meta.PypiSidecar;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.Vertx;
@@ -20,14 +26,19 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.junit5.VertxTestContext;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.security.Permission;
 import java.security.PermissionCollection;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.concurrent.TimeUnit;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Authorization tests for the {@link PypiHandler} yank/unyank endpoints
@@ -55,16 +66,14 @@ public final class PypiHandlerAuthzTest extends AsyncApiTestBase {
     private static final String DENIED_REPO = "pypi-authz-denied-nonexistent";
 
     /**
-     * Minimal valid pypi-local repository body (fs storage), mirroring
-     * {@code RepositoryHandlerTest.VALID_BODY}.
+     * Package whose release the "allowed" tests yank/unyank.
      */
-    private static final JsonObject REPO_BODY = new JsonObject()
-        .put(
-            "repo",
-            new JsonObject()
-                .put("type", "pypi-local")
-                .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
-        );
+    private static final String PKG = "pkg";
+
+    /**
+     * Version of {@link #PKG} seeded into the fixture repository.
+     */
+    private static final String VERSION = "1.0";
 
     @Override
     protected Policy<?> testPolicy() {
@@ -98,11 +107,13 @@ public final class PypiHandlerAuthzTest extends AsyncApiTestBase {
     }
 
     @Test
-    void yankAllowedWithWritePermission(final Vertx vertx, final VertxTestContext ctx)
-        throws Exception {
-        this.createRepo(vertx, ALLOWED_REPO);
+    void yankAllowedWithWritePermission(
+        final Vertx vertx, final VertxTestContext ctx, @TempDir final Path tmp
+    ) throws Exception {
+        this.createRepo(vertx, ALLOWED_REPO, tmp);
         final HttpResponse<Buffer> res = this.post(
-            vertx, String.format("/api/v1/pypi/%s/pkg/1.0/yank", ALLOWED_REPO)
+            vertx,
+            String.format("/api/v1/pypi/%s/%s/%s/yank", ALLOWED_REPO, PKG, VERSION)
         );
         MatcherAssert.assertThat(
             "Allows yank with write permission on the target repo",
@@ -112,11 +123,13 @@ public final class PypiHandlerAuthzTest extends AsyncApiTestBase {
     }
 
     @Test
-    void unyankAllowedWithWritePermission(final Vertx vertx, final VertxTestContext ctx)
-        throws Exception {
-        this.createRepo(vertx, ALLOWED_REPO);
+    void unyankAllowedWithWritePermission(
+        final Vertx vertx, final VertxTestContext ctx, @TempDir final Path tmp
+    ) throws Exception {
+        this.createRepo(vertx, ALLOWED_REPO, tmp);
         final HttpResponse<Buffer> res = this.post(
-            vertx, String.format("/api/v1/pypi/%s/pkg/1.0/unyank", ALLOWED_REPO)
+            vertx,
+            String.format("/api/v1/pypi/%s/%s/%s/unyank", ALLOWED_REPO, PKG, VERSION)
         );
         MatcherAssert.assertThat(
             "Allows unyank with write permission on the target repo",
@@ -144,22 +157,43 @@ public final class PypiHandlerAuthzTest extends AsyncApiTestBase {
     }
 
     /**
-     * Create a pypi-local repository fixture via the (unrestricted, per
-     * {@link RepoScopedPolicy}) repositories API.
+     * Create a hosted pypi repository fixture via the (unrestricted, per
+     * {@link RepoScopedPolicy}) repositories API, stored under the JUnit
+     * temp dir (an approved fs storage root in {@link AsyncApiTestBase}),
+     * and seed one distribution file of {@link #PKG} {@link #VERSION}:
+     * since 2.2.9 yank/unyank of a release without files answers 404, so
+     * the seeded release is what lets the authorized calls reach 204.
      * @param vertx Vertx instance
      * @param name Repository name
+     * @param tmp Storage root of the fixture repository
      * @throws Exception On error
      */
-    private void createRepo(final Vertx vertx, final String name) throws Exception {
+    private void createRepo(final Vertx vertx, final String name, final Path tmp)
+        throws Exception {
         final HttpResponse<Buffer> put = WebClient.create(vertx)
             .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/" + name)
             .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
-            .sendJsonObject(REPO_BODY)
+            .sendJsonObject(
+                new JsonObject().put(
+                    "repo",
+                    new JsonObject()
+                        .put("type", "pypi")
+                        .put(
+                            "storage",
+                            new JsonObject().put("type", "fs").put("path", tmp.toString())
+                        )
+                )
+            )
             .toCompletionStage().toCompletableFuture()
             .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
         MatcherAssert.assertThat(
             "Repository fixture is created", put.statusCode(), new IsEqual<>(200)
         );
+        final Storage scoped = new SubStorage(new Key.From(name), new FileStorage(tmp));
+        final Key file = new Key.From(PKG, VERSION, PKG + "-" + VERSION + ".tar.gz");
+        scoped.save(file, new Content.From("dist".getBytes(StandardCharsets.UTF_8))).join();
+        PypiSidecar.write(scoped, file, null, Instant.now().truncatedTo(ChronoUnit.MICROS))
+            .join();
     }
 
     /**

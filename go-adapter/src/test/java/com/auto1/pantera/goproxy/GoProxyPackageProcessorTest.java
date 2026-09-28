@@ -85,12 +85,29 @@ class GoProxyPackageProcessorTest {
     }
 
     @Test
+    void recordsTheRealPathOfAMixedCaseModule() {
+        // B84: the index stored the '!'-escaped path, so search never found
+        // github.com/BurntSushi/toml by its real module path.
+        final String escaped = "github.com/!burnt!sushi/toml";
+        this.storage.save(
+            new Key.From(escaped, "@v", "v1.3.2.zip"),
+            new Content.From("zip".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        this.packages.add(
+            new ProxyArtifactEvent(
+                new Key.From(escaped + "/@v/1.3.2"), "go_proxy", "u", Optional.empty()
+            )
+        );
+        this.processor.run();
+        assertEquals("github.com/BurntSushi/toml", this.events.poll().artifactName());
+    }
+
+    @Test
     void decodesEscapedModuleNameForArtifactEventButNotStorageKey() {
         // WS4-go.6: Go escapes uppercase as `!` + lowercase on the wire
         // (github.com/BurntSushi/toml -> github.com/!burnt!sushi/toml);
         // the recorded ArtifactEvent (DB/index/audit) must show the
-        // decoded form while the storage/event key (asserted via the
-        // zip existence check below) stays escaped.
+        // decoded form while the storage/event key stays escaped.
         final String escapedModule = "github.com/!burnt!sushi/toml";
         final String version = "1.0.0";
         final Key eventKey = new Key.From(escapedModule + "/@v/" + version);
@@ -113,7 +130,7 @@ class GoProxyPackageProcessorTest {
             "github.com/BurntSushi/toml", event.artifactName(),
             "package.name must be decoded for DB/index/audit"
         );
-        assertEquals(version, event.artifactVersion());
+        assertEquals(version, event.artifactVersion(), "version is recorded unchanged");
         assertEquals(
             eventKey.string(), event.pathPrefix(),
             "recorded path prefix (storage key) must stay escaped"

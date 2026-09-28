@@ -20,6 +20,7 @@ import com.auto1.pantera.db.dao.RoleDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.security.policy.RolePermissionsReader;
 import com.auto1.pantera.settings.users.CrudRoles;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.Router;
@@ -46,6 +47,11 @@ public final class RoleHandler {
     /**
      * Update role permission constant.
      */
+    /**
+     * The bootstrap administrator role — never editable by a non-administrator.
+     */
+    private static final String PROTECTED_ROLE = "admin";
+
     private static final ApiRolePermission UPDATE =
         new ApiRolePermission(RoleAction.UPDATE);
 
@@ -205,6 +211,11 @@ public final class RoleHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
             return;
         }
+        final String invalid = RoleHandler.invalidPermissions(body);
+        if (invalid != null) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", invalid);
+            return;
+        }
         final Optional<JsonObject> existing = this.roles.get(rname);
         final PermissionCollection perms = this.policy.getPermissions(
             new AuthUser(
@@ -214,6 +225,17 @@ public final class RoleHandler {
         );
         if (existing.isPresent() && perms.implies(RoleHandler.UPDATE)
             || existing.isEmpty() && perms.implies(RoleHandler.CREATE)) {
+            // SECURITY (2.2.9, privesc-role): role CREATE/UPDATE is a
+            // delegated authoring right, not root. A non-AllPermission
+            // caller may not (a) rewrite the built-in admin role, (b) author
+            // all_permission, or (c) grant any permission their own effective
+            // set does not already imply — evaluated on the materialised
+            // permissions, never on the raw JSON.
+            final String ceiling = this.escalationRefusal(rname, body, perms);
+            if (ceiling != null) {
+                ApiResponse.sendError(ctx, 403, "FORBIDDEN", ceiling);
+                return;
+            }
             CompletableFuture.runAsync(
                 () -> this.roles.addOrUpdate(body, rname),
                 HandlerExecutor.get()
@@ -231,11 +253,76 @@ public final class RoleHandler {
     }
 
     /**
+     * Materialise the submitted role the same way the policy does when it
+     * loads the role. A key that is not a registered permission type (for
+     * example a repository name used as a top-level key) or a malformed
+     * value would otherwise be stored and make the policy drop the whole
+     * role, so the role would silently grant nothing.
+     * @param body Submitted role document
+     * @return Refusal reason or {@code null} when every key materialises
+     */
+    private static String invalidPermissions(final JsonObject body) {
+        String refusal = null;
+        try {
+            new RolePermissionsReader().read(body);
+        } catch (final ClassCastException ex) {
+            refusal = "'permissions' must be an object keyed by permission type,"
+                + " e.g. {\"adapter_basic_permissions\": {\"<repo>\": [\"read\"]}}";
+        } catch (final RuntimeException ex) {
+            refusal = String.format(
+                "Invalid role permissions: %s. The keys of 'permissions' must be"
+                    + " permission types such as adapter_basic_permissions, keyed"
+                    + " by repository inside",
+                ex.getMessage()
+            );
+        }
+        return refusal;
+    }
+
+    /**
+     * Privilege-ceiling check for role authoring. Returns a refusal message,
+     * or {@code null} when the write is within the caller's authority.
+     * @param rname Role being written
+     * @param body Submitted role document
+     * @param perms Caller's effective permissions
+     * @return Refusal reason or {@code null}
+     */
+    private String escalationRefusal(
+        final String rname, final JsonObject body, final PermissionCollection perms
+    ) {
+        if (perms.implies(new java.security.AllPermission())) {
+            return null;
+        }
+        if (RoleHandler.PROTECTED_ROLE.equals(rname)) {
+            return "The built-in administrator role can only be modified by an administrator";
+        }
+        final PermissionCollection granted = new RolePermissionsReader().read(body);
+        for (final java.security.Permission perm
+            : java.util.Collections.list(granted.elements())) {
+            if (perm instanceof java.security.AllPermission || !perms.implies(perm)) {
+                return "Cannot grant a permission you do not hold yourself: " + perm;
+            }
+        }
+        return null;
+    }
+
+    /**
      * DELETE /api/v1/roles/:name — delete role.
      * @param ctx Routing context
      */
     private void deleteRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
+        // SECURITY (2.2.9, privesc-role): the built-in admin role is protected —
+        // the same notion escalationRefusal() uses for PUT. Deleting it would let
+        // a delegated role manager (delete grant, no AllPermission) tear down the
+        // bootstrap administrator role.
+        if (RoleHandler.PROTECTED_ROLE.equals(rname)) {
+            ApiResponse.sendError(
+                ctx, 403, "FORBIDDEN",
+                "The built-in administrator role cannot be deleted"
+            );
+            return;
+        }
         CompletableFuture.runAsync(
             () -> this.roles.remove(rname),
             HandlerExecutor.get()
@@ -290,6 +377,16 @@ public final class RoleHandler {
      */
     private void disableRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
+        // SECURITY (2.2.9, privesc-role): the built-in admin role is protected —
+        // the same notion escalationRefusal() uses for PUT. Disabling it strips
+        // every permission from its members and could lock all administrators out.
+        if (RoleHandler.PROTECTED_ROLE.equals(rname)) {
+            ApiResponse.sendError(
+                ctx, 403, "FORBIDDEN",
+                "The built-in administrator role cannot be disabled"
+            );
+            return;
+        }
         CompletableFuture.runAsync(
             () -> this.roles.disable(rname),
             HandlerExecutor.get()

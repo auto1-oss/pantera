@@ -151,7 +151,7 @@ public final class DebianSlice extends Slice.Wrap {
                         users,
                         new OperationControl(
                             policy,
-                            new AdapterBasicPermission(config.codename(), Action.Standard.WRITE)
+                            new AdapterBasicPermission(config.codename(), Action.Standard.DELETE)
                         )
                     )
                 ),

@@ -12,6 +12,7 @@ package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.RepoAuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiCooldownHistoryPermission;
 import com.auto1.pantera.api.perms.ApiCooldownPermission;
@@ -28,6 +29,7 @@ import com.auto1.pantera.db.dao.SettingsDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.observability.StructuredLogger;
+import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -189,13 +191,25 @@ public final class CooldownHandler {
         router.get("/api/v1/cooldown/history")
             .handler(new AuthzHandler(this.policy, ApiCooldownHistoryPermission.READ))
             .handler(this::history);
+        // SECURITY (2.2.9, cooldown-unblock-authz): unblocking a quarantined
+        // artifact is a lifecycle WRITE on the named repository. The global
+        // ApiCooldownPermission.WRITE gate is repository-agnostic, so — like the
+        // pypi-yank-authz / artifact-repo-authz BOLA family — it is paired with a
+        // per-repository WRITE grant resolved from the {@code :name} path
+        // parameter. A global cooldown-write holder must ALSO hold WRITE on THIS
+        // repository; the global gate is preserved, not weakened. The READ
+        // endpoints above already scope rows by AdapterBasicPermission(repo, read).
+        final RepoAuthzHandler repoWrite =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.WRITE);
         // POST /api/v1/repositories/:name/cooldown/unblock — unblock single artifact
         router.post("/api/v1/repositories/:name/cooldown/unblock")
             .handler(new AuthzHandler(this.policy, ApiCooldownPermission.WRITE))
+            .handler(repoWrite)
             .handler(this::unblock);
         // POST /api/v1/repositories/:name/cooldown/unblock-all — unblock all
         router.post("/api/v1/repositories/:name/cooldown/unblock-all")
             .handler(new AuthzHandler(this.policy, ApiCooldownPermission.WRITE))
+            .handler(repoWrite)
             .handler(this::unblockAll);
     }
 
@@ -927,9 +941,9 @@ public final class CooldownHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
             return;
         }
-        final String artifact = body.getString("artifact", "").trim();
+        final String requested = body.getString("artifact", "").trim();
         final String version = body.getString("version", "").trim();
-        if (artifact.isEmpty() || version.isEmpty()) {
+        if (requested.isEmpty() || version.isEmpty()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "artifact and version are required");
             return;
         }
@@ -944,6 +958,9 @@ public final class CooldownHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Repository type is required");
             return;
         }
+        // The documented maven/gradle "groupId:artifactId" form must reach
+        // the dotted key the block is stored under.
+        final String artifact = new UnblockArtifactName(repoType, requested).value();
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
         final String unblockIp = CooldownHandler.clientIp(ctx);
         // DB write completes first, then synchronous cache invalidation, then response

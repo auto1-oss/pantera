@@ -298,8 +298,11 @@ public final class AutoBlockRegistry {
             .log();
     }
 
-    /** Per-remote mutable state. Guarded by {@code synchronized(this)}. */
-    private static final class WindowState {
+    /**
+     * Per-remote mutable state. Guarded by {@code synchronized(this)}.
+     * Package-private for tests.
+     */
+    static final class WindowState {
         int[] successes;
         int[] failures;
         int currentBucket;
@@ -340,9 +343,19 @@ public final class AutoBlockRegistry {
             if (elapsedMs < 1000L) {
                 return;
             }
-            final int secondsElapsed = (int) Math.min(
-                elapsedMs / 1000L, (long) windowSeconds
-            );
+            final long secondsElapsed = elapsedMs / 1000L;
+            if (secondsElapsed >= windowSeconds) {
+                // Idle for at least a whole window: nothing in it is still
+                // current. Restart the window at now; advancing the start
+                // by only one window left it far behind, so every call for
+                // the next idle/window seconds wiped the window again and
+                // failures after a quiet period never accumulated.
+                java.util.Arrays.fill(this.successes, 0);
+                java.util.Arrays.fill(this.failures, 0);
+                this.currentBucket = 0;
+                this.currentBucketStartMs = nowMs;
+                return;
+            }
             for (int i = 0; i < secondsElapsed; i++) {
                 this.currentBucket = (this.currentBucket + 1) % windowSeconds;
                 this.successes[this.currentBucket] = 0;

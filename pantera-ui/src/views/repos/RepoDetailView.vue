@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import { getRepo, getTree, getArtifactDetail, deleteArtifacts } from '@/api/repos'
 import { getApiClient } from '@/api/client'
@@ -17,6 +17,9 @@ import Dialog from 'primevue/dialog'
 import Textarea from 'primevue/textarea'
 import Message from 'primevue/message'
 import type { TreeEntry, ArtifactDetail } from '@/types'
+import { techForRepoType } from '@/utils/techSetup'
+
+const SetMeUpDrawer = defineAsyncComponent(() => import('@/components/setup/SetMeUpDrawer.vue'))
 
 const props = defineProps<{ name: string }>()
 const route = useRoute()
@@ -82,6 +85,13 @@ const repoType = computed(() => {
   return (repo?.type as string) ?? ''
 })
 const isProxy = computed(() => repoType.value.endsWith('-proxy'))
+const setupTech = computed(() => techForRepoType(repoType.value))
+const setupOpen = ref(false)
+const setupMounted = ref(false)
+function openSetup() {
+  setupMounted.value = true
+  setupOpen.value = true
+}
 const isGroup = computed(() => repoType.value.endsWith('-group'))
 const groupMembers = computed(() => {
   if (!repoConfig.value) return []
@@ -296,7 +306,23 @@ function formatSize(bytes?: number): string {
       <div v-if="repoConfig" class="flex items-center gap-3">
         <h1 class="text-2xl font-bold text-gray-900 dark:text-white">{{ name }}</h1>
         <RepoTypeBadge v-if="repoType" :type="repoType" size="md" />
+        <Button
+          v-if="setupTech"
+          label="Set Me Up"
+          icon="pi pi-bolt"
+          size="small"
+          severity="secondary"
+          class="ml-auto"
+          data-testid="set-me-up-btn"
+          @click="openSetup"
+        />
       </div>
+      <SetMeUpDrawer
+        v-if="setupTech && setupMounted"
+        v-model:visible="setupOpen"
+        :tech="setupTech.key"
+        :repo="name"
+      />
 
       <!-- Proxy cache banner -->
       <Message v-if="isProxy" severity="warn" :closable="false" class="mb-0">

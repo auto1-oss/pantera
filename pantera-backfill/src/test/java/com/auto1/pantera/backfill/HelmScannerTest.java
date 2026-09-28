@@ -20,6 +20,8 @@ import java.util.List;
 import java.util.stream.Collectors;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsNull;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -29,6 +31,65 @@ import org.junit.jupiter.api.io.TempDir;
  * @since 1.20.13
  */
 final class HelmScannerTest {
+
+    @Test
+    void recordsThePerChartStorageKey(@TempDir final Path temp) throws IOException {
+        // PushChartSlice writes <chart>/<chart>-<version>.tgz, so the url is
+        // repo-relative rather than a bare filename.
+        final Path chart = temp.resolve("nginx");
+        Files.createDirectories(chart);
+        Files.write(chart.resolve("nginx-1.2.3.tgz"), new byte[128]);
+        Files.writeString(
+            temp.resolve("index.yaml"),
+            String.join(
+                "\n",
+                "apiVersion: v1",
+                "entries:",
+                "  nginx:",
+                "    - name: nginx",
+                "      version: 1.2.3",
+                "      urls:",
+                "        - nginx/nginx-1.2.3.tgz"
+            ),
+            StandardCharsets.UTF_8
+        );
+        final ArtifactRecord record = new HelmScanner().scan(temp, "charts")
+            .collect(java.util.stream.Collectors.toList()).get(0);
+        MatcherAssert.assertThat(
+            "The per-chart key must be recorded so browse opens the chart directory",
+            record.pathPrefix(), new IsEqual<>("nginx/nginx-1.2.3.tgz")
+        );
+        MatcherAssert.assertThat(
+            "Size still resolves through the same lookup",
+            record.size(), new IsEqual<>(128L)
+        );
+    }
+
+    @Test
+    void recordsNoKeyWhenTheChartFileIsAbsent(@TempDir final Path temp) throws IOException {
+        // A fabricated path would browse to nothing, which is the bug this
+        // guards against — better to record none and keep the old fallback.
+        Files.writeString(
+            temp.resolve("index.yaml"),
+            String.join(
+                "\n",
+                "apiVersion: v1",
+                "entries:",
+                "  ghost:",
+                "    - name: ghost",
+                "      version: 9.9.9",
+                "      urls:",
+                "        - ghost/ghost-9.9.9.tgz"
+            ),
+            StandardCharsets.UTF_8
+        );
+        final ArtifactRecord record = new HelmScanner().scan(temp, "charts")
+            .collect(java.util.stream.Collectors.toList()).get(0);
+        MatcherAssert.assertThat(
+            "No file on disk means no key",
+            record.pathPrefix(), new IsNull<>()
+        );
+    }
 
     @Test
     void scansMultipleChartsWithVersions(@TempDir final Path temp)

@@ -131,7 +131,7 @@ pantera-ui/
     types/
       index.ts           # TypeScript interfaces (User, Repo, Role, Settings, etc.)
     views/               # Page components, one per route
-      admin/             # Admin-only: repo mgmt, users, roles, storage, cooldown, settings
+      admin/             # Admin-only: repo mgmt, users, roles, storage, cooldown, negative cache, troubleshoot, settings
       auth/              # Login, OAuth callback
       dashboard/         # Dashboard with stats and charts
       profile/           # User profile and API token management

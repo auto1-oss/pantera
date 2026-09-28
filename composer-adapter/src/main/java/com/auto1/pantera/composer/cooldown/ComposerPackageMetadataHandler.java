@@ -14,10 +14,10 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
+import com.auto1.pantera.composer.MinifiedMetadata;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
-import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -134,6 +134,12 @@ public final class ComposerPackageMetadataHandler {
     private final ComposerMetadataFilter filter;
 
     /**
+     * Expands Composer v2 minified version arrays so versions, release dates
+     * and the filter all see self-contained entries.
+     */
+    private final MinifiedMetadata minified;
+
+    /**
      * Ctor.
      *
      * @param upstream Upstream Composer proxy slice
@@ -154,6 +160,7 @@ public final class ComposerPackageMetadataHandler {
         this.detector = new ComposerMetadataRequestDetector();
         this.parser = new ComposerMetadataParser();
         this.filter = new ComposerMetadataFilter();
+        this.minified = new MinifiedMetadata();
     }
 
     /**
@@ -184,7 +191,7 @@ public final class ComposerPackageMetadataHandler {
         final String pkg = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a Composer metadata path: " + path)
         );
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+        return this.upstream.response(line, auditCtx.requestHeaders(), Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->
@@ -209,7 +216,10 @@ public final class ComposerPackageMetadataHandler {
     ) {
         final JsonNode parsed;
         try {
-            parsed = this.parser.parse(upstreamBytes);
+            // Minified entries inherit from their predecessor (a version's
+            // "time" may be inherited too): expand before reading anything.
+            // Pass-through paths below still serve the upstream bytes.
+            parsed = this.minified.expand(this.parser.parse(upstreamBytes));
         } catch (final MetadataParseException ex) {
             EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Failed to parse per-package metadata JSON — passing upstream bytes through")

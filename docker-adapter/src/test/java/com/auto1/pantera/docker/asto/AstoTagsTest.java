@@ -24,7 +24,7 @@ import wtf.g4s8.hamcrest.json.JsonHas;
 import wtf.g4s8.hamcrest.json.JsonValueIs;
 
 import java.util.Collection;
-import java.util.Optional;
+import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -52,23 +52,6 @@ final class AstoTagsTest {
             .collect(Collectors.toList());
     }
 
-    @Test
-    void reportsNextPageWhenTruncated() {
-        final AstoTags tags = new AstoTags(
-            this.name, new Key.From("foo"), this.keys, Pagination.from(null, 2)
-        );
-        MatcherAssert.assertThat(tags.hasNext(), new IsEqual<>(true));
-        MatcherAssert.assertThat(tags.nextCursor(), new IsEqual<>(Optional.of("0.1-rc")));
-    }
-
-    @Test
-    void reportsNoNextPageWhenNotTruncated() {
-        final AstoTags tags = new AstoTags(
-            this.name, new Key.From("foo"), this.keys, Pagination.from(null, 4)
-        );
-        MatcherAssert.assertThat(tags.hasNext(), new IsEqual<>(false));
-    }
-
     @ParameterizedTest
     @CsvSource({
         ",,0.1;0.1-rc;1.0;latest",
@@ -94,6 +77,26 @@ final class AstoTagsTest {
                     ).map(JsonValueIs::new).collect(Collectors.toList())
                 )
             )
+        );
+    }
+
+    /**
+     * T06: an image with no tag keys is unknown to the repository, whatever
+     * page is asked; one with tags is known even past its last tag.
+     */
+    @Test
+    void knowsNameOnlyWhenItHasTags() {
+        MatcherAssert.assertThat(
+            "no tag keys: unknown",
+            new AstoTags(this.name, new Key.From("foo"), List.of(), Pagination.from("2.7", 2))
+                .known(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "tag keys, cursor past the last tag: known",
+            new AstoTags(this.name, new Key.From("foo"), this.keys, Pagination.from("zzz", 2))
+                .known(),
+            new IsEqual<>(true)
         );
     }
 }

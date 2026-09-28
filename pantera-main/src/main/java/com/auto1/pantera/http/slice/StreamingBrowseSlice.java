@@ -122,7 +122,7 @@ public final class StreamingBrowseSlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return ResponseBuilder.internalError()
-                .textBody("Failed to list directory: " + throwable.getMessage())
+                .textBody("Failed to list directory")
                 .build();
         });
     }

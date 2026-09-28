@@ -10,6 +10,19 @@
  */
 package com.auto1.pantera.api.v1;
 
+import com.auto1.pantera.api.AuthTokenRest;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.perms.FreePermissions;
+import com.auto1.pantera.security.policy.Policy;
+import java.security.PermissionCollection;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -58,6 +71,11 @@ public final class DashboardHandler {
     private static final int BACKGROUND_REFRESH_INTERVAL_S = 270;
 
     /**
+     * Number of repositories listed in {@code top_repos}.
+     */
+    private static final int TOP_REPOS = 5;
+
+    /**
      * Initial delay before the first background refresh (gives the JVM time to warm up).
      */
     private static final int BACKGROUND_INITIAL_DELAY_S = 10;
@@ -71,6 +89,13 @@ public final class DashboardHandler {
      * Database data source (nullable).
      */
     private final DataSource dataSource;
+
+    /**
+     * Pantera security policy. SECURITY (2.2.9): the snapshot is global and
+     * authorization-insensitive; every response is PROJECTED through the
+     * caller's per-repository read scope before it leaves this handler.
+     */
+    private final Policy<?> policy;
 
     /**
      * Cached full dashboard payload to serve all concurrent users from memory.
@@ -93,10 +118,14 @@ public final class DashboardHandler {
      * Ctor.
      * @param crs Repository settings CRUD
      * @param dataSource Database data source (nullable)
+     * @param policy Pantera security policy
      */
-    public DashboardHandler(final CrudRepoSettings crs, final DataSource dataSource) {
+    public DashboardHandler(
+        final CrudRepoSettings crs, final DataSource dataSource, final Policy<?> policy
+    ) {
         this.crs = crs;
         this.dataSource = dataSource;
+        this.policy = policy;
         this.refresher = Executors.newSingleThreadScheduledExecutor(r -> {
             final Thread t = new Thread(r, "dashboard-cache-refresher");
             t.setDaemon(true);
@@ -150,7 +179,7 @@ public final class DashboardHandler {
      * @param ctx Routing context
      */
     private void handleStats(final RoutingContext ctx) {
-        this.respondWithCache(ctx, CachedDashboard::stats);
+        this.respondWithCache(ctx, DashboardHandler::stats);
     }
 
     /**
@@ -158,7 +187,7 @@ public final class DashboardHandler {
      * @param ctx Routing context
      */
     private void handleReposByType(final RoutingContext ctx) {
-        this.respondWithCache(ctx, CachedDashboard::reposByType);
+        this.respondWithCache(ctx, DashboardHandler::reposByType);
     }
 
     /**
@@ -190,7 +219,18 @@ public final class DashboardHandler {
      * @param extractor Function to extract the desired JSON from the cache
      */
     private void respondWithCache(final RoutingContext ctx,
-        final java.util.function.Function<CachedDashboard, JsonObject> extractor) {
+        final java.util.function.BiFunction<CachedDashboard, Set<String>, JsonObject> projector) {
+        final io.vertx.ext.auth.User usr = ctx.user();
+        if (usr == null) {
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Authentication required");
+            return;
+        }
+        final AuthUser caller = new AuthUser(
+            usr.principal().getString(AuthTokenRest.SUB),
+            usr.principal().getString(AuthTokenRest.CONTEXT)
+        );
+        final java.util.function.Function<CachedDashboard, JsonObject> extractor = snapshot ->
+            projector.apply(snapshot, this.readableRepositories(caller));
         CompletableFuture.supplyAsync(() -> {
             final CachedDashboard current = this.cache.get();
             final boolean expired = current == null
@@ -243,16 +283,7 @@ public final class DashboardHandler {
      * Returns an empty dashboard snapshot for the first-request fallback.
      */
     private static CachedDashboard emptyDashboard() {
-        return new CachedDashboard(
-            new JsonObject()
-                .put("repo_count", 0)
-                .put("artifact_count", 0)
-                .put("total_storage", 0)
-                .put("blocked_count", 0)
-                .put("top_repos", new JsonArray()),
-            new JsonObject().put("types", new JsonObject()),
-            0L
-        );
+        return new CachedDashboard(List.of(), Map.of(), List.of(), 0L);
     }
 
     /**
@@ -268,55 +299,35 @@ public final class DashboardHandler {
      * @return Cached dashboard snapshot
      */
     private CachedDashboard buildDashboard() {
-        final int repoCount = this.crs.listAll().size();
-        final JsonObject types = new JsonObject();
-        final JsonArray topRepos = new JsonArray();
-        long artifactCount = 0;
-        long totalStorage = 0;
-        long blockedCount = 0;
+        final List<RepoRow> rows = new ArrayList<>();
+        final Map<String, Long> blocked = new HashMap<>();
         if (this.dataSource != null) {
             try (Connection conn = this.dataSource.getConnection();
                  Statement stmt = conn.createStatement()) {
                 // MVs are refreshed externally by pg_cron on a schedule.
                 // See docs/admin-guide/performance-tuning.md § "Dashboard Materialized Views".
-                // Query 1: global totals (sub-millisecond from MV)
-                try (ResultSet rs = stmt.executeQuery(
-                    "SELECT artifact_count, total_size FROM mv_artifact_totals"
-                )) {
-                    if (rs.next()) {
-                        artifactCount = rs.getLong("artifact_count");
-                        totalStorage = rs.getLong("total_size");
-                    }
-                }
-                // Query 2: blocked count (artifact_cooldowns is small, always direct)
-                try (ResultSet rs = stmt.executeQuery(
-                    "SELECT COUNT(*) AS cnt FROM artifact_cooldowns WHERE status = 'ACTIVE'"
-                )) {
-                    if (rs.next()) {
-                        blockedCount = rs.getLong("cnt");
-                    }
-                }
-                // Query 3: repos by type (sub-millisecond from MV)
-                try (ResultSet rs = stmt.executeQuery(
-                    "SELECT repo_type, COUNT(DISTINCT repo_name) AS repo_count "
-                        + "FROM mv_artifact_per_repo GROUP BY repo_type"
-                )) {
-                    while (rs.next()) {
-                        types.put(rs.getString("repo_type"), rs.getInt("repo_count"));
-                    }
-                }
-                // Query 4: top repos by storage (sub-millisecond from MV)
+                // Every per-repo row is cached (not a pre-aggregated global)
+                // so each response can be projected through the caller's
+                // repository scope — SECURITY (2.2.9): the old global top-5
+                // / totals leaked names, types and sizes of repositories the
+                // caller could not read.
                 try (ResultSet rs = stmt.executeQuery(
                     "SELECT repo_name, repo_type, artifact_count AS cnt, total_size "
-                        + "FROM mv_artifact_per_repo "
-                        + "ORDER BY total_size DESC, artifact_count DESC LIMIT 5"
+                        + "FROM mv_artifact_per_repo"
                 )) {
                     while (rs.next()) {
-                        topRepos.add(new JsonObject()
-                            .put("name", rs.getString("repo_name"))
-                            .put("type", rs.getString("repo_type"))
-                            .put("artifact_count", rs.getLong("cnt"))
-                            .put("size", rs.getLong("total_size")));
+                        rows.add(new RepoRow(
+                            rs.getString("repo_name"), rs.getString("repo_type"),
+                            rs.getLong("cnt"), rs.getLong("total_size")
+                        ));
+                    }
+                }
+                try (ResultSet rs = stmt.executeQuery(
+                    "SELECT repo_name, COUNT(*) AS cnt FROM artifact_cooldowns "
+                        + "WHERE status = 'ACTIVE' GROUP BY repo_name"
+                )) {
+                    while (rs.next()) {
+                        blocked.put(rs.getString("repo_name"), rs.getLong("cnt"));
                     }
                 }
             } catch (final Exception ex) { // NOPMD EmptyCatchBlock - dashboard is best-effort: DB unavailable or materialized views missing falls through to zeroed counters
@@ -325,19 +336,116 @@ public final class DashboardHandler {
                 // deployment prerequisite, not a bug).
             }
         }
-        final JsonObject stats = new JsonObject()
+        return new CachedDashboard(
+            List.copyOf(rows), Map.copyOf(blocked), List.copyOf(this.crs.listAll()),
+            System.currentTimeMillis()
+        );
+    }
+
+    /**
+     * Repositories the caller may read: {@code null} = unrestricted
+     * (FreePermissions or a genuine wildcard read), else the readable subset
+     * of the configured repositories (possibly empty).
+     * @param caller Authenticated principal
+     * @return Readable repository names, or {@code null} for unrestricted
+     */
+    private Set<String> readableRepositories(final AuthUser caller) {
+        final PermissionCollection perms = this.policy.getPermissions(caller);
+        if (perms instanceof FreePermissions
+            || perms.implies(new AdapterBasicPermission("*", "read"))) {
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - null is the "no restriction" scope; an empty set is a genuine deny-all
+        }
+        final Set<String> readable = new HashSet<>();
+        for (final String name : this.crs.listAll()) {
+            if (perms.implies(new AdapterBasicPermission(name, "read"))) {
+                readable.add(name);
+            }
+        }
+        return readable;
+    }
+
+    /**
+     * Project the snapshot's stats through a scope.
+     * @param snapshot Cached rows
+     * @param scope Readable repositories ({@code null} = all)
+     * @return Scoped stats payload
+     */
+    private static JsonObject stats(final CachedDashboard snapshot, final Set<String> scope) {
+        long artifacts = 0;
+        long storage = 0;
+        long blockedCount = 0;
+        final List<RepoRow> visible = new ArrayList<>();
+        for (final RepoRow row : snapshot.rows()) {
+            if (scope == null || scope.contains(row.name())) {
+                visible.add(row);
+                artifacts += row.count();
+                storage += row.size();
+            }
+        }
+        for (final Map.Entry<String, Long> entry : snapshot.blocked().entrySet()) {
+            if (scope == null || scope.contains(entry.getKey())) {
+                blockedCount += entry.getValue();
+            }
+        }
+        visible.sort(Comparator.comparingLong(RepoRow::size).reversed()
+            .thenComparing(Comparator.comparingLong(RepoRow::count).reversed()));
+        final JsonArray top = new JsonArray();
+        for (final RepoRow row : visible.subList(0, Math.min(TOP_REPOS, visible.size()))) {
+            top.add(new JsonObject()
+                .put("name", row.name())
+                .put("type", row.type())
+                .put("artifact_count", row.count())
+                .put("size", row.size()));
+        }
+        long repoCount = 0;
+        for (final String name : snapshot.configured()) {
+            if (scope == null || scope.contains(name)) {
+                repoCount += 1;
+            }
+        }
+        return new JsonObject()
             .put("repo_count", repoCount)
-            .put("artifact_count", artifactCount)
-            .put("total_storage", totalStorage)
+            .put("artifact_count", artifacts)
+            .put("total_storage", storage)
             .put("blocked_count", blockedCount)
-            .put("top_repos", topRepos);
-        final JsonObject reposByType = new JsonObject().put("types", types);
-        return new CachedDashboard(stats, reposByType, System.currentTimeMillis());
+            .put("top_repos", top);
+    }
+
+    /**
+     * Project the repos-by-type payload through a scope.
+     * @param snapshot Cached rows
+     * @param scope Readable repositories ({@code null} = all)
+     * @return Scoped repos-by-type payload
+     */
+    private static JsonObject reposByType(final CachedDashboard snapshot, final Set<String> scope) {
+        final Map<String, Set<String>> byType = new HashMap<>();
+        for (final RepoRow row : snapshot.rows()) {
+            if (scope == null || scope.contains(row.name())) {
+                byType.computeIfAbsent(row.type(), k -> new HashSet<>()).add(row.name());
+            }
+        }
+        final JsonObject types = new JsonObject();
+        for (final Map.Entry<String, Set<String>> entry : byType.entrySet()) {
+            types.put(entry.getKey(), entry.getValue().size());
+        }
+        return new JsonObject().put("types", types);
     }
 
     /**
      * Immutable snapshot of dashboard data.
      */
-    private record CachedDashboard(JsonObject stats, JsonObject reposByType, long timestamp) {
+    private record CachedDashboard(
+        List<RepoRow> rows, Map<String, Long> blocked, List<String> configured, long timestamp
+    ) {
+    }
+
+    /**
+     * One repository's materialised-view row.
+     * @param name Repository name
+     * @param type Repository type
+     * @param count Artifact count
+     * @param size Total size in bytes
+     */
+    private record RepoRow(String name, String type, long count, long size) {
     }
 }

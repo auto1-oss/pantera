@@ -492,6 +492,50 @@ class SliceIndexTest {
     }
 
     @Test
+    void versionedHtmlRequestIsAnsweredWithTheVersionedHtmlType() {
+        // R35: PEP 691 -- a client asking for the versioned HTML
+        // serialization (v1 or the latest alias) gets the versioned type,
+        // not the legacy text/html.
+        this.storage.save(
+            new Key.From("hello", "0.2.0", "hello-0.2.0-py3-none-any.whl"),
+            new Content.From("content".getBytes())
+        ).join();
+        for (final String accept : new String[] {
+            "application/vnd.pypi.simple.latest+html",
+            "application/vnd.pypi.simple.v1+html",
+        }) {
+            final Response resp = new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/hello/"),
+                Headers.from("Accept", accept),
+                Content.EMPTY
+            ).join();
+            org.hamcrest.MatcherAssert.assertThat(
+                accept,
+                resp.headers().values("Content-Type"),
+                new org.hamcrest.core.IsEqual<>(
+                    java.util.List.of("application/vnd.pypi.simple.v1+html; charset=utf-8")
+                )
+            );
+        }
+    }
+
+    @Test
+    void plainHtmlRequestKeepsTextHtml() {
+        this.storage.save(
+            new Key.From("hello", "0.2.0", "hello-0.2.0-py3-none-any.whl"),
+            new Content.From("content".getBytes())
+        ).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/hello/"),
+                Headers.from("Accept", "text/html"),
+                Content.EMPTY
+            ).join().headers().values("Content-Type"),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("text/html; charset=utf-8"))
+        );
+    }
+
+    @Test
     void jsonRequestWithoutCacheGeneratesDynamically() {
         // No persisted HTML, only raw files. The JSON generator path
         // must still produce valid JSON for the hosted package.
@@ -594,4 +638,55 @@ class SliceIndexTest {
             ).getBytes();
     }
 
+
+    @Test
+    void dynamicJsonCarriesPep700VersionsAndSize() {
+        this.storage.save(
+            new Key.From("hello", "0.2.0", "hello-0.2.0.tar.gz"),
+            new Content.From("sdist".getBytes())
+        ).join();
+        final Response resp = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/simple/hello/"),
+            Headers.from("Accept", "application/vnd.pypi.simple.v1+json"),
+            Content.EMPTY
+        ).join();
+        final javax.json.JsonObject parsed = javax.json.Json.createReader(
+            new java.io.StringReader(readBody(resp))
+        ).readObject();
+        org.junit.jupiter.api.Assertions.assertEquals(
+            "[\"0.2.0\"]", parsed.getJsonArray("versions").toString(),
+            "versions must be present (PEP 700)"
+        );
+        org.junit.jupiter.api.Assertions.assertEquals(
+            5L,
+            parsed.getJsonArray("files").getJsonObject(0).getJsonNumber("size").longValue(),
+            "size must be present (PEP 700)"
+        );
+    }
+
+    @Test
+    void indexResponsesVaryOnAccept() {
+        // The same URL serves HTML or PEP 691 JSON depending on Accept, so a
+        // shared cache must key on it (B93).
+        this.storage.save(
+            new Key.From("hello", "0.2.0", "hello-0.2.0.tar.gz"),
+            new Content.From("sdist".getBytes())
+        ).join();
+        final Response generated = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/simple/hello/"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        readBody(generated);
+        final Response cached = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/simple/hello/"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        readBody(cached);
+        org.junit.jupiter.api.Assertions.assertEquals(
+            java.util.List.of("Accept"), generated.headers().values("Vary"),
+            "a generated index must carry Vary: Accept"
+        );
+        org.junit.jupiter.api.Assertions.assertEquals(
+            java.util.List.of("Accept"), cached.headers().values("Vary"),
+            "a persisted index must carry Vary: Accept"
+        );
+    }
 }

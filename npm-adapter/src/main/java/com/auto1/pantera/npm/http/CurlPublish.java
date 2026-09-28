@@ -70,7 +70,14 @@ final class CurlPublish implements Publish {
                 final String vers = pkg.getString(CurlPublish.VERSION);
                 final byte[] bytes = uploaded.bytes();
                 return this.saveAndUpdate(uploaded, name, vers, bytes)
-                    .thenApply(nothing -> new PackageInfo(name, vers, bytes.length));
+                    .thenApply(
+                        nothing -> new PackageInfo(
+                            name, vers, bytes.length,
+                            new Key.From(
+                                name, "-", String.format("%s-%s.tgz", name, vers)
+                            ).string()
+                        )
+                    );
             }
         );
     }

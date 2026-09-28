@@ -60,7 +60,9 @@ public final class DeclinedEndpointSlice implements Slice {
     public CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
     ) {
-        return body.asBytesFuture().thenApply(
+        // Drain, never materialise, the body: some declined routes (web
+        // login) are reachable without credentials.
+        return body.discard().thenApply(
             ignored -> ResponseBuilder.notFound()
                 .header("X-Pantera-Reason", "not_implemented")
                 .jsonBody(

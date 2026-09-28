@@ -13,11 +13,13 @@ package com.auto1.pantera.settings;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.security.perms.EmptyPermissions;
 import com.auto1.pantera.security.policy.CachedDbPolicy;
 import com.auto1.pantera.security.policy.PoliciesLoader;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.security.policy.YamlPolicyConfig;
 import com.auto1.pantera.settings.cache.CachedUsers;
+import java.security.PermissionCollection;
 import java.util.Optional;
 import javax.sql.DataSource;
 
@@ -122,7 +124,10 @@ public interface PanteraSecurity {
         }
 
         /**
-         * Initialize policy. If policy section is absent, {@link Policy#FREE} is used.
+         * Initialize policy. When the policy section is absent (and no database
+         * policy is in use), a deny-by-default policy granting
+         * {@link EmptyPermissions} is returned so that a missing configuration
+         * fails closed rather than open.
          * @param settings Yaml settings
          * @return Policy instance
          */
@@ -130,7 +135,13 @@ public interface PanteraSecurity {
             final YamlMapping mapping = settings.yamlMapping(FromYaml.NODE_POLICY);
             final Policy<?> res;
             if (mapping == null) {
-                res = Policy.FREE;
+                // SECURITY: no policy section and no database policy — fail
+                // CLOSED. FreePermissions (Policy.FREE) implies every
+                // permission; EmptyPermissions denies by default, matching the
+                // sentinel used across CachedDbPolicy / CachedYamlPolicy /
+                // PolicyByUsername for principals with no declared permissions.
+                final Policy<PermissionCollection> deny = user -> EmptyPermissions.INSTANCE;
+                res = deny;
             } else {
                 res = new PoliciesLoader().newObject(
                     mapping.string(FromYaml.NODE_TYPE), new YamlPolicyConfig(mapping)

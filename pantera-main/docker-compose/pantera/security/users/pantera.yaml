@@ -1,3 +1,6 @@
+# DEV FIXTURE for the docker-compose stack's file-backed auth (`type: local`),
+# which the default DB-backed deployment does not use. Plain passwords are
+# for local development only — never copy this file to a real deployment.
 type: plain # plain and sha256 types are supported
 pass: pantera
 email: david@example.com # Optional

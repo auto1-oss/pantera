@@ -19,13 +19,17 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.cache.DigestComputer;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
+import com.auto1.pantera.http.cache.ProxyCacheWriter;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.context.ContextualExecutor;
+import com.auto1.pantera.http.context.RequestContext;
+import com.auto1.pantera.http.fault.Fault;
+import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
+import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -35,19 +39,24 @@ import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
-import org.slf4j.MDC;
 
 import javax.json.Json;
 import javax.json.JsonObject;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.EnumMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ForkJoinPool;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.net.URI;
@@ -56,6 +65,20 @@ import java.time.Instant;
 /**
  * Slice for downloading actual package zip files through proxy.
  * Emits events to database when packages are actually downloaded.
+ *
+ * <p>A cache miss is served <b>stream-through</b>: the upstream body is
+ * teed to the client and to the cache in a single pass by
+ * {@link ProxyCacheWriter#streamThroughAndCommit} (2.2.9 — the archive is
+ * never materialised on heap), verified against the packument's declared
+ * {@code dist.shasum} (SHA-1; WS4-composer.3 / S7 of
+ * {@code 00-security-integrity-decisions.md}) before the cache commit, and
+ * single-flighted per dist key (WS4-composer.4) so concurrent cold requests
+ * for the same archive make exactly one upstream call. Because bytes are
+ * already flowing to the client when the digest comparison runs, a mismatch
+ * cannot turn the in-flight response into a 502; it keeps the cache empty
+ * (the next request re-fetches cleanly), is logged, and is written to the
+ * audit trail as a {@code checksum_mismatch} access failure — Composer
+ * itself re-verifies {@code dist.shasum} on the bytes it receives.</p>
  *
  * <p><b>Trace context contract.</b> Trace context (trace.id / span.id /
  * span.parent.id) is inherited from the {@code EcsLoggingSlice} MDC scope
@@ -79,6 +102,14 @@ public final class ProxyDownloadSlice implements Slice {
     private static final Pattern DOWNLOAD_PATTERN = Pattern.compile(
         "^/dist/(?<vendor>[^/]+)/(?<package>[^/]+)/(?<version>.+?)(?:\\.zip)?$"
     );
+
+    /**
+     * No sidecar algorithm is deferred: the only claim handed to the cache
+     * writer is the packument's {@code dist.shasum} (SHA-1), and it must be
+     * compared before the streamed archive is committed so that a mismatch
+     * keeps the cache empty.
+     */
+    private static final Set<ChecksumAlgo> NO_DEFERRED_ALGOS = Set.of();
 
     /**
      * Remote slice to fetch from (for same-host requests).
@@ -105,12 +136,12 @@ public final class ProxyDownloadSlice implements Slice {
      * Repository name.
      */
     private final String rname;
-    
+
     /**
      * Repository type.
      */
     private final String rtype;
-    
+
     /**
      * Storage to read cached metadata.
      */
@@ -127,12 +158,12 @@ public final class ProxyDownloadSlice implements Slice {
     private final CooldownInspector inspector;
 
     /**
-     * Per-key single-flight gate for the primary dist-archive fetch
-     * (WS4-composer.3/.4). Concurrent callers for the same uncached
-     * archive collapse to a single upstream call; followers wait on the
-     * gate then re-enter {@link #fetchWithSingleFlight} which now hits
-     * the warm cache the leader wrote (or retries cleanly if the leader's
-     * fetch failed integrity verification).
+     * Per-key single-flight gate for the dist-archive fetch
+     * (WS4-composer.4). Concurrent callers for the same uncached archive
+     * collapse to a single upstream call; followers wait on the leader's
+     * gate — released once the leader's cache write is durable (or has
+     * failed) — then re-enter {@link #fetchWithSingleFlight}, which now
+     * serves the warm cache the leader wrote or retries cleanly.
      */
     private final SingleFlight<Key, Void> singleFlight;
 
@@ -241,24 +272,34 @@ public final class ProxyDownloadSlice implements Slice {
 
             // Evaluate cooldown before proceeding
             final String owner = new Login(headers).getValue();
+            // Keyed like the metadata handlers (ComposerMetadataRequestDetector):
+            // Composer names are case-insensitive, one block row per package.
             final CooldownRequest cdreq = new CooldownRequest(
                 this.rtype,
                 this.rname,
-                packageName,
+                packageName.toLowerCase(Locale.ROOT),
                 version,
                 owner,
                 Instant.now()
             );
 
             // Cache-first: check local storage before network calls
-            // New format uses .zip extension; also check legacy key without it
-            final Key distKey = new Key.From(
-                "dist", vendor, pkg, version + ".zip"
-            );
+            // New format uses .zip extension; also check legacy key without it.
+            // A dev-branch dist requested for a specific commit (?ref=) is
+            // cached per reference and never answered from the version-only
+            // keys, which hold whatever commit the branch pointed at before.
+            final DevDistReference refs = new DevDistReference();
+            final Optional<String> ref = refs.requested(version, line.uri().getRawQuery());
+            final Key distKey = ref
+                .map(r -> refs.key(vendor, pkg, version, r))
+                .orElseGet(() -> new Key.From("dist", vendor, pkg, version + ".zip"));
             final Key legacyKey = new Key.From("dist", vendor, pkg, version);
             return this.storage.exists(distKey).thenCompose(cached -> {
                 if (cached) {
                     return CompletableFuture.completedFuture(distKey);
+                }
+                if (ref.isPresent()) {
+                    return CompletableFuture.completedFuture((Key) null);
                 }
                 // Fall back to legacy key (no .zip)
                 return this.storage.exists(legacyKey).thenApply(
@@ -295,7 +336,7 @@ public final class ProxyDownloadSlice implements Slice {
                         );
                     }
                     return this.fetchAndCache(
-                        line, headers, ctx, packageName, version, distKey
+                        line, headers, ctx, packageName, version, distKey, ref
                     );
                 });
             });
@@ -324,9 +365,9 @@ public final class ProxyDownloadSlice implements Slice {
     }
 
     /**
-     * Resolve the dist location from cached metadata, then fetch/verify/
-     * cache it (single-flighted per {@code distKey} — WS4-composer.4) and
-     * serve the result.
+     * Resolve the dist location (upstream URL + declared {@code dist.shasum})
+     * from the cached metadata, then fetch, verify and cache the archive
+     * (single-flighted per {@code distKey} — WS4-composer.4) and serve it.
      */
     private CompletableFuture<Response> fetchAndCache(
         final RequestLine line,
@@ -334,11 +375,12 @@ public final class ProxyDownloadSlice implements Slice {
         final AuditContext ctx,
         final String packageName,
         final String version,
-        final Key distKey
+        final Key distKey,
+        final Optional<String> ref
     ) {
         final String owner = new Login(headers).getValue();
-        return this.resolveDist(packageName, version).thenCompose(distOpt -> {
-            if (distOpt.isEmpty()) {
+        return this.resolveDist(packageName, version, ref).thenCompose(dist -> {
+            if (dist.isEmpty()) {
                 EcsLogger.error("com.auto1.pantera.composer")
                     .message("Could not find original URL for package")
                     .eventCategory("web")
@@ -357,7 +399,7 @@ public final class ProxyDownloadSlice implements Slice {
                 );
             }
             return this.fetchWithSingleFlight(
-                line, headers, ctx, packageName, version, distKey, distOpt.get()
+                line, headers, ctx, packageName, version, distKey, dist.get()
             );
         });
     }
@@ -365,11 +407,11 @@ public final class ProxyDownloadSlice implements Slice {
     /**
      * Single-flight gate around the leader fetch (WS4-composer.4): the
      * first caller for an uncached {@code distKey} becomes the leader and
-     * performs {@link #leaderFetchVerifyAndCache}; concurrent followers
-     * wait for the leader's gate then re-enter this method, which now
-     * either serves the warm cache the leader wrote or — if the leader's
-     * fetch failed integrity verification or upstream was unavailable —
-     * retries as a fresh leader.
+     * performs {@link #leaderFetch}; concurrent followers wait for the
+     * leader's gate then re-enter this method, which now either serves the
+     * warm cache the leader wrote or — if the leader's fetch failed
+     * integrity verification or upstream was unavailable — retries as a
+     * fresh leader.
      */
     private CompletableFuture<Response> fetchWithSingleFlight(
         final RequestLine line,
@@ -394,7 +436,7 @@ public final class ProxyDownloadSlice implements Slice {
                 }
             );
             if (isLeader[0]) {
-                return this.leaderFetchVerifyAndCache(
+                return this.leaderFetch(
                     line, headers, ctx, packageName, version, distKey, dist, leaderGate
                 );
             }
@@ -442,20 +484,14 @@ public final class ProxyDownloadSlice implements Slice {
     }
 
     /**
-     * Leader-only upstream fetch: buffer the archive, verify it against
-     * the packument's declared {@code dist.shasum} (WS4-composer.3 / S7 of
-     * {@code 00-security-integrity-decisions.md}), and — only on a clean
-     * verification (or when Composer declared no claim to verify against)
-     * — persist it to the cache. A mismatch rejects the whole write: the
-     * cache stays empty and the client receives a 502 with
-     * {@code X-Pantera-Fault}, so a corrupted upstream archive can never
-     * poison the cache and the next request re-fetches cleanly. Unlike the
-     * Maven WI-07 stream-through trade-off, bytes are buffered (not teed to
-     * the client) precisely so verification can fail closed before any
-     * byte reaches the caller — dist archives are small package artifacts,
-     * not multi-gigabyte primaries, so the heap cost is bounded.
+     * Leader-only upstream fetch: dial the dist's real host (the configured
+     * upstream, or — for a cross-host dist — a per-host client, subject to
+     * the egress policy), relay a non-2xx upstream answer unchanged, and
+     * hand a 2xx body to {@link #streamThrough}. Every exit releases the
+     * single-flight gate so parked followers never wait on a fetch that is
+     * not going to populate the cache.
      */
-    private CompletableFuture<Response> leaderFetchVerifyAndCache(
+    private CompletableFuture<Response> leaderFetch(
         final RequestLine line,
         final Headers headers,
         final AuditContext ctx,
@@ -467,9 +503,36 @@ public final class ProxyDownloadSlice implements Slice {
     ) {
         final String owner = new Login(headers).getValue();
         final URI ouri = URI.create(dist.url());
-        final Slice target = sameHost(this.remoteBase, ouri)
-            ? this.remote
-            : new UriClientSlice(this.clients, baseOf(ouri));
+        final Slice target;
+        if (sameHost(this.remoteBase, ouri)) {
+            target = this.remote;
+        } else {
+            // SECURITY (2.2.9): dist.url is publisher-influenced metadata.
+            // A cross-host dist is only dialed when the egress policy
+            // allows the destination (the Jetty resolver re-checks after
+            // DNS); a denied destination is an upstream failure.
+            final Optional<String> denied = ProxyDownloadSlice.egressDenial(ouri);
+            if (denied.isPresent()) {
+                leaderGate.complete(null);
+                EcsLogger.warn("com.auto1.pantera.composer")
+                    .message("dist.url refused by egress policy: " + denied.get())
+                    .eventCategory("network")
+                    .eventAction("egress_denied")
+                    .eventOutcome("failure")
+                    .field("url.full", dist.url())
+                    .field("destination.address", ouri.getHost())
+                    .field("event.reason", denied.get())
+                    .field("repository.name", this.rname)
+                    .field("log.source", "application")
+                    .log();
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.badGateway()
+                        .textBody("dist destination not allowed")
+                        .build()
+                );
+            }
+            target = new UriClientSlice(this.clients, baseOf(ouri));
+        }
         final String pathWithQuery = buildPathWithQuery(ouri);
         final RequestLine newLine = RequestLine.from(
             line.method().value() + " " + pathWithQuery + " " + line.version()
@@ -484,32 +547,28 @@ public final class ProxyDownloadSlice implements Slice {
             .log();
         return target.response(newLine, out, Content.EMPTY).thenCompose(response -> {
             if (!response.status().success()) {
-                return response.body().asBytesFuture().thenApply(ignored -> {
-                    leaderGate.complete(null);
-                    EcsLogger.warn("com.auto1.pantera.composer")
-                        .message("Upstream download failed")
-                        .eventCategory("web")
-                        .eventAction("proxy_download")
-                        .eventOutcome("failure")
-                        .field("package.name", packageName)
-                        .field("package.version", version)
-                        .field("http.response.status_code", response.status().code())
-                        .field("log.source", "http")
-                        .log();
-                    AuditLogger.access(
-                        ctx, this.rtype, this.rname, packageName, version, 0L, owner,
-                        AuditLogger.OUTCOME_FAILURE,
-                        response.status().code() == 404
-                            ? AuditLogger.REASON_NOT_FOUND
-                            : AuditLogger.REASON_UPSTREAM_UNAVAILABLE
-                    );
-                    return response;
-                });
+                leaderGate.complete(null);
+                EcsLogger.warn("com.auto1.pantera.composer")
+                    .message("Upstream download failed")
+                    .eventCategory("web")
+                    .eventAction("proxy_download")
+                    .eventOutcome("failure")
+                    .field("package.name", packageName)
+                    .field("package.version", version)
+                    .field("http.response.status_code", response.status().code())
+                    .field("log.source", "http")
+                    .log();
+                AuditLogger.access(
+                    ctx, this.rtype, this.rname, packageName, version, 0L, owner,
+                    AuditLogger.OUTCOME_FAILURE,
+                    response.status().code() == 404
+                        ? AuditLogger.REASON_NOT_FOUND
+                        : AuditLogger.REASON_UPSTREAM_UNAVAILABLE
+                );
+                return CompletableFuture.completedFuture(response);
             }
-            return response.body().asBytesFuture().thenCompose(
-                bytes -> this.verifyAndPersist(
-                    ctx, packageName, version, distKey, dist, owner, headers, bytes, leaderGate
-                )
+            return this.streamThrough(
+                headers, ctx, packageName, version, distKey, dist, response, leaderGate
             );
         }).exceptionally(err -> {
             leaderGate.complete(null);
@@ -520,6 +579,7 @@ public final class ProxyDownloadSlice implements Slice {
                 .eventOutcome("failure")
                 .field("package.name", packageName)
                 .field("package.version", version)
+                .field("repository.name", this.rname)
                 .error(err)
                 .field("log.source", "application")
                 .log();
@@ -527,102 +587,221 @@ public final class ProxyDownloadSlice implements Slice {
                 ctx, this.rtype, this.rname, packageName, version, 0L, owner,
                 AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_UPSTREAM_UNAVAILABLE
             );
-            return ResponseBuilder.badGateway()
-                .textBody("Upstream temporarily unavailable")
-                .build();
+            return ProxyDownloadSlice.upstreamFailure(err);
         });
     }
 
     /**
-     * Verify the fetched bytes against the declared {@code dist.shasum}
-     * (SHA-1 hex — Composer's real integrity claim; see the class-level
-     * note on {@link DistLocation}). On mismatch the write is rejected:
-     * nothing is cached and the leader gate still releases so followers
-     * can retry cleanly. On match (or no declared claim to verify), the
-     * bytes are persisted and served.
+     * STREAM the dist through to the client and the cache at once. Before
+     * 2.2.9 the whole upstream body was materialised with
+     * {@code asBytesFuture()} — an artifact of any size the upstream chose
+     * to send sat in heap before the first byte reached anyone
+     * (resource-dos F53). {@link ProxyCacheWriter} tees the upstream stream
+     * to the response and to a temp file that commits on completion — only
+     * after the digest it computed over the streamed bytes matched the
+     * packument's {@code dist.shasum} claim (when one is declared).
      */
-    private CompletableFuture<Response> verifyAndPersist(
+    private CompletableFuture<Response> streamThrough(
+        final Headers headers,
         final AuditContext ctx,
         final String packageName,
         final String version,
         final Key distKey,
         final DistLocation dist,
-        final String owner,
-        final Headers headers,
-        final byte[] bytes,
+        final Response response,
         final CompletableFuture<Void> leaderGate
     ) {
-        final Optional<String> mismatch = verifyShasum(dist.shasum(), bytes);
-        if (mismatch.isPresent()) {
-            leaderGate.complete(null);
-            EcsLogger.warn("com.auto1.pantera.composer")
-                .message("Composer dist integrity verification failed; not cached")
-                .eventCategory("web")
-                .eventAction("cache_write")
-                .eventOutcome("failure")
-                .field("package.name", packageName)
-                .field("package.version", version)
-                .field("event.reason", AuditLogger.REASON_CHECKSUM_MISMATCH)
-                .log();
-            AuditLogger.access(
-                ctx, this.rtype, this.rname, packageName, version, 0L, owner,
-                AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_CHECKSUM_MISMATCH
-            );
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.badGateway()
-                    .header("X-Pantera-Fault", "upstream-integrity:sha1")
-                    .textBody("Upstream integrity verification failed")
-                    .build()
-            );
-        }
-        EcsLogger.info("com.auto1.pantera.composer")
-            .message("Caching dist artifact to storage")
-            .eventCategory("web")
-            .eventAction("proxy_download")
-            .eventOutcome("success")
-            .field("package.name", packageName)
-            .field("package.version", version)
-            .field("file.size", bytes.length)
-            .field("log.source", "application")
-            .log();
-        return this.storage.save(distKey, new Content.From(bytes)).thenApply(unused -> {
-            leaderGate.complete(null);
-            // Genuine cache miss + successful, integrity-verified upstream
-            // fetch — the only branch that should publish.
-            this.emitEvent(packageName, version, headers);
-            AuditLogger.access(
-                ctx, this.rtype, this.rname, packageName, version,
-                bytes.length, owner, AuditLogger.OUTCOME_SUCCESS, null
+        final String owner = new Login(headers).getValue();
+        final ProxyCacheWriter writer = new ProxyCacheWriter(this.storage, this.rname);
+        final RequestContext rctx = new RequestContext(
+            ctx.traceId(), null, this.rname, dist.url()
+        );
+        return writer.streamThroughAndCommit(
+            distKey, dist.url(), response.body().size(), response.body(),
+            ProxyDownloadSlice.shasumClaim(dist), NO_DEFERRED_ALGOS, rctx
+        ).toCompletableFuture().thenApply(result -> {
+            if (result instanceof Result.Err<?>) {
+                // The writer could not even open its temp file; the upstream
+                // body was never subscribed, so it is released here.
+                leaderGate.complete(null);
+                response.body().discard();
+                AuditLogger.access(
+                    ctx, this.rtype, this.rname, packageName, version, 0L,
+                    owner, AuditLogger.OUTCOME_FAILURE,
+                    AuditLogger.REASON_UPSTREAM_UNAVAILABLE
+                );
+                return ResponseBuilder.badGateway()
+                    .textBody("Upstream temporarily unavailable")
+                    .build();
+            }
+            @SuppressWarnings("unchecked")
+            final ProxyCacheWriter.StreamedArtifact streamed =
+                ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) result).value();
+            this.afterStream(
+                streamed, headers, ctx, packageName, version, distKey, owner, leaderGate
             );
             return ResponseBuilder.ok()
                 .header("Content-Type", "application/zip")
-                .body(new Content.From(bytes))
+                .body(streamed.body())
                 .build();
         });
     }
 
     /**
-     * Verify {@code bytes} against a declared {@code dist.shasum} claim.
-     *
-     * @param declared Declared shasum, if Composer's metadata carried one
-     * @param bytes Fetched archive bytes
-     * @return Empty when there was no claim to verify or the claim
-     *  matched; otherwise the locally-computed digest that disagreed
-     *  (for logging), so the caller can reject the write.
+     * Post-stream bookkeeping, run when the tee terminates (i.e. once the
+     * client has consumed the body): release the single-flight followers,
+     * then publish + audit only if the cache write actually committed — a
+     * genuine cache miss + successful, integrity-verified upstream fetch is
+     * the only branch that should publish. The size is read back from the
+     * committed cache entry: upstreams that stream without Content-Length
+     * (GitHub zipballs) declare no size, and 0 is not a valid audit
+     * package.size. An integrity mismatch is recorded as a failed access:
+     * the bytes reached the client, nothing was cached.
      */
-    private static Optional<String> verifyShasum(
-        final Optional<String> declared, final byte[] bytes
+    private void afterStream(
+        final ProxyCacheWriter.StreamedArtifact streamed,
+        final Headers headers,
+        final AuditContext ctx,
+        final String packageName,
+        final String version,
+        final Key distKey,
+        final String owner,
+        final CompletableFuture<Void> leaderGate
     ) {
-        if (declared.isEmpty()) {
-            return Optional.empty();
+        streamed.verificationOutcome().toCompletableFuture()
+            .thenCompose(outcome -> {
+                if (outcome instanceof Result.Ok<?>) {
+                    return this.committedSize(distKey).thenApply(Optional::of);
+                }
+                if (outcome instanceof Result.Err<?> err
+                    && err.fault() instanceof Fault.UpstreamIntegrity) {
+                    this.rejectedMismatch(ctx, packageName, version, owner);
+                }
+                return CompletableFuture.completedFuture(Optional.<Long>empty());
+            })
+            .whenComplete((committed, err) -> {
+                leaderGate.complete(null);
+                if (err == null && committed.isPresent()) {
+                    this.committed(committed.get(), headers, ctx, packageName, version, owner);
+                }
+            });
+    }
+
+    /**
+     * The streamed archive committed to the cache: log, publish the proxy
+     * artifact event and write the successful access-audit record.
+     */
+    private void committed(
+        final long size,
+        final Headers headers,
+        final AuditContext ctx,
+        final String packageName,
+        final String version,
+        final String owner
+    ) {
+        EcsLogger.info("com.auto1.pantera.composer")
+            .message("Cached streamed dist artifact to storage")
+            .eventCategory("web")
+            .eventAction("proxy_download")
+            .eventOutcome("success")
+            .field("package.name", packageName)
+            .field("package.version", version)
+            .field("file.size", size)
+            .field("log.source", "application")
+            .log();
+        this.emitEvent(packageName, version, headers);
+        AuditLogger.access(
+            ctx, this.rtype, this.rname, packageName, version,
+            size, owner, AuditLogger.OUTCOME_SUCCESS, null
+        );
+    }
+
+    /**
+     * The streamed bytes disagreed with the packument's {@code dist.shasum}
+     * (WS4-composer.3 / S7): the writer dropped its temp file, so nothing
+     * was cached and the next request re-fetches cleanly. Logged as a state
+     * transition and audited as a failed access with
+     * {@code checksum_mismatch}.
+     */
+    private void rejectedMismatch(
+        final AuditContext ctx,
+        final String packageName,
+        final String version,
+        final String owner
+    ) {
+        EcsLogger.warn("com.auto1.pantera.composer")
+            .message(
+                "Composer dist integrity verification against the packument dist.shasum failed;"
+                    + " the streamed bytes reached the client but nothing was cached"
+            )
+            .eventCategory("web")
+            .eventAction("cache_write")
+            .eventOutcome("failure")
+            .field("event.reason", AuditLogger.REASON_CHECKSUM_MISMATCH)
+            .field("repository.name", this.rname)
+            .field("package.name", packageName)
+            .field("package.version", version)
+            .field("log.source", "application")
+            .log();
+        AuditLogger.access(
+            ctx, this.rtype, this.rname, packageName, version, 0L, owner,
+            AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_CHECKSUM_MISMATCH
+        );
+    }
+
+    /**
+     * The packument's {@code dist.shasum}, handed to the cache writer as an
+     * in-memory SHA-1 "sidecar" so the tee compares it against the digest it
+     * computes over the streamed bytes and refuses to commit a mismatch. No
+     * phantom {@code .sha256} HTTP fetch — Composer has no such resource;
+     * the real claim is inline in the packument. Empty when the packument
+     * declares no claim: there is nothing to verify against and the archive
+     * is cached as streamed.
+     *
+     * @param dist Resolved dist location
+     * @return Sidecar suppliers keyed by algorithm (at most SHA-1)
+     */
+    private static Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> shasumClaim(
+        final DistLocation dist
+    ) {
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> claims =
+            new EnumMap<>(ChecksumAlgo.class);
+        dist.shasum().ifPresent(
+            claim -> claims.put(
+                ChecksumAlgo.SHA1,
+                () -> CompletableFuture.completedFuture(
+                    Optional.<InputStream>of(
+                        new ByteArrayInputStream(claim.getBytes(StandardCharsets.US_ASCII))
+                    )
+                )
+            )
+        );
+        return claims;
+    }
+
+    /**
+     * The 502 answered when the upstream call itself failed. Preserves the
+     * outbound circuit breaker's fast-fail marker (and its Retry-After
+     * hint) so a php-group does not convict this member on fabricated
+     * evidence — see {@link UpstreamCircuitOpenException}.
+     *
+     * @param err Failure, possibly wrapped
+     * @return 502 response
+     */
+    private static Response upstreamFailure(final Throwable err) {
+        final ResponseBuilder builder = ResponseBuilder.badGateway();
+        Throwable cur = err;
+        while (cur != null) {
+            if (cur instanceof UpstreamCircuitOpenException open) {
+                builder.header(UpstreamCircuitOpenException.HEADER, "true");
+                if (open.retryAfterSeconds() > 0L) {
+                    builder.header("Retry-After", Long.toString(open.retryAfterSeconds()));
+                }
+                break;
+            }
+            cur = cur.getCause();
         }
-        final String claim = declared.get().trim().toLowerCase(Locale.ROOT);
-        if (claim.isEmpty()) {
-            return Optional.empty();
-        }
-        final String computed = DigestComputer.compute(bytes, Set.of(DigestComputer.SHA1))
-            .get(DigestComputer.SHA1);
-        return claim.equals(computed) ? Optional.empty() : Optional.of(computed);
+        return builder.textBody("Upstream temporarily unavailable").build();
     }
 
     /**
@@ -641,6 +820,27 @@ public final class ProxyDownloadSlice implements Slice {
         }
         out.add("Accept", "application/octet-stream, */*");
         return out;
+    }
+
+    /**
+     * Name-level / literal-IP egress check for a cross-host dist (no DNS —
+     * this runs on the reactive path; the resolver guards resolved names).
+     * Judged by the live admin egress policy (DB-backed, env fallback), the
+     * same one the outbound resolver enforces.
+     * @param uri Dist URI
+     * @return Reason when denied, else empty
+     */
+    private static Optional<String> egressDenial(final URI uri) {
+        final com.auto1.pantera.http.client.egress.EgressPolicy policy =
+            com.auto1.pantera.http.client.egress.EgressSettingsRegistry.policy().get();
+        final String host = uri.getHost();
+        final Optional<String> byName = policy.hostRejection(host);
+        if (byName.isPresent()) {
+            return byName;
+        }
+        // DNS-free: only a strictly valid IP literal is parsed; a hostname
+        // (or a malformed numeric host) is left to the egress resolver.
+        return policy.literalRejection(host);
     }
 
     /**
@@ -703,7 +903,7 @@ public final class ProxyDownloadSlice implements Slice {
     private static boolean safeEq(final String s1, final String s2) {
         return s1 == null ? s2 == null : s1.equalsIgnoreCase(s2);
     }
-    
+
     /**
      * A resolved dist location: the upstream URL to fetch the archive
      * from, plus Composer's declared integrity claim, if any.
@@ -730,15 +930,47 @@ public final class ProxyDownloadSlice implements Slice {
      *
      * @param packageName Package name (vendor/package)
      * @param version Version
+     * @param ref Requested dist reference (dev versions), if any
      * @return Resolved dist location, or empty if metadata/version/dist
      *  could not be found
      */
     private CompletableFuture<Optional<DistLocation>> resolveDist(
         final String packageName,
-        final String version
+        final String version,
+        final Optional<String> ref
     ) {
-        // Metadata is cached by CachedProxySlice with .json extension
-        final Key metadataKey = new Key.From(packageName + ".json");
+        // Metadata is cached by CachedProxySlice with .json extension. Stable
+        // and dev-branch versions live in separate files (Composer v2 serves
+        // dev branches from /p2/<pkg>~dev.json, cached as <pkg>~dev.json), so
+        // a version absent from the stable file is looked up in the dev file.
+        return this.distFrom(new Key.From(packageName + ".json"), packageName, version, ref)
+            .thenCompose(found -> {
+                if (found.isPresent()) {
+                    return CompletableFuture.completedFuture(found);
+                }
+                return this.distFrom(
+                    new Key.From(packageName + "~dev.json"), packageName, version, ref
+                );
+            });
+    }
+
+    /**
+     * Resolve a version's dist location from one cached metadata file.
+     *
+     * @param metadataKey Cached metadata file
+     * @param packageName Package name ({@code vendor/pkg})
+     * @param version Version
+     * @param ref Requested dist reference: the version's current
+     *     {@code dist.reference} must match it, otherwise the URL (which
+     *     builds a different commit) is not returned
+     * @return Dist location, or empty when the file or the version is absent
+     */
+    private CompletableFuture<Optional<DistLocation>> distFrom(
+        final Key metadataKey,
+        final String packageName,
+        final String version,
+        final Optional<String> ref
+    ) {
         return this.storage.exists(metadataKey).thenCompose(exists -> {
             if (!exists) {
                 EcsLogger.warn("com.auto1.pantera.composer")
@@ -753,7 +985,7 @@ public final class ProxyDownloadSlice implements Slice {
             }
             return this.storage.value(metadataKey).thenCompose(content ->
                 content.asBytesFuture().thenApply(
-                    bytes -> this.parseDistLocation(bytes, packageName, version)
+                    bytes -> this.parseDist(bytes, packageName, version, ref)
                 )
             );
         });
@@ -763,26 +995,22 @@ public final class ProxyDownloadSlice implements Slice {
      * Parse the {@code dist} object for {@code packageName}@{@code version}
      * out of a cached packument and extract its URL + declared shasum.
      */
-    private Optional<DistLocation> parseDistLocation(
-        final byte[] bytes, final String packageName, final String version
+    private Optional<DistLocation> parseDist(
+        final byte[] bytes,
+        final String packageName,
+        final String version,
+        final Optional<String> ref
     ) {
         try {
             final String json = new String(bytes, StandardCharsets.UTF_8);
             final JsonObject metadata = Json.createReader(new StringReader(json)).readObject();
-            final Optional<JsonObject> distOpt = findDistObject(metadata, packageName, version);
-            if (distOpt.isEmpty()) {
+            final Optional<JsonObject> dist = ProxyDownloadSlice.distObject(metadata, packageName, version);
+            if (dist.isEmpty()) {
                 return Optional.empty();
             }
-            final JsonObject dist = distOpt.get();
-            // Cached file now has rewritten format with "original_url" field
-            // containing the actual remote URL (GitHub/packagist); fall back
-            // to "url" for backward compatibility with older cache entries.
-            final String originalUrl = dist.containsKey("original_url")
-                ? dist.getString("original_url", null)
-                : dist.getString("url", null);
-            if (originalUrl == null || originalUrl.isEmpty()) {
+            if (ref.isPresent() && !ref.get().equals(referenceOf(dist.get()))) {
                 EcsLogger.warn("com.auto1.pantera.composer")
-                    .message("No dist URL found for package")
+                    .message("Requested dev dist reference is not the current one in metadata")
                     .eventCategory("web")
                     .eventAction("proxy_download")
                     .eventOutcome("failure")
@@ -792,19 +1020,7 @@ public final class ProxyDownloadSlice implements Slice {
                     .log();
                 return Optional.empty();
             }
-            final Optional<String> shasum = Optional.ofNullable(
-                dist.getString("shasum", null)
-            ).filter(s -> !s.isBlank());
-            EcsLogger.info("com.auto1.pantera.composer")
-                .message("Found original URL for package")
-                .eventCategory("web")
-                .eventAction("proxy_download")
-                .field("package.name", packageName)
-                .field("package.version", version)
-                .field("url.original", originalUrl)
-                .field("log.source", "application")
-                .log();
-            return Optional.of(new DistLocation(originalUrl, shasum));
+            return this.distLocation(dist.get(), packageName, version);
         } catch (final Exception ex) {
             EcsLogger.error("com.auto1.pantera.composer")
                 .message("Failed to parse metadata")
@@ -824,7 +1040,7 @@ public final class ProxyDownloadSlice implements Slice {
      * inside a packument, handling both v2 minified (array) and v1 (object)
      * version layouts.
      */
-    private static Optional<JsonObject> findDistObject(
+    private static Optional<JsonObject> distObject(
         final JsonObject metadata, final String packageName, final String version
     ) {
         final JsonObject packages = metadata.getJsonObject("packages");
@@ -855,6 +1071,99 @@ public final class ProxyDownloadSlice implements Slice {
         return versionData == null
             ? Optional.empty()
             : Optional.ofNullable(versionData.getJsonObject("dist"));
+    }
+
+    /**
+     * Read the upstream URL and the declared {@code dist.shasum} claim out
+     * of a version's {@code dist} object.
+     *
+     * @param dist Dist object of the requested version
+     * @param packageName Package name (for logging)
+     * @param version Version (for logging)
+     * @return Dist location, or empty when the dist declares no URL
+     */
+    private Optional<DistLocation> distLocation(
+        final JsonObject dist, final String packageName, final String version
+    ) {
+        // Get original URL from cached metadata
+        // Cached file now has rewritten format with "original_url" field
+        // containing the actual remote URL (GitHub/packagist)
+        String originalUrl = null;
+        if (dist.containsKey("original_url")) {
+            originalUrl = dist.getString("original_url");
+            EcsLogger.info("com.auto1.pantera.composer")
+                .message("Using original_url from metadata")
+                .eventCategory("web")
+                .eventAction("proxy_download")
+                .field("package.name", packageName)
+                .field("package.version", version)
+                .field("url.original", originalUrl)
+                .field("log.source", "application")
+                .log();
+        } else if (dist.containsKey("url")) {
+            // Fallback to "url" for backward compatibility
+            originalUrl = dist.getString("url");
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("No original_url found in dist, using url field")
+                .eventCategory("web")
+                .eventAction("proxy_download")
+                .field("package.name", packageName)
+                .field("package.version", version)
+                .field("url.original", originalUrl)
+                .field("log.source", "application")
+                .log();
+        }
+        if (originalUrl == null || originalUrl.isEmpty()) {
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("No dist URL found for package")
+                .eventCategory("web")
+                .eventAction("proxy_download")
+                .eventOutcome("failure")
+                .field("package.name", packageName)
+                .field("package.version", version)
+                .field("log.source", "application")
+                .log();
+            return Optional.empty();
+        }
+        final Optional<String> shasum = Optional.ofNullable(dist.getString("shasum", null))
+            .map(String::trim)
+            .filter(claim -> !claim.isEmpty());
+        EcsLogger.info("com.auto1.pantera.composer")
+            .message("Found original URL for package")
+            .eventCategory("web")
+            .eventAction("proxy_download")
+            .field("package.name", packageName)
+            .field("package.version", version)
+            .field("url.original", originalUrl)
+            .field("log.source", "application")
+            .log();
+        return Optional.of(new DistLocation(originalUrl, shasum));
+    }
+
+    /**
+     * Size of a committed cache entry; 0 when the storage cannot report it.
+     *
+     * @param key Cache key
+     * @return Size in bytes
+     */
+    private CompletableFuture<Long> committedSize(final Key key) {
+        return this.storage.metadata(key)
+            .<Long>thenApply(
+                meta -> meta.read(com.auto1.pantera.asto.Meta.OP_SIZE)
+                    .map(Long::longValue).orElse(0L)
+            )
+            .exceptionally(err -> 0L);
+    }
+
+    /**
+     * The {@code dist.reference} string of a dist, or null.
+     *
+     * @param dist Dist object
+     * @return Reference or null
+     */
+    private static String referenceOf(final JsonObject dist) {
+        final javax.json.JsonValue value = dist.get("reference");
+        return value instanceof javax.json.JsonString str ? str.getString() : null;
     }
 
     private static boolean versionEquals(final String a, final String b) {
@@ -915,16 +1224,17 @@ public final class ProxyDownloadSlice implements Slice {
     }
 
     /**
-     * Build an {@link AuditContext} for the current request. Reads the
-     * internal {@code X-Pantera-Ctx-*} headers into MDC first (a no-op if
-     * already populated by {@code EcsLoggingSlice} on the request thread;
-     * a real restore on a worker thread that never had it).
+     * Build an {@link AuditContext} for the current request from its internal
+     * {@code X-Pantera-Ctx-*} headers, which are authoritative on any thread
+     * (the thread's MDC is never read: a pooled thread can hold another
+     * request's values). The headers are also bound to this thread's MDC for
+     * the application logs that follow.
      *
      * @param headers Inbound request headers
-     * @return Context carrying whatever trace id / client IP could be resolved
+     * @return Context carrying the request's trace id / client IP
      */
     private AuditContext captureAuditContext(final Headers headers) {
         RequestContextHeaders.bindToMdc(headers);
-        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
+        return new AuditContext(headers);
     }
 }

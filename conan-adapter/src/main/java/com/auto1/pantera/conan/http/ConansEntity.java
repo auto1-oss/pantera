@@ -18,14 +18,11 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqParams;
 import com.google.common.base.Strings;
 import io.vavr.Tuple2;
-import org.apache.hc.core5.http.HttpHost;
-import org.apache.hc.core5.net.URIBuilder;
 
 import javax.json.Json;
 import javax.json.JsonArrayBuilder;
 import javax.json.JsonObjectBuilder;
 import java.io.IOException;
-import java.net.URISyntaxException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
@@ -44,11 +41,6 @@ import java.util.stream.Collectors;
  * Pantera-conan storage structure for now corresponds to standard conan_server.
  */
 public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatableClass - namespace container for nested REST endpoint slices; intentionally non-instantiable
-
-    /**
-     * Protocol type for download URIs.
-     */
-    private static final String PROTOCOL = "http";
 
     /**
      * Subdir for package recipe (sources).
@@ -123,7 +115,7 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
 
         @Override
         public CompletableFuture<RequestResult> getResult(final RequestLine request,
-            final String hostname, final Matcher matcher) {
+            final RepoFileUrl urls, final Matcher matcher) {
             final String pkghash = matcher.group(ConansEntity.URI_HASH);
             final String uripath = matcher.group(ConansEntity.URI_PATH);
             return BaseConanSlice.generateJson(
@@ -137,15 +129,7 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
                 }, tuple -> {
                     Optional<String> result = Optional.empty();
                     if (tuple._2()) {
-                        final URIBuilder builder = new URIBuilder();
-                        builder.setScheme(ConansEntity.PROTOCOL);
-                        try {
-                            builder.setHttpHost(HttpHost.create(hostname));
-                            builder.setPath(tuple._1());
-                            result = Optional.of(builder.toString());
-                        } catch (URISyntaxException ex) {
-                            throw new PanteraIOException(ex);
-                        }
+                        result = Optional.of(urls.of(tuple._1()));
                     }
                     return result;
                 }, builder -> builder.build().toString()
@@ -169,7 +153,7 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
 
         @Override
         public CompletableFuture<RequestResult> getResult(final RequestLine request,
-            final String hostname, final Matcher matcher) {
+            final RepoFileUrl urls, final Matcher matcher) {
             final String uripath = matcher.group(ConansEntity.URI_PATH);
             return BaseConanSlice.generateJson(
                 ConansEntity.PKG_SRC_LIST, file -> {
@@ -181,15 +165,7 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
                 }, tuple -> {
                     Optional<String> result = Optional.empty();
                     if (tuple._2()) {
-                        final URIBuilder builder = new URIBuilder();
-                        builder.setScheme(ConansEntity.PROTOCOL);
-                        try {
-                            builder.setHttpHost(HttpHost.create(hostname));
-                            builder.setPath(tuple._1());
-                            result = Optional.of(builder.toString());
-                        } catch (URISyntaxException ex) {
-                            throw new PanteraIOException(ex);
-                        }
+                        result = Optional.of(urls.of(tuple._1()));
                     }
                     return result;
                 }, builder -> builder.build().toString()
@@ -213,7 +189,7 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
 
         @Override
         public CompletableFuture<RequestResult> getResult(final RequestLine request,
-            final String hostname, final Matcher matcher) {
+            final RepoFileUrl urls, final Matcher matcher) {
             final String uripath = matcher.group(ConansEntity.URI_PATH);
             final String pkgpath = String.join("", uripath, ConansEntity.PKG_BIN_DIR);
             return this.getStorage().list(new Key.From(pkgpath)).thenCompose(
@@ -323,7 +299,7 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
 
         @Override
         public CompletableFuture<RequestResult> getResult(final RequestLine request,
-            final String hostname, final Matcher matcher) {
+            final RepoFileUrl urls, final Matcher matcher) {
             final String uripath = matcher.group(ConansEntity.URI_PATH);
             final String hash = matcher.group(ConansEntity.URI_HASH);
             return BaseConanSlice.generateJson(
@@ -356,7 +332,7 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
 
         @Override
         public CompletableFuture<RequestResult> getResult(final RequestLine request,
-            final String hostname, final Matcher matcher) {
+            final RepoFileUrl urls, final Matcher matcher) {
             final String question = new RqParams(request.uri()).value("q").orElse("");
             return this.getStorage().list(Key.ROOT).thenApply(
                 keys -> {
@@ -402,17 +378,17 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
 
         @Override
         public CompletableFuture<RequestResult> getResult(final RequestLine request,
-            final String hostname, final Matcher matcher) {
-            return this.checkPkg(matcher, hostname).thenApply(RequestResult::new);
+            final RepoFileUrl urls, final Matcher matcher) {
+            return this.checkPkg(matcher, urls).thenApply(RequestResult::new);
         }
 
         /**
          * Check package manifest existance and providing manifest download URL.
          * @param matcher Request parameters matcher.
-         * @param hostname Host name or IP for generation URL.
+         * @param urls Client-facing URLs of repository files.
          * @return Json string with conan manifest URL.
          */
-        private CompletableFuture<String> checkPkg(final Matcher matcher, final String hostname) {
+        private CompletableFuture<String> checkPkg(final Matcher matcher, final RepoFileUrl urls) {
             final String uripath = matcher.group(ConansEntity.URI_PATH);
             final Key key = new Key.From(
                 String.join(
@@ -423,18 +399,10 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
                 exist -> {
                     final String result;
                     if (exist) {
-                        final URIBuilder builder = new URIBuilder();
-                        builder.setScheme(ConansEntity.PROTOCOL);
-                        try {
-                            builder.setHttpHost(HttpHost.create(hostname));
-                            builder.setPath(key.string());
-                            result = String.format(
-                                "{ \"%1$s\": \"%2$s\"}", ConansEntity.CONAN_MANIFEST,
-                                builder.build()
-                            );
-                        } catch (URISyntaxException ex) {
-                            throw new PanteraIOException(ex);
-                        }
+                        result = String.format(
+                            "{ \"%1$s\": \"%2$s\"}", ConansEntity.CONAN_MANIFEST,
+                            urls.of(key.string())
+                        );
                     } else {
                         result = "";
                     }
@@ -459,17 +427,17 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
 
         @Override
         public CompletableFuture<RequestResult> getResult(final RequestLine request,
-            final String hostname, final Matcher matcher) {
-            return this.checkPkg(matcher, hostname).thenApply(RequestResult::new);
+            final RepoFileUrl urls, final Matcher matcher) {
+            return this.checkPkg(matcher, urls).thenApply(RequestResult::new);
         }
 
         /**
          * Check package manifest existance and providing manifest download URL.
          * @param matcher Request parameters matcher.
-         * @param hostname Host name or IP for generation URL.
+         * @param urls Client-facing URLs of repository files.
          * @return Json string with conan manifest URL.
          */
-        private CompletableFuture<String> checkPkg(final Matcher matcher, final String hostname) {
+        private CompletableFuture<String> checkPkg(final Matcher matcher, final RepoFileUrl urls) {
             final String pkghash = matcher.group(ConansEntity.URI_HASH);
             final String uripath = matcher.group(ConansEntity.URI_PATH);
             final Key key = new Key.From(
@@ -481,18 +449,10 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
                 exist -> {
                     final String result;
                     if (exist) {
-                        final URIBuilder builder = new URIBuilder();
-                        builder.setScheme(ConansEntity.PROTOCOL);
-                        try {
-                            builder.setHttpHost(HttpHost.create(hostname));
-                            builder.setPath(key.string());
-                            result = String.format(
-                                "{\"%1$s\": \"%2$s\"}", ConansEntity.CONAN_MANIFEST,
-                                builder.build()
-                            );
-                        } catch (URISyntaxException ex) {
-                            throw new PanteraIOException(ex);
-                        }
+                        result = String.format(
+                            "{\"%1$s\": \"%2$s\"}", ConansEntity.CONAN_MANIFEST,
+                            urls.of(key.string())
+                        );
                     } else {
                         result = "";
                     }
@@ -517,7 +477,7 @@ public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatabl
 
         @Override
         public CompletableFuture<RequestResult> getResult(
-            final RequestLine request, final String hostname, final Matcher matcher
+            final RequestLine request, final RepoFileUrl urls, final Matcher matcher
         ) {
             return this.getPkgInfoJson(matcher).thenApply(RequestResult::new);
         }

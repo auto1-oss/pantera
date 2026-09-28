@@ -81,6 +81,13 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
      */
     static final String KEY_CANONICAL_BASE_URL = "client_base_url";
 
+    /**
+     * Client-facing scheme key: {@code auto} (derive from the request),
+     * {@code http}, or {@code https}. Env fallback {@code
+     * PANTERA_CLIENT_BASE_SCHEME}.
+     */
+    static final String KEY_CLIENT_BASE_SCHEME = "client_base_scheme";
+
     private static final String ENV_PREFIX = "PANTERA_";
 
     /**
@@ -216,7 +223,8 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
             return new ClientBaseUrlSettings(
                 this.resolveBoolean(KEY_TRUST_FORWARDED, defaults.trustForwardedHeaders()),
                 this.resolveHostAllowlist(defaults.hostAllowlist()),
-                this.resolveCanonicalBaseUrl(defaults.canonicalBaseUrl())
+                this.resolveCanonicalBaseUrl(defaults.canonicalBaseUrl()),
+                this.resolveClientBaseScheme(defaults.clientBaseScheme())
             );
         } catch (final IllegalArgumentException ex) {
             return defaults;
@@ -269,6 +277,25 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
             this.dao == null ? Optional.empty() : this.dao.get(KEY_CANONICAL_BASE_URL);
         final String raw = row.orElseGet(
             () -> this.envLookup.apply(ClientBaseUrlSettingsLoader.envName(KEY_CANONICAL_BASE_URL))
+        );
+        return raw == null || raw.isBlank() ? fallback : raw.trim();
+    }
+
+    /**
+     * Resolve the client-facing scheme: DB row → env var → hardcoded default
+     * ({@code auto}). Validation happens once, in {@link
+     * ClientBaseUrlSettings}'s compact constructor, on every {@link #load()}.
+     *
+     * @param fallback Hardcoded default (always {@code auto})
+     * @return Resolved raw value, before validation
+     */
+    private String resolveClientBaseScheme(final String fallback) {
+        final Optional<String> row =
+            this.dao == null ? Optional.empty() : this.dao.get(KEY_CLIENT_BASE_SCHEME);
+        final String raw = row.orElseGet(
+            () -> this.envLookup.apply(
+                ClientBaseUrlSettingsLoader.envName(KEY_CLIENT_BASE_SCHEME)
+            )
         );
         return raw == null || raw.isBlank() ? fallback : raw.trim();
     }

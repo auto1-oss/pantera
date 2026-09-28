@@ -48,6 +48,43 @@ final class ImportRequestTest {
     }
 
     @Test
+    void rejectsPercentEncodedParentSegments() {
+        final Headers headers = new Headers()
+            .add(ImportHeaders.REPO_TYPE, "maven")
+            .add(ImportHeaders.IDEMPOTENCY_KEY, "key");
+        // The URI layer decodes once (%2e%2e -> ..), so the bypass uses
+        // DOUBLE encoding: %252e%252e -> (uri) %2e%2e -> passes the literal
+        // ".." check -> (normalizePath's second decode) -> ".." -> escape.
+        // The containment check must run AFTER decoding.
+        Assertions.assertThrows(
+            ResponseException.class,
+            () -> ImportRequest.parse(
+                new RequestLine(RqMethod.PUT, "/.import/my-repo/%252e%252e/%252e%252e/etc/passwd"),
+                headers
+            ),
+            "a double-encoded (%252e%252e) parent segment must be rejected"
+        );
+    }
+
+    @Test
+    void rejectsEncodedSeparatorWithinSegment() {
+        final Headers headers = new Headers()
+            .add(ImportHeaders.REPO_TYPE, "maven")
+            .add(ImportHeaders.IDEMPOTENCY_KEY, "key");
+        // Double-encoded %252f survives the URI layer as %2f, then
+        // normalizePath's decode turns it into '/', reintroducing a separator
+        // (and a parent hop) inside what looked like a single safe segment.
+        Assertions.assertThrows(
+            ResponseException.class,
+            () -> ImportRequest.parse(
+                new RequestLine(RqMethod.PUT, "/.import/my-repo/a%252f%252e%252e%252fb"),
+                headers
+            ),
+            "an encoded separator inside a segment must be rejected"
+        );
+    }
+
+    @Test
     void rejectsMissingRepository() {
         final Headers headers = new Headers()
             .add(ImportHeaders.REPO_TYPE, "npm")

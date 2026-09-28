@@ -185,16 +185,23 @@ final class NpmProxyConditionalRefreshTest {
         public CompletableFuture<Response> response(
             final RequestLine line, final Headers headers, final Content body
         ) {
-            this.calls.incrementAndGet();
+            // Record everything BEFORE publishing the call counter: awaitCalls()
+            // polls on calls(), so incrementing first lets the asserting thread
+            // observe calls==2 while lastIfNoneMatch/lastResponseBodyBytes still
+            // hold call #1's values — a race that shows up as a bogus
+            // "conditional request carried no If-None-Match" failure under load.
+            // The counter is the readiness signal, so it must be set last.
             final java.util.List<String> inm = headers.values("If-None-Match");
             final String seen = inm.isEmpty() ? null : inm.get(0);
             this.lastIfNoneMatch.set(seen);
             if (ETAG.equals(seen)) {
                 this.lastResponseBodyBytes.set(0);
+                this.calls.incrementAndGet();
                 return ResponseBuilder.from(RsStatus.NOT_MODIFIED).completedFuture();
             }
             final byte[] content = new TestResource("json/original.json").asBytes();
             this.lastResponseBodyBytes.set(content.length);
+            this.calls.incrementAndGet();
             return ResponseBuilder.ok()
                 .header("Last-Modified", LAST_MODIFIED)
                 .header("ETag", ETAG)

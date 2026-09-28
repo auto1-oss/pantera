@@ -10,6 +10,10 @@
  */
 package com.auto1.pantera.audit;
 
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
+
 /**
  * Correlation context threaded explicitly into every {@link AuditLogger} call.
  *
@@ -41,4 +45,58 @@ public record AuditContext(String traceId, String clientIp) {
      * there genuinely is none.
      */
     public static final AuditContext NONE = new AuditContext(null, null);
+
+    /**
+     * Context of the request carrying these headers: the internal
+     * {@code X-Pantera-Ctx-Trace-Id} / {@code X-Pantera-Ctx-Client-Ip}
+     * headers {@link EcsLoggingSlice} stamps on every inbound request.
+     *
+     * <p>This is the way to build the context at slice entry. The headers
+     * travel with the request, so they are authoritative on any thread; the
+     * thread's MDC is never consulted, because a pooled worker, event-loop
+     * or HTTP-client thread can still hold an earlier, unrelated request's
+     * values. A header that is absent or blank yields {@code null}.
+     *
+     * @param headers Request headers
+     */
+    public AuditContext(final Headers headers) {
+        this(
+            AuditContext.header(headers, EcsLoggingSlice.CTX_TRACE_ID_HEADER),
+            AuditContext.header(headers, EcsLoggingSlice.CTX_CLIENT_IP_HEADER)
+        );
+    }
+
+    /**
+     * This context as the internal {@code X-Pantera-Ctx-*} request headers, for
+     * a slice that re-enters another slice on the same request's behalf: the
+     * callee restores the request's trace id / client IP from these headers on
+     * its worker threads instead of inheriting a pooled thread's stale MDC.
+     *
+     * @return Fresh headers carrying the non-empty fields of this context
+     */
+    public Headers requestHeaders() {
+        final Headers out = new Headers();
+        if (this.traceId != null && !this.traceId.isEmpty()) {
+            out.add(EcsLoggingSlice.CTX_TRACE_ID_HEADER, this.traceId);
+        }
+        if (this.clientIp != null && !this.clientIp.isEmpty()) {
+            out.add(EcsLoggingSlice.CTX_CLIENT_IP_HEADER, this.clientIp);
+        }
+        return out;
+    }
+
+    /**
+     * First non-blank value of a header.
+     *
+     * @param headers Headers
+     * @param name Header name
+     * @return Value, or {@code null} when absent or blank
+     */
+    private static String header(final Headers headers, final String name) {
+        return headers.find(name).stream()
+            .map(Header::getValue)
+            .filter(value -> value != null && !value.isBlank())
+            .findFirst()
+            .orElse(null);
+    }
 }

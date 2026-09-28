@@ -36,11 +36,11 @@ Add Pantera as a Composer repository in your project's `composer.json`:
 
 Set `secure-http` to `false` only if your Pantera instance does not use HTTPS.
 
-### Using a Standalone Proxy Repository
+### Using a Proxy Repository Directly
 
-A `php-proxy` repository also works with no `local` member fronting it — point `composer.json` at it directly (`http://pantera-host:8080/php-proxy`) and `composer install`/`composer update`/`composer require` bootstrap normally from an empty cache.
+You can also point Composer at a `php-proxy` repository (for example `http://pantera-host:8080/php-proxy`) when you only need upstream packages. The proxy answers `packages.json` itself and sends the per-package lookups back to its own `/p2/` endpoint. The root never depends on the upstream, so packages Pantera has already cached keep installing while the upstream is unavailable. Use a group when you also need packages from a local repository.
 
-Every URL Pantera's Composer repository root advertises (`metadata-url`, `search`, `list`, `security-advisories`, etc.) is rewritten to point back at Pantera itself — Composer never resolves directly against the upstream (e.g. Packagist), so cache, cooldown, and authentication stay enforced on every request the client makes.
+Dev-branch dists (`dev-*`, `*-dev`) downloaded through a proxy are tied to the commit named in the metadata. The dist URL ends in `?ref=<commit>`, so after the branch moves, `composer update` downloads the new commit rather than a cached copy of the old one.
 
 ### Configure Authentication
 
@@ -77,25 +77,28 @@ composer require vendor/package
 
 Pantera resolves packages through the group repository, checking your local repository first and then falling through to the proxied upstream (Packagist).
 
-### Dist Integrity
+How a group resolves package metadata:
 
-Every dist archive Pantera caches from a proxy upstream is verified against the packument's declared `dist.shasum` before it is written to the cache. Despite the field's name, Composer's own client verifies this claim as a **SHA-1** digest (not SHA-256) — Pantera matches that behavior exactly, so a corrupted or tampered upstream archive is rejected (the cache stays empty and the next request re-fetches cleanly) instead of being served to Composer with a false claim. Hosted (`php` / `php-local`) publishes also compute and store `dist.shasum` on the archive Pantera actually serves, so a downstream Composer client — including another Pantera instance mirroring this repository as a proxy — can verify it too.
+- Local (hosted) members are always asked before proxy members, whatever the member order in the group.
+- A package that exists in a local member belongs to that member. The group never asks a proxy member about it, including its `dev-*` branches, so Packagist cannot add versions to a private package and private package names are not sent upstream.
+- A `403` from a member is returned as `403`. A group reader also needs read permission on the member repositories.
+- When a member cannot answer (for example, the upstream is down) and no other member has the package, the group returns `503` with `Retry-After` instead of `404`. When the upstream circuit breaker is open, the proxy's `502` and the group's `503` both carry `X-Pantera-Circuit-Open: true` and the breaker's `Retry-After`.
 
-### Search and Package Discovery
+### Archive Downloads
+
+The first download of an archive through a proxy streams the bytes to Composer while Pantera writes them to its cache. Before the cached copy is committed, Pantera compares the streamed bytes with the `dist.shasum` (SHA-1) declared in the package metadata: an archive that does not match is never cached, so the next request fetches it again, and Composer's own `dist.shasum` check rejects the corrupted download. Concurrent first requests for the same archive share one upstream download. `HEAD` requests are answered like the matching `GET` on every path (same status and headers, no body).
+
+When an administrator enables `download-mode: redirect` on a hosted repository stored in an object store, an archive download may answer `302 Found` with a time-limited object-store URL instead of streaming the bytes. Composer follows the redirect and its `dist.shasum` check is unchanged; your machine must be able to reach the object store directly (see [Streaming Downloads](../streaming-downloads.md#presigned-direct-download-redirects)). Package metadata is never redirected.
+
+### Package Catalog Endpoints
+
+A hosted repository lists the packages published into it at `GET /packages/list.json` (`{"packageNames": [...]}`, optionally `?q=<term>` to narrow the list) and `GET /p2/available-packages.json` (`{"available-packages": [...]}`):
 
 ```bash
-composer search <term>
-composer show -a
+curl -sS -u 'your-username:your-api-token' 'http://pantera-host:8080/php-local/packages/list.json?q=my-package'
 ```
 
-`composer search`/`show -a` are backed by `GET /packages/list.json` (optionally `?q=<term>`), which — for a `local`/hosted `php` repository — enumerates the packages actually published into that repository. For `php-proxy`, the same path is a live pass-through to the upstream's own `list.json`/`search.json` (not cached — the full upstream catalog is far larger than what any single repository proxies). `GET /p2/available-packages.json` works the same way and backs Composer's wildcard/`show -a` resolution against a local repository.
-
-### Conditional Requests and HEAD
-
-- A proxy repository issues a conditional `If-Modified-Since` request when revalidating already-cached package metadata; a `304` from the upstream is served from cache without re-transferring or re-parsing the metadata body.
-- Package metadata responses (`/p2/<vendor>/<pkg>.json`, `/packages/<vendor>/<pkg>.json`) carry a `Last-Modified` header once Pantera has captured one from the upstream. A client sending its own `If-Modified-Since` matching that value gets a bodiless `304` straight from the warm cache — no upstream call at all.
-- The repository root (`/packages.json`, `/repo.json`) is now cached (TTL, single-flighted) instead of being fetched from the upstream on every request — an upstream blip no longer breaks `composer require` root resolution; the last-known root is served stale until the upstream recovers.
-- `HEAD` is supported everywhere `GET` is — package metadata, dist archives, and the catalog surfaces above — returning the same status and headers as the equivalent `GET`, with no body.
+On a proxy repository the same two paths are forwarded live to the upstream and are not cached.
 
 ---
 
@@ -103,14 +106,68 @@ composer show -a
 
 ### Upload a Package Archive
 
+Set `"version"` in the package's `composer.json` (without it the upload becomes `dev-master`) and exclude `vendor/` from the archive:
+
+```json
+{
+  "version": "1.0.0",
+  "archive": {
+    "exclude": ["/vendor", "/dist"]
+  }
+}
+```
+
+Build and upload the archive (prints `201` once the package is indexed):
+
 ```bash
-curl -X PUT \
-  -H "Authorization: Basic $(echo -n your-username:your-jwt-token | base64)" \
-  --data-binary @my-package-1.0.0.zip \
+composer archive --format=zip --dir=dist --file=my-package-1.0.0
+curl -sS -w '%{http_code}\n' -u 'your-username:your-api-token' \
+  --upload-file dist/my-package-1.0.0.zip \
   http://pantera-host:8080/php-local/my-package-1.0.0.zip
 ```
 
 The local Composer repository indexes uploaded archives and makes them available for `composer require`.
+
+### Version Resolution
+
+Pantera takes the package version from the first of these that is present:
+
+1. `"version"` in the archive's `composer.json`.
+2. A `major.minor.patch` version in the file name, such as `my-package-1.0.0.zip`.
+3. `dev-master`. An archive with no version in `composer.json` or in its file name is published as `dev-master`, and the upload does not warn about it.
+
+### Re-uploading a Version
+
+Published releases are immutable:
+
+| Upload | Result |
+|--------|--------|
+| A release that is not published yet | `201`, published |
+| The same release again with the same content | `201`, nothing changes |
+| The same release again with different content | `409 Conflict`, the published archive is kept |
+| The same release again, when either archive is corrupt or too large to compare | `409 Conflict`, the published archive is kept |
+| A dev branch (`dev-*` or `*-dev`) | `201`, replaces the previous upload of that branch |
+
+Pantera compares the files inside the two archives, not their bytes. It compares at most 256 MiB of unpacked content and 65,536 entries, and it does not read a published archive larger than 256 MiB. When it cannot complete the comparison, it treats the upload as different.
+
+To ship a change, publish a new version. The same rules apply to JSON package registrations (`PUT /` with a package JSON body, or `PUT /?version=1.0.0` for a body without a `version` field).
+
+Every uploaded archive is listed with `dist.shasum`, the SHA-1 of the archive as Pantera stores it (Pantera writes the resolved version into its `composer.json`, so it differs from the SHA-1 of the file you uploaded). Composer records it in `composer.lock` and checks every download against it. After a dev branch is re-uploaded, `composer install` from an older lock file fails the checksum check; run `composer update <package>` to lock the new upload. Releases uploaded before Pantera 2.2.9 keep their entry without `dist.shasum`, and Composer skips the check for them.
+
+An archive that cannot be read, has no `composer.json`, or has a `composer.json` that is not valid JSON is rejected with `400 Bad Request`.
+
+### Delete a Package Archive
+
+Composer has no delete command. Delete an archive from the Pantera UI or with the REST API ([`DELETE /api/v1/repositories/:name/artifacts`](../../rest-api-reference.md)), using its storage path:
+
+```bash
+curl -X DELETE http://pantera-host:8086/api/v1/repositories/php-local/artifacts \
+  -H "Authorization: Bearer your-jwt-token" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "artifacts/vendor/my-package/1.0.0/vendor-my-package-1.0.0.zip"}'
+```
+
+Uploaded archives are stored as `artifacts/<vendor>/<package>/<version>/<vendor>-<package>-<version>.<zip|tar.gz>`. Consumers that locked the deleted version fail to install it. To ship a fix, publish a new version.
 
 ---
 
@@ -123,6 +180,12 @@ The local Composer repository indexes uploaded archives and makes them available
 | `curl error 60: SSL certificate problem` | HTTPS verification failure | Set `"secure-http": false` in composer.json (non-HTTPS) or install proper certs |
 | Package found on Packagist but not resolving | Proxy not configured for packagist.org | Ask admin to verify the php-proxy remote URL |
 | `Your requirements could not be resolved` | Dependency conflict, not a Pantera issue | Run `composer update --with-all-dependencies` to resolve conflicts |
+| `409 Conflict` on upload | That release is already published with different content, or the two archives could not be compared (corrupt or too large) | Publish a new version |
+| `400 Bad Request` on upload | The archive is unreadable or its `composer.json` is missing or invalid | Rebuild the archive with `composer archive` |
+| `503 Service Unavailable` with `Retry-After` from a group, or `502` from a proxy | The upstream could not be reached or sent invalid metadata | Retry later. The package is not reported as missing during an upstream outage |
+| `403 Forbidden` from a group | Your account cannot read one of the group's member repositories | Ask an admin for read access on the member repositories |
+| Composer reports a failed checksum verification for a downloaded archive | Through a proxy: the upstream sent an archive that does not match its declared `dist.shasum`, and Pantera did not cache it. From a hosted repository: a dev branch was re-uploaded after your lock file was written | Retry the install; for a re-uploaded dev branch run `composer update <package>` |
+| Download fails after a `302` redirect | `download-mode: redirect` is enabled for the repository but your network cannot reach the object store | Ask an admin to set `download-mode: stream` for the repository, or allow access to the object store endpoint |
 
 ---
 

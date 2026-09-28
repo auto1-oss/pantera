@@ -15,6 +15,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
@@ -63,6 +64,32 @@ final class RaceSliceTest {
         ).response(new RequestLine(RqMethod.GET, "/foo"), Headers.EMPTY, Content.EMPTY).join();
 
         Assertions.assertEquals(RsStatus.NOT_FOUND, res.status());
+    }
+
+    @Test
+    void relaysMethodNotAllowedWhenEveryRemoteRejectsTheMethod() {
+        final Response res = new RaceSlice(
+            new SliceSimple(ResponseBuilder.methodNotAllowed().build()),
+            new SliceSimple(ResponseBuilder.methodNotAllowed().build())
+        ).response(
+            new RequestLine(RqMethod.PUT, "/foo"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.METHOD_NOT_ALLOWED)
+        );
+    }
+
+    @Test
+    void notFoundStillWinsOverAPartialMethodNotAllowed() {
+        final Response res = new RaceSlice(
+            new SliceSimple(ResponseBuilder.methodNotAllowed().build()),
+            new SliceSimple(ResponseBuilder.notFound().build())
+        ).response(
+            new RequestLine(RqMethod.GET, "/foo"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.NOT_FOUND)
+        );
     }
 
     @Test
@@ -173,6 +200,67 @@ final class RaceSliceTest {
         ).response(new RequestLine(RqMethod.GET, "/path"), Headers.EMPTY, Content.EMPTY).join();
         Assertions.assertEquals(RsStatus.FORBIDDEN, response.status());
         Assertions.assertEquals("first-403", response.body().asString());
+    }
+
+    @Test
+    void circuitOpenMarkerIsRelayedWithRetryAfter() {
+        final Response res = new RaceSlice(circuitOpen("17")).response(
+            new RequestLine(RqMethod.GET, "/p2/x/y.json"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "the breaker's fast-fail status is kept",
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "the circuit-open marker survives the race",
+            res.headers().values(UpstreamCircuitOpenException.HEADER),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("true"))
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "the breaker's Retry-After survives the race",
+            res.headers().values("Retry-After"),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("17"))
+        );
+    }
+
+    @Test
+    void circuitOpenRemoteOutranksNotFound() {
+        final Response res = new RaceSlice(
+            slice(RsStatus.NOT_FOUND, "missing", Duration.ZERO),
+            circuitOpen("9")
+        ).response(new RequestLine(RqMethod.GET, "/a"), Headers.EMPTY, Content.EMPTY).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "a remote that could not be asked is not proof of absence",
+            res.headers().values(UpstreamCircuitOpenException.HEADER),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("true"))
+        );
+    }
+
+    @Test
+    void genuineServerErrorOutranksCircuitOpen() {
+        final Response res = new RaceSlice(
+            slice(RsStatus.INTERNAL_ERROR, "boom", Duration.ZERO),
+            circuitOpen("9")
+        ).response(new RequestLine(RqMethod.GET, "/a"), Headers.EMPTY, Content.EMPTY).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "a genuine upstream failure is reported unmarked",
+            res.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty(),
+            new org.hamcrest.core.IsEqual<>(true)
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "a genuine upstream failure is a 502",
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+    }
+
+    private static Slice circuitOpen(final String retry) {
+        return (line, headers, body) -> CompletableFuture.completedFuture(
+            ResponseBuilder.badGateway()
+                .header(UpstreamCircuitOpenException.HEADER, "true")
+                .header("Retry-After", retry)
+                .textBody("Upstream circuit breaker is open")
+                .build()
+        );
     }
 
     private static Slice slice(RsStatus status, String body, Duration delay) {

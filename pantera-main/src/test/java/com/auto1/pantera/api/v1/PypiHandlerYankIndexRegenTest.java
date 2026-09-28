@@ -134,8 +134,9 @@ final class PypiHandlerYankIndexRegenTest extends AsyncApiTestBase {
     }
 
     /**
-     * Yanking a version with no distribution files must not fabricate a
-     * persisted (phantom) index for a package that was never uploaded.
+     * Yanking a version with no distribution files answers {@code 404}
+     * (2.2.9) and must not fabricate a persisted (phantom) index for a
+     * package that was never uploaded.
      */
     @Test
     void yankOfNonexistentVersionDoesNotCreatePhantomIndex(
@@ -156,8 +157,8 @@ final class PypiHandlerYankIndexRegenTest extends AsyncApiTestBase {
             .toCompletionStage().toCompletableFuture()
             .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
         MatcherAssert.assertThat(
-            "yank of a nonexistent version stays a no-op success",
-            yank.statusCode(), new IsEqual<>(204)
+            "yank of a version without distribution files answers 404",
+            yank.statusCode(), new IsEqual<>(404)
         );
         MatcherAssert.assertThat(
             "no phantom index must be persisted for an unpublished package",

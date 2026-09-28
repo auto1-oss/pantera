@@ -104,29 +104,23 @@ final class AstoRepositoryAddArchiveTest {
     }
 
     @Test
-    void shouldWriteDistShasumMatchingStoredArchiveBytes() {
+    void distCarriesTheShasumOfTheStoredArchive() throws Exception {
         this.saveZipArchive();
         final byte[] stored = new BlockingStorage(this.storage)
             .value(new Key.From("artifacts", this.name.full()));
-        final String expected = DigestComputer.compute(stored, Set.of(DigestComputer.SHA1))
-            .get(DigestComputer.SHA1);
-        final JsonObject p2File = this.storage.value(new Key.From("p2/psr/log.json"))
-            .join()
-            .asJsonObject();
-        final JsonObject dist = p2File.getJsonObject("packages")
-            .getJsonObject("psr/log")
-            .getJsonObject(this.name.version())
-            .getJsonObject("dist");
+        final StringBuilder hex = new StringBuilder();
+        for (final byte bte : java.security.MessageDigest.getInstance("SHA-1").digest(stored)) {
+            hex.append(String.format("%02x", bte));
+        }
         MatcherAssert.assertThat(
-            "dist.shasum matches SHA-1 of the exact archive bytes served at dist.url "
-                + "(Composer's ArchiveDownloader verifies with hash_file('sha1', ...))",
-            dist.getString("shasum"),
-            new IsEqual<>(expected)
-        );
-        MatcherAssert.assertThat(
-            "shasum is non-blank",
-            dist.getString("shasum"),
-            new IsNot<>(new IsEqual<>(""))
+            this.storage.value(new Key.From("p2/psr/log.json")).join()
+                .asJsonObject()
+                .getJsonObject("packages")
+                .getJsonObject("psr/log")
+                .getJsonObject(this.name.version())
+                .getJsonObject("dist")
+                .getString("shasum", ""),
+            new IsEqual<>(hex.toString())
         );
     }
 

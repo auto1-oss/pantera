@@ -130,8 +130,8 @@ public final class MavenSlice extends Slice.Wrap {
 
     /**
      * Ctor with synchronous index writer for read-after-write consistency.
-     * Uses {@link MavenHostedPolicy#DEFAULT} (no PGP verify, no release
-     * immutability) — byte-identical to pre-2.3.0 hosted-write behaviour.
+     * Uses {@link MavenHostedPolicy#DEFAULT} (no PGP verify, release
+     * immutability on) — a repository opts out with releaseImmutable: false.
      * @param storage The storage.
      * @param policy Access policy.
      * @param basicAuth Basic authentication.

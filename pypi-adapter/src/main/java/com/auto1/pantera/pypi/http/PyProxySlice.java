@@ -16,7 +16,6 @@ import com.auto1.pantera.asto.cache.StreamThroughCache;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.impl.NoopCooldownService;
-import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
@@ -26,7 +25,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
-import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.http.slice.MethodNotAllowedSlice;
 import com.auto1.pantera.publishdate.PublishDateRegistries;
 import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
@@ -40,6 +39,16 @@ import java.util.Queue;
  * @since 0.7
  */
 public final class PyProxySlice extends Slice.Wrap {
+
+    /**
+     * Path of a distribution file.
+     */
+    private static final String FILE = ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)";
+
+    /**
+     * Any path that is not a distribution file.
+     */
+    private static final String NOT_A_FILE = "(?!" + PyProxySlice.FILE + "$).*";
 
     /**
      * New maven proxy without cache.
@@ -114,48 +123,52 @@ public final class PyProxySlice extends Slice.Wrap {
         final CooldownService cooldown,
         final CooldownInspector inspector
     ) {
-        super(buildRoute(clients, remote, auth, cache, events, rname, rtype, cooldown, inspector));
+        this(
+            new ProxySlice(
+                clients,
+                auth,
+                new AuthClientSlice(new UriClientSlice(clients, remote), auth),
+                cache,
+                new StreamThroughCache(cache),
+                events,
+                rname,
+                rtype,
+                cooldown,
+                inspector,
+                // PyPI JSON API upstream — always pypi.org, regardless of the
+                // Simple-API mirror configured. Used by PypiJsonHandler to
+                // serve cooldown-filtered /pypi/{pkg}/{ver}/json responses.
+                new UriClientSlice(clients, jsonApiUri(remote)),
+                // Mirror credential binding (2.2.9): index links may name
+                // any host; the upstream credentials go only to hosts
+                // trusted for THIS remote.
+                CacheTimeControl.DEFAULT_TTL,
+                remote
+            )
+        );
     }
 
     /**
-     * Build the GET/HEAD route table over a single shared {@link ProxySlice}
-     * instance. HEAD delegates to the SAME instance as GET via
-     * {@link PySlice.HeadAsGetSlice} (rewrite HEAD -> GET, drain the body,
-     * keep status + headers) — sharing one instance means caching, cooldown,
-     * and cache-first offline-safety behave identically for both methods and
-     * the in-memory mirror/index caches aren't duplicated per method.
-     * @checkstyle ParameterNumberCheck (5 lines)
+     * Routes over the proxy. A proxy is read-only: GET is proxied; HEAD of an
+     * index page is answered like GET without the body (a group relays
+     * client HEAD probes to its members); HEAD of a distribution file is
+     * refused rather than turned into a full upstream download. Refusals
+     * carry the {@code Allow} header.
+     *
+     * @param proxy Proxy slice answering GET
      */
-    private static SliceRoute buildRoute(
-        final ClientSlices clients, final URI remote, final Authenticator auth,
-        final Storage cache, final Optional<Queue<ProxyArtifactEvent>> events,
-        final String rname, final String rtype, final CooldownService cooldown,
-        final CooldownInspector inspector
-    ) {
-        final Slice proxy = new ProxySlice(
-            clients,
-            auth,
-            new AuthClientSlice(new UriClientSlice(clients, remote), auth),
-            cache,
-            new StreamThroughCache(cache),
-            events,
-            rname,
-            rtype,
-            cooldown,
-            inspector,
-            // PyPI JSON API upstream — always pypi.org, regardless of the
-            // Simple-API mirror configured. Used by PypiJsonHandler to
-            // serve cooldown-filtered /pypi/{pkg}/{ver}/json responses.
-            new UriClientSlice(clients, jsonApiUri(remote))
-        );
-        return new SliceRoute(
-            new RtRulePath(MethodRule.GET, proxy),
-            // HEAD support: uv (and other resolvers) probe artifact/index
-            // URLs with HEAD before deciding to fetch.
-            new RtRulePath(MethodRule.HEAD, new PySlice.HeadAsGetSlice(proxy)),
-            new RtRulePath(
-                RtRule.FALLBACK,
-                new SliceSimple(ResponseBuilder.methodNotAllowed().build())
+    private PyProxySlice(final Slice proxy) {
+        super(
+            new SliceRoute(
+                new RtRulePath(MethodRule.GET, proxy),
+                new RtRulePath(
+                    new RtRule.All(MethodRule.HEAD, new RtRule.ByPath(PyProxySlice.NOT_A_FILE)),
+                    new HeadAsGetSlice(proxy)
+                ),
+                new RtRulePath(
+                    new RtRule.ByPath(PyProxySlice.FILE), new MethodNotAllowedSlice("GET")
+                ),
+                new RtRulePath(RtRule.FALLBACK, new MethodNotAllowedSlice("GET, HEAD"))
             )
         );
     }

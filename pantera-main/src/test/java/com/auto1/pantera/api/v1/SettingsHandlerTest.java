@@ -59,4 +59,21 @@ public final class SettingsHandlerTest extends AsyncApiTestBase {
             }
         );
     }
+
+    @Test
+    void uiSettingsExposePrefixes(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        this.request(
+            vertx, ctx,
+            HttpMethod.GET, "/api/v1/settings/ui",
+            res -> {
+                Assertions.assertEquals(200, res.statusCode(), "status");
+                final JsonObject ui = res.bodyAsJsonObject().getJsonObject("ui");
+                Assertions.assertNotNull(
+                    ui.getJsonArray("prefixes"),
+                    "ui section must carry the global prefixes array"
+                );
+            }
+        );
+    }
 }

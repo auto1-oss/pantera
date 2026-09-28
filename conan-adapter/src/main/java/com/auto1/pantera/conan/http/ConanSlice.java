@@ -349,21 +349,49 @@ public final class ConanSlice extends Slice.Wrap {
                         MethodRule.POST
                     ),
                     new BearerAuthzSlice(
-                        new ConanUpload.UploadUrls(storage, tokenizer),
+                        new ConanUpload.UploadUrls(storage, tokenizer, name),
                         tokens.auth(),
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                         )
                     )
                 ),
+                // Conan 1.x sends no credentials to a signed URL: the PUT is
+                // authorised as the user the URL was signed for, who must
+                // still hold WRITE here; a PUT with credentials is
+                // authorised by them.
                 new RtRulePath(
                     MethodRule.PUT,
-                    new ConanUpload.PutFile(
-                        storage, tokenizer,
-                        events.map(queue -> new RepositoryEvents("conan", name, queue))
+                    ConanSlice.upload(
+                        new ConanUpload.PutFile(
+                            storage, tokenizer, name,
+                            events.map(queue -> new RepositoryEvents("conan", name, queue))
+                        ),
+                        tokens, tokenizer,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        ),
+                        name
                     )
                 )
             )
+        );
+    }
+
+    /**
+     * File PUT authorised by a signed upload URL or by credentials.
+     * @param put File upload
+     * @param tokens User tokens
+     * @param tokenizer Upload URL signatures
+     * @param write WRITE permission check
+     * @param name Repository name
+     * @return Slice
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private static Slice upload(final Slice put, final Tokens tokens,
+        final ItemTokenizer tokenizer, final OperationControl write, final String name) {
+        return new SignedPutSlice(
+            put, new BearerAuthzSlice(put, tokens.auth(), write), tokenizer, write, name
         );
     }
 }

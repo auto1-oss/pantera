@@ -159,8 +159,8 @@ docker run -d \
   -e JWT_PRIVATE_KEY_PATH=/etc/pantera/jwt-private.pem \
   -e JWT_PUBLIC_KEY_PATH=/etc/pantera/jwt-public.pem \
   -e PANTERA_USER_NAME=admin \
-  -e PANTERA_USER_PASS=changeme \
-  pantera:2.1.2
+  -e PANTERA_USER_PASS=<choose-a-strong-password> \
+  pantera:2.2.9
 ```
 
 ### Minimal Configuration
@@ -185,22 +185,22 @@ curl http://localhost:8080/.health
 
 ### First Login
 
-On a fresh install Pantera creates a default admin user automatically:
+On a database-backed first start Pantera creates the `admin` user automatically:
 
 | Username | Password |
 |---|---|
-| `admin` | `admin` |
+| `admin` | From `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` if set, else a random password written to `<pantera.home>/bootstrap-admin-password` (default `/var/pantera/bootstrap-admin-password`, mode 0600). |
 
-The `must_change_password` flag is set, so the very first login goes to a forced password-change screen. The new password must meet these rules (server-side `PasswordPolicy.java`):
+The startup log records only that file's path, never the password — retrieve it (e.g. `docker exec pantera cat /var/pantera/bootstrap-admin-password`), sign in, then delete the file. The `must_change_password` flag is set, so the very first login goes to a forced password-change screen. The new password must meet these rules (server-side `PasswordPolicy.java`):
 
 - Minimum 12 characters
 - Uppercase + lowercase + digit + special character
 - Not equal to the username
 - Not a well-known weak password (`admin`, `password`, `changeme`, etc.)
 
-**Change the default immediately in production.** Any non-compliant password is rejected with HTTP 400 `WEAK_PASSWORD`.
+**Set `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` (or retrieve the generated one) and change it on first sign-in.** Any non-compliant password is rejected with HTTP 400 `WEAK_PASSWORD`.
 
-The bootstrap only runs when the `users` table is empty, so an existing install is never overwritten.
+The bootstrap only runs when no `admin` user and no holder of the `admin` role exists, so an existing install is never overwritten. (A DB-less deployment has no bootstrap admin; sign in with the `env` provider credentials `PANTERA_USER_NAME` / `PANTERA_USER_PASS` you set.)
 
 ### Ports
 
@@ -210,6 +210,16 @@ The bootstrap only runs when the `users` table is empty, so an existing install 
 | `8086` | REST management API |
 | `8087` | Prometheus metrics |
 | `8090` | Management UI (separate container) |
+
+> **Keep `8087` off the public network.** The metrics endpoint is
+> unauthenticated by design (Prometheus scrapes it) and exposes repository
+> names, upstream hosts and request rates. It binds to all interfaces by
+> default; set `PANTERA_METRICS_BIND` (e.g. `127.0.0.1` or the pod/VM's
+> private address) when the host has a public interface, and never map the
+> port in a public-facing load balancer. The same applies to the backend
+> port (`8080`, mapped to `8088` in the compose stack) when a reverse proxy
+> enforces TLS or rate limits in front of Pantera — expose the proxy, not
+> the backend.
 
 ### Volumes
 
@@ -245,6 +255,32 @@ cd pantera/pantera-main/docker-compose
 cp .env.example .env   # Edit with your secrets
 docker compose up -d
 ```
+
+> The compose stack is a **development and evaluation** environment. It
+> publishes every service port (backend `8088`, metrics `8087`, database,
+> Valkey, Keycloak) on the host, so run it only on a private network. For
+> production, expose the nginx proxy alone and keep the backend, metrics and
+> data services on an internal network.
+
+Fixtures that hold secrets are not committed (2.2.9):
+
+- **TLS**: nginx generates a self-signed key pair into `nginx/ssl/` at
+  container start (`10-selfsigned.sh`) when none is present; the directory
+  ignores `nginx.key`/`nginx.crt`. Drop your own pair there to use a real
+  certificate.
+- **Keycloak realm**: `keycloak-export/pantera-realm.json` reads the client
+  secret from `KEYCLOAK_CLIENT_SECRET` and the sample user's password from
+  `PANTERA_DEV_SSO_USER_PASSWORD` (both required in `.env`; the password is
+  temporary and must be changed at first login). Keycloak only imports the
+  realm when it does not exist yet, so a realm imported from an older
+  checkout keeps its old values. Re-import it after upgrading (this resets
+  the realm, including the sample user's password):
+
+  ```bash
+  docker compose stop keycloak
+  docker compose run --rm --no-deps keycloak import --dir /opt/keycloak/data/import --override true
+  docker compose start keycloak
+  ```
 
 ### Stack Services
 
@@ -293,14 +329,16 @@ The `.env` file configures all stack services. Key variables to set before first
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `PANTERA_VERSION` | `2.1.2` | Docker image tag |
-| `PANTERA_USER_NAME` | `admin` | Bootstrap admin username |
-| `PANTERA_USER_PASS` | `changeme` | Bootstrap admin password |
+| `PANTERA_VERSION` | `2.2.9` | Docker image tag |
+| `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` | (set one, or read the generated file) | Initial password for the auto-created `admin` user on the first DB-backed start. If unset, a random one is written to `/var/pantera/bootstrap-admin-password` (mode 0600); the log records only that path. |
+| `PANTERA_USER_NAME` | `admin` | Username for the optional `env` auth provider (not the database bootstrap admin) |
+| `PANTERA_USER_PASS` | (set one) | Password for the `env` auth provider |
 | `JWT_PRIVATE_KEY_PATH` | `/etc/pantera/jwt-private.pem` | Path to the RSA private key used to sign tokens (RS256). Generate with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt-private.pem`. |
 | `JWT_PUBLIC_KEY_PATH` | `/etc/pantera/jwt-public.pem` | Path to the matching RSA public key for verification. Generate with `openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem`. |
 | `POSTGRES_USER` | `pantera` | Database username |
 | `POSTGRES_PASSWORD` | (set a strong password) | Database password |
-| `KEYCLOAK_CLIENT_SECRET` | (from Keycloak console) | OIDC client secret |
+| `KEYCLOAK_CLIENT_SECRET` | (from Keycloak console) | OIDC client secret; also seeds the bundled dev realm's client on import |
+| `PANTERA_DEV_SSO_USER_PASSWORD` | (set one) | Temporary password of the dev realm's sample user, seeded on import (dev stack only) |
 
 For the full list of `.env` variables, see the [Configuration Reference](../configuration-reference.md#8-docker-compose-environment-env).
 

@@ -15,11 +15,16 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.ListResult;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.Optional;
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -58,6 +63,14 @@ final class DispatchedStorageTest {
     void setUp() {
         this.memory = new InMemoryStorage();
         this.storage = new DispatchedStorage(new SlowStorage(this.memory));
+    }
+
+    @Test
+    void exposesDelegatePath(@TempDir final Path dir) {
+        assertThat(
+            new DispatchedStorage(new FileStorage(dir)).pathFor(new Key.From("a", "b")),
+            new IsEqual<>(Optional.of(dir.resolve("a/b")))
+        );
     }
 
     @Test

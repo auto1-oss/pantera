@@ -22,6 +22,7 @@ import com.auto1.pantera.settings.PrefixesConfig;
 import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.settings.repo.Repositories;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -56,25 +57,29 @@ final class SliceByPath implements Slice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         final String originalPath = line.uri().getPath();
-        final String strippedPath = this.stripPrefix(originalPath);
+        final String rawPath = line.uri().getRawPath();
+        final String strippedRaw = this.stripPrefix(rawPath);
 
-        // If path was modified, create new RequestLine preserving query too
+        // If path was modified, create new RequestLine from the RAW (still
+        // percent-encoded) path and query: rebuilding it from the decoded
+        // components turns %23/%3F into a fragment/query delimiter, makes
+        // %20 unparseable and decodes %25 a second time.
         final RequestLine effectiveLine;
-        if (strippedPath.equals(originalPath)) {
+        if (strippedRaw == null || strippedRaw.equals(rawPath)) {
             effectiveLine = line;
         } else {
-            final String query = line.uri().getQuery();
-            final StringBuilder uri = new StringBuilder(strippedPath);
+            final String query = line.uri().getRawQuery();
+            final StringBuilder uri = new StringBuilder(strippedRaw);
             if (query != null && !query.isEmpty()) {
                 uri.append('?').append(query);
             }
             effectiveLine = new RequestLine(
-                line.method().value(),
-                uri.toString(),
+                line.method(),
+                URI.create(uri.toString()),
                 line.version()
             );
         }
-        
+        final String strippedPath = effectiveLine.uri().getPath();
         final Optional<Key> key = SliceByPath.keyFromPath(strippedPath);
         if (key.isEmpty()) {
             return CompletableFuture.completedFuture(ResponseBuilder.notFound()

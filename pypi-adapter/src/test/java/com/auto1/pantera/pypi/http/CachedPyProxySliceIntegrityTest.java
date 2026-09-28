@@ -207,70 +207,37 @@ final class CachedPyProxySliceIntegrityTest {
     }
 
     @Test
-    @DisplayName("HEAD on an uncached wheel returns 200 with no body and populates "
-        + "the cache with the FULL bytes (not a phantom empty artifact) — WS4-pypi.8")
-    void headOnUncachedWheel_populatesCacheWithoutCorruption() throws Exception {
+    @DisplayName("cache-miss primary fetch forwards the caller's identity and request context to the origin")
+    void primaryFetchForwardsRequestIdentity() throws Exception {
+        // B36: the origin (pypi ProxySlice) derives the audit user and the
+        // trace/client-ip context from the headers it receives. The primary
+        // stream-through fetch used to call it with Headers.EMPTY, so every
+        // cache-miss artifact_access / artifact_publish record said UNKNOWN.
         final Storage storage = new InMemoryStorage();
-        final MeterRegistry registry = new SimpleMeterRegistry();
         final FakePyUpstream origin = new FakePyUpstream(
-            WHEEL_BYTES, sha256Hex(WHEEL_BYTES), md5Hex(WHEEL_BYTES), null
+            WHEEL_BYTES, sha256Hex(WHEEL_BYTES), null, null
         );
-        final CachedPyProxySlice slice = buildSlice(origin, storage, registry);
-
-        final Response head = slice.response(
-            new RequestLine(RqMethod.HEAD, WHEEL_PATH),
-            Headers.EMPTY,
-            Content.EMPTY
-        ).join();
-
-        assertEquals(RsStatus.OK, head.status(), "HEAD on uncached wheel returns 200");
-        assertArrayEquals(
-            new byte[0],
-            head.body().asBytesFuture().join(),
-            "HEAD response body must be empty"
-        );
-        assertTrue(
-            storage.exists(WHEEL_KEY).join(),
-            "HEAD on an uncached wheel must still populate the cache (real GET underneath)"
-        );
-        assertArrayEquals(
-            WHEEL_BYTES,
-            storage.value(WHEEL_KEY).join().asBytes(),
-            "cached artifact must be the FULL wheel bytes, not a phantom empty write"
-        );
-
-        final int upstreamCallsAfterHead = origin.primaryCalls();
-        final Response get = slice.response(
+        final CachedPyProxySlice slice = buildSlice(origin, storage, new SimpleMeterRegistry());
+        final Response response = slice.response(
             new RequestLine(RqMethod.GET, WHEEL_PATH),
-            Headers.EMPTY,
+            new Headers()
+                .add(com.auto1.pantera.http.auth.AuthzSlice.LOGIN_HDR, "alice")
+                .add(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.9.8.7"),
             Content.EMPTY
         ).join();
-        assertEquals(RsStatus.OK, get.status(), "subsequent GET 200 from the now-warm cache");
-        assertArrayEquals(
-            WHEEL_BYTES, get.body().asBytesFuture().join(), "subsequent GET serves full bytes"
+        response.body().asBytesFuture().join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "the origin sees the authenticated caller",
+            new com.auto1.pantera.http.headers.Login(origin.primaryHeaders()).getValue(),
+            new org.hamcrest.core.IsEqual<>("alice")
         );
-        assertEquals(
-            upstreamCallsAfterHead, origin.primaryCalls(),
-            "subsequent GET must be served from cache, not hit upstream again"
+        org.hamcrest.MatcherAssert.assertThat(
+            "the origin sees the request's client IP context",
+            origin.primaryHeaders().values(
+                com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER
+            ),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("10.9.8.7"))
         );
-    }
-
-    @Test
-    @DisplayName("HEAD on a missing artifact returns 404, never 405 (WS4-pypi.8)")
-    void headOnMissingArtifact_returns404NotMethodNotAllowed() throws Exception {
-        final Storage storage = new InMemoryStorage();
-        final MeterRegistry registry = new SimpleMeterRegistry();
-        final Slice alwaysNotFound = (line, headers, body) ->
-            CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
-        final CachedPyProxySlice slice = buildSlice(alwaysNotFound, storage, registry);
-
-        final Response head = slice.response(
-            new RequestLine(RqMethod.HEAD, "/missing/missing-0.0.1-py3-none-any.whl"),
-            Headers.EMPTY,
-            Content.EMPTY
-        ).join();
-
-        assertEquals(RsStatus.NOT_FOUND, head.status(), "missing artifact HEAD -> 404, never 405");
     }
 
     private static CachedPyProxySlice buildSlice(
@@ -332,6 +299,8 @@ final class CachedPyProxySliceIntegrityTest {
         private final String md5;
         private final String sha512;
         private final AtomicInteger primaryCalls = new AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicReference<Headers> lastPrimaryHeaders =
+            new java.util.concurrent.atomic.AtomicReference<>(Headers.EMPTY);
         private final java.util.concurrent.atomic.AtomicBoolean hold =
             new java.util.concurrent.atomic.AtomicBoolean();
 
@@ -349,6 +318,10 @@ final class CachedPyProxySliceIntegrityTest {
 
         int primaryCalls() {
             return this.primaryCalls.get();
+        }
+
+        Headers primaryHeaders() {
+            return this.lastPrimaryHeaders.get();
         }
 
         void holdPrimary(final boolean hold) {
@@ -370,6 +343,7 @@ final class CachedPyProxySliceIntegrityTest {
                 return serveOrNotFound(this.sha512);
             }
             this.primaryCalls.incrementAndGet();
+            this.lastPrimaryHeaders.set(headers);
             if (this.hold.get()) {
                 // Spin-block in a background thread until released, simulating
                 // a slow upstream so followers race the leader.

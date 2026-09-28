@@ -343,19 +343,27 @@ final class CooldownHistoryRepositoryTest {
     }
 
     @Test
-    void archiveAndDeleteByRepoArchivesAllActiveForThatRepo() {
+    void archiveAndReleaseByRepoArchivesAndReleasesAllActiveForThatRepo() {
         for (int i = 0; i < 5; i++) {
             this.seedLive("npm-proxy", "repo-a", "pkg" + i, "1.0." + i);
         }
         this.seedLive("npm-proxy", "repo-b", "untouched", "1.0.0");
-        final int moved = this.repository.archiveAndDeleteByRepo(
+        final int moved = this.repository.archiveAndReleaseByRepo(
             "npm-proxy", "repo-a", ArchiveReason.MANUAL_UNBLOCK, "alice");
         MatcherAssert.assertThat(
             "5 rows for repo-a should have been archived", moved, Matchers.is(5)
         );
         MatcherAssert.assertThat(
-            "Only repo-b's row should remain live",
-            this.liveRowCount(), Matchers.is(1L)
+            "released rows stay in the live table (INACTIVE)",
+            this.liveRowCount(), Matchers.is(6L)
+        );
+        MatcherAssert.assertThat(
+            "repo-a has no ACTIVE blocks left",
+            this.repository.countActiveBlocks("npm-proxy", "repo-a"), Matchers.is(0L)
+        );
+        MatcherAssert.assertThat(
+            "repo-b's block is untouched",
+            this.repository.countActiveBlocks("npm-proxy", "repo-b"), Matchers.is(1L)
         );
         final List<DbHistoryRecord> history = this.repository.findHistoryPaginated(
             Set.of("repo-a", "repo-b"), null, null, null, "archived_at", false, 0, 50

@@ -337,6 +337,37 @@ class UploadSliceTest {
             event.artifactVersion(),
             Matchers.is("1.0.0-TEST")
         );
+        MatcherAssert.assertThat(
+            "path_prefix is the repository-relative version directory without a leading slash",
+            event.pathPrefix(),
+            new org.hamcrest.core.IsEqual<>(
+                "wkda/common/api/retail-financing-application-dtos/1.0.0-TEST"
+            )
+        );
+    }
+
+    @Test
+    void artifactEventCarriesRequestContext() {
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final Slice slice = new UploadSlice(this.asto, Optional.of(events), "libs-release-local");
+        final byte[] data = "jar".getBytes(StandardCharsets.UTF_8);
+        slice.response(
+            new RequestLine(RqMethod.PUT, "/com/acme/lib/1.0/lib-1.0.jar"),
+            Headers.from(
+                new ContentLength(data.length),
+                new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-maven"),
+                new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
+            ),
+            new Content.From(data)
+        ).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            events.peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-maven")
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            events.peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 
     @Test
@@ -484,6 +515,44 @@ class UploadSliceTest {
             events.isEmpty(),
             Matchers.is(true)
         );
+    }
+
+
+    @Test
+    void uploadInvalidatesTheGroupNegativeCacheEntry() {
+        final com.auto1.pantera.http.cache.NegativeCache cache =
+            new com.auto1.pantera.http.cache.NegativeCache(
+                new com.auto1.pantera.cache.NegativeCacheConfig(
+                    java.time.Duration.ofMinutes(5), 1_000, false,
+                    com.auto1.pantera.cache.NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
+                    com.auto1.pantera.cache.NegativeCacheConfig.DEFAULT_L1_TTL,
+                    com.auto1.pantera.cache.NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
+                    com.auto1.pantera.cache.NegativeCacheConfig.DEFAULT_L2_TTL
+                )
+            );
+        // Group keys use the dotted ArtifactNameParser name, not the URL form.
+        final com.auto1.pantera.http.cache.NegativeCacheKey groupKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(
+                "maven_group", "maven-group", "com.pantera.fresh", "0.1/fresh-0.1.pom"
+            );
+        cache.cacheNotFound(groupKey);
+        final com.auto1.pantera.http.cache.NegativeCacheRegistry registry =
+            com.auto1.pantera.http.cache.NegativeCacheRegistry.instance();
+        registry.setSharedCache(cache);
+        try {
+            final byte[] data = "pom".getBytes(StandardCharsets.UTF_8);
+            this.ums.response(
+                new RequestLine(RqMethod.PUT, "/com/pantera/fresh/0.1/fresh-0.1.pom"),
+                Headers.from(new ContentLength(data.length)),
+                new Content.From(data)
+            ).join();
+            MatcherAssert.assertThat(
+                cache.isKnown404(groupKey),
+                new org.hamcrest.core.IsEqual<>(false)
+            );
+        } finally {
+            registry.clear();
+        }
     }
 
     // ===== WS4-maven.4: GA-level maven-metadata.xml regeneration =====
@@ -697,12 +766,36 @@ class UploadSliceTest {
     }
 
     @Test
-    @DisplayName("WS4-maven.6: releaseImmutable=false (default) preserves the legacy "
-        + "overwrite behaviour — regression guard")
-    void releaseMutableByDefaultAllowsOverwrite() {
+    @DisplayName("WS4-maven.6: release immutability is on by default — a release "
+        + "redeploy with different bytes is refused with 409")
+    void releaseImmutableByDefaultRejectsRedeploy() {
         put(this.ums, "/com/example/mut/1.0/mut-1.0.jar", "first".getBytes(StandardCharsets.UTF_8));
         final Response redeploy = put(
             this.ums, "/com/example/mut/1.0/mut-1.0.jar", "second".getBytes(StandardCharsets.UTF_8)
+        );
+        MatcherAssert.assertThat(
+            "the default policy refuses a differing release redeploy",
+            redeploy.status(), Matchers.is(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the originally published bytes are preserved",
+            this.asto.value(new Key.From("com/example/mut/1.0/mut-1.0.jar")).join(),
+            new ContentIs("first".getBytes(StandardCharsets.UTF_8))
+        );
+    }
+
+    @Test
+    @DisplayName("WS4-maven.6: releaseImmutable=false opts out — a release redeploy "
+        + "overwrites (regression guard for the legacy behaviour)")
+    void releaseMutableWhenOptedOutAllowsOverwrite() {
+        final Slice mutable = new UploadSlice(
+            this.asto, Optional.empty(), "maven",
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
+            new MavenHostedPolicy(false, false)
+        );
+        put(mutable, "/com/example/mut/1.0/mut-1.0.jar", "first".getBytes(StandardCharsets.UTF_8));
+        final Response redeploy = put(
+            mutable, "/com/example/mut/1.0/mut-1.0.jar", "second".getBytes(StandardCharsets.UTF_8)
         );
         MatcherAssert.assertThat(redeploy.status(), Matchers.is(RsStatus.CREATED));
         MatcherAssert.assertThat(

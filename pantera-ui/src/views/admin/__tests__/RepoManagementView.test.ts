@@ -12,7 +12,7 @@ const bulkUpdateAccessPolicyMock = vi.fn()
 
 vi.mock('@/api/repos', () => ({
   listRepos: (...args: unknown[]) => listReposMock(...args),
-  deleteRepo: vi.fn().mockResolvedValue(undefined),
+  deleteRepo: vi.fn().mockResolvedValue('deleted'),
   moveRepo: vi.fn().mockResolvedValue(undefined),
   bulkUpdateAccessPolicy: (...args: unknown[]) => bulkUpdateAccessPolicyMock(...args),
 }))
@@ -28,6 +28,15 @@ vi.mock('@/composables/useConfirmDelete', () => ({
     confirm: vi.fn().mockResolvedValue(true),
     accept: vi.fn(),
     reject: vi.fn(),
+  }),
+}))
+
+// Auth store stub — hasAction() returns true for every call. Declared at the
+// module top level: a vi.mock is hoisted before everything else, so vitest
+// (v5+) rejects one nested in a hook.
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({
+    hasAction: () => true,
   }),
 }))
 
@@ -62,12 +71,6 @@ function mountView() {
 describe('RepoManagementView — bulk access policy', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    // Spoof the auth store to return true for every hasAction call.
-    vi.mock('@/stores/auth', () => ({
-      useAuthStore: () => ({
-        hasAction: () => true,
-      }),
-    }))
     listReposMock.mockReset()
     bulkUpdateAccessPolicyMock.mockReset()
     listReposMock.mockResolvedValue({

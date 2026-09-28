@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.docker.Catalog;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.error.InvalidRepoNameException;
 import com.auto1.pantera.docker.misc.CatalogPage;
 import com.auto1.pantera.docker.misc.ImageRepositoryName;
 import com.auto1.pantera.docker.misc.Pagination;
@@ -77,6 +78,11 @@ public final class TrimmedDocker implements Docker {
     }
 
     @Override
+    public String resolveName(final String name) {
+        return this.origin.resolveName(this.trim(name));
+    }
+
+    @Override
     public DownloadPolicy downloadPolicy() {
         // Forward to origin -- this decorator only strips a name prefix for
         // shared-port routing (RepositorySlices wraps the hosted "docker"
@@ -90,9 +96,14 @@ public final class TrimmedDocker implements Docker {
 
     @Override
     public CompletableFuture<Catalog> catalog(Pagination pagination) {
-        Pagination trimmed = new Pagination(
-            trim(pagination.last()), pagination.limit()
-        );
+        final Pagination trimmed;
+        try {
+            trimmed = new Pagination(trim(pagination.last()), pagination.limit());
+        } catch (final IllegalArgumentException ex) {
+            // A `last` cursor outside this repository's names is a client
+            // error (400 NAME_INVALID), not a server failure.
+            return CompletableFuture.failedFuture(new InvalidRepoNameException(ex.getMessage()));
+        }
         return this.origin.catalog(trimmed)
             .thenCompose(catalog -> new ParsedCatalog(catalog).repos())
             .thenApply(names -> names.stream()

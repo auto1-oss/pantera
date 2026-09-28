@@ -36,10 +36,10 @@ If Pantera is behind an Nginx reverse proxy with TLS termination (e.g., on port 
 
 ## Login
 
-Authenticate with your Pantera credentials:
+Authenticate with your Pantera credentials (`--password-stdin` keeps the token out of the process list):
 
 ```bash
-docker login pantera-host:8080 -u your-username -p your-jwt-token
+echo 'your-api-token' | docker login pantera-host:8080 -u 'your-username' --password-stdin
 ```
 
 Or interactively:
@@ -99,7 +99,7 @@ answer rather than failing outright.
 
 ## Push Images
 
-Push images to a local Docker repository:
+Push images to a local Docker repository. Proxy and group repositories are read-only: a push to them fails with `405 UNSUPPORTED` (`docker push` reports `unsupported`).
 
 ### Step 1: Tag the Image
 
@@ -115,46 +115,65 @@ docker push pantera-host:8080/docker-local/myapp:latest
 docker push pantera-host:8080/docker-local/myapp:1.0.0
 ```
 
+Blob uploads may be monolithic or chunked (several `PATCH` requests with `Content-Range: <start>-<end>`, then the committing `PUT ?digest=`, which verifies the assembled bytes against the claimed digest — `400 DIGEST_INVALID` on a mismatch), so resumable pushes from tools such as `crane`, `oras` or `skopeo` work. A chunk whose start is not the end of the data already uploaded is refused with `416 BLOB_UPLOAD_INVALID` and `Range: 0-<last byte held>` / `Docker-Upload-UUID` headers; resume from that offset (or start a new upload session).
+
 ---
 
-## Delete Images / Garbage Collection
+## List Images and Tags
+
+```bash
+# Images in a repository (needs the 'catalog' registry permission)
+curl -u 'your-username:your-api-token' http://pantera-host:8080/v2/docker-local/_catalog
+
+# Tags of an image
+curl -u 'your-username:your-api-token' http://pantera-host:8080/v2/docker-local/myapp/tags/list
+```
+
+The catalog is per repository (`/v2/<repo>/_catalog`) and lists full image names with the repository prefix (`docker-local/myapp`, `docker-local/team/tools/builder`); there is no registry-wide `/v2/_catalog`. A proxy repository's catalog lists the images it has cached. A group's catalog is the union of its members' catalogs, named under the group (`docker-group/myapp`), which are the names you pull through the group; each member contributes only if you hold the `catalog` permission on it.
+
+Both endpoints page with `?n=<count>&last=<name>`. On every repository type, a full page (catalog or tags) carries a `Link: <...>; rel="next"` header pointing at the next page. The catalog's `last` is a name from an earlier page, including the repository prefix. A `last` outside the repository (`400 NAME_INVALID`) or an `n` that is not a non-negative integer (`400 PAGINATION_NUMBER_INVALID`) is rejected. A tags request for an image the repository does not hold answers `404 NAME_UNKNOWN`, on every page (with or without `last`); a `last` past the final tag of an image the repository holds answers an empty page. Through a group, `tags/list` is the sorted union of every member's tags for that image, paged the same way; when no member holds the image the group relays a member's `404 NAME_UNKNOWN`, never an empty `200`. A `Link` header on any answer relayed from a member is rewritten to the group's path, so following it keeps you on the group.
+
+---
+
+## Delete Images
 
 Local (`docker`) repositories support the standard Distribution-spec delete
-endpoints, so `skopeo delete` and manual cleanup both work:
+endpoints, so `skopeo delete`, `crane delete` and manual cleanup work:
 
 ```bash
 # Resolve the tag to its digest and delete the manifest reference
 skopeo delete docker://pantera-host:8080/docker-local/myapp:1.0.0
 
 # Delete an unreferenced blob directly by digest (registry GC)
-curl -X DELETE -u your-username:your-jwt-token \
-    https://pantera-host:8080/v2/docker-local/myapp/blobs/sha256:<digest>
+curl -X DELETE -u 'your-username:your-api-token' \
+    http://pantera-host:8080/v2/docker-local/myapp/blobs/sha256:<digest>
 ```
 
 Deleting a manifest removes the tag/digest reference (and, if it was pushed
-with an OCI `subject`, its referrers-index entry) — it returns `202
-Accepted`. It does **not** delete the underlying blob: blobs are
-content-addressed and may be shared by other manifests, so blob removal is
-the separate `DELETE .../blobs/<digest>` call, matching standard registry GC
-behavior. Deleting a reference or digest that does not exist returns `404`.
+with an OCI `subject`, its referrers-index entry) and returns `202 Accepted`.
+It does **not** delete the underlying blobs: they are content-addressed and
+may be shared by other manifests, so blob removal is the separate
+`DELETE .../blobs/<digest>` call, matching standard registry GC behavior.
+Deleting a reference or digest that does not exist returns `404`.
 
-**Scope:** delete is wired for **hosted (`docker`) repositories only** —
-`docker-proxy` and `docker-group` reject `DELETE` with `405 Method Not
-Allowed`; deletes always target the authoritative store, never a proxy
-cache or a group.
+**Scope:** the registry API deletes only on hosted (`docker`) repositories.
+On `docker-proxy` and `docker-group` repositories,
+`DELETE /v2/<repo>/<image>/manifests/<reference>` and
+`DELETE /v2/<repo>/<image>/blobs/<digest>` answer `405 UNSUPPORTED` (so
+`skopeo delete` and `crane delete` report the operation as unsupported, not
+the image as missing) — deletes always target the authoritative store, never
+a proxy cache or a group.
 
----
+Alternatively, delete a tag from a local repository in the UI (repository browser), or with the REST API (needs `api_repository_permissions: delete`):
 
-## Chunked Blob Uploads
+```bash
+curl -X DELETE http://pantera-host:8086/api/v1/repositories/docker-local/packages \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "docker/registry/v2/repositories/myapp/_manifests/tags/1.0.0"}'
+```
 
-Clients that push a layer as a sequence of `PATCH` chunks (large-layer
-pushes via `oras`/`skopeo`, rather than Docker/BuildKit's single monolithic
-`PATCH`) are fully supported: each chunk is validated for contiguity against
-its `Content-Range` header and assembled in order before the final `PUT
-?digest=` verifies the assembled bytes against the claimed digest. A
-non-contiguous chunk (one that does not start where the upload actually left
-off) is rejected with `416 Requested Range Not Satisfiable` rather than
-silently accepted out of order.
+The `path` is the tag's storage folder: `docker/registry/v2/repositories/<image>/_manifests/tags/<tag>`. See [REST API Reference](../../rest-api-reference.md#delete-apiv1repositoriesnamepackages).
 
 ---
 
@@ -182,11 +201,13 @@ subject-bearing manifest carries an `OCI-Subject: <digest>` header. Narrow a
 listing with `?artifactType=<type>` — the response then carries an
 `OCI-Filters-Applied: artifactType` header.
 
-**Scope:** referrers are indexed and served for **hosted (`docker`)
-repositories only**. `docker-proxy` and `docker-group` repositories always
-answer with an empty referrers listing — proxying an upstream registry's own
-referrers, and a fallback `sha256-<digest>` tag-schema index for registries
-without the referrers API, are not implemented.
+**Scope:** referrers are indexed on push for **hosted (`docker`)
+repositories only**. A `docker-proxy` repository always answers an empty
+referrers listing — proxying an upstream registry's own referrers, and a
+fallback `sha256-<digest>` tag-schema index for registries without the
+referrers API, are not implemented. Through a `docker-group`, the listing is
+the first member's answer (every member answers `200`), so put the hosted
+member first if you discover referrers through a group.
 
 ---
 
@@ -222,7 +243,10 @@ they pushed or expect.
 
 **Scope:** applies uniformly across `docker`, `docker-proxy`, and
 `docker-group` repositories — the check runs against whichever manifest
-each mode resolves, right before serving it. Legacy schema1→schema2
+each mode resolves, right before serving it. A proxy forwards your `Accept`
+list upstream and caches each Accept-variant of a tag separately, so a
+client asking for an OCI index and one asking for a Docker v2 manifest never
+overwrite each other's cached manifest. Legacy schema1→schema2
 conversion is **not** implemented: a manifest stored outside the four
 modern types above is served as-is when accepted, or 406s — it is never
 transcoded.
@@ -283,12 +307,16 @@ calls are unaffected either way.
 | `http: server gave HTTP response to HTTPS client` | Docker expects HTTPS by default | Add Pantera to `insecure-registries` in `daemon.json` |
 | `unauthorized: authentication required` | Not logged in or token expired | Run `docker login` with a fresh JWT token |
 | `denied: requested access to the resource is denied` | User lacks push permission | Contact admin for write access to the Docker local repository |
+| `denied` when re-pushing an existing tag (e.g. `latest`) with new content | Moving an existing tag needs the `overwrite` action on top of `push` | Push a new tag, or ask the admin to grant `overwrite` |
+| Push fails with `unsupported` (405) | The target is a proxy or group repository | Push to a local (`docker`) repository instead |
+| `name unknown` (404 `NAME_UNKNOWN`) on a tags list | The repository holds no tags for that image name | Check the image path (`<repo>/<image>`, include `library/` for official images) |
+| `size invalid` (413 `SIZE_INVALID`) during push | A layer exceeds the server's request-body limit | Ask the admin to raise the limit |
 | `manifest unknown` | Image not cached in proxy yet | Verify the image path matches upstream (include `library/` for official images) |
 | Push fails with `500 Internal Server Error` | Large layer upload timeout | Ask admin to increase `proxy_timeout` and check Nginx `client_max_body_size` |
 | Pull is slow for first request | Image being fetched from upstream for the first time | This is expected; subsequent pulls will be fast from cache |
 | `EOF` during push | Connection reset, often from proxy/LB | Increase timeouts in Nginx (`proxy_read_timeout 300s`) and set `client_max_body_size 0` |
-| `skopeo delete` / blob `DELETE` returns `405 Method Not Allowed` | Target is a `docker-proxy` or `docker-group` repository | Delete against the hosted (`docker`) repository directly — proxy/group repos are read-through, not authoritative |
-| Chunked push fails with `416 Requested Range Not Satisfiable` | A `PATCH` chunk's `Content-Range` start does not match the bytes already received | Restart the upload (`POST` a new session) — chunks must be sent strictly in order with no gaps or overlaps |
+| `skopeo delete` / `crane delete` reports `unsupported` (405 `UNSUPPORTED`) | Target is a `docker-proxy` or `docker-group` repository | Delete against the hosted (`docker`) repository directly — proxy/group repos are read-through, not authoritative |
+| Chunked push fails with `416` (`BLOB_UPLOAD_INVALID`) | A `PATCH` chunk's `Content-Range` start does not match the bytes already received | Resume from the offset in the `Range` header, or restart the upload (`POST` a new session) — chunks must be sent strictly in order with no gaps or overlaps |
 | `406 Not Acceptable` on a manifest GET/HEAD | Client's `Accept` header does not list the stored manifest's media type | Send the media types your client actually supports, or drop the `Accept` header entirely to get the stored manifest unconditionally |
 | Blob pull times out / connection refused after a `302` | `download-mode: redirect`/`auto` is enabled but the client network cannot reach the object store directly | Ask an admin to set `download-mode: stream` for the repository, or grant the client network route/DNS to the object store endpoint |
 

@@ -15,7 +15,6 @@ import com.auto1.pantera.docker.Catalog;
 
 import javax.json.Json;
 import java.util.Collection;
-import java.util.Optional;
 
 /**
  * {@link Catalog} that is a page of given repository names list.
@@ -24,34 +23,30 @@ import java.util.Optional;
  */
 public final class CatalogPage implements Catalog {
 
-    private final Pagination.Page page;
+    /**
+     * Repository names.
+     */
+    private final Collection<String> names;
+
+    private final Pagination pagination;
 
     /**
      * @param names Repository names.
      * @param pagination Pagination parameters.
      */
     public CatalogPage(Collection<String> names, Pagination pagination) {
-        this.page = pagination.page(names.stream());
+        this.names = names;
+        this.pagination = pagination;
     }
 
     @Override
     public Content json() {
         return new Content.From(
             Json.createObjectBuilder()
-                .add("repositories", this.page.json())
+                .add("repositories", pagination.apply(names.stream()))
                 .build()
                 .toString()
                 .getBytes()
         );
-    }
-
-    @Override
-    public boolean hasNext() {
-        return this.page.truncated();
-    }
-
-    @Override
-    public Optional<String> nextCursor() {
-        return this.page.cursor();
     }
 }

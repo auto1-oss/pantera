@@ -13,6 +13,7 @@ package com.auto1.pantera.http.log;
 import com.auto1.pantera.http.Headers;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -106,5 +107,21 @@ final class LogSanitizerTest {
             LogSanitizer.sanitizeUrl(url),
             Matchers.equalTo(url)
         );
+    }
+
+    @Test
+    void redactsTokenInCondaUrlPath() {
+        MatcherAssert.assertThat(
+            LogSanitizer.sanitizeUrl(
+                "/my-conda/t/eyJ1IjoiYWxpY2UifQ.c2lnbmF0dXJlLWJ5dGVz/linux-64/pkg-1.0-0.tar.bz2"
+            ),
+            new IsEqual<>("/my-conda/t/***REDACTED***/linux-64/pkg-1.0-0.tar.bz2")
+        );
+    }
+
+    @Test
+    void keepsShortTPathSegment() {
+        final String url = "/maven/org/t/tools/1.0/tools-1.0.jar";
+        MatcherAssert.assertThat(LogSanitizer.sanitizeUrl(url), new IsEqual<>(url));
     }
 }

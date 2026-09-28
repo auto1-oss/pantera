@@ -12,12 +12,15 @@ package com.auto1.pantera.composer.http.proxy;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.composer.JsonPackage;
+import com.auto1.pantera.composer.MinifiedMetadata;
 import com.auto1.pantera.http.log.EcsLogger;
 
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
+import javax.json.JsonReader;
 import javax.json.JsonValue;
+import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.Set;
@@ -105,16 +108,28 @@ public interface MergePackage {
         }
 
         /**
-         * Obtains `packages` entry from file.
+         * Obtains `packages` entry from the remote file. A Composer v2
+         * minified remote ({@code "minified": "composer/2.0"}, what
+         * packagist serves on {@code /p2/}) is expanded first: the merge
+         * re-keys the version array by version and drops the marker, so
+         * entries that inherited {@code name}, {@code require}, {@code dist}
+         * ... from their predecessor would otherwise lose those fields.
          * @param pkgs Optional content of `package.json` file
          * @return Packages entry from file if content is presented, otherwise empty.
          */
         private static CompletionStage<Optional<JsonObject>> packagesFromOpt(
             final Optional<? extends Content> pkgs
         ) {
-            return pkgs.isPresent() ? WithRemote.packagesFrom(pkgs.get())
-                : CompletableFuture.completedFuture(Optional.empty());
-
+            if (pkgs.isEmpty()) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+            return pkgs.get().asBytesFuture().thenApply(bytes -> {
+                try (JsonReader reader = Json.createReader(
+                    new ByteArrayInputStream(new MinifiedMetadata().expandBytes(bytes))
+                )) {
+                    return Optional.ofNullable(reader.readObject().getJsonObject("packages"));
+                }
+            });
         }
 
         /**

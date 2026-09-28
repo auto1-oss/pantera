@@ -44,7 +44,13 @@ import java.util.concurrent.TimeUnit;
  *   <li>On manual unblock: Cache is invalidated immediately</li>
  * </ul>
  *
- * <p>Cache key format: {@code metadata:{repoType}:{repoName}:{packageName}}</p>
+ * <p>Cache key format:
+ * {@code metadata:{repoType}:{repoName}:{variant}:{packageName}} — the
+ * variant names the body shape (npm {@code full} vs {@code abbreviated};
+ * {@code default} for single-shape callers), and the package name is
+ * always the last segment (both by-package invalidation paths match on
+ * that suffix). L2 values above 1 KB are stored gzip-compressed; the
+ * decoder falls back to raw for legacy entries.</p>
  * 
  * <p>Configuration via YAML (pantera.yaml):</p>
  * <pre>
@@ -88,6 +94,44 @@ public class FilteredMetadataCache implements Cleanable<String> {
     private static final Duration SWR_GRACE = Duration.ofMinutes(5);
 
     /**
+     * Variant segment for callers that do not distinguish body shapes of
+     * the same package's metadata (see {@link #cacheKey}).
+     */
+    static final String DEFAULT_VARIANT = "default";
+
+    /**
+     * L2 read timeout. Was 100 ms, which a multi-megabyte envelope (a full
+     * npm packument runs to tens of MB) could never satisfy — every serve
+     * then paid the full timeout, discarded the in-flight transfer, redid
+     * the filter AND re-wrote the value to L2: strictly worse than either
+     * a completed hit or a plain recompute. 500 ms is a ceiling, not a
+     * wait — small values still return in ~1 ms; gzip (see
+     * {@link #l2Encode}) keeps even the largest envelopes comfortably
+     * inside it. The {@link #l2ReadAllowed()} breaker bounds the damage
+     * when Valkey is genuinely degraded.
+     */
+    private static final long L2_READ_TIMEOUT_MS = 500;
+
+    /**
+     * Consecutive L2 read failures (timeout or error) after which L2 reads
+     * are skipped for {@link #L2_SKIP_WINDOW} — a degraded Valkey must not
+     * add the read timeout to every metadata serve across all packages.
+     */
+    private static final int L2_STRIKES_TO_SKIP = 3;
+
+    /**
+     * How long L2 reads stay skipped after the strike threshold trips.
+     * Writes stay enabled (they are async fire-and-forget).
+     */
+    private static final Duration L2_SKIP_WINDOW = Duration.ofSeconds(10);
+
+    /**
+     * Threshold below which L2 values are stored raw — gzip overhead is not
+     * worth it for tiny envelopes, and the decoder handles both forms.
+     */
+    private static final int L2_COMPRESS_MIN_BYTES = 1024;
+
+    /**
      * L1 cache (in-memory) with per-entry dynamic TTL.
      * May be null in L2-only mode.
      */
@@ -117,6 +161,36 @@ public class FilteredMetadataCache implements Cleanable<String> {
      * In-flight requests to prevent stampede.
      */
     private final ConcurrentMap<String, CompletableFuture<CacheEntry>> inflight;
+
+    /**
+     * Optional per-key invalidation publisher. Wired by
+     * {@code CooldownSupport} to broadcast dropped envelope keys on the
+     * {@code cooldown-envelope} pub/sub channel so peer instances drop
+     * their L1 entries too. The receive side ({@link #invalidate(String)})
+     * never re-publishes — that is the no-loop guarantee. {@code null}
+     * (default) = single-instance deployments and tests: no fan-out.
+     */
+    private volatile java.util.function.Consumer<String> invalidationPublisher;
+
+    /**
+     * Consecutive L2 read failures; reset on any successful L2 answer
+     * (hit or miss). At {@link #L2_STRIKES_TO_SKIP} the read path is
+     * skipped until {@link #l2SkipUntilNanos}.
+     */
+    private final java.util.concurrent.atomic.AtomicInteger l2Strikes =
+        new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
+     * Monotonic deadline (nanos) until which L2 reads are skipped; 0 = not
+     * skipping.
+     */
+    private volatile long l2SkipUntilNanos;
+
+    /**
+     * Monotonic clock for the L2 read breaker; package-private setter for
+     * time-travel in tests.
+     */
+    private java.util.function.LongSupplier nanoClock = System::nanoTime;
 
     /**
      * Statistics.
@@ -257,7 +331,37 @@ public class FilteredMetadataCache implements Cleanable<String> {
         final String packageName,
         final java.util.function.Supplier<CompletableFuture<CacheEntry>> loader
     ) {
-        final String key = cacheKey(repoType, repoName, packageName);
+        return this.getEntry(
+            repoType, repoName, DEFAULT_VARIANT, packageName, loader
+        );
+    }
+
+    /**
+     * Variant-aware {@link #getEntry(String, String, String, java.util.function.Supplier)}.
+     *
+     * <p>The {@code variant} names the body shape the loader filters —
+     * e.g. the npm proxy caches the full packument and the abbreviated
+     * (install-v1) packument under {@code "full"} / {@code "abbreviated"}.
+     * Before the variant segment existed, both shapes shared one envelope
+     * key and whichever computed first was served to both kinds of
+     * request — an install-v1 client could receive the full packument
+     * (and vice versa) for the envelope's whole TTL.</p>
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param variant Body-shape discriminator (see {@link #cacheKey})
+     * @param packageName Package name
+     * @param loader Function to compute filtered metadata on cache miss
+     * @return CompletableFuture with the cache entry (L1, promoted-L2, or computed)
+     */
+    public CompletableFuture<CacheEntry> getEntry(
+        final String repoType,
+        final String repoName,
+        final String variant,
+        final String packageName,
+        final java.util.function.Supplier<CompletableFuture<CacheEntry>> loader
+    ) {
+        final String key = cacheKey(repoType, repoName, variant, packageName);
 
         // L1 check - skip in L2-only mode
         if (!this.l2OnlyMode && this.l1Cache != null) {
@@ -282,12 +386,26 @@ public class FilteredMetadataCache implements Cleanable<String> {
             }
         }
 
-        // L2 check (if available)
-        if (this.l2Connection != null) {
+        // L2 check — skipped while the read breaker is open (a degraded
+        // Valkey must not add the read timeout to every serve). Writes
+        // stay enabled; they are async fire-and-forget.
+        if (this.l2Connection != null && this.l2ReadAllowed()) {
             return this.l2Connection.async().get(key)
                 .toCompletableFuture()
-                .orTimeout(100, TimeUnit.MILLISECONDS)
-                .exceptionally(err -> null)
+                .orTimeout(L2_READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .handle((raw, err) -> {
+                    if (err != null) {
+                        this.recordL2ReadFailure(err);
+                        return null;
+                    }
+                    // Any answered read — hit or miss — proves L2 healthy.
+                    this.l2Strikes.set(0);
+                    if (raw == null) {
+                        return null;
+                    }
+                    final byte[] decoded = l2Decode(raw);
+                    return decoded.length == 0 ? null : decoded;
+                })
                 .thenCompose(l2Bytes -> {
                     if (l2Bytes != null) {
                         this.l2Hits++;
@@ -358,25 +476,36 @@ public class FilteredMetadataCache implements Cleanable<String> {
         final CompletableFuture<CacheEntry> future = loader.get();
         this.inflight.put(key, future);
         future.whenComplete((entry, error) -> {
-            this.inflight.remove(key);
-            if (error == null && entry != null) {
+            // Write back only while this load is still the registered one.
+            // Every invalidation path (invalidate / invalidateAll / clear /
+            // L2 sweep) drops the in-flight entry, so a computation that was
+            // already running when the block state changed must not publish
+            // its pre-change result into L1/L2 — its own caller still gets it.
+            final boolean current = this.inflight.remove(key, future);
+            if (current && error == null && entry != null) {
                 // Cache in L1 with L1 TTL (skip in L2-only mode)
                 if (!this.l2OnlyMode && this.l1Cache != null) {
                     // Wrap entry with L1 TTL for proper expiration, preserving
                     // the blocked-version detail for cache-hit audit records.
+                    // The expiry is capped at l1Ttl even when a block ends days
+                    // from now, so a missed invalidation self-heals via SWR
+                    // within l1Ttl instead of pinning the envelope until then.
                     final CacheEntry l1Entry = new CacheEntry(
                         entry.data(),
-                        entry.earliestBlockedUntil(),
+                        entry.earliestBlockedUntil().map(this::capToL1Ttl),
                         this.l1Ttl,
                         entry.blockedVersions()
                     );
                     this.l1Cache.put(key, l1Entry);
                 }
-                // Cache in L2 with L2 TTL (use configured l2Ttl, capped by blockedUntil if present)
+                // Cache in L2 with L2 TTL (use configured l2Ttl, capped by
+                // blockedUntil if present). Values above the threshold are
+                // gzip-compressed — packument JSON shrinks 5–10x, which is
+                // what keeps multi-MB envelopes inside the read timeout.
                 if (this.l2Connection != null) {
                     final long ttlSeconds = this.calculateL2Ttl(entry);
                     if (ttlSeconds > 0) {
-                        this.l2Connection.async().setex(key, ttlSeconds, entry.data());
+                        this.l2Connection.async().setex(key, ttlSeconds, l2Encode(entry.data()));
                     }
                 }
             }
@@ -386,8 +515,55 @@ public class FilteredMetadataCache implements Cleanable<String> {
     }
 
     /**
-     * Invalidate cached metadata for a package.
+     * Tell caches outside this one that hold cooldown-filtered bytes (e.g. a
+     * Maven group's merged metadata) that a package's view may have changed.
+     * Only the shared, process-wide instance notifies; test instances and the
+     * pub/sub receive path never do.
+     *
+     * @param packageName Package name
+     */
+    private void notifyPackageChanged(final String packageName) {
+        final FilteredMetadataCacheRegistry registry = FilteredMetadataCacheRegistry.instance();
+        if (registry.isShared(this)) {
+            registry.packageChanged(packageName);
+        }
+    }
+
+    /**
+     * Everything-changed variant of {@link #notifyPackageChanged(String)}.
+     */
+    private void notifyAllPackagesChanged() {
+        final FilteredMetadataCacheRegistry registry = FilteredMetadataCacheRegistry.instance();
+        if (registry.isShared(this)) {
+            registry.allPackagesChanged();
+        }
+    }
+
+    /**
+     * Earliest of {@code blockedUntil} and {@code now + l1Ttl} — the L1
+     * logical-expiry instant for an envelope that has blocked versions.
+     *
+     * @param blockedUntil Earliest block expiry of the envelope
+     * @return Capped expiry instant
+     */
+    private Instant capToL1Ttl(final Instant blockedUntil) {
+        final Instant cap = Instant.now().plus(this.l1Ttl);
+        return blockedUntil.isBefore(cap) ? blockedUntil : cap;
+    }
+
+    /**
+     * Invalidate cached metadata for a package — every variant of it.
      * Called when a version is blocked or unblocked.
+     *
+     * <p>Since the variant segment was added to the key, one package can
+     * hold several envelopes (e.g. npm {@code full} + {@code abbreviated});
+     * a block-state change affects all of them, so this matches on the
+     * {@code metadata:{repoType}:{repoName}:} prefix plus the
+     * {@code :{packageName}} suffix in L1, sweeps L2 with the anchored glob
+     * {@code metadata:{repoType}:{repoName}:*:{packageName}}, and publishes
+     * every dropped key to peers. (Pre-variant L2 entries — three segments,
+     * no variant — match nothing here; nothing reads their key shape any
+     * more, so they simply age out via TTL.)</p>
      *
      * @param repoType Repository type
      * @param repoName Repository name
@@ -398,13 +574,27 @@ public class FilteredMetadataCache implements Cleanable<String> {
         final String repoName,
         final String packageName
     ) {
-        final String key = cacheKey(repoType, repoName, packageName);
+        this.notifyPackageChanged(packageName);
+        final String prefix = "metadata:" + repoType + ":" + repoName + ":";
+        final String suffix = ":" + packageName;
         if (this.l1Cache != null) {
-            this.l1Cache.invalidate(key);
+            for (final String key : this.l1Cache.asMap().keySet()) {
+                if (key.startsWith(prefix) && key.endsWith(suffix)) {
+                    this.l1Cache.invalidate(key);
+                    this.inflight.remove(key);
+                    this.publishInvalidation(key);
+                }
+            }
         }
-        this.inflight.remove(key);
+        this.inflight.keySet().stream()
+            .filter(key -> key.startsWith(prefix) && key.endsWith(suffix))
+            .forEach(this.inflight::remove);
         if (this.l2Connection != null) {
-            this.l2Connection.async().del(key);
+            final String pattern = "metadata:" + escapeGlob(repoType) + ":"
+                + escapeGlob(repoName) + ":*:" + escapeGlob(packageName);
+            this.sweepL2Step(
+                io.lettuce.core.ScanCursor.INITIAL, pattern, packageName, 0
+            );
         }
     }
 
@@ -415,6 +605,7 @@ public class FilteredMetadataCache implements Cleanable<String> {
      * @param repoName Repository name
      */
     public void invalidateAll(final String repoType, final String repoName) {
+        this.notifyAllPackagesChanged();
         final String prefix = "metadata:" + repoType + ":" + repoName + ":";
 
         // L1: Invalidate matching keys (skip in L2-only mode)
@@ -456,19 +647,33 @@ public class FilteredMetadataCache implements Cleanable<String> {
      * cache TTL (default 30 days when no blocks are active).
      *
      * <p>Match shape: the cache key is
-     * {@code metadata:{repoType}:{repoName}:{packageName}}, so we
-     * check {@code key.endsWith(":" + packageName)} — exact suffix
-     * match on the package-name segment. Package names that don't
-     * contain colons (the universal case in Pantera-supported
+     * {@code metadata:{repoType}:{repoName}:{packageName}}, so L1 keys are
+     * matched with {@code key.endsWith(":" + packageName)} and L2 keys with
+     * the anchored glob {@code metadata:*:{packageName}} — exact suffix
+     * match on the package-name segment either way. Package names that
+     * don't contain colons (the universal case in Pantera-supported
      * registries) round-trip cleanly.
      *
+     * <p><b>The L2 sweep is independent of L1.</b> Before 2.2.7 the Valkey
+     * {@code DEL} was issued only for keys found in the local L1 scan — but
+     * by the time a background refresh fires this invalidation, the short-
+     * lived L1 twin of the envelope is typically already evicted (and in
+     * L2-only mode never existed), so the stale envelope survived in Valkey
+     * for the full L2 TTL and was re-promoted into L1 on every serve. That
+     * was the 2.2.6 "npm metadata never refreshes" incident. The sweep now
+     * SCANs L2 by pattern regardless of L1 state, deletes every match, and
+     * publishes each dropped key to peers via the configured
+     * {@link #setInvalidationPublisher(java.util.function.Consumer)}.
+     *
      * @param packageName Canonical package name as the cache stores it.
-     * @return number of L1 entries invalidated (0 if disabled / nothing matched).
+     * @return number of L1 entries invalidated on this instance; the L2
+     *  sweep completes asynchronously and logs its own outcome.
      */
     public int invalidateByPackageName(final String packageName) {
         if (packageName == null || packageName.isEmpty()) {
             return 0;
         }
+        this.notifyPackageChanged(packageName);
         final String suffix = ":" + packageName;
         final java.util.List<String> matched = new java.util.ArrayList<>();
         if (this.l1Cache != null) {
@@ -480,12 +685,419 @@ public class FilteredMetadataCache implements Cleanable<String> {
             for (final String key : matched) {
                 this.l1Cache.invalidate(key);
                 this.inflight.remove(key);
+                this.publishInvalidation(key);
             }
         }
-        if (this.l2Connection != null && !matched.isEmpty()) {
-            this.l2Connection.async().del(matched.toArray(new String[0]));
+        if (this.l2Connection != null) {
+            this.sweepL2(packageName);
         }
         return matched.size();
+    }
+
+    /**
+     * Register the cross-instance invalidation publisher — called once at
+     * boot by {@code CooldownSupport} when pub/sub is wired.
+     *
+     * @param publisher Consumer receiving each dropped canonical cache key;
+     *  {@code null} disables fan-out (tests)
+     */
+    public void setInvalidationPublisher(final java.util.function.Consumer<String> publisher) {
+        this.invalidationPublisher = publisher;
+    }
+
+    /**
+     * Publish one dropped key to peers; never throws into the caller.
+     *
+     * @param key Canonical cache key that was invalidated locally
+     */
+    private void publishInvalidation(final String key) {
+        final java.util.function.Consumer<String> publisher = this.invalidationPublisher;
+        if (publisher != null) {
+            try {
+                publisher.accept(key);
+            } catch (final RuntimeException ex) {
+                com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cooldown.metadata")
+                    .message("Envelope invalidation pub/sub publish failed; peers rely on TTL")
+                    .eventCategory("database")
+                    .eventAction("envelope_invalidate_publish")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .field("log.source", "application")
+                    .log();
+            }
+        }
+    }
+
+    /**
+     * Asynchronously delete every L2 envelope whose package-name segment
+     * matches, via cursor-based SCAN (never the blocking KEYS command).
+     * Each deleted key is also dropped from L1/in-flight and published to
+     * peers. The final outcome is logged so a refresh-driven invalidation
+     * is visible in the log stream even when this instance's L1 held
+     * nothing.
+     *
+     * @param packageName Canonical package name (last key segment)
+     */
+    private void sweepL2(final String packageName) {
+        final String pattern = "metadata:*:" + escapeGlob(packageName);
+        this.sweepL2Step(io.lettuce.core.ScanCursor.INITIAL, pattern, packageName, 0);
+    }
+
+    /**
+     * One SCAN page of {@link #sweepL2(String)}; recurses until the cursor
+     * finishes.
+     *
+     * @param cursor Scan cursor position
+     * @param pattern Anchored glob pattern for the envelope keys
+     * @param packageName Package name, for logging
+     * @param deleted Keys deleted by previous pages
+     */
+    private CompletableFuture<Integer> sweepL2Step(
+        final io.lettuce.core.ScanCursor cursor,
+        final String pattern,
+        final String packageName,
+        final int deleted
+    ) {
+        final CompletableFuture<Integer> done = new CompletableFuture<>();
+        this.l2Connection.async()
+            .scan(cursor, io.lettuce.core.ScanArgs.Builder.matches(pattern).limit(500))
+            .whenComplete((result, error) -> {
+                if (error != null) {
+                    com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cooldown.metadata")
+                        .message("L2 envelope sweep failed; stale entries expire via TTL")
+                        .eventCategory("database")
+                        .eventAction("envelope_invalidate_l2")
+                        .eventOutcome("failure")
+                        .field("package.name", packageName)
+                        .error(error)
+                        .field("log.source", "application")
+                        .log();
+                    done.completeExceptionally(error);
+                    return;
+                }
+                final java.util.List<String> keys = result.getKeys();
+                final CompletableFuture<?> del;
+                if (keys.isEmpty()) {
+                    del = CompletableFuture.completedFuture(null);
+                } else {
+                    del = this.l2Connection.async().del(keys.toArray(new String[0]))
+                        .toCompletableFuture()
+                        .exceptionally(ignored -> 0L);
+                    for (final String key : keys) {
+                        if (this.l1Cache != null) {
+                            this.l1Cache.invalidate(key);
+                        }
+                        this.inflight.remove(key);
+                        this.publishInvalidation(key);
+                    }
+                }
+                final int total = deleted + keys.size();
+                del.thenRun(() -> this.sweepL2Next(result, pattern, packageName, total, done));
+            });
+        return done;
+    }
+
+    /**
+     * Continue or finish an L2 sweep once a page's deletes have landed.
+     *
+     * @param result Scan page just processed
+     * @param pattern MATCH pattern
+     * @param packageName Package name, for logging
+     * @param total Keys deleted so far
+     * @param done Sweep completion
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private void sweepL2Next(
+        final io.lettuce.core.KeyScanCursor<String> result, final String pattern,
+        final String packageName, final int total, final CompletableFuture<Integer> done
+    ) {
+        if (result.isFinished()) {
+            if (total > 0) {
+                com.auto1.pantera.http.log.EcsLogger.info("com.auto1.pantera.cooldown.metadata")
+                    .message("L2 envelope sweep dropped " + total + " stale entrie(s)")
+                    .eventCategory("database")
+                    .eventAction("envelope_invalidate_l2")
+                    .eventOutcome("success")
+                    .field("package.name", packageName)
+                    .field("log.source", "application")
+                    .log();
+            }
+            done.complete(total);
+        } else {
+            this.sweepL2Step(result, pattern, packageName, total)
+                .whenComplete((sum, err) -> {
+                    if (err == null) {
+                        done.complete(sum);
+                    } else {
+                        done.completeExceptionally(err);
+                    }
+                });
+        }
+    }
+
+    /**
+     * {@link #invalidateByPackageName(String)} whose future completes once
+     * the L2 sweep has finished, with honest counts: envelopes dropped from
+     * this node's L1, and envelope keys deleted from L2 (cluster-wide; peers
+     * drop their L1 twins via the invalidation publisher). Admin tooling
+     * uses this where it must report — and act after — a completed sweep.
+     *
+     * @param packageName Canonical package name as the cache stores it
+     * @return Future of {@code [l1Dropped, l2Deleted]}
+     */
+    public CompletableFuture<int[]> invalidatePackageAwaiting(final String packageName) {
+        if (packageName == null || packageName.isEmpty()) {
+            return CompletableFuture.completedFuture(new int[]{0, 0});
+        }
+        this.notifyPackageChanged(packageName);
+        final String suffix = ":" + packageName;
+        int local = 0;
+        if (this.l1Cache != null) {
+            for (final String key : java.util.List.copyOf(this.l1Cache.asMap().keySet())) {
+                if (key.endsWith(suffix)) {
+                    this.l1Cache.invalidate(key);
+                    this.inflight.remove(key);
+                    this.publishInvalidation(key);
+                    local = local + 1;
+                }
+            }
+        }
+        final int l1 = local;
+        if (this.l2Connection == null) {
+            return CompletableFuture.completedFuture(new int[]{l1, 0});
+        }
+        return this.sweepL2Step(
+            io.lettuce.core.ScanCursor.INITIAL,
+            "metadata:*:" + escapeGlob(packageName), packageName, 0
+        ).thenApply(l2 -> new int[]{l1, l2});
+    }
+
+    /**
+     * Where the filtered envelope of one package in one repository lives
+     * right now: this node's L1 (with the age of the youngest variant) and
+     * L2 (with the longest remaining TTL across variants). Matches every
+     * repo-type and variant segment, so callers need only the repository
+     * and package names.
+     *
+     * @param repoName Repository name
+     * @param packageName Canonical package name
+     * @return Future of the envelope state
+     */
+    public CompletableFuture<EnvelopeState> probe(
+        final String repoName, final String packageName
+    ) {
+        final String suffix = ":" + packageName;
+        final String segment = ":" + repoName + ":";
+        long age = -1L;
+        if (this.l1Cache != null) {
+            for (final java.util.Map.Entry<String, CacheEntry> entry
+                : this.l1Cache.asMap().entrySet()) {
+                final String key = entry.getKey();
+                if (key.endsWith(suffix) && FilteredMetadataCache.repoSegment(key, segment)) {
+                    final long cur = Duration.between(
+                        entry.getValue().createdAt(), Instant.now()
+                    ).toMillis();
+                    age = age < 0 ? cur : Math.min(age, cur);
+                }
+            }
+        }
+        final boolean inL1 = age >= 0;
+        final long l1Age = age;
+        if (this.l2Connection == null) {
+            return CompletableFuture.completedFuture(
+                new EnvelopeState(inL1, l1Age, false, -2L)
+            );
+        }
+        final String pattern = "metadata:*:" + escapeGlob(repoName) + ":*:"
+            + escapeGlob(packageName);
+        return this.scanAll(io.lettuce.core.ScanCursor.INITIAL, pattern, new java.util.ArrayList<>())
+            .thenCompose(found -> {
+                final java.util.List<CompletableFuture<Long>> ttls = found.stream()
+                    .filter(key -> key.endsWith(suffix)
+                        && FilteredMetadataCache.repoSegment(key, segment))
+                    .map(key -> this.l2Connection.async().pttl(key).toCompletableFuture())
+                    .toList();
+                return CompletableFuture.allOf(ttls.toArray(new CompletableFuture[0]))
+                    .thenApply(ignored -> ttls.stream()
+                        .map(CompletableFuture::join)
+                        .filter(java.util.Objects::nonNull)
+                        .filter(ttl -> ttl != -2L)
+                        .max(Long::compare)
+                        .map(ttl -> new EnvelopeState(inL1, l1Age, true, ttl))
+                        .orElseGet(() -> new EnvelopeState(inL1, l1Age, false, -2L)));
+            });
+    }
+
+    /**
+     * Collect every L2 key matching a pattern (cursor SCAN to completion).
+     *
+     * @param cursor Scan cursor
+     * @param pattern MATCH pattern
+     * @param acc Accumulator
+     * @return Future of the matching keys
+     */
+    private CompletableFuture<java.util.List<String>> scanAll(
+        final io.lettuce.core.ScanCursor cursor, final String pattern,
+        final java.util.List<String> acc
+    ) {
+        return this.l2Connection.async()
+            .scan(cursor, io.lettuce.core.ScanArgs.Builder.matches(pattern).limit(1000))
+            .toCompletableFuture()
+            .thenCompose(page -> {
+                acc.addAll(page.getKeys());
+                if (page.isFinished()) {
+                    return CompletableFuture.completedFuture(acc);
+                }
+                return this.scanAll(page, pattern, acc);
+            });
+    }
+
+    /**
+     * Whether a canonical key's repository segment (third segment) equals
+     * the given {@code :repo:} marker.
+     *
+     * @param key Canonical key {@code metadata:type:repo:variant:package}
+     * @param segment {@code ":" + repoName + ":"}
+     * @return True when the key belongs to the repository
+     */
+    private static boolean repoSegment(final String key, final String segment) {
+        final int first = key.indexOf(':', "metadata:".length());
+        return first > 0 && key.startsWith(segment, first);
+    }
+
+    /**
+     * Envelope presence across tiers.
+     *
+     * @param l1Present Whether this node's L1 holds an envelope
+     * @param l1AgeMs Age of the youngest L1 envelope, {@code -1} when absent
+     * @param l2Present Whether L2 holds an envelope
+     * @param l2TtlMs Longest remaining L2 TTL in ms, {@code -2} when absent,
+     *  {@code -1} when it never expires
+     */
+    public record EnvelopeState(
+        boolean l1Present, long l1AgeMs, boolean l2Present, long l2TtlMs
+    ) {
+    }
+
+    /**
+     * Whether L2 reads are currently allowed (the read breaker is closed).
+     *
+     * @return {@code true} when the L2 GET may be attempted
+     */
+    boolean l2ReadAllowed() {
+        return this.nanoClock.getAsLong() >= this.l2SkipUntilNanos;
+    }
+
+    /**
+     * Record one failed L2 read (timeout or transport error). At
+     * {@link #L2_STRIKES_TO_SKIP} consecutive failures, L2 reads are
+     * skipped for {@link #L2_SKIP_WINDOW} — serves fall straight through
+     * to the local recompute instead of stalling on a degraded Valkey.
+     *
+     * @param err The read failure
+     */
+    void recordL2ReadFailure(final Throwable err) {
+        final int strikes = this.l2Strikes.incrementAndGet();
+        if (strikes == L2_STRIKES_TO_SKIP) {
+            this.l2SkipUntilNanos = this.nanoClock.getAsLong() + L2_SKIP_WINDOW.toNanos();
+            com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cooldown.metadata")
+                .message("L2 envelope reads degraded ("
+                    + strikes + " consecutive failures) — skipping L2 for "
+                    + L2_SKIP_WINDOW.toSeconds() + "s, serving from recompute")
+                .eventCategory("database")
+                .eventAction("envelope_l2_degraded")
+                .eventOutcome("failure")
+                .error(err)
+                .field("log.source", "application")
+                .log();
+        }
+    }
+
+    /**
+     * Override the breaker clock (tests only).
+     *
+     * @param clock Monotonic nano clock
+     */
+    void nanoClock(final java.util.function.LongSupplier clock) {
+        this.nanoClock = clock;
+    }
+
+    /**
+     * Encode a value for L2 storage: gzip above
+     * {@link #L2_COMPRESS_MIN_BYTES} (packument JSON shrinks 5–10x, which
+     * keeps even tens-of-MB envelopes inside {@link #L2_READ_TIMEOUT_MS}),
+     * raw below it. The decoder distinguishes the two by the gzip magic
+     * bytes, which also keeps pre-compression entries readable during a
+     * rolling upgrade.
+     *
+     * @param data Envelope bytes
+     * @return Bytes to store in L2
+     */
+    static byte[] l2Encode(final byte[] data) {
+        if (data.length < L2_COMPRESS_MIN_BYTES) {
+            return data;
+        }
+        try (java.io.ByteArrayOutputStream bos =
+                 new java.io.ByteArrayOutputStream(Math.max(64, data.length / 4))) {
+            try (java.util.zip.GZIPOutputStream gz = new java.util.zip.GZIPOutputStream(bos)) {
+                gz.write(data);
+            }
+            return bos.toByteArray();
+        } catch (final java.io.IOException ex) {
+            // In-memory gzip cannot realistically fail; fall back to raw
+            // rather than losing the write.
+            return data;
+        }
+    }
+
+    /**
+     * Decode an L2 value: gunzip when the gzip magic is present, else the
+     * bytes are a raw (small or pre-compression) envelope. A corrupt value
+     * decodes to an empty array so the caller treats it as a miss and
+     * recomputes — a genuine envelope is never empty.
+     *
+     * @param stored Bytes read from L2
+     * @return Envelope bytes; empty when undecodable
+     */
+    static byte[] l2Decode(final byte[] stored) {
+        if (stored.length < 2
+            || (stored[0] & 0xFF) != 0x1F || (stored[1] & 0xFF) != 0x8B) {
+            return stored;
+        }
+        try (java.util.zip.GZIPInputStream gz = new java.util.zip.GZIPInputStream(
+            new java.io.ByteArrayInputStream(stored)
+        )) {
+            return gz.readAllBytes();
+        } catch (final java.io.IOException ex) {
+            com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cooldown.metadata")
+                .message("Undecodable L2 envelope value — treating as cache miss")
+                .eventCategory("database")
+                .eventAction("envelope_l2_decode")
+                .eventOutcome("failure")
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+            return new byte[0];
+        }
+    }
+
+    /**
+     * Escape Redis glob metacharacters so a literal package name cannot be
+     * misread as a pattern.
+     *
+     * @param raw Package name
+     * @return Glob-safe literal
+     */
+    private static String escapeGlob(final String raw) {
+        final StringBuilder out = new StringBuilder(raw.length());
+        for (int idx = 0; idx < raw.length(); idx = idx + 1) {
+            final char chr = raw.charAt(idx);
+            if (chr == '*' || chr == '?' || chr == '[' || chr == ']' || chr == '\\') {
+                out.append('\\');
+            }
+            out.append(chr);
+        }
+        return out.toString();
     }
 
     /**
@@ -496,6 +1108,7 @@ public class FilteredMetadataCache implements Cleanable<String> {
      * runs at most once per settings update.
      */
     public void clear() {
+        this.notifyAllPackagesChanged();
         if (this.l1Cache != null) {
             this.l1Cache.invalidateAll();
         }
@@ -592,7 +1205,36 @@ public class FilteredMetadataCache implements Cleanable<String> {
         final String repoName,
         final String packageName
     ) {
-        return String.format("metadata:%s:%s:%s", repoType, repoName, packageName);
+        return cacheKey(repoType, repoName, DEFAULT_VARIANT, packageName);
+    }
+
+    /**
+     * Canonical variant-aware cache key:
+     * {@code metadata:{repoType}:{repoName}:{variant}:{packageName}}.
+     *
+     * <p>The variant names the body shape being cached (npm: {@code full}
+     * vs {@code abbreviated}); {@code default} for callers with a single
+     * shape. The package name stays the LAST segment — both by-package
+     * invalidation paths ({@link #invalidateByPackageName} and
+     * {@link #invalidate(String, String, String)}) match on the
+     * {@code :{packageName}} suffix, so any future key change must keep
+     * this position.</p>
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param variant Body-shape discriminator
+     * @param packageName Package name
+     * @return Canonical L1/L2 cache key
+     */
+    public static String cacheKey(
+        final String repoType,
+        final String repoName,
+        final String variant,
+        final String packageName
+    ) {
+        return String.format(
+            "metadata:%s:%s:%s:%s", repoType, repoName, variant, packageName
+        );
     }
 
     /**
@@ -706,6 +1348,15 @@ public class FilteredMetadataCache implements Cleanable<String> {
             this.createdAt = Instant.now();
             this.blockedVersions = blockedVersions == null
                 ? null : java.util.Set.copyOf(blockedVersions);
+        }
+
+        /**
+         * When this entry was computed.
+         *
+         * @return Creation instant
+         */
+        public Instant createdAt() {
+            return this.createdAt;
         }
 
         /**

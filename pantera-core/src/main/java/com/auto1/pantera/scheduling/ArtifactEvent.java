@@ -10,9 +10,13 @@
  */
 package com.auto1.pantera.scheduling;
 
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.MDC;
 
 /**
@@ -24,6 +28,16 @@ public final class ArtifactEvent {
      * Default value for owner when owner is not found or irrelevant.
      */
     public static final String DEF_OWNER = "UNKNOWN";
+
+    /**
+     * Process-wide creation counter, see {@link #sequence()}.
+     */
+    private static final AtomicLong SEQUENCE = new AtomicLong();
+
+    /**
+     * Creation order of this event in this process, see {@link #sequence()}.
+     */
+    private final long sequence = ArtifactEvent.SEQUENCE.incrementAndGet();
 
     /**
      * Repository type.
@@ -213,6 +227,26 @@ public final class ArtifactEvent {
     }
 
     /**
+     * Return a copy carrying the request context that {@code EcsLoggingSlice}
+     * stamped on the inbound request as the internal
+     * {@code X-Pantera-Ctx-Trace-Id} / {@code X-Pantera-Ctx-Client-Ip}
+     * headers. Local publish paths build their event after one or more async
+     * hops, on a thread whose MDC is empty or still holds another request's
+     * values, so the construction-time MDC capture is unreliable there; the
+     * headers travel with the request and are authoritative. A header that is
+     * absent keeps the value captured at construction.
+     *
+     * @param headers Request headers of the publish
+     * @return Copy with the request's trace id and client IP bound
+     */
+    public ArtifactEvent withRequestContext(final Headers headers) {
+        return this.withContext(
+            ArtifactEvent.header(headers, EcsLoggingSlice.CTX_TRACE_ID_HEADER),
+            ArtifactEvent.header(headers, EcsLoggingSlice.CTX_CLIENT_IP_HEADER)
+        );
+    }
+
+    /**
      * Originating HTTP {@code trace.id} captured at construction time.
      * @return Trace id, or {@code null} when the event was produced outside
      *     a request scope (e.g. scheduled jobs, import CLI).
@@ -311,6 +345,25 @@ public final class ArtifactEvent {
                          final String artifactName, final String version, final long size) {
         this(repoType, repoName, owner, artifactName, version, size,
             System.currentTimeMillis(), Optional.empty(), null, Type.INSERT);
+    }
+
+    /**
+     * Creation order of this event within this process: an event created
+     * before another has a lower sequence. Lets the index writer drop events
+     * that a repository or path delete has since superseded, however long
+     * they waited in the queue. Not part of equality.
+     * @return Sequence number
+     */
+    public long sequence() {
+        return this.sequence;
+    }
+
+    /**
+     * The sequence of the most recently created event.
+     * @return Latest sequence number (0 before any event)
+     */
+    public static long latestSequence() {
+        return ArtifactEvent.SEQUENCE.get();
     }
 
     /**
@@ -426,6 +479,21 @@ public final class ArtifactEvent {
             ", created=" + created +
             ", release=" + release.orElse(null) +
             '}';
+    }
+
+    /**
+     * First non-blank value of a header.
+     *
+     * @param headers Headers
+     * @param name Header name
+     * @return Value, or {@code null} when absent or blank
+     */
+    private static String header(final Headers headers, final String name) {
+        return headers.find(name).stream()
+            .map(Header::getValue)
+            .filter(value -> value != null && !value.isBlank())
+            .findFirst()
+            .orElse(null);
     }
 
     /**

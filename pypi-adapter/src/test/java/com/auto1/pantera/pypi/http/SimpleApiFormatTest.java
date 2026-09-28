@@ -10,8 +10,12 @@
  */
 package com.auto1.pantera.pypi.http;
 
+import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.Header;
+import java.util.List;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
@@ -102,7 +106,7 @@ class SimpleApiFormatTest {
     }
 
     @Test
-    void latestJsonAliasSelectsJson() {
+    void latestJsonAliasAloneSelectsJson() {
         MatcherAssert.assertThat(
             SimpleApiFormat.fromHeaders(
                 Headers.from(new Header("Accept", "application/vnd.pypi.simple.latest+json"))
@@ -112,7 +116,7 @@ class SimpleApiFormatTest {
     }
 
     @Test
-    void latestHtmlAliasSelectsHtml() {
+    void latestHtmlAliasAloneSelectsHtml() {
         MatcherAssert.assertThat(
             SimpleApiFormat.fromHeaders(
                 Headers.from(new Header("Accept", "application/vnd.pypi.simple.latest+html"))
@@ -122,7 +126,9 @@ class SimpleApiFormatTest {
     }
 
     @Test
-    void equalQValuesDefaultToHtml() {
+    void equalQValuesPreferJson() {
+        // On a tie the explicit PEP 691 type is the more specific request,
+        // so JSON wins.
         MatcherAssert.assertThat(
             SimpleApiFormat.fromHeaders(
                 Headers.from(
@@ -132,7 +138,7 @@ class SimpleApiFormatTest {
                     )
                 )
             ),
-            new IsEqual<>(SimpleApiFormat.HTML)
+            new IsEqual<>(SimpleApiFormat.JSON)
         );
     }
 
@@ -177,6 +183,141 @@ class SimpleApiFormatTest {
         MatcherAssert.assertThat(
             SimpleApiFormat.HTML.contentType(),
             new IsEqual<>("text/html")
+        );
+    }
+
+    @Test
+    void honoursQualityValuesPreferringHtml() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header(
+                        "Accept",
+                        "text/html;q=0.5, application/vnd.pypi.simple.v1+json;q=0.1"
+                    )
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.HTML)
+        );
+    }
+
+    @Test
+    void latestJsonAliasSelectsJson() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(new Header("Accept", "application/vnd.pypi.simple.latest+json"))
+            ),
+            new IsEqual<>(SimpleApiFormat.JSON)
+        );
+    }
+
+    @Test
+    void latestHtmlAliasSelectsHtml() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header(
+                        "Accept",
+                        "application/vnd.pypi.simple.latest+html, "
+                            + "application/vnd.pypi.simple.v1+json;q=0.2"
+                    )
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.HTML)
+        );
+    }
+
+    @Test
+    void zeroQualityJsonIsNotAcceptable() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header("Accept", "application/vnd.pypi.simple.v1+json;q=0, */*")
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.HTML)
+        );
+    }
+
+    @Test
+    void pipDefaultAcceptSelectsJson() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header(
+                        "Accept",
+                        "application/vnd.pypi.simple.v1+json, "
+                            + "application/vnd.pypi.simple.v1+html; q=0.1, text/html; q=0.01"
+                    )
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.JSON)
+        );
+    }
+
+    @Test
+    void latestHtmlAnswersTheVersionedHtmlType() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.negotiated(
+                new Response(
+                    RsStatus.OK,
+                    Headers.from(new Header("Content-Type", "text/html")),
+                    Content.EMPTY
+                ),
+                Headers.from(new Header("Accept", "application/vnd.pypi.simple.latest+html"))
+            ).headers().values("Content-Type"),
+            new IsEqual<>(List.of("application/vnd.pypi.simple.v1+html"))
+        );
+    }
+
+    @Test
+    void wildcardKeepsTextHtml() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.negotiated(
+                new Response(
+                    RsStatus.OK,
+                    Headers.from(new Header("Content-Type", "text/html; charset=utf-8")),
+                    Content.EMPTY
+                ),
+                Headers.from(new Header("Accept", "*/*"))
+            ).headers().values("Content-Type"),
+            new IsEqual<>(List.of("text/html; charset=utf-8"))
+        );
+    }
+
+    @Test
+    void preferredTextHtmlKeepsTextHtml() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.negotiated(
+                new Response(
+                    RsStatus.OK,
+                    Headers.from(new Header("Content-Type", "text/html")),
+                    Content.EMPTY
+                ),
+                Headers.from(
+                    new Header(
+                        "Accept", "text/html, application/vnd.pypi.simple.v1+html; q=0.5"
+                    )
+                )
+            ).headers().values("Content-Type"),
+            new IsEqual<>(List.of("text/html"))
+        );
+    }
+
+    @Test
+    void negotiatedResponsesVaryOnAccept() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.negotiated(
+                new Response(
+                    RsStatus.OK,
+                    Headers.from(
+                        new Header("Content-Type", "application/vnd.pypi.simple.v1+json")
+                    ),
+                    Content.EMPTY
+                ),
+                Headers.from(new Header("Accept", "application/vnd.pypi.simple.v1+json"))
+            ).headers().values("Vary"),
+            new IsEqual<>(List.of("Accept"))
         );
     }
 }

@@ -17,18 +17,18 @@ import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.response.CooldownResponseFactory;
+import com.auto1.pantera.docker.misc.OfficialImageName;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
-import org.slf4j.MDC;
 
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
@@ -59,7 +59,13 @@ import java.util.stream.StreamSupport;
  * tag-only check misses the "digest-blocked, tag re-used" case;
  * a digest-only check misses the "tag moved to a new digest since
  * the block was recorded" case. Checking both covers every
- * combination the operator might have produced.</p>
+ * combination the operator might have produced. Because a blocked pull
+ * leaves both a tag row and a digest row, a manual unblock of the tag
+ * releases the digests the tag points to as well (see
+ * {@code DockerLinkedDigests} in pantera-main).</p>
+ *
+ * <p>Both rows are keyed by the canonical image name
+ * ({@link CooldownImageName}), never the raw path segment.</p>
  *
  * <p>When blocked, returns <strong>404 {@code MANIFEST_UNKNOWN}</strong>
  * per the OCI distribution spec for "the referenced tag was not
@@ -127,6 +133,16 @@ public final class DockerManifestByTagHandler {
     private final DockerManifestByTagMetadataRequestDetector detector;
 
     /**
+     * Canonical cooldown artifact name for a request-path image name.
+     */
+    private final CooldownImageName names;
+
+    /**
+     * Records the served manifest's release date before evaluation.
+     */
+    private final ManifestReleaseRecorder recorder;
+
+    /**
      * Ctor.
      *
      * @param upstream Upstream Docker registry proxy slice
@@ -142,12 +158,41 @@ public final class DockerManifestByTagHandler {
         final String repoType,
         final String repoName
     ) {
+        this(
+            upstream, cooldown, inspector, repoType, repoName,
+            new CooldownImageName(repoName, new OfficialImageName(false)),
+            ManifestReleaseRecorder.NONE
+        );
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param upstream Upstream Docker registry proxy slice
+     * @param cooldown Cooldown evaluation service
+     * @param inspector Cooldown inspector
+     * @param repoType Repository type (e.g. {@code "docker-proxy"})
+     * @param repoName Repository name
+     * @param names Canonical cooldown artifact naming
+     * @param recorder Release-date recorder run before evaluation
+     */
+    public DockerManifestByTagHandler(
+        final Slice upstream,
+        final CooldownService cooldown,
+        final CooldownInspector inspector,
+        final String repoType,
+        final String repoName,
+        final CooldownImageName names,
+        final ManifestReleaseRecorder recorder
+    ) {
         this.upstream = upstream;
         this.cooldown = cooldown;
         this.inspector = inspector;
         this.repoType = repoType;
         this.repoName = repoName;
         this.detector = new DockerManifestByTagMetadataRequestDetector();
+        this.names = names;
+        this.recorder = recorder;
     }
 
     /**
@@ -176,9 +221,7 @@ public final class DockerManifestByTagHandler {
         final String user
     ) {
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext ctx = new AuditContext(headers);
         final String path = line.uri().getPath();
         final String image = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a manifest-by-tag path: " + path)
@@ -198,8 +241,14 @@ public final class DockerManifestByTagHandler {
                     );
                 }
                 // Buffer the manifest body — it is small JSON (<50 KB).
+                final String artifact = this.names.of(image);
+                final Optional<String> digest = digestHeader(resp.headers());
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.evaluateAndRespond(resp.headers(), bytes, image, tag, user, ctx)
+                    this.recorder.record(image, artifact, tag, digest, resp.headers(), bytes)
+                        .exceptionally(err -> null)
+                        .thenCompose(ignored -> this.evaluateAndRespond(
+                            resp.headers(), bytes, artifact, tag, user, ctx
+                        ))
                 );
             });
     }
@@ -268,8 +317,10 @@ public final class DockerManifestByTagHandler {
             + "\"detail\":{\"Tag\":\"%s\"}}]}",
             tag.replace("\"", "\\\"")
         );
+        // The cooldown marker makes GroupResolver treat this 404 as an
+        // authoritative verdict: the walk stops and it is never negative-cached.
         return ResponseBuilder.notFound()
-            .header("X-Pantera-Cooldown", "blocked")
+            .header(CooldownResponseFactory.HEADER, "blocked")
             .jsonBody(body)
             .build();
     }

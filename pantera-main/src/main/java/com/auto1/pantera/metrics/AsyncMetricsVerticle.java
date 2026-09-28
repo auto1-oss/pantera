@@ -149,7 +149,11 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
     public void start(final Promise<Void> startPromise) {
         final HttpServerOptions options = new HttpServerOptions()
             .setPort(this.port)
-            .setHost("0.0.0.0") // NOPMD AvoidUsingHardCodedIP - server bind on all interfaces (wildcard, not a target IP)
+            // The scrape endpoint is unauthenticated by Prometheus convention
+            // and exposes repository/upstream topology in its labels; bind it
+            // to a private interface with PANTERA_METRICS_BIND (2.2.9) —
+            // the default keeps the historical all-interfaces bind.
+            .setHost(System.getenv().getOrDefault("PANTERA_METRICS_BIND", "0.0.0.0")) // NOPMD AvoidUsingHardCodedIP - default wildcard bind, not a target IP
             .setIdleTimeout(60)
             .setTcpKeepAlive(true)
             .setTcpNoDelay(true);

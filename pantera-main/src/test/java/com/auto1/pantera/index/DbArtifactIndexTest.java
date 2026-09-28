@@ -139,6 +139,63 @@ class DbArtifactIndexTest {
     }
 
     @Test
+    void getStatsScopesDocumentCountToAllowedRepos() throws Exception {
+        this.index.index(new ArtifactDocument(
+            "maven", "repo-a", "com/example/a1", "a1", "1.0", 10L, Instant.now(), "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo-a", "com/example/a2", "a2", "1.0", 10L, Instant.now(), "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo-b", "com/example/b1", "b1", "1.0", 10L, Instant.now(), "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo-c", "com/example/c1", "c1", "1.0", 10L, Instant.now(), "u"
+        )).join();
+        MatcherAssert.assertThat(
+            "a null scope counts every repository (global total)",
+            DbArtifactIndexTest.documents(this.index.getStats(null).join()),
+            new IsEqual<>(4L)
+        );
+        MatcherAssert.assertThat(
+            "the no-arg getStats stays the global total",
+            DbArtifactIndexTest.documents(this.index.getStats().join()),
+            new IsEqual<>(4L)
+        );
+        MatcherAssert.assertThat(
+            "a two-repo scope counts only those repositories",
+            DbArtifactIndexTest.documents(this.index.getStats(List.of("repo-a", "repo-b")).join()),
+            new IsEqual<>(3L)
+        );
+        MatcherAssert.assertThat(
+            "a single-repo scope counts only that repository",
+            DbArtifactIndexTest.documents(this.index.getStats(List.of("repo-a")).join()),
+            new IsEqual<>(2L)
+        );
+        MatcherAssert.assertThat(
+            "an empty scope is a genuine deny-all",
+            DbArtifactIndexTest.documents(this.index.getStats(List.of()).join()),
+            new IsEqual<>(0L)
+        );
+        MatcherAssert.assertThat(
+            "an unknown repository contributes zero",
+            DbArtifactIndexTest.documents(this.index.getStats(List.of("does-not-exist")).join()),
+            new IsEqual<>(0L)
+        );
+        MatcherAssert.assertThat(
+            "a known + unknown mix counts only the known repository",
+            DbArtifactIndexTest.documents(
+                this.index.getStats(List.of("repo-b", "does-not-exist")).join()
+            ),
+            new IsEqual<>(1L)
+        );
+    }
+
+    private static long documents(final Map<String, Object> stats) {
+        return ((Number) stats.get("documents")).longValue();
+    }
+
+    @Test
     void indexUpsert() throws Exception {
         final Instant now = Instant.now();
         this.index.index(new ArtifactDocument(
@@ -1017,6 +1074,150 @@ class DbArtifactIndexTest {
             this.index.locateByName("com/example/other/2.0/other-2.0.jar")
                 .join().orElseThrow(),
             Matchers.contains("repo1")
+        );
+    }
+
+    /**
+     * A REST delete cascades on the storage path the rows were indexed
+     * from: the {@code path_prefix} (maven, composer, docker keep a package
+     * identity in {@code name}) as well as the {@code name}.
+     */
+    @Test
+    void removeByPathMatchesPathPrefixOfPackageNamedFormats() throws Exception {
+        this.insertArtifactRow(
+            "maven", "mvn", "com.qa.lib", "0.0.2", 1L, "u", "/com/qa/lib/0.0.2"
+        );
+        this.insertArtifactRow(
+            "maven", "mvn", "com.qa.lib", "0.0.3", 1L, "u", "com/qa/lib/0.0.3"
+        );
+        this.insertArtifactRow(
+            "maven", "mvn", "com.qa.lib-extra", "1.0", 1L, "u", "com/qa/lib-extra/1.0"
+        );
+        this.insertArtifactRow(
+            "docker", "dock", "dock/qa/app", "1.0", 1L, "u",
+            "docker/registry/v2/repositories/qa/app/_manifests/tags/1.0/current/link"
+        );
+        this.insertArtifactRow(
+            "php", "php", "qa/helper", "1.0.0", 1L, "u",
+            "artifacts/qa/helper/1.0.0/qa-helper-1.0.0.zip"
+        );
+        MatcherAssert.assertThat(
+            "version folder delete removes the legacy slash-prefixed maven row",
+            this.index.removeByPath("mvn", "com/qa/lib/0.0.2").join(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "artifact folder delete removes its versions but not a sibling sharing the string prefix",
+            this.index.removeByPath("mvn", "com/qa/lib").join(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "docker tag delete removes the row whose path_prefix is under the tag",
+            this.index.removeByPath(
+                "dock", "docker/registry/v2/repositories/qa/app/_manifests/tags/1.0"
+            ).join(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "composer archive delete removes the row indexed from that archive",
+            this.index.removeByPath(
+                "php", "artifacts/qa/helper/1.0.0/qa-helper-1.0.0.zip"
+            ).join(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "the sibling artifact must survive",
+            this.index.locateByName("com.qa.lib-extra").join().orElseThrow(),
+            new IsEqual<>(List.of("mvn"))
+        );
+    }
+
+    /**
+     * Deleting a repository removes all of its rows and only its rows.
+     */
+    @Test
+    void removeRepoRemovesOnlyThatRepository() throws Exception {
+        final Instant now = Instant.now();
+        this.index.index(new ArtifactDocument(
+            "file", "gone", "a/b.txt", "b.txt", "1", 1L, now, "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "file", "gone", "a/c.txt", "c.txt", "1", 1L, now, "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "file", "gone-too", "a/b.txt", "b.txt", "1", 1L, now, "u"
+        )).join();
+        MatcherAssert.assertThat(
+            "both rows of the deleted repository are removed",
+            this.index.removeRepo("gone").join(),
+            new IsEqual<>(2)
+        );
+        MatcherAssert.assertThat(
+            "a repository whose name merely starts the same is untouched",
+            this.index.locateByName("a/b.txt").join().orElseThrow(),
+            new IsEqual<>(List.of("gone-too"))
+        );
+    }
+
+    /**
+     * B84: V145 renames Go rows indexed under the '!'-escaped module path to
+     * the real path, and drops an escaped row whose decoded twin exists.
+     */
+    @Test
+    void v145DecodesEscapedGoModuleNames() throws Exception {
+        this.insertArtifactRow(
+            "go", "go-local", "github.com/!burnt!sushi/toml", "1.3.2", 1L, "u",
+            "github.com/!burnt!sushi/toml/@v/v1.3.2.zip"
+        );
+        this.insertArtifactRow(
+            "go-proxy", "go-remote", "github.com/!azure/sdk", "1.0.0", 1L, "u", null
+        );
+        this.insertArtifactRow(
+            "go-proxy", "go-remote", "github.com/Azure/sdk", "1.0.0", 1L, "u", null
+        );
+        this.insertArtifactRow(
+            "npm", "npm-local", "odd!name", "1.0.0", 1L, "u", null
+        );
+        try (Connection conn = this.dataSource.getConnection();
+             Statement stmt = conn.createStatement()) {
+            stmt.execute(
+                new String(
+                    DbArtifactIndexTest.class.getResourceAsStream(
+                        "/db/migration/V145__go_index_real_module_path.sql"
+                    ).readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8
+                )
+            );
+        }
+        MatcherAssert.assertThat(
+            "the escaped local row is renamed to the real module path",
+            this.index.locateByName("github.com/BurntSushi/toml").join().orElseThrow(),
+            new IsEqual<>(List.of("go-local"))
+        );
+        MatcherAssert.assertThat(
+            "the escaped duplicate of an already decoded row is gone",
+            this.index.locateByName("github.com/!azure/sdk").join().orElseThrow(),
+            new IsEqual<>(List.of())
+        );
+        MatcherAssert.assertThat(
+            "other formats are untouched",
+            this.index.locateByName("odd!name").join().orElseThrow(),
+            new IsEqual<>(List.of("npm-local"))
+        );
+    }
+
+    /**
+     * B25: maven local uploads stored {@code path_prefix} with a leading
+     * slash before 2.2.9; {@code locate} must still find those rows.
+     */
+    @Test
+    void locateFindsLegacySlashPrefixedPathPrefix() throws Exception {
+        this.insertArtifactRow(
+            "maven", "maven-local", "com.qa.locate", "1.0", 1L, "u", "/com/qa/locate/1.0"
+        );
+        MatcherAssert.assertThat(
+            this.index.locate("com/qa/locate/1.0/locate-1.0.jar").join(),
+            new IsEqual<>(List.of("maven-local"))
         );
     }
 

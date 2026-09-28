@@ -16,7 +16,7 @@
     "@elastic/apm-rum": "5.17.4",
     "@elastic/apm-rum-vue": "2.1.14",
     "@primeuix/themes": "2.0.3",
-    "axios": "1.16.0",
+    "axios": "1.18.0",
     "chart.js": "4.5.1",
     "pinia": "2.3.1",
     "primeicons": "7.0.0",
@@ -41,12 +41,12 @@
     "typescript": "5.9.3",
     "typescript-eslint": "8.58.1",
     "vite": "8.0.16",
-    "vitest": "3.2.6",
+    "vitest": "5.0.2",
     "vue-eslint-parser": "10.4.0",
     "vue-tsc": "3.2.6"
   },
   "overrides": {
     "glob": "^13.0.0",
-    "postcss": "^8.5.14"
+    "postcss": "^8.5.26"
   }
 }

@@ -100,6 +100,21 @@ public final class NegativeCache {
     /** Wire-prefix for an "invalidate by artifact name" peer message. */
     private static final String NAME_PREFIX = "name:";
 
+    /** L2 key prefix of every negative-cache entry. */
+    private static final String L2_PREFIX = "negative:";
+
+    /** SCAN page size for L2 sweeps and admin listings. */
+    private static final int SCAN_COUNT = 1000;
+
+    /** Per-command timeout for admin L2 operations, in milliseconds. */
+    private static final long L2_ADMIN_TIMEOUT_MS = 5_000L;
+
+    /**
+     * Above this many dropped keys, peers are told to drop their whole L1
+     * instead of receiving one pub/sub message per key.
+     */
+    private static final int MAX_PUBLISHED_KEYS = 200;
+
     /**
      * Create negative cache from config (the single-instance wiring constructor).
      *
@@ -122,13 +137,31 @@ public final class NegativeCache {
      *               single-node deployments and tests).
      */
     public NegativeCache(final NegativeCacheConfig config, final CacheInvalidationPubSub pubsub) {
-        this.enabled = true;
-        this.ttl = config.l2Ttl();
-        final RedisAsyncCommands<String, byte[]> l2Commands =
+        this(
+            config, pubsub,
             GlobalCacheConfig.valkeyConnection()
                 .filter(v -> config.isValkeyEnabled())
                 .map(ValkeyConnection::async)
-                .orElse(null);
+                .orElse(null)
+        );
+    }
+
+    /**
+     * Create negative cache over an explicit L2 command set (the
+     * field-initialising constructor). Package-private so Valkey-gated
+     * tests can bind a dedicated connection without touching the
+     * process-wide {@link GlobalCacheConfig}.
+     *
+     * @param config Unified negative cache configuration.
+     * @param pubsub Cross-instance pubsub, may be {@code null}.
+     * @param l2Commands L2 commands, {@code null} for single-tier.
+     */
+    NegativeCache(
+        final NegativeCacheConfig config, final CacheInvalidationPubSub pubsub,
+        final RedisAsyncCommands<String, byte[]> l2Commands
+    ) {
+        this.enabled = true;
+        this.ttl = config.l2Ttl();
         this.l2 = l2Commands;
         this.twoTier = l2Commands != null;
         final int maxSize = config.isValkeyEnabled() ? config.l1MaxSize() : config.maxSize();
@@ -336,6 +369,15 @@ public final class NegativeCache {
                 .toArray(String[]::new);
             this.l2.del(redisKeys);
         }
+        if (this.twoTier) {
+            // The L1 scan only sees what THIS node cached. A 404 recorded by
+            // a peer lives in L2 alone here, and the peer's pub/sub drop is
+            // undone on its next miss by re-promoting the surviving L2 key —
+            // so the L2 sweep must not depend on the local L1 (same class of
+            // bug as the 2.2.7 envelope fix). Asynchronous: the upload path
+            // must not wait on Valkey.
+            this.sweepL2ByName(artifactName);
+        }
         // Peer fan-out — every other Pantera instance runs the same
         // name-match scan over its local L1. The publish carries the
         // artifact name rather than every matched flat-key so the
@@ -478,6 +520,346 @@ public final class NegativeCache {
      */
     public boolean isEnabled() {
         return this.enabled;
+    }
+
+    /**
+     * Whether this cache has a Valkey L2 tier.
+     *
+     * @return True when two-tier
+     */
+    public boolean hasL2() {
+        return this.twoTier;
+    }
+
+    /**
+     * Snapshot of this node's L1 keys in {@link NegativeCacheKey#flat()} form.
+     * Admin diagnostics only — copies the key set, never the values.
+     *
+     * @return Immutable copy of the L1 flat keys
+     */
+    public java.util.Set<String> l1Keys() {
+        return java.util.Set.copyOf(this.notFoundCache.asMap().keySet());
+    }
+
+    /**
+     * Whether a key is present in this node's L1, without touching the
+     * hit/miss statistics the serving path records.
+     *
+     * @param key Composite key
+     * @return True when present in L1
+     */
+    public boolean inL1(final NegativeCacheKey key) {
+        return this.notFoundCache.asMap().containsKey(key.flat());
+    }
+
+    /**
+     * Cursor-based SCAN of the L2 {@code negative:*} keyspace, bounded by
+     * {@code limit} keys. Empty when there is no L2.
+     *
+     * @param limit Maximum number of keys to collect
+     * @return Future of the flat keys found and whether the scan stopped early
+     */
+    public CompletableFuture<L2Keys> l2Keys(final int limit) {
+        if (!this.twoTier) {
+            return CompletableFuture.completedFuture(new L2Keys(List.of(), false));
+        }
+        return this.collectL2(ScanCursor.INITIAL, new java.util.ArrayList<>(), limit);
+    }
+
+    /**
+     * Remaining L2 TTL per flat key, in milliseconds. Absent keys map to
+     * {@code -2} and keys without expiry to {@code -1} (Valkey PTTL
+     * semantics). Empty when there is no L2.
+     *
+     * @param flats Flat keys
+     * @return Future of flat key to PTTL
+     */
+    public CompletableFuture<java.util.Map<String, Long>> l2TtlMillis(
+        final java.util.Collection<String> flats
+    ) {
+        final java.util.Map<String, Long> result =
+            new java.util.concurrent.ConcurrentHashMap<>();
+        if (!this.twoTier || flats.isEmpty()) {
+            return CompletableFuture.completedFuture(result);
+        }
+        final CompletableFuture<?>[] all = flats.stream()
+            .distinct()
+            .map(
+                flat -> this.l2.pttl(L2_PREFIX + flat).toCompletableFuture()
+                    .orTimeout(L2_ADMIN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    .thenAccept(ttl -> result.put(flat, ttl == null ? -2L : ttl))
+            )
+            .toArray(CompletableFuture[]::new);
+        return CompletableFuture.allOf(all).thenApply(ignored -> result);
+    }
+
+    /**
+     * Invalidate one key and report honestly what was removed from each
+     * tier: L1 from the local removal, L2 from the {@code DEL} reply.
+     * Peers drop their L1 via pub/sub.
+     *
+     * @param key Composite key
+     * @return Future of the per-tier counts
+     */
+    public CompletableFuture<Invalidation> invalidateCounted(final NegativeCacheKey key) {
+        final String flat = key.flat();
+        final int l1 = this.notFoundCache.asMap().remove(flat) == null ? 0 : 1;
+        if (this.pubsub != null) {
+            this.pubsub.publish(PUBSUB_CHANNEL, flat);
+        }
+        if (!this.twoTier) {
+            return CompletableFuture.completedFuture(new Invalidation(l1, 0));
+        }
+        return this.l2.del(L2_PREFIX + flat).toCompletableFuture()
+            .orTimeout(L2_ADMIN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .thenApply(
+                deleted -> new Invalidation(l1, deleted == null ? 0 : deleted.intValue())
+            );
+    }
+
+    /**
+     * Invalidate every entry whose key matches {@code match}, in this node's
+     * L1 AND across the whole L2 keyspace (cursor SCAN, independent of what
+     * L1 holds), then tell peers to drop theirs. Small match sets are
+     * published key by key; large ones make peers drop their whole L1 — a
+     * safe superset, L1 re-hydrates from L2.
+     *
+     * @param match Key predicate
+     * @return Future of honest per-tier counts (L1 = this node)
+     */
+    public CompletableFuture<Invalidation> invalidateMatching(
+        final java.util.function.Predicate<NegativeCacheKey> match
+    ) {
+        final java.util.Set<String> dropped = new java.util.HashSet<>();
+        for (final String flat : this.l1Keys()) {
+            final NegativeCacheKey nck = NegativeCacheKey.parse(flat);
+            if (nck != null && match.test(nck)
+                && this.notFoundCache.asMap().remove(flat) != null) {
+                dropped.add(flat);
+            }
+        }
+        final int l1 = dropped.size();
+        final CompletableFuture<List<String>> l2Deleted;
+        if (this.twoTier) {
+            l2Deleted = this.deleteL2Matching(
+                ScanCursor.INITIAL, match, new java.util.ArrayList<>()
+            );
+        } else {
+            l2Deleted = CompletableFuture.completedFuture(List.of());
+        }
+        return l2Deleted.thenApply(l2keys -> {
+            dropped.addAll(l2keys);
+            this.publishDropped(dropped);
+            return new Invalidation(l1, l2keys.size());
+        });
+    }
+
+    /**
+     * Fan a set of dropped flat keys out to peers.
+     *
+     * @param dropped Flat keys dropped locally
+     */
+    private void publishDropped(final java.util.Set<String> dropped) {
+        if (this.pubsub == null || dropped.isEmpty()) {
+            return;
+        }
+        if (dropped.size() > MAX_PUBLISHED_KEYS) {
+            this.pubsub.publishAll(PUBSUB_CHANNEL);
+        } else {
+            for (final String flat : dropped) {
+                this.pubsub.publish(PUBSUB_CHANNEL, flat);
+            }
+        }
+    }
+
+    /**
+     * One SCAN page of {@link #l2Keys(int)}.
+     *
+     * @param cursor Scan cursor
+     * @param acc Accumulated flat keys
+     * @param limit Collection bound
+     * @return Future of the collected keys
+     */
+    private CompletableFuture<L2Keys> collectL2(
+        final ScanCursor cursor, final List<String> acc, final int limit
+    ) {
+        return this.l2.scan(cursor, ScanArgs.Builder.matches(L2_PREFIX + "*").limit(SCAN_COUNT))
+            .toCompletableFuture()
+            .orTimeout(L2_ADMIN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .thenCompose(page -> {
+                for (final String key : page.getKeys()) {
+                    if (acc.size() >= limit) {
+                        return CompletableFuture.completedFuture(new L2Keys(acc, true));
+                    }
+                    acc.add(key.substring(L2_PREFIX.length()));
+                }
+                if (page.isFinished()) {
+                    return CompletableFuture.completedFuture(new L2Keys(acc, false));
+                }
+                return this.collectL2(page, acc, limit);
+            });
+    }
+
+    /**
+     * One SCAN page of {@link #invalidateMatching}: deletes the matching
+     * keys of the page, then recurses.
+     *
+     * @param cursor Scan cursor
+     * @param match Key predicate
+     * @param deleted Flat keys deleted so far
+     * @return Future of every deleted flat key
+     */
+    private CompletableFuture<List<String>> deleteL2Matching(
+        final ScanCursor cursor,
+        final java.util.function.Predicate<NegativeCacheKey> match,
+        final List<String> deleted
+    ) {
+        return this.l2.scan(cursor, ScanArgs.Builder.matches(L2_PREFIX + "*").limit(SCAN_COUNT))
+            .toCompletableFuture()
+            .orTimeout(L2_ADMIN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .thenCompose(page -> {
+                final List<String> victims = new java.util.ArrayList<>();
+                for (final String key : page.getKeys()) {
+                    final NegativeCacheKey nck =
+                        NegativeCacheKey.parse(key.substring(L2_PREFIX.length()));
+                    if (nck != null && match.test(nck)) {
+                        victims.add(key);
+                    }
+                }
+                final CompletableFuture<Void> del;
+                if (victims.isEmpty()) {
+                    del = CompletableFuture.completedFuture(null);
+                } else {
+                    del = this.l2.del(victims.toArray(new String[0])).toCompletableFuture()
+                        .orTimeout(L2_ADMIN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                        .thenAccept(ignored -> victims.forEach(
+                            key -> deleted.add(key.substring(L2_PREFIX.length()))
+                        ));
+                }
+                return del.thenCompose(ignored -> {
+                    if (page.isFinished()) {
+                        return CompletableFuture.completedFuture(deleted);
+                    }
+                    return this.deleteL2Matching(page, match, deleted);
+                });
+            });
+    }
+
+    /**
+     * Asynchronous L2 sweep for {@link #invalidateByArtifactName}: SCAN with
+     * a server-side MATCH anchored on the artifact-name segment — for the
+     * name and each of its parent paths — verified client-side with the same
+     * rule as the L1 scan. A failure is logged; the entry then expires via
+     * TTL.
+     *
+     * @param artifactName Canonical artifact name just stored
+     */
+    private void sweepL2ByName(final String artifactName) {
+        final java.util.Set<String> names = new java.util.LinkedHashSet<>();
+        String cur = artifactName;
+        while (!cur.isEmpty()) {
+            names.add(cur);
+            final int slash = cur.lastIndexOf('/');
+            cur = slash > 0 ? cur.substring(0, slash) : "";
+        }
+        for (final String name : names) {
+            final String pattern = L2_PREFIX + "*:*:"
+                + NegativeCache.escapeGlob(NegativeCache.encodeSegment(name)) + ":*";
+            this.sweepL2Step(ScanCursor.INITIAL, pattern, artifactName)
+                .whenComplete((ignored, err) -> {
+                    if (err != null) {
+                        EcsLogger.warn("com.auto1.pantera.cache")
+                            .message("Negative-cache L2 sweep failed; entries expire via TTL")
+                            .eventCategory("database")
+                            .eventAction("neg_cache_invalidate_l2")
+                            .eventOutcome("failure")
+                            .field("package.name", artifactName)
+                            .error(err)
+                            .field("log.source", "application")
+                            .log();
+                    }
+                });
+        }
+    }
+
+    /**
+     * One page of {@link #sweepL2ByName(String)}.
+     *
+     * @param cursor Scan cursor
+     * @param pattern Server-side MATCH pattern
+     * @param uploaded Uploaded artifact name (client-side verification)
+     * @return Future completing when the sweep finishes
+     */
+    private CompletableFuture<Void> sweepL2Step(
+        final ScanCursor cursor, final String pattern, final String uploaded
+    ) {
+        return this.l2.scan(cursor, ScanArgs.Builder.matches(pattern).limit(SCAN_COUNT))
+            .toCompletableFuture()
+            .thenCompose(page -> {
+                final String[] victims = page.getKeys().stream()
+                    .filter(key -> {
+                        final NegativeCacheKey nck =
+                            NegativeCacheKey.parse(key.substring(L2_PREFIX.length()));
+                        return nck != null
+                            && cachedNameMatchesUploaded(nck.artifactName(), uploaded);
+                    })
+                    .toArray(String[]::new);
+                if (victims.length > 0) {
+                    this.l2.del(victims);
+                }
+                if (page.isFinished()) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                return this.sweepL2Step(page, pattern, uploaded);
+            });
+    }
+
+    /**
+     * Flat-key segment encoding, identical to {@link NegativeCacheKey#flat()}.
+     *
+     * @param value Raw segment
+     * @return Encoded segment
+     */
+    private static String encodeSegment(final String value) {
+        final String flat = new NegativeCacheKey("s", "t", value, "").flat();
+        return flat.substring("s:t:".length(), flat.length() - 1);
+    }
+
+    /**
+     * Escape Valkey glob metacharacters so a literal name cannot act as a
+     * pattern.
+     *
+     * @param raw Literal
+     * @return Glob-safe literal
+     */
+    private static String escapeGlob(final String raw) {
+        final StringBuilder out = new StringBuilder(raw.length());
+        for (int idx = 0; idx < raw.length(); idx = idx + 1) {
+            final char chr = raw.charAt(idx);
+            if (chr == '*' || chr == '?' || chr == '[' || chr == ']' || chr == '\\') {
+                out.append('\\');
+            }
+            out.append(chr);
+        }
+        return out.toString();
+    }
+
+    /**
+     * Keys collected from an L2 scan.
+     *
+     * @param flats Flat keys (without the {@code negative:} prefix)
+     * @param truncated Whether the scan stopped at the bound
+     */
+    public record L2Keys(List<String> flats, boolean truncated) {
+    }
+
+    /**
+     * Honest per-tier invalidation counts.
+     *
+     * @param l1 Entries removed from this node's L1
+     * @param l2 Entries removed from L2
+     */
+    public record Invalidation(int l1, int l2) {
     }
 
     /**

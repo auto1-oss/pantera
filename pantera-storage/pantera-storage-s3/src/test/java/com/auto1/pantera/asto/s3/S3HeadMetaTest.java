@@ -11,6 +11,7 @@
 package com.auto1.pantera.asto.s3;
 
 import com.auto1.pantera.asto.Meta;
+import java.time.Instant;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
@@ -47,6 +48,34 @@ final class S3HeadMetaTest {
                     .build()
             ).read(Meta.OP_MD5).orElseThrow(IllegalStateException::new),
             new IsEqual<>(hash)
+        );
+    }
+
+    @Test
+    void readUpdatedAtFromLastModified() {
+        final Instant modified = Instant.parse("2026-01-02T03:04:05Z");
+        MatcherAssert.assertThat(
+            new S3HeadMeta(
+                HeadObjectResponse.builder()
+                    .contentLength(0L)
+                    .eTag("abc")
+                    .lastModified(modified)
+                    .build()
+            ).read(Meta.OP_UPDATED_AT).orElseThrow(IllegalStateException::new),
+            new IsEqual<>(modified)
+        );
+    }
+
+    @Test
+    void omitsUpdatedAtWhenLastModifiedIsAbsent() {
+        MatcherAssert.assertThat(
+            new S3HeadMeta(
+                HeadObjectResponse.builder()
+                    .contentLength(0L)
+                    .eTag("abc")
+                    .build()
+            ).read(Meta.OP_UPDATED_AT).isPresent(),
+            new IsEqual<>(false)
         );
     }
 }

@@ -18,8 +18,10 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.html.HtmlEscape;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.pypi.NormalizedProjectName;
+import com.auto1.pantera.pypi.cooldown.Pep440VersionComparator;
 import com.auto1.pantera.pypi.meta.Metadata;
 import com.auto1.pantera.pypi.meta.PackageInfo;
 import com.jcabi.xml.XMLDocument;
@@ -27,6 +29,7 @@ import org.reactivestreams.Publisher;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -55,10 +58,7 @@ public final class SearchSlice implements Slice {
                         if (list.isEmpty()) {
                             res.complete(new Content.From(SearchSlice.empty()));
                         } else {
-                            final Key latest = list.stream().map(Key::string)
-                                .max(Comparator.naturalOrder())
-                                .map(Key.From::new)
-                                .orElseThrow(IllegalStateException::new);
+                            final Key latest = SearchSlice.latest(list);
                             res = this.storage.value(latest).thenCompose(
                                 val -> new ContentAsStream<PackageInfo>(val).process(
                                     input ->
@@ -81,6 +81,25 @@ public final class SearchSlice implements Slice {
                 return ResponseBuilder.internalError(throwable).build();
             }
         ).toCompletableFuture();
+    }
+
+    /**
+     * The distribution of the highest release, by PEP 440 ordering of the
+     * version directory (a plain string sort puts {@code 0.9} above
+     * {@code 0.10}). Ties within one release pick the greatest key so the
+     * choice is deterministic.
+     * @param keys Distribution keys of one project
+     * @return Key of a distribution of the latest release
+     */
+    private static Key latest(final Collection<Key> keys) {
+        final Comparator<String> pep440 = new Pep440VersionComparator();
+        final Comparator<Key> order = Comparator
+            .comparing(
+                (Key key) -> DistFilename.versionOf(key).orElse(""),
+                pep440
+            )
+            .thenComparing(Key::string);
+        return keys.stream().max(order).orElseThrow(IllegalStateException::new);
     }
 
     /**
@@ -116,15 +135,19 @@ public final class SearchSlice implements Slice {
             "<value><struct>",
             "<member>",
             "<name>name</name>",
-            String.format("<value><string>%s</string></value>", info.name()),
+            String.format("<value><string>%s</string></value>", HtmlEscape.escape(info.name())),
             "</member>",
             "<member>",
             "<name>summary</name>",
-            String.format("<value><string>%s</string></value>", info.summary()),
+            String.format(
+                "<value><string>%s</string></value>", HtmlEscape.escape(info.summary())
+            ),
             "</member>",
             "<member>",
             "<name>version</name>",
-            String.format("<value><string>%s</string></value>", info.version()),
+            String.format(
+                "<value><string>%s</string></value>", HtmlEscape.escape(info.version())
+            ),
             "</member>",
             "<member>",
             "<name>_pypi_ordering</name>",

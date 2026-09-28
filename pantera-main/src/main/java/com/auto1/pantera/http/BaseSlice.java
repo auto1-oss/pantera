@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.http;
 
+import com.auto1.pantera.http.slice.PathTraversalGuardSlice;
 import com.auto1.pantera.micrometer.MicrometerSlice;
 import com.auto1.pantera.settings.MetricsContext;
 
@@ -33,7 +34,7 @@ public final class BaseSlice extends Slice.Wrap {
         super(
             BaseSlice.wrapToBaseMetricsSlices(
                 mctx,
-                new SafeSlice(origin)
+                new SafeSlice(new PathTraversalGuardSlice(origin))
             )
         );
     }

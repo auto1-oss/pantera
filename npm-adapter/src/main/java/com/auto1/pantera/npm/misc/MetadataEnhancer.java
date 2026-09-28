@@ -15,6 +15,8 @@ import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
 import java.time.Instant;
+import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Enhances npm package metadata with complete fields required by npm/yarn/pnpm.
@@ -171,39 +173,31 @@ public final class MetadataEnhancer {
      */
     private JsonObject generateTimeObject() {
         final JsonObjectBuilder timeBuilder = Json.createObjectBuilder();
-        final Instant now = Instant.now();
-
-        // Track earliest and latest timestamps
-        Instant earliest = now;
-        Instant latest = now;
-
-        // Extract timestamps from versions if available
+        // Derived only from stored publish times, never from the request
+        // clock: a "now" seed made "modified" (and so the ETag over this
+        // body) change on every read, which defeated If-None-Match / 304.
+        Instant earliest = null;
+        Instant latest = null;
         if (this.original.containsKey("versions")) {
             final JsonObject versions = this.original.getJsonObject("versions");
-
-            for (String version : versions.keySet()) {
-                final JsonObject versionMeta = versions.getJsonObject(version);
-
-                // Try to extract timestamp from version metadata
-                final Instant versionTime = this.extractVersionTime(versionMeta);
-
-                // Add per-version timestamp
+            for (final String version : versions.keySet()) {
+                final Optional<Instant> stamp =
+                    this.extractVersionTime(versions.getJsonObject(version));
+                if (stamp.isEmpty()) {
+                    continue;
+                }
+                final Instant versionTime = stamp.get();
                 timeBuilder.add(version, versionTime.toString());
-
-                // Track earliest/latest
-                if (versionTime.isBefore(earliest)) {
+                if (earliest == null || versionTime.isBefore(earliest)) {
                     earliest = versionTime;
                 }
-                if (versionTime.isAfter(latest)) {
+                if (latest == null || versionTime.isAfter(latest)) {
                     latest = versionTime;
                 }
             }
         }
-
-        // Add created and modified timestamps
-        timeBuilder.add("created", earliest.toString());
-        timeBuilder.add("modified", latest.toString());
-
+        timeBuilder.add("created", Objects.requireNonNullElse(earliest, Instant.EPOCH).toString());
+        timeBuilder.add("modified", Objects.requireNonNullElse(latest, Instant.EPOCH).toString());
         return timeBuilder.build();
     }
 
@@ -236,16 +230,18 @@ public final class MetadataEnhancer {
     
     /**
      * Extract timestamp from version metadata.
-     * Falls back to current time if not available.
+     * Empty when the version carries no parseable timestamp (such a version
+     * is left out of the time object rather than stamped with the request
+     * time, which would make the packument body non-deterministic).
      *
      * @param versionMeta Version metadata
-     * @return Timestamp
+     * @return Timestamp, if recorded
      */
-    private Instant extractVersionTime(final JsonObject versionMeta) {
+    private Optional<Instant> extractVersionTime(final JsonObject versionMeta) {
         // Check if version has a _publishTime field (added by PerVersionLayout)
         if (versionMeta.containsKey("_publishTime")) {
             try {
-                return Instant.parse(versionMeta.getString("_publishTime"));
+                return Optional.of(Instant.parse(versionMeta.getString("_publishTime")));
             } catch (final Exception ex) {
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse _publishTime field")
@@ -258,7 +254,7 @@ public final class MetadataEnhancer {
         // Check if version has a _time field
         if (versionMeta.containsKey("_time")) {
             try {
-                return Instant.parse(versionMeta.getString("_time"));
+                return Optional.of(Instant.parse(versionMeta.getString("_time")));
             } catch (final Exception ex) {
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse _time field")
@@ -271,7 +267,7 @@ public final class MetadataEnhancer {
         // Check if version has a publishTime field
         if (versionMeta.containsKey("publishTime")) {
             try {
-                return Instant.parse(versionMeta.getString("publishTime"));
+                return Optional.of(Instant.parse(versionMeta.getString("publishTime")));
             } catch (final Exception ex) {
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse publishTime field")
@@ -281,7 +277,6 @@ public final class MetadataEnhancer {
             }
         }
 
-        // Fall back to current time
-        return Instant.now();
+        return Optional.empty();
     }
 }

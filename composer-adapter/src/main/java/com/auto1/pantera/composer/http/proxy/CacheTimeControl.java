@@ -12,6 +12,7 @@ package com.auto1.pantera.composer.http.proxy;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.Remote;
@@ -25,14 +26,8 @@ import java.util.concurrent.CompletionStage;
 
 /**
  * Check if saved item is expired by comparing time value.
- *
- * <p>Public (WS6.3) so other Composer packages — e.g.
- * {@code com.auto1.pantera.composer.cooldown.ComposerRootBaseLoader} —
- * can reuse the same TTL mechanism instead of hand-rolling a second one;
- * mirrors the already-public {@code CacheTimeControl} in the go-adapter
- * and pypi-adapter modules.
  */
-public final class CacheTimeControl implements CacheControl {
+final class CacheTimeControl implements CacheControl {
     /**
      * Name to file which contains info about cached items (e.g. when an item was saved).
      */
@@ -52,7 +47,7 @@ public final class CacheTimeControl implements CacheControl {
      * Ctor with default value for time of expiration (12 hours).
      * @param storage Storage
      */
-    public CacheTimeControl(final Storage storage) {
+    CacheTimeControl(final Storage storage) {
         this(storage, Duration.ofHours(12));
     }
 
@@ -61,7 +56,7 @@ public final class CacheTimeControl implements CacheControl {
      * @param storage Storage
      * @param expiration Time after which cached items are not valid
      */
-    public CacheTimeControl(final Storage storage, final Duration expiration) {
+    CacheTimeControl(final Storage storage, final Duration expiration) {
         this.storage = storage;
         this.expiration = expiration;
     }
@@ -77,21 +72,15 @@ public final class CacheTimeControl implements CacheControl {
                     if (exists) {
                         res = this.storage.metadata(item)
                             .thenApply(
-                                metadata -> {
-                                    // Try to get last updated time from filesystem
-                                    final Instant updatedAt = metadata.read(
-                                        raw -> {
-                                            if (raw.containsKey("updated-at")) {
-                                                return Instant.parse(raw.get("updated-at"));
-                                            }
-                                            // Fallback: assume valid if no timestamp
-                                            return Instant.now();
-                                        }
-                                    );
-                                    final Duration age = Duration.between(updatedAt, Instant.now());
-                                    final boolean valid = age.compareTo(this.expiration) < 0;
-                                    return valid;
-                                }
+                                // A storage that reports no updated-at gives no
+                                // evidence of freshness: treat the entry as
+                                // stale (refresh) rather than fresh forever.
+                                metadata -> metadata.read(Meta.OP_UPDATED_AT)
+                                    .map(
+                                        updated -> Duration.between(updated, Instant.now())
+                                            .compareTo(this.expiration) < 0
+                                    )
+                                    .orElse(false)
                             );
                     } else {
                         res = CompletableFuture.completedFuture(false);

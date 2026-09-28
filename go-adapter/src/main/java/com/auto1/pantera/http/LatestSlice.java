@@ -13,16 +13,20 @@ package com.auto1.pantera.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.cooldown.metadata.VersionComparators;
 import com.auto1.pantera.http.headers.ContentType;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 
 import java.net.URI;
 import java.util.Collection;
-import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Go mod slice: this slice returns json-formatted metadata about go module as
@@ -30,6 +34,11 @@ import java.util.concurrent.CompletableFuture;
  * section of readme.
  */
 public final class LatestSlice implements Slice {
+
+    /**
+     * {@code .info} file directly under an {@code @v} directory; group 1 is the version.
+     */
+    private static final Pattern INFO = Pattern.compile("^.*/@v/([^/]+)\\.info$");
 
     private final Storage storage;
 
@@ -63,40 +72,40 @@ public final class LatestSlice implements Slice {
     }
 
     /**
-     * Composes response. It filters .info files from module directory, chooses the greatest
-     * version by {@link VersionComparators#semver()} (NOT lexicographic string order — plain
-     * string comparison would rank {@code v0.9.0} above {@code v0.10.0}), and returns content
-     * from the .info file.
+     * Composes response. It takes the {@code .info} files directly under the
+     * module's {@code @v} directory whose version also has a {@code .zip}
+     * (a version without its zip cannot be downloaded), chooses the latest version by Go version
+     * ordering (highest release, else highest prerelease, else highest
+     * pseudo-version) and returns content from its {@code .info} file.
      * @param module Module file names list from repository
      * @return Response
      */
     private CompletableFuture<Response> resp(final Collection<Key> module) {
-        final Optional<String> info = module.stream().map(Key::string)
-            .filter(item -> item.endsWith("info"))
-            .max(Comparator.comparing(LatestSlice::version, VersionComparators.semver()));
-        if (info.isPresent()) {
-            return this.storage.value(new KeyFromPath(info.get()))
+        final Map<String, Key> infos = new HashMap<>();
+        final Set<String> names = new HashSet<>();
+        for (final Key key : module) {
+            names.add(key.string());
+            final Matcher matcher = LatestSlice.INFO.matcher(key.string());
+            if (matcher.matches()) {
+                infos.put(matcher.group(1), key);
+            }
+        }
+        infos.values().removeIf(
+            info -> {
+                final String name = info.string();
+                return !names.contains(
+                    name.substring(0, name.length() - ".info".length()).concat(".zip")
+                );
+            }
+        );
+        final Optional<String> latest = new GoVersionOrder().latest(infos.keySet());
+        if (latest.isPresent()) {
+            return this.storage.value(infos.get(latest.get()))
                 .thenApply(c -> ResponseBuilder.ok()
                     .header(ContentType.json())
                     .body(c)
                     .build());
         }
         return ResponseBuilder.notFound().completedFuture();
-    }
-
-    /**
-     * Extracts the version token from a {@code .info} storage key
-     * ({@code module/path/@v/v1.2.3.info} &rarr; {@code v1.2.3}) so it can be
-     * compared with {@link VersionComparators#semver()}, which tolerates the
-     * leading {@code v}.
-     * @param key Storage key string
-     * @return Version token
-     */
-    private static String version(final String key) {
-        final String filename = key.substring(key.lastIndexOf('/') + 1);
-        final String suffix = ".info";
-        return filename.endsWith(suffix)
-            ? filename.substring(0, filename.length() - suffix.length())
-            : filename;
     }
 }

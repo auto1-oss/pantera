@@ -19,6 +19,9 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.AuthzSlice;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
 import com.auto1.pantera.http.rq.RqParams;
@@ -70,11 +73,6 @@ public final class ConanUpload {
      * Host name http header.
      */
     private static final String HOST = "Host";
-
-    /**
-     * Protocol type for download URIs.
-     */
-    private static final String PROTOCOL = "http://";
 
     /**
      * Subdir for package recipe (sources).
@@ -136,22 +134,34 @@ public final class ConanUpload {
         private final ItemTokenizer tokenizer;
 
         /**
+         * Name of the repository the upload URLs are issued for.
+         */
+        private final String repository;
+
+        /**
          * @param storage Current Pantera storage instance.
          * @param tokenizer Tokenizer for repository items.
+         * @param repository Name of the repository the upload URLs are issued for.
          */
-        public UploadUrls(final Storage storage, final ItemTokenizer tokenizer) {
+        public UploadUrls(final Storage storage, final ItemTokenizer tokenizer,
+            final String repository) {
             this.storage = storage;
             this.tokenizer = tokenizer;
+            this.repository = repository;
         }
 
         @Override
         public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
             final Matcher matcher = matchRequest(line);
             final String path = matcher.group(ConanUpload.URI_PATH);
-            final String hostname = new RqHeaders.Single(headers, ConanUpload.HOST).asString();
+            final Signer signer = new Signer(
+                new RqHeaders.Single(headers, ConanUpload.HOST).asString(),
+                ConanUpload.verifiedUser(headers)
+            );
             return this.storage.exists(new Key.From(path))
                 .thenCompose(
-                    exist -> exist ? generateError(path) : generateUrls(body, path, hostname)
+                    exist -> exist ? generateError(path)
+                        : generateUrls(body, path, signer, new RepoFileUrl(headers))
                 );
         }
 
@@ -159,11 +169,12 @@ public final class ConanUpload {
          * Implements uploading from the client to server repository storage.
          * @param body Request body with file data.
          * @param path Target path for the package.
-         * @param hostname Server host name.
+         * @param signer Host and user the upload URL's signature is bound to.
+         * @param urls Client-facing URLs of repository files.
          * @return Respose result of this operation.
          */
         private CompletableFuture<Response> generateUrls(final Publisher<ByteBuffer> body,
-                                                         final String path, final String hostname) {
+            final String path, final Signer signer, final RepoFileUrl urls) {
             return new Content.From(body).asStringFuture()
                 .thenApply(
                     str -> {
@@ -186,8 +197,10 @@ public final class ConanUpload {
                                 "", "/", fpath, pkgdir, key
                             );
                             final String url = String.join(
-                                "", ConanUpload.PROTOCOL, hostname, filepath, "?signature=",
-                                this.tokenizer.generateToken(filepath, hostname)
+                                "", urls.of(filepath), "?signature=",
+                                this.tokenizer.generateToken(
+                                    filepath, signer.hostname, this.repository, signer.user
+                                )
                             );
                             result.add(key, url);
                         }
@@ -201,7 +214,53 @@ public final class ConanUpload {
     }
 
     /**
+     * User the authorization layer verified for this request: only the
+     * login header {@code AuthzSlice} sets (it drops any client-sent one).
+     * @param headers Request headers
+     * @return User name, empty when the request was not authenticated
+     */
+    private static String verifiedUser(final Headers headers) {
+        return headers.find(AuthzSlice.LOGIN_HDR).stream()
+            .findFirst()
+            .map(Header::getValue)
+            .filter(val -> !val.isBlank() && !AuthUser.ANONYMOUS.name().equals(val))
+            .orElse("");
+    }
+
+    /**
+     * Host and authenticated user an upload URL is signed for.
+     * @since 2.2.9
+     */
+    private static final class Signer {
+
+        /**
+         * Host name.
+         */
+        private final String hostname;
+
+        /**
+         * Authenticated user.
+         */
+        private final String user;
+
+        /**
+         * Ctor.
+         * @param hostname Host name
+         * @param user Authenticated user
+         */
+        Signer(final String hostname, final String user) {
+            this.hostname = hostname;
+            this.user = user;
+        }
+    }
+
+    /**
      * Conan HTTP PUT /{path/to/file}?signature={signature} REST API.
+     *
+     * <p>The signature is only redeemable against the repository that issued
+     * it, for the exact path and host it was issued for, and until it
+     * expires. It is a second factor, not the authorisation: {@link ConanSlice}
+     * also requires an authenticated user with WRITE on this repository.</p>
      */
     public static final class PutFile implements Slice {
 
@@ -224,25 +283,34 @@ public final class ConanUpload {
         private final Optional<RepositoryEvents> events;
 
         /**
+         * Name of this repository; a signature issued for another one is refused.
+         */
+        private final String repository;
+
+        /**
          * Legacy ctor retained for callers that cannot supply an events
          * queue (tests, tools). Uploads are not indexed in this mode.
          * @param storage Current Pantera storage instance.
          * @param tokenizer Tokenize repository items via JWT tokens.
+         * @param repository Name of this repository.
          */
-        public PutFile(final Storage storage, final ItemTokenizer tokenizer) {
-            this(storage, tokenizer, Optional.empty());
+        public PutFile(final Storage storage, final ItemTokenizer tokenizer,
+            final String repository) {
+            this(storage, tokenizer, repository, Optional.empty());
         }
 
         /**
          * Ctor.
          * @param storage Current Pantera storage instance.
          * @param tokenizer Tokenize repository items via JWT tokens.
+         * @param repository Name of this repository.
          * @param events Optional repository events sink for DB indexing.
          */
         public PutFile(final Storage storage, final ItemTokenizer tokenizer,
-            final Optional<RepositoryEvents> events) {
+            final String repository, final Optional<RepositoryEvents> events) {
             this.storage = storage;
             this.tokenizer = tokenizer;
+            this.repository = repository;
             this.events = events;
         }
 
@@ -256,7 +324,9 @@ public final class ConanUpload {
                     .toCompletableFuture()
                     .thenApply(
                         item -> {
-                            if (item.isPresent() && item.get().getHostname().equals(hostname)
+                            if (item.isPresent()
+                                && item.get().getRepository().equals(this.repository)
+                                && item.get().getHostname().equals(hostname)
                                 && item.get().getPath().equals(path)) {
                                 return new SliceUpload(
                                     this.storage,

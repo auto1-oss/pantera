@@ -252,4 +252,122 @@ class UnifiedJwtAuthHandlerTest {
             new IsEqual<>(true)
         );
     }
+
+    @Test
+    void userRevocationRejectsOldSessionButNotTheLoginAfterIt() {
+        // Password change: every session issued before it is revoked, and
+        // the user's re-login right afterwards must work (2.2.9 regression:
+        // the user-wide entry rejected every token for 7 days).
+        final InMemoryBlocklist blocklist = new InMemoryBlocklist();
+        final UnifiedJwtAuthHandler guarded =
+            new UnifiedJwtAuthHandler(this.publicKey, null, blocklist);
+        final String before = this.accessToken("bob", Instant.now().minusSeconds(120));
+        blocklist.revokeUser("bob", 3600);
+        final String after = this.accessToken("bob", Instant.now());
+        MatcherAssert.assertThat(
+            "Session issued before the revocation must be rejected",
+            guarded.user(before).toCompletableFuture().join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "Login after the revocation must be accepted",
+            guarded.user(after).toCompletableFuture().join().isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void refreshTokenIsNotARepositoryCredential() {
+        // B46: user() backs Bearer and Basic-password auth on the repository
+        // port; a refresh token only mints access tokens on /auth/refresh.
+        final String refresh = JWT.create()
+            .withSubject("frank")
+            .withClaim("context", "local")
+            .withClaim("type", "refresh")
+            .withJWTId("00000000-0000-0000-0000-00000000000f")
+            .withExpiresAt(Instant.now().plusSeconds(3600))
+            .sign(this.algorithm);
+        MatcherAssert.assertThat(
+            "a refresh token must not authenticate a repository request",
+            this.handler.user(refresh).toCompletableFuture().join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the refresh route still sees the validated refresh token",
+            this.handler.validated(refresh).map(UnifiedJwtAuthHandler.ValidatedToken::type)
+                .orElse(null),
+            new IsEqual<>(TokenType.REFRESH)
+        );
+    }
+
+    @Test
+    void sameSecondTokenIssuedBeforeTheRevocationIsRejected() {
+        // B45: iat has one-second resolution; a token issued earlier in the
+        // same second as the revocation survived it. The millisecond
+        // issue-time claim closes the gap without rejecting the re-login.
+        final InMemoryBlocklist blocklist = new InMemoryBlocklist();
+        final UnifiedJwtAuthHandler guarded =
+            new UnifiedJwtAuthHandler(this.publicKey, null, blocklist);
+        final Instant revoked = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+            .plusMillis(500);
+        blocklist.put("erin", new UserRevocation(revoked, Instant.now().plusSeconds(3600)));
+        MatcherAssert.assertThat(
+            "a token issued 300 ms before the revocation must be rejected",
+            guarded.user(this.accessToken("erin", revoked.minusMillis(300)))
+                .toCompletableFuture().join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "a token issued 200 ms after the revocation must be accepted",
+            guarded.user(this.accessToken("erin", revoked.plusMillis(200)))
+                .toCompletableFuture().join().isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    private String accessToken(final String sub, final Instant issuedAt) {
+        return JWT.create()
+            .withSubject(sub)
+            .withClaim("context", "local")
+            .withClaim("type", "access")
+            .withJWTId(java.util.UUID.randomUUID().toString())
+            .withIssuedAt(issuedAt)
+            .withClaim("iat_ms", issuedAt.toEpochMilli())
+            .withExpiresAt(Instant.now().plusSeconds(3600))
+            .sign(this.algorithm);
+    }
+
+    /**
+     * Blocklist over {@link UserRevocation} without Valkey or a database.
+     */
+    private static final class InMemoryBlocklist implements RevocationBlocklist {
+        private final java.util.Map<String, UserRevocation> users =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+        @Override
+        public boolean isRevokedJti(final String jti) {
+            return false;
+        }
+
+        @Override
+        public boolean isRevokedUser(final String username, final Instant issuedAt) {
+            final UserRevocation rev = this.users.get(username);
+            return rev != null && rev.revokes(issuedAt, Instant.now());
+        }
+
+        @Override
+        public void revokeJti(final String jti, final int ttlSeconds) {
+            // not exercised
+        }
+
+        @Override
+        public void revokeUser(final String username, final int ttlSeconds) {
+            final Instant now = Instant.now();
+            this.users.put(username, new UserRevocation(now, now.plusSeconds(ttlSeconds)));
+        }
+
+        void put(final String username, final UserRevocation rev) {
+            this.users.put(username, rev);
+        }
+    }
 }

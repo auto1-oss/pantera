@@ -17,11 +17,11 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.npm.PackageNameFromUrl;
 import com.auto1.pantera.npm.PerVersionLayout;
+import com.auto1.pantera.npm.RepoBaseUrl;
 import com.auto1.pantera.npm.Tarballs;
 import com.auto1.pantera.npm.misc.AbbreviatedMetadata;
 import com.auto1.pantera.npm.misc.MetadataETag;
@@ -29,8 +29,6 @@ import com.auto1.pantera.npm.misc.MetadataEnhancer;
 import com.auto1.pantera.npm.misc.PackumentRevision;
 import javax.json.JsonObject;
 
-import java.net.MalformedURLException;
-import java.net.URI;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -43,15 +41,26 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class DownloadPackageSlice implements Slice {
 
-    private final URL base;
+    private final RepoBaseUrl base;
     private final Storage storage;
 
     /**
+     * Ctor for a repository with a configured {@code url:}.
      * @param base Base URL
      * @param storage Abstract storage
      */
     public DownloadPackageSlice(final URL base, final Storage storage) {
-        this.base = base;
+        this(Optional.of(base), storage);
+    }
+
+    /**
+     * Ctor; the single field-initializing constructor.
+     * @param base Configured {@code url:}, or empty -- in which case the
+     *  client-facing base is resolved per request, see {@link RepoBaseUrl}
+     * @param storage Abstract storage
+     */
+    public DownloadPackageSlice(final Optional<URL> base, final Storage storage) {
+        this.base = new RepoBaseUrl(base);
         this.storage = storage;
     }
 
@@ -182,7 +191,7 @@ public final class DownloadPackageSlice implements Slice {
 
         // P0.2: Calculate ETag from JSON string (no extra buffering)
         final String etag = new MetadataETag(responseStr).calculate();
-        final String vary = new ClientBaseUrl(headers).varyHeaderValue();
+        final String vary = this.base.vary(headers);
 
         // P0.2: Check if client has matching ETag (304 Not Modified)
         final Response result;
@@ -198,15 +207,12 @@ public final class DownloadPackageSlice implements Slice {
             // emits the GROUP's URLs, not its own configured url:), falling
             // back to this repository's own base when nothing was stamped —
             // the same precedence SingleVersionSlice#serve uses.
-            final String prefix = new ClientBaseUrl(headers).stamped()
-                .orElseGet(() -> this.base.toString());
+            final String prefix = this.base.resolve(headers);
             // Apply tarball URL rewriting and STREAM response (no buffering!)
             final Content content = new Content.From(
                 responseStr.getBytes(StandardCharsets.UTF_8)
             );
-            final Content rewritten = new Tarballs(
-                content, DownloadPackageSlice.toBaseUrl(prefix, this.base)
-            ).value();
+            final Content rewritten = new Tarballs(content, prefix).value();
             // Return streaming response - memory usage: ~4KB instead of 200MB+
             result = ResponseBuilder.ok()
                 .header("Content-Type", abbreviated
@@ -222,27 +228,6 @@ public final class DownloadPackageSlice implements Slice {
         return result;
     }
 
-    /**
-     * Parse the client-facing base prefix as a {@link URL} for {@link
-     * Tarballs}, which takes a {@link URL} rather than a {@link String}.
-     * Falls back to {@code fallback} on a malformed prefix — defensive
-     * only, since {@code SliceByPath} never stamps anything but a
-     * well-formed absolute URL.
-     *
-     * @param prefix Client-facing base prefix (stamped or configured)
-     * @param fallback This repository's configured base
-     * @return Parsed URL, or {@code fallback} if {@code prefix} is unparsable
-     */
-    private static URL toBaseUrl(final String prefix, final URL fallback) {
-        URL result;
-        try {
-            result = URI.create(prefix).toURL();
-        } catch (final IllegalArgumentException | MalformedURLException ex) {
-            result = fallback;
-        }
-        return result;
-    }
-    
     /**
      * Check if client requests abbreviated manifest.
      * 

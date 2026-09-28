@@ -99,6 +99,28 @@ class UserDaoTest {
     }
 
     @Test
+    void updateWithoutTypeKeepsTheSsoProvider() {
+        // A roles-only save from the UI carries no "type": it must not turn
+        // an Okta user into a local one (the SSO identity binding would then
+        // reject the user's next Okta login).
+        this.dao.addOrUpdate(
+            Json.createObjectBuilder().add("type", "okta").add("email", "o@example.com").build(),
+            "okta-user"
+        );
+        this.dao.addOrUpdate(
+            Json.createObjectBuilder().add("roles", Json.createArrayBuilder()).build(),
+            "okta-user"
+        );
+        assertEquals("okta", this.dao.get("okta-user").get().getString("auth_provider"));
+    }
+
+    @Test
+    void newUserWithoutTypeIsLocal() {
+        this.dao.addOrUpdate(Json.createObjectBuilder().add("pass", "secret123").build(), "plain-user");
+        assertEquals("local", this.dao.get("plain-user").get().getString("auth_provider"));
+    }
+
+    @Test
     void enablesAndDisablesUser() {
         addTestUser("dave");
         this.dao.disable("dave");
@@ -113,6 +135,13 @@ class UserDaoTest {
         assertTrue(this.dao.get("eve").isPresent());
         this.dao.remove("eve");
         assertTrue(this.dao.get("eve").isEmpty());
+    }
+
+    @Test
+    void removingAnUnknownUserIsNotFound() {
+        // R46: DELETE /api/v1/users/<unknown> answered 200. The handler maps
+        // IllegalStateException to 404, so the DAO must report "not found".
+        assertThrows(IllegalStateException.class, () -> this.dao.remove("nobody-here"));
     }
 
     @Test
@@ -239,6 +268,53 @@ class UserDaoTest {
             this.dao.listPaged(null, "username", true, 2, 2);
         assertEquals(5, page2.total());
         assertEquals(2, page2.items().size());
+    }
+
+    @Test
+    void updateWithPasswordAppliesFieldsAndCredentialTogether() {
+        addTestUser("dora");
+        this.dao.updateWithPassword(
+            Json.createObjectBuilder().add("email", "dora@new.example").build(),
+            "dora", "Correct-Horse-Battery-9"
+        );
+        assertEquals(
+            "dora@new.example", this.dao.get("dora").orElseThrow().getString("email"),
+            "the other fields are updated"
+        );
+        assertTrue(
+            this.dao.passwordMatches("dora", "Correct-Horse-Battery-9"),
+            "the new password is set"
+        );
+        assertFalse(this.dao.passwordMatches("dora", "pass123"), "the old password is gone");
+    }
+
+    @Test
+    void updateWithWeakPasswordWritesNothing() {
+        // B48: a weak reset used to write the other fields, then fail.
+        addTestUser("eric");
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> this.dao.updateWithPassword(
+                Json.createObjectBuilder().add("email", "eric@new.example").build(),
+                "eric", "short"
+            ),
+            "a weak password is refused"
+        );
+        assertEquals(
+            "eric@example.com", this.dao.get("eric").orElseThrow().getString("email"),
+            "the other fields are untouched"
+        );
+    }
+
+    @Test
+    void passwordMatchesChecksOnlyTheStoredHash() {
+        // B13: the current-password check must not accept a token.
+        addTestUser("fay");
+        assertFalse(
+            this.dao.passwordMatches("fay", "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJmYXkifQ.c2ln"),
+            "a token is not the password"
+        );
+        assertTrue(this.dao.passwordMatches("fay", "pass123"), "the stored password matches");
     }
 
     private void addTestUser(final String name) {

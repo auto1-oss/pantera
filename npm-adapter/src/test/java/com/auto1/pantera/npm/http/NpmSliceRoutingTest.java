@@ -218,6 +218,21 @@ final class NpmSliceRoutingTest {
         );
     }
 
+    @Test
+    void deleteWithoutRevisionSegmentAnswersPreconditionRequired() throws Exception {
+        final Response response = this.responseFor(RqMethod.DELETE, "/@scope/scoped-pkg");
+        MatcherAssert.assertThat(
+            "a DELETE with no /-rev/ segment is a missing revision (428), not 404",
+            response.status(), new IsEqual<>(RsStatus.PRECONDITION_REQUIRED)
+        );
+        MatcherAssert.assertThat(
+            "the package survives",
+            new PerVersionLayout(this.storage)
+                .hasVersions(new Key.From("@scope/scoped-pkg")).toCompletableFuture().join(),
+            new IsEqual<>(true)
+        );
+    }
+
     /**
      * Drive one request through a freshly built LOCAL npm slice and return
      * the raw response, without asserting on it -- unlike {@link

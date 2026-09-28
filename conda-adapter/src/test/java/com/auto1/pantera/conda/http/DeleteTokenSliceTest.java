@@ -75,6 +75,19 @@ class DeleteTokenSliceTest {
         );
     }
 
+    @Test
+    void returnsUnauthorizedForSchemeLessHeader() {
+        MatcherAssert.assertThat(
+            new DeleteTokenSlice(new FakeTokens()),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.UNAUTHORIZED),
+                new RequestLine(RqMethod.DELETE, "/authentications$"),
+                Headers.from(Authorization.NAME, "garbage"),
+                Content.EMPTY
+            )
+        );
+    }
+
     /**
      * Fake test implementation of {@link Tokens}.
      * @since 0.3

@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.composer.cooldown;
 
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -166,6 +168,25 @@ final class ComposerMetadataRequestDetectorTest {
         assertThat(
             this.detector.isMetadataRequest(""),
             is(false)
+        );
+    }
+
+    @Test
+    void devFileKeysCooldownUnderTheBasePackageName() {
+        // Composer v2 serves dev branches from /p2/<vendor>/<pkg>~dev.json;
+        // the dist download keys the same versions under <vendor>/<pkg>, so
+        // the metadata key must match or a dev version gets two block rows.
+        MatcherAssert.assertThat(
+            this.detector.extractPackageName("/p2/acme/widget~dev.json"),
+            new IsEqual<>(Optional.of("acme/widget"))
+        );
+    }
+
+    @Test
+    void packageNameIsLowercased() {
+        MatcherAssert.assertThat(
+            this.detector.extractPackageName("/p2/Acme/Widget.json"),
+            new IsEqual<>(Optional.of("acme/widget"))
         );
     }
 }

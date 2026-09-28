@@ -23,6 +23,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -147,6 +149,41 @@ class SliceByPathPrefixTest {
         assertEquals(404, response.status().code());
     }
 
+    @ParameterizedTest
+    @CsvSource({
+        "/p1/files/col/report%231.txt,/files/col/report%231.txt,/files/col/report#1.txt",
+        "/p1/files/col/q%3F.txt,/files/col/q%3F.txt,/files/col/q?.txt",
+        "/p1/files/col/a%20b.txt,/files/col/a%20b.txt,/files/col/a b.txt",
+        "/p1/files/col/q%2525A.txt,/files/col/q%2525A.txt,/files/col/q%25A.txt",
+        "/p1/files/col/%252e%252e/x,/files/col/%252e%252e/x,/files/col/%2e%2e/x"
+    })
+    void keepsPercentEncodingWhenStrippingPrefix(final String sent,
+        final String raw, final String decoded) {
+        final RecordingSlices slices = new RecordingSlices();
+        final Response rsp = new SliceByPath(
+            slices, new PrefixesConfig(Arrays.asList("p1"))
+        ).response(
+            new RequestLine(RqMethod.GET, sent),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        assertEquals(200, rsp.status().code(), "request is routed");
+        assertEquals("files", slices.lastKey(), "repository key");
+        assertEquals(raw, slices.lastLine().uri().getRawPath(), "raw path keeps encoding");
+        assertEquals(decoded, slices.lastLine().uri().getPath(), "decoded exactly once");
+    }
+
+    @Test
+    void keepsRawQueryWhenStrippingPrefix() {
+        final RecordingSlices slices = new RecordingSlices();
+        new SliceByPath(slices, new PrefixesConfig(Arrays.asList("p1"))).response(
+            new RequestLine(RqMethod.GET, "/p1/files/list?q=a%26b%3Dc&x=%23"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        assertEquals("q=a%26b%3Dc&x=%23", slices.lastLine().uri().getRawQuery());
+    }
+
     /**
      * Subclass of RepositorySlices that records which Key was passed to slice().
      */
@@ -156,17 +193,28 @@ class SliceByPathPrefixTest {
          */
         private final List<String> keys;
 
+        /**
+         * Request lines the returned slices received.
+         */
+        private final List<RequestLine> lines;
+
         RecordingSlices() {
             super(new TestSettings(), null, null);
             this.keys = Collections.synchronizedList(new ArrayList<>(4));
+            this.lines = Collections.synchronizedList(new ArrayList<>(4));
         }
 
         @Override
         public Slice slice(final Key name, final int port) {
             this.keys.add(name.string());
-            return (line, headers, body) -> CompletableFuture.completedFuture(
-                ResponseBuilder.ok().build()
-            );
+            return (line, headers, body) -> {
+                this.lines.add(line);
+                return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+            };
+        }
+
+        RequestLine lastLine() {
+            return this.lines.get(this.lines.size() - 1);
         }
 
         String lastKey() {

@@ -63,11 +63,11 @@ public final class ComposerProxy implements Slice {
         
         // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own ComposerProxySlice, evaluated in priority order
-        this.slice = new RaceSlice(
+        this.slice = new com.auto1.pantera.adapters.ReadOnlyProxySlice(new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> {
                     final com.auto1.pantera.http.client.auth.Authenticator auth =
-                        GenericAuthenticator.create(client, remote.username(), remote.pwd());
+                        GenericAuthenticator.create(client, remote.uri(), remote.username(), remote.pwd());
 
                     return asto.map(
                         cache -> new ComposerProxySlice(
@@ -108,7 +108,7 @@ public final class ComposerProxy implements Slice {
                     );
                 }
             ).collect(Collectors.toList())
-        );
+        ));
     }
 
     @Override

@@ -43,6 +43,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import javax.json.Json;
+import javax.json.JsonObject;
 
 /**
  * Exercises the FULL {@link ComposerProxySlice} wiring — not just
@@ -51,12 +54,16 @@ import java.util.concurrent.TimeUnit;
  * Packagist. No Docker, no live network: the fixture is an embedded
  * Vert.x server on loopback, so this stays a fast unit test.
  *
- * <p>This is the regression test for WS4-composer.1/.2: before the fix,
+ * <p>This is the regression test for the standalone-proxy root bootstrap
+ * (WS4-composer.1/.2): before the fix,
  * {@code ComposerRootPackagesHandler} was wired to {@code CachedProxySlice}
  * (the package-merge path), which mangles {@code /packages.json} into a
  * bogus package name and always 404s — a handler-level test alone cannot
  * see that regression because it constructs the handler directly, bypassing
- * {@code ComposerProxySlice}'s internal wiring entirely.</p>
+ * {@code ComposerProxySlice}'s internal wiring entirely. The proxy answers
+ * with its OWN root (every advertised URL is Pantera-local; the upstream's
+ * Packagist URLs are never relayed), so the root needs no upstream call at
+ * all and bootstraps even while the upstream is down.</p>
  */
 final class ComposerProxySliceRootBootstrapTest {
 
@@ -92,9 +99,10 @@ final class ComposerProxySliceRootBootstrapTest {
     @Test
     void standaloneProxyBootstrapsRootWithoutLocalMember() throws Exception {
         final int port = RandomFreePort.get();
+        final FakePackagistRoot packagist = new FakePackagistRoot();
         this.upstream = new VertxSliceServer(
             ComposerProxySliceRootBootstrapTest.VERTX,
-            new LoggingSlice(new FakePackagistRoot()),
+            new LoggingSlice(packagist),
             port
         );
         this.upstream.start();
@@ -126,18 +134,30 @@ final class ComposerProxySliceRootBootstrapTest {
         final String body = new String(
             resp.body().asBytesFuture().get(10, TimeUnit.SECONDS), StandardCharsets.UTF_8
         );
+        final JsonObject root = Json.createReader(new java.io.StringReader(body)).readObject();
         MatcherAssert.assertThat(
-            "metadata-url must be rewritten to the Pantera-local base",
-            body, new StringContains(false, BASE_URL + "/p2/%package%.json")
+            "metadata-url must send per-package lookups back to this proxy (host-relative)",
+            root.getString("metadata-url"), new IsEqual<>("/php_proxy/p2/%package%.json")
         );
         MatcherAssert.assertThat(
             "No served root field may leak the upstream host",
             body, new IsNot<>(new StringContains(false, "packagist.org"))
         );
+        MatcherAssert.assertThat(
+            "The proxy's own root needs no upstream round trip",
+            packagist.rootCalls(), new IsEqual<>(0)
+        );
     }
 
     /** Serves a Packagist-shaped lazy-provider root at {@code /packages.json}. */
     private static final class FakePackagistRoot implements Slice {
+
+        private final AtomicInteger roots = new AtomicInteger();
+
+        int rootCalls() {
+            return this.roots.get();
+        }
+
         @Override
         public CompletableFuture<Response> response(
             final RequestLine line, final Headers headers, final Content body
@@ -146,6 +166,7 @@ final class ComposerProxySliceRootBootstrapTest {
                 if (!"/packages.json".equals(line.uri().getPath())) {
                     return ResponseBuilder.notFound().build();
                 }
+                this.roots.incrementAndGet();
                 return ResponseBuilder.ok()
                     .header("Content-Type", "application/json")
                     .body(

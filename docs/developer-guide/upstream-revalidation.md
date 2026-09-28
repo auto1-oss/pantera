@@ -28,7 +28,6 @@ What this contract does **not** cover: negative caching (WS5), or the two circui
 | npm packument | `RxNpmProxyStorage.save` persists the upstream ETag into `meta.meta`; `NpmProxy.conditionalRefresh` sends `If-None-Match` on the stale-while-revalidate background refresh | N/A (abbreviated-metadata path has its own derived-ETag 304 — see `DownloadPackageSlice.serveAbbreviated`) | `NpmProxy` serves the pre-refresh stale copy immediately (SWR), refresh runs in the background |
 | Composer packument | `CachedProxySlice.revalidateOrRefresh` / `touchCache` (WS4-composer.7) — `If-Modified-Since` against the captured `lastModifiedStore` entry | `CachedProxySlice.buildMetadataResponse` (WS6.2) — emits the captured `Last-Modified`, honors client `If-Modified-Since` | Cache-first check in `checkCacheFirst` serves whatever is on disk regardless of upstream reachability; TTL-expired entries still get a background revalidation attempt |
 | PyPI JSON API (`/pypi/<pkg>/json`) | `PypiJsonBaseLoader` (WS6.3) — TTL cache + single-flight over the raw base document, mirrors `GoMetadataBaseLoader` | N/A | `PypiJsonBaseLoader.staleFallback` |
-| Composer root (`/packages.json`, `/repo.json`) | `ComposerRootBaseLoader` (WS6.3) — TTL cache + single-flight over the raw root document, mirrors `GoMetadataBaseLoader` | N/A | `ComposerRootBaseLoader.staleFallback` |
 
 ---
 

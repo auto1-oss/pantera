@@ -11,6 +11,9 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.RepoAuthzHandler;
+import com.auto1.pantera.api.SecretRebindException;
+import com.auto1.pantera.api.SecretRedactor;
 import com.auto1.pantera.api.ManageStorageAliases;
 import com.auto1.pantera.api.perms.ApiAliasPermission;
 import com.auto1.pantera.asto.Key;
@@ -18,7 +21,9 @@ import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.db.dao.StorageAliasDao;
 import com.auto1.pantera.http.context.HandlerExecutor;
+import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.repo.FsStorageRootPolicy;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
@@ -56,6 +61,18 @@ public final class StorageAliasHandler {
     private final StorageAliasDao aliasDao;
 
     /**
+     * Outbound-URL policy for the S3 {@code endpoint} (SECURITY, 2.2.9).
+     */
+    private final RemoteUrlPolicy endpoints;
+
+    /**
+     * Approved roots for local-filesystem storage (SECURITY, 2.2.9): an
+     * alias is a storage block like an inline one, and a repository that
+     * references it by name was never checked against the roots.
+     */
+    private final java.util.function.Supplier<FsStorageRootPolicy> fsRoots;
+
+    /**
      * Ctor.
      * @param storagesCache Pantera settings storage cache
      * @param asto Pantera settings storage
@@ -69,6 +86,75 @@ public final class StorageAliasHandler {
         this.asto = asto;
         this.policy = policy;
         this.aliasDao = aliasDao;
+        this.endpoints = RemoteUrlPolicy.fromRegistry();
+        this.fsRoots = com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.fsRootPolicy();
+    }
+
+    /**
+     * Refuse an alias whose local-filesystem path is outside the approved
+     * roots. An update that keeps the path already saved for the alias is
+     * not re-validated, so aliases created before the roots existed stay
+     * editable. Resolves symlinks -- worker thread only.
+     * @param alias Alias name
+     * @param repo Repository name, {@code null} for a global alias
+     * @param body Alias storage block
+     */
+    private void checkRoots(final String alias, final String repo, final JsonObject body) {
+        final FsStorageRootPolicy roots = this.fsRoots.get();
+        final java.util.Optional<String> path = roots.localPath(body);
+        if (path.isPresent() && this.savedPath(alias, repo, roots).equals(path)
+            && body.getString("type").equals(this.savedType(alias, repo))) {
+            return;
+        }
+        roots.rejectBlock(body).ifPresent(reason -> {
+            throw new EndpointRejected(reason);
+        });
+    }
+
+    /**
+     * Local path saved for an alias.
+     * @param alias Alias name
+     * @param repo Repository name, nullable
+     * @param roots Policy (path extraction)
+     * @return Saved path, empty when none
+     */
+    private java.util.Optional<String> savedPath(
+        final String alias, final String repo, final FsStorageRootPolicy roots
+    ) {
+        return this.saved(alias, repo).flatMap(roots::localPath);
+    }
+
+    /**
+     * Storage type saved for an alias.
+     * @param alias Alias name
+     * @param repo Repository name, nullable
+     * @return Saved type, or empty string
+     */
+    private String savedType(final String alias, final String repo) {
+        return this.saved(alias, repo)
+            .map(cfg -> cfg.get("type"))
+            .filter(type -> type.getValueType() == javax.json.JsonValue.ValueType.STRING)
+            .map(type -> ((javax.json.JsonString) type).getString())
+            .orElse("");
+    }
+
+    /**
+     * Saved config of an alias (DB only).
+     * @param alias Alias name
+     * @param repo Repository name, nullable
+     * @return Saved storage block
+     */
+    private java.util.Optional<JsonObject> saved(final String alias, final String repo) {
+        if (this.aliasDao == null) {
+            return java.util.Optional.empty();
+        }
+        final List<JsonObject> all = repo == null
+            ? this.aliasDao.listGlobal() : this.aliasDao.listForRepo(repo);
+        return all.stream()
+            .filter(item -> alias.equals(item.getString("name", null)))
+            .map(item -> item.getJsonObject("config"))
+            .filter(java.util.Objects::nonNull)
+            .findFirst();
     }
 
     /**
@@ -94,17 +180,31 @@ public final class StorageAliasHandler {
         router.delete("/api/v1/storages/:name")
             .handler(new AuthzHandler(this.policy, delete))
             .handler(this::deleteGlobalAlias);
+        // SECURITY (2.2.9, storage-alias-authz): the per-repository routes
+        // name a repository, so they also require the per-repo grant — an
+        // alias mutation rewrites that repository's backing storage. The
+        // PUT was composed with READ (its global sibling above correctly uses
+        // CREATE), letting a read-only alias principal persist backend config.
+        final RepoAuthzHandler repoRead =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.READ);
+        final RepoAuthzHandler repoWrite =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.WRITE);
+        final RepoAuthzHandler repoDelete =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.DELETE);
         // GET /api/v1/repositories/:name/storages — list per-repo aliases
         router.get("/api/v1/repositories/:name/storages")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::listRepoAliases);
         // PUT /api/v1/repositories/:name/storages/:alias — create/update repo alias
         router.put("/api/v1/repositories/:name/storages/:alias")
-            .handler(new AuthzHandler(this.policy, read))
+            .handler(new AuthzHandler(this.policy, create))
+            .handler(repoWrite)
             .handler(this::putRepoAlias);
         // DELETE /api/v1/repositories/:name/storages/:alias — delete repo alias
         router.delete("/api/v1/repositories/:name/storages/:alias")
             .handler(new AuthzHandler(this.policy, delete))
+            .handler(repoDelete)
             .handler(this::deleteRepoAlias);
     }
 
@@ -142,18 +242,37 @@ public final class StorageAliasHandler {
         if (body == null) {
             return;
         }
+        final java.util.List<String> outbound = StorageAliasHandler.endpointUrls(body);
+        final java.util.Optional<String> syntax = this.endpoints.syntaxError(outbound);
+        if (syntax.isPresent()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", syntax.get());
+            return;
+        }
         CompletableFuture.runAsync(() -> {
+            this.endpoints.resolvedError(outbound).ifPresent(reason -> {
+                throw new EndpointRejected(reason);
+            });
+            this.checkRoots(name, null, body);
+            // SECURITY (2.2.9): keep the stored secret when the client
+            // round-trips the "***" mask, but refuse restoring it against a
+            // changed endpoint/host (would exfiltrate the secret). Also fixes
+            // saving the literal mask over real backend credentials.
+            final JsonObject merged =
+                new SecretRedactor().restoreMasked(body, this.saved(name, null).orElse(null));
             if (this.aliasDao != null) {
-                this.aliasDao.put(name, null, body);
+                this.aliasDao.put(name, null, merged);
             }
             try {
-                new ManageStorageAliases(this.asto).add(name, body);
+                new ManageStorageAliases(this.asto).add(name, merged);
             } catch (final Exception ignored) {
                 // YAML write is best-effort when DB is primary
             }
             this.storagesCache.invalidateAll();
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
-            if (err != null) {
+            final Throwable cause = err == null ? null : StorageAliasHandler.rootCause(err);
+            if (cause instanceof EndpointRejected || cause instanceof SecretRebindException) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST", cause.getMessage());
+            } else if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
                 ctx.response().setStatusCode(200).end();
@@ -241,19 +360,38 @@ public final class StorageAliasHandler {
         if (body == null) {
             return;
         }
+        final java.util.List<String> outbound = StorageAliasHandler.endpointUrls(body);
+        final java.util.Optional<String> syntax = this.endpoints.syntaxError(outbound);
+        if (syntax.isPresent()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", syntax.get());
+            return;
+        }
         CompletableFuture.runAsync(() -> {
+            this.endpoints.resolvedError(outbound).ifPresent(reason -> {
+                throw new EndpointRejected(reason);
+            });
+            this.checkRoots(aliasName, repoName, body);
+            // SECURITY (2.2.9): keep the stored secret when the client
+            // round-trips the "***" mask, but refuse restoring it against a
+            // changed endpoint/host (would exfiltrate the secret). Also fixes
+            // saving the literal mask over real backend credentials.
+            final JsonObject merged = new SecretRedactor()
+                .restoreMasked(body, this.saved(aliasName, repoName).orElse(null));
             if (this.aliasDao != null) {
-                this.aliasDao.put(aliasName, repoName, body);
+                this.aliasDao.put(aliasName, repoName, merged);
             }
             try {
                 new ManageStorageAliases(new Key.From(repoName), this.asto)
-                    .add(aliasName, body);
+                    .add(aliasName, merged);
             } catch (final Exception ignored) {
                 // YAML write is best-effort when DB is primary
             }
             this.storagesCache.invalidateAll();
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
-            if (err != null) {
+            final Throwable cause = err == null ? null : StorageAliasHandler.rootCause(err);
+            if (cause instanceof EndpointRejected || cause instanceof SecretRebindException) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST", cause.getMessage());
+            } else if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
                 ctx.response().setStatusCode(200).end();
@@ -300,8 +438,12 @@ public final class StorageAliasHandler {
      */
     private static JsonArray aliasesToArray(final Collection<JsonObject> aliases) {
         final JsonArray arr = new JsonArray();
+        // SECURITY (2.2.9, repo-config-secret): alias configs carry backend
+        // credentials (S3 secretAccessKey / sessionToken, tokens). Redact
+        // before they cross the read API — secrets are write-only.
+        final SecretRedactor redactor = new SecretRedactor();
         for (final JsonObject alias : aliases) {
-            arr.add(new io.vertx.core.json.JsonObject(alias.toString()));
+            arr.add(new io.vertx.core.json.JsonObject(redactor.redact(alias).toString()));
         }
         return arr;
     }
@@ -321,7 +463,7 @@ public final class StorageAliasHandler {
             if (alias.containsKey("storage")) {
                 entry.put("config",
                     new io.vertx.core.json.JsonObject(
-                        alias.getJsonObject("storage").toString()));
+                        new SecretRedactor().redact(alias.getJsonObject("storage")).toString()));
             }
             arr.add(entry);
         }
@@ -334,6 +476,47 @@ public final class StorageAliasHandler {
      * @param ctx Routing context
      * @return Parsed object, or null if invalid (response already sent)
      */
+    /**
+     * Outbound URLs an alias body can carry: the S3 {@code endpoint}.
+     * @param body Alias body
+     * @return Endpoint URLs (empty when absent)
+     */
+    private static java.util.List<String> endpointUrls(final JsonObject body) {
+        final java.util.List<String> urls = new java.util.ArrayList<>();
+        if (body.containsKey("endpoint")) {
+            if (body.get("endpoint").getValueType() == javax.json.JsonValue.ValueType.STRING) {
+                urls.add(body.getString("endpoint"));
+            } else {
+                urls.add("");
+            }
+        }
+        return urls;
+    }
+
+    /**
+     * Unwrap {@link java.util.concurrent.CompletionException} layers.
+     * @param err Failure
+     * @return Root cause
+     */
+    private static Throwable rootCause(final Throwable err) {
+        Throwable cause = err;
+        while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
+    }
+
+    /**
+     * An alias {@code endpoint} refused by the resolving egress check.
+     */
+    private static final class EndpointRejected extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        EndpointRejected(final String message) {
+            super(message);
+        }
+    }
+
     private static JsonObject bodyAsJson(final RoutingContext ctx) {
         final String raw = ctx.body().asString();
         if (raw == null || raw.isBlank()) {

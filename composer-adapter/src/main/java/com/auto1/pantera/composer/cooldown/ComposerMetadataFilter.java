@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.composer.cooldown;
 
+import com.auto1.pantera.composer.MinifiedMetadata;
 import com.auto1.pantera.cooldown.metadata.MetadataFilter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -26,9 +27,21 @@ import java.util.Set;
  * version keys. Composer has no "latest" tag in the metadata format, so
  * {@link #updateLatest(JsonNode, String)} is a no-op that returns metadata unchanged.</p>
  *
+ * <p>A Composer v2 minified document ({@code "minified": "composer/2.0"}) is
+ * expanded before any entry is removed: its entries inherit fields from the
+ * previous one, so dropping an entry would strip {@code name},
+ * {@code require}, {@code dist}, ... from the entries after it. The filtered
+ * document is returned expanded, without the marker (see
+ * {@link MinifiedMetadata}).</p>
+ *
  * @since 2.2.0
  */
 public final class ComposerMetadataFilter implements MetadataFilter<JsonNode> {
+
+    /**
+     * Expands minified version arrays before entries are removed.
+     */
+    private final MinifiedMetadata minified = new MinifiedMetadata();
 
     @Override
     public JsonNode filter(final JsonNode metadata, final Set<String> blockedVersions) {
@@ -38,6 +51,7 @@ public final class ComposerMetadataFilter implements MetadataFilter<JsonNode> {
         if (!(metadata instanceof ObjectNode)) {
             return metadata;
         }
+        this.minified.expand(metadata);
         final JsonNode packages = metadata.get("packages");
         if (packages == null || !packages.isObject() || packages.size() == 0) {
             return metadata;

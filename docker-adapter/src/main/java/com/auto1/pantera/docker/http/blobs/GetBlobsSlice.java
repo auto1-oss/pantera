@@ -69,6 +69,9 @@ public class GetBlobsSlice extends DockerActionSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         final BlobsRequest request = BlobsRequest.from(line);
+        if (!request.wellFormed()) {
+            return body.discard().thenApply(ignored -> request.invalidDigest());
+        }
         // Captured before the async hop -- MDC does not survive worker-thread
         // continuations (CLAUDE.md audit rules: captureAuditContext at the
         // top of the slice).

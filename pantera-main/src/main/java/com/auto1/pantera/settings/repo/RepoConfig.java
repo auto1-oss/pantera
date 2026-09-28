@@ -375,12 +375,13 @@ public final class RepoConfig {
      * hosted deploy that would overwrite an existing non-SNAPSHOT primary
      * artifact is rejected with 409 Conflict instead of silently
      * overwriting it. SNAPSHOT redeploys are always allowed regardless of
-     * this setting. Default {@code false} (legacy overwrite behaviour).
+     * this setting. Default {@code true} (immutable); a repository opts out only
+     * with an explicit {@code releaseImmutable: false}.
      *
      * @return True when release redeploys are rejected for this repo
      */
     public boolean releaseImmutable() {
-        return Boolean.parseBoolean(this.repoYaml().string("releaseImmutable"));
+        return !"false".equalsIgnoreCase(this.repoYaml().string("releaseImmutable"));
     }
 
     /**

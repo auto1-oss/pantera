@@ -24,7 +24,7 @@ import javax.sql.DataSource;
  * Stores JWT revocation entries (by JTI or username) with an expiry.
  * @since 2.1.0
  */
-public final class RevocationDao implements RevocationStore {
+public final class RevocationDao {
 
     /**
      * Database data source.
@@ -40,22 +40,43 @@ public final class RevocationDao implements RevocationStore {
     }
 
     /**
-     * Insert a revocation entry with a TTL.
+     * Insert a revocation entry with a TTL, stamped now on this node's clock.
      * @param entryType Entry type: "jti" or "username"
      * @param entryValue The JTI string or username
-     * @param ttlSeconds Time-to-live in seconds; expires_at = NOW() + ttl
+     * @param ttlSeconds Time-to-live in seconds
      */
-    @Override
     public void insert(final String entryType, final String entryValue, final int ttlSeconds) {
+        this.insert(entryType, entryValue, Instant.now(), ttlSeconds);
+    }
+
+    /**
+     * Insert a revocation entry revoked at {@code createdAt}.
+     *
+     * <p>The revocation instant is taken from the revoking node, not the
+     * database's {@code NOW()}: tokens are stamped with the issuing node's
+     * clock and compared at millisecond precision, so a database clock
+     * running ahead would otherwise reject the re-login that follows a
+     * password change.</p>
+     *
+     * @param entryType Entry type: "jti" or "username"
+     * @param entryValue The JTI string or username
+     * @param createdAt Revocation instant
+     * @param ttlSeconds Time-to-live in seconds; expires_at = createdAt + ttl
+     */
+    public void insert(
+        final String entryType, final String entryValue,
+        final Instant createdAt, final int ttlSeconds
+    ) {
         final String sql = String.join(" ",
-            "INSERT INTO revocation_blocklist (entry_type, entry_value, expires_at)",
-            "VALUES (?, ?, NOW() + (? || ' seconds')::INTERVAL)"
+            "INSERT INTO revocation_blocklist (entry_type, entry_value, created_at, expires_at)",
+            "VALUES (?, ?, ?, ?)"
         );
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, entryType);
             ps.setString(2, entryValue);
-            ps.setInt(3, ttlSeconds);
+            ps.setTimestamp(3, Timestamp.from(createdAt));
+            ps.setTimestamp(4, Timestamp.from(createdAt.plusSeconds(ttlSeconds)));
             ps.executeUpdate();
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to insert revocation entry", ex);
@@ -92,10 +113,9 @@ public final class RevocationDao implements RevocationStore {
      * @param since Fetch entries created after this instant
      * @return List of active revocation entries created since the given timestamp
      */
-    @Override
     public List<RevocationEntry> pollSince(final Instant since) {
         final String sql = String.join(" ",
-            "SELECT entry_type, entry_value, expires_at",
+            "SELECT entry_type, entry_value, created_at, expires_at",
             "FROM revocation_blocklist",
             "WHERE created_at > ? AND expires_at > NOW()",
             "ORDER BY created_at ASC"
@@ -109,6 +129,7 @@ public final class RevocationDao implements RevocationStore {
                     entries.add(new RevocationEntry(
                         rs.getString("entry_type"),
                         rs.getString("entry_value"),
+                        rs.getTimestamp("created_at").toInstant(),
                         rs.getTimestamp("expires_at").toInstant()
                     ));
                 }
@@ -121,7 +142,13 @@ public final class RevocationDao implements RevocationStore {
 
     /**
      * A single revocation blocklist entry.
+     * @param entryType Entry type: "jti" or "username"
+     * @param entryValue The JTI string or username
+     * @param createdAt When the entry was written (the revocation instant)
+     * @param expiresAt When the entry lapses
      */
-    public record RevocationEntry(String entryType, String entryValue, Instant expiresAt) {
+    public record RevocationEntry(
+        String entryType, String entryValue, Instant createdAt, Instant expiresAt
+    ) {
     }
 }

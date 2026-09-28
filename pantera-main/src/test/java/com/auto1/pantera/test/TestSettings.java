@@ -54,6 +54,11 @@ public final class TestSettings implements Settings {
     private final PanteraCaches caches;
 
     /**
+     * Access policy.
+     */
+    private final Policy<?> policy;
+
+    /**
      * Ctor.
      */
     public TestSettings() {
@@ -82,7 +87,7 @@ public final class TestSettings implements Settings {
     }
 
     /**
-     * Primary ctor.
+     * Ctor with a free access policy.
      *
      * @param storage Storage
      * @param meta Yaml `meta` mapping
@@ -91,9 +96,34 @@ public final class TestSettings implements Settings {
         final Storage storage,
         final YamlMapping meta
     ) {
+        this(storage, meta, Policy.FREE);
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param policy Access policy
+     */
+    public TestSettings(final Policy<?> policy) {
+        this(new InMemoryStorage(), Yaml.createYamlMappingBuilder().build(), policy);
+    }
+
+    /**
+     * Primary ctor.
+     *
+     * @param storage Storage
+     * @param meta Yaml `meta` mapping
+     * @param policy Access policy
+     */
+    public TestSettings(
+        final Storage storage,
+        final YamlMapping meta,
+        final Policy<?> policy
+    ) {
         this.storage = storage;
         this.meta = meta;
         this.caches = new TestPanteraCaches();
+        this.policy = policy;
     }
 
     @Override
@@ -111,7 +141,7 @@ public final class TestSettings implements Settings {
 
             @Override
             public Policy<?> policy() {
-                return Policy.FREE;
+                return TestSettings.this.policy;
             }
 
             @Override

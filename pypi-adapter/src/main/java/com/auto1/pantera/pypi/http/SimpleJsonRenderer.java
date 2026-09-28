@@ -11,21 +11,20 @@
 package com.auto1.pantera.pypi.http;
 
 import com.auto1.pantera.pypi.cooldown.Pep440VersionComparator;
-
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
+import java.util.TreeSet;
 import javax.json.Json;
 import javax.json.JsonArrayBuilder;
 import javax.json.JsonObjectBuilder;
 
 /**
  * Renders PEP 691 (v1.1) JSON Simple Repository API responses.
- * Includes upload-time and per-file {@code size} (PEP 700) and the
- * top-level {@code versions} array (PEP 700).
+ * Includes the PEP 700 fields that api-version 1.1 makes mandatory: the
+ * project-level {@code versions} array and the per-file {@code size}, plus
+ * the optional {@code upload-time}.
  */
 public final class SimpleJsonRenderer {
 
@@ -40,102 +39,84 @@ public final class SimpleJsonRenderer {
      */
     public static String render(final String packageName, final List<FileEntry> files) {
         final JsonArrayBuilder filesArray = Json.createArrayBuilder();
+        final TreeSet<String> versions = new TreeSet<>(new Pep440VersionComparator());
         for (final FileEntry file : files) {
-            filesArray.add(renderFile(file));
+            file.effectiveVersion().ifPresent(versions::add);
+            final JsonObjectBuilder entry = Json.createObjectBuilder()
+                .add("filename", file.filename())
+                .add("url", file.url() + "#sha256=" + file.sha256())
+                .add("hashes", Json.createObjectBuilder().add("sha256", file.sha256()));
+            if (file.size() >= 0) {
+                entry.add("size", file.size());
+            }
+            if (file.requiresPython() != null && !file.requiresPython().isEmpty()) {
+                entry.add("requires-python", file.requiresPython());
+            }
+            if (file.uploadTime() != null) {
+                // PEP 700: upload-time format is yyyy-mm-ddThh:mm:ss.ffffffZ
+                // with max 6 fractional digits. Truncate to microseconds to
+                // avoid emitting the 9-digit nanosecond form produced by
+                // Instant.toString() when the source Instant has nano
+                // precision (Linux filesystem creationTime). Python's
+                // datetime.fromisoformat rejects >6 fractional digits on
+                // all versions through 3.13, which breaks pip parsing.
+                entry.add(
+                    "upload-time",
+                    file.uploadTime().truncatedTo(ChronoUnit.MICROS).toString()
+                );
+            }
+            // PEP 691: yanked is a boolean or a NON-EMPTY string (the
+            // reason). An empty string is falsy, and pip maps a falsy
+            // value to "not yanked" — so a reason-less yank must be
+            // boolean true, never "".
+            if (file.yanked()) {
+                final Optional<String> reason = file.yankedReason()
+                    .filter(text -> !text.isBlank());
+                if (reason.isPresent()) {
+                    entry.add("yanked", reason.get());
+                } else {
+                    entry.add("yanked", true);
+                }
+            } else {
+                entry.add("yanked", false);
+            }
+            if (file.distInfoMetadata().isPresent()) {
+                // PEP 714 renamed the JSON key to "core-metadata" — the
+                // previous "data-dist-info-metadata" was the HTML *attribute*
+                // name, not a valid PEP 691/714 JSON key, so compliant
+                // clients silently ignored it. "dist-info-metadata" is kept
+                // as a legacy-client compat alias with the identical value.
+                final String sha256 = file.distInfoMetadata().get();
+                entry.add("core-metadata", Json.createObjectBuilder().add("sha256", sha256));
+                entry.add(
+                    "dist-info-metadata", Json.createObjectBuilder().add("sha256", sha256)
+                );
+            }
+            filesArray.add(entry);
         }
         return Json.createObjectBuilder()
             .add("meta", Json.createObjectBuilder().add("api-version", "1.1"))
             .add("name", packageName)
-            .add("versions", renderVersions(files))
+            .add("versions", Json.createArrayBuilder(List.copyOf(versions)))
             .add("files", filesArray)
             .build()
             .toString();
     }
 
     /**
-     * Render a single file entry as a PEP 691/700/714 JSON object.
-     */
-    private static JsonObjectBuilder renderFile(final FileEntry file) {
-        final JsonObjectBuilder entry = Json.createObjectBuilder()
-            .add("filename", file.filename())
-            .add("url", file.url() + "#sha256=" + file.sha256())
-            .add("hashes", Json.createObjectBuilder().add("sha256", file.sha256()))
-            .add("size", file.size());
-        if (file.requiresPython() != null && !file.requiresPython().isEmpty()) {
-            entry.add("requires-python", file.requiresPython());
-        }
-        if (file.uploadTime() != null) {
-            // PEP 700: upload-time format is yyyy-mm-ddThh:mm:ss.ffffffZ
-            // with max 6 fractional digits. Truncate to microseconds to
-            // avoid emitting the 9-digit nanosecond form produced by
-            // Instant.toString() when the source Instant has nano
-            // precision (Linux filesystem creationTime). Python's
-            // datetime.fromisoformat rejects >6 fractional digits on
-            // all versions through 3.13, which breaks pip parsing.
-            entry.add(
-                "upload-time",
-                file.uploadTime().truncatedTo(ChronoUnit.MICROS).toString()
-            );
-        }
-        // PEP 691: yanked is either boolean false (not yanked) or
-        // a string (yanked reason, may be empty). A boolean true
-        // is non-compliant — pip expects a string when yanked.
-        if (file.yanked()) {
-            entry.add("yanked", file.yankedReason().orElse(""));
-        } else {
-            entry.add("yanked", false);
-        }
-        if (file.distInfoMetadata().isPresent()) {
-            // PEP 714 renamed the JSON key to "core-metadata" — the
-            // previous "data-dist-info-metadata" was the HTML *attribute*
-            // name, not a valid PEP 691/714 JSON key, so compliant
-            // clients silently ignored it. "dist-info-metadata" is kept
-            // as a legacy-client compat alias with the identical value.
-            final String sha256 = file.distInfoMetadata().get();
-            entry.add("core-metadata", Json.createObjectBuilder().add("sha256", sha256));
-            entry.add("dist-info-metadata", Json.createObjectBuilder().add("sha256", sha256));
-        }
-        return entry;
-    }
-
-    /**
-     * PEP 700 top-level {@code versions} array: the distinct set of
-     * versions present across all files, sorted per PEP 440 ordering.
-     * Files whose version could not be determined (legacy layouts with
-     * no version folder) are excluded rather than surfaced as {@code
-     * null}.
-     */
-    private static JsonArrayBuilder renderVersions(final List<FileEntry> files) {
-        final Set<String> distinct = new LinkedHashSet<>();
-        for (final FileEntry file : files) {
-            if (file.version() != null && !file.version().isEmpty()) {
-                distinct.add(file.version());
-            }
-        }
-        final List<String> sorted = distinct.stream()
-            .sorted(new Pep440VersionComparator())
-            .toList();
-        final JsonArrayBuilder versions = Json.createArrayBuilder();
-        for (final String version : sorted) {
-            versions.add(version);
-        }
-        return versions;
-    }
-
-    /**
      * A file entry for the PEP 691 JSON response.
-     * @param filename Distribution filename
-     * @param url Relative or absolute download URL (sha256 fragment appended at render time)
-     * @param sha256 Hex SHA-256 digest of the file content
-     * @param requiresPython PEP 345 Requires-Python constraint, or empty/null
-     * @param uploadTime Upload timestamp, or null when unknown
-     * @param yanked Whether the file has been yanked (PEP 592)
-     * @param yankedReason Optional yank reason
-     * @param distInfoMetadata Optional PEP 658/714 core-metadata sha256
-     * @param size File size in bytes (PEP 700)
-     * @param version Extracted distribution version, or null when it could not be
-     *                determined from the storage layout — excluded from the
-     *                top-level {@code versions} array in that case
+     *
+     * @param filename File name
+     * @param url Relative URL
+     * @param sha256 Hex SHA-256 digest
+     * @param requiresPython Requires-Python constraint (nullable)
+     * @param uploadTime Upload time (nullable)
+     * @param yanked Whether the file is yanked
+     * @param yankedReason Yank reason
+     * @param distInfoMetadata Core-metadata digest
+     * @param size File size in bytes, negative when unknown
+     * @param version Release version the file belongs to (nullable: derived
+     *  from the filename)
      */
     public record FileEntry(
         String filename,
@@ -148,5 +129,49 @@ public final class SimpleJsonRenderer {
         Optional<String> distInfoMetadata,
         long size,
         String version
-    ) {}
+    ) {
+
+        /**
+         * Entry without a known size or version (the version is then derived
+         * from the filename).
+         * @param filename File name
+         * @param url Relative URL
+         * @param sha256 Hex SHA-256 digest
+         * @param requiresPython Requires-Python constraint (nullable)
+         * @param uploadTime Upload time (nullable)
+         * @param yanked Whether the file is yanked
+         * @param yankedReason Yank reason
+         * @param distInfoMetadata Core-metadata digest
+         */
+        public FileEntry(
+            final String filename,
+            final String url,
+            final String sha256,
+            final String requiresPython,
+            final Instant uploadTime,
+            final boolean yanked,
+            final Optional<String> yankedReason,
+            final Optional<String> distInfoMetadata
+        ) {
+            this(
+                filename, url, sha256, requiresPython, uploadTime, yanked,
+                yankedReason, distInfoMetadata, -1L, null
+            );
+        }
+
+        /**
+         * The release version: the explicit one, or one parsed from the
+         * distribution filename ({@code name-ver-...whl}, {@code name-ver.tar.gz}).
+         * @return Version, empty when it cannot be determined
+         */
+        Optional<String> effectiveVersion() {
+            final Optional<String> result;
+            if (this.version != null && !this.version.isBlank()) {
+                result = Optional.of(this.version);
+            } else {
+                result = new DistFilename(this.filename).version();
+            }
+            return result;
+        }
+    }
 }

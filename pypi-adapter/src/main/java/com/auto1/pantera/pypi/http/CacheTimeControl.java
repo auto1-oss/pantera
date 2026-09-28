@@ -11,6 +11,7 @@
 package com.auto1.pantera.pypi.http;
 
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.Remote;
@@ -73,27 +74,16 @@ public final class CacheTimeControl implements CacheControl {
                     if (exists) {
                         return this.storage.metadata(item)
                             .thenApply(
-                                metadata -> {
-                                    // Try to get last updated time from storage metadata
-                                    final Instant updatedAt = metadata.read(
-                                        raw -> {
-                                            if (raw.containsKey("updated-at")) {
-                                                return Instant.parse(raw.get("updated-at"));
-                                            }
-                                            // Fallback: assume valid if no timestamp
-                                            // This ensures backward compatibility with existing cache
-                                            // and allows fallback to stale cache when remote fails
-                                            return null;
-                                        }
-                                    );
-                                    if (updatedAt == null) {
-                                        // No timestamp - consider valid (backward compatible)
-                                        return true;
-                                    }
-                                    final Duration age = Duration.between(updatedAt, Instant.now());
-                                    // Valid if age is less than expiration TTL
-                                    return age.compareTo(this.expiration) < 0;
-                                }
+                                // Valid if younger than the TTL. A storage that
+                                // reports no updated-at gives no evidence of
+                                // freshness: stale (served while a background
+                                // refresh runs), never fresh forever.
+                                metadata -> metadata.read(Meta.OP_UPDATED_AT)
+                                    .map(
+                                        updated -> Duration.between(updated, Instant.now())
+                                            .compareTo(this.expiration) < 0
+                                    )
+                                    .orElse(false)
                             );
                     }
                     // Item doesn't exist - not valid (will fetch from remote)

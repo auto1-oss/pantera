@@ -15,7 +15,6 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
-import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.BearerAuthzSlice;
 import com.auto1.pantera.http.auth.CombinedAuthzSliceWrap;
@@ -29,7 +28,6 @@ import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
-import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.npm.http.auth.AddUserSlice;
 import com.auto1.pantera.npm.http.auth.PanteraAddUserSlice;
@@ -64,6 +62,11 @@ public final class NpmSlice implements Slice {
      * Header name `referer`.
      */
     private static final String REFERER = "referer";
+
+    /**
+     * Documentation anchor explaining how to log in with the npm CLI.
+     */
+    private static final String LOGIN_DOCS = "repositories/npm.md#logging-in-with-npm-login";
 
     /**
      * Route.
@@ -116,8 +119,8 @@ public final class NpmSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(base, storage, policy, basicAuth, tokenAuth, name, events, false, null,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
+        this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, false,
+            null, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
             DownloadPolicy.streamOnly());
     }
 
@@ -142,8 +145,8 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly
     ) {
-        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, null,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
+        this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
+            null, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
             DownloadPolicy.streamOnly());
     }
 
@@ -171,8 +174,8 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly
     ) {
-        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
+        this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
+            tokens, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
             DownloadPolicy.streamOnly());
     }
 
@@ -183,6 +186,30 @@ public final class NpmSlice implements Slice {
      */
     public NpmSlice(
         final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Tokens tokens,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex
+    ) {
+        this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
+            tokens, syncIndex, artifactIndex, DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor for a repository whose {@code url:} may be absent -- the client-facing
+     * base for emitted links ({@code dist.tarball}, the {@code .npmrc} registry
+     * line) is then resolved per request instead of being pinned to one host.
+     * See {@link com.auto1.pantera.npm.RepoBaseUrl}.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NpmSlice(
+        final Optional<URL> base,
         final Storage storage,
         final Policy<?> policy,
         final Authentication basicAuth,
@@ -218,13 +245,40 @@ public final class NpmSlice implements Slice {
         final ArtifactIndex artifactIndex,
         final DownloadPolicy downloadPolicy
     ) {
+        this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
+            tokens, syncIndex, artifactIndex, downloadPolicy);
+    }
+
+    /**
+     * Ctor for a repository whose {@code url:} may be absent (see {@link
+     * com.auto1.pantera.npm.RepoBaseUrl}) with an explicit WS1.7 download
+     * policy -- the combination {@code RepositorySlices} wires for a
+     * configured repository. Only the {@code .tgz} tarball-byte route is
+     * redirect-eligible; every metadata route always streams.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NpmSlice(
+        final Optional<URL> base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Tokens tokens,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
             syncIndex, artifactIndex, downloadPolicy);
     }
 
     /**
      * Primary ctor.
-     * @param base Base URL.
+     * @param base Configured {@code url:}, or empty when the repository has
+     *  none -- see {@link com.auto1.pantera.npm.RepoBaseUrl}.
      * @param storage Storage.
      * @param policy Policy.
      * @param basicAuth Basic auth.
@@ -242,7 +296,7 @@ public final class NpmSlice implements Slice {
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     private NpmSlice(
-        final URL base,
+        final Optional<URL> base,
         final Storage storage,
         final Policy<?> policy,
         final Authentication basicAuth,
@@ -473,25 +527,26 @@ public final class NpmSlice implements Slice {
                 new com.auto1.pantera.npm.http.audit.LocalAuditSlice()
             ),
             new RtRulePath(
-                new RtRule.All(
-                    MethodRule.PUT,
-                    new RtRule.ByPath(".*/-/user/org\\.couchdb\\.user:.+")
-                ),
-                // Use JWT-only OAuth login or npm token-based adduser
-                jwtOnly && basicAuth != null
-                    ? new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens)  // JWT-only
-                    : (basicAuth != null 
-                        ? new PanteraAddUserSlice(  // Creates npm tokens
-                            basicAuth,
-                            new StorageTokenRepository(storage),
-                            new TokenGenerator()
-                        )
-                        : new AddUserSlice(  // Standalone npm tokens
-                            new StorageUserRepository(storage, new BCryptPasswordHasher()),
-                            new StorageTokenRepository(storage),
-                            new BCryptPasswordHasher(),
-                            new TokenGenerator()
-                        ))
+                com.auto1.pantera.npm.http.auth.OAuthLoginSlice.LEGACY_LOGIN,
+                // Reachable without credentials: the body is capped before
+                // any of the handlers below buffers it.
+                new com.auto1.pantera.npm.http.auth.LoginBodyCapSlice(
+                    // Use JWT-only OAuth login or npm token-based adduser
+                    jwtOnly && basicAuth != null
+                        ? new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens)  // JWT-only
+                        : (basicAuth != null
+                            ? new PanteraAddUserSlice(  // Creates npm tokens
+                                basicAuth,
+                                new StorageTokenRepository(storage),
+                                new TokenGenerator()
+                            )
+                            : new AddUserSlice(  // Standalone npm tokens
+                                new StorageUserRepository(storage, new BCryptPasswordHasher()),
+                                new StorageTokenRepository(storage),
+                                new BCryptPasswordHasher(),
+                                new TokenGenerator()
+                            ))
+                )
             ),
             new RtRulePath(
                 new RtRule.All(
@@ -522,7 +577,7 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/v1/search")
                 ),
                 NpmSlice.createAuthSlice(
-                    new SearchSlice(artifactIndex, name),
+                    new SearchSlice(artifactIndex, name, Optional.of(storage)),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -531,11 +586,17 @@ public final class NpmSlice implements Slice {
                 )
             ),
             new RtRulePath(
-                new RtRule.All(
-                    MethodRule.POST,
-                    new RtRule.ByPath(".*/-/v1/login$")
-                ),
-                this.webLoginSlice(jwtOnly, basicAuth)
+                com.auto1.pantera.npm.http.auth.OAuthLoginSlice.WEB_LOGIN,
+                new com.auto1.pantera.npm.http.auth.LoginBodyCapSlice(
+                    new DeclinedEndpointSlice("npm web login", NpmSlice.LOGIN_DOCS)
+                )
+            ),
+            new RtRulePath(
+                com.auto1.pantera.npm.http.auth.OAuthLoginSlice.LOGOUT,
+                this.declinedRoute(
+                    "npm logout", Action.Standard.READ,
+                    basicAuth, npmTokenAuth, policy, name
+                )
             ),
             new RtRulePath(
                 new RtRule.All(
@@ -768,25 +829,6 @@ public final class NpmSlice implements Slice {
             return new CombinedAuthzSliceWrap(origin, basicAuth, tokenAuth, control);
         }
         return new BearerAuthzSlice(origin, tokenAuth, control);
-    }
-
-    /**
-     * Web login (`npm login --auth-type=web`) is only meaningful for
-     * JWT-only repos with a Pantera authentication backend wired; other
-     * modes keep the pre-existing 404 (no route existed before this).
-     *
-     * @param jwtOnly Whether this repository is JWT-only
-     * @param basicAuth Basic authentication, or {@code null}
-     * @return Login slice
-     */
-    private Slice webLoginSlice(final boolean jwtOnly, final Authentication basicAuth) {
-        final Slice slice;
-        if (jwtOnly && basicAuth != null) {
-            slice = new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens);
-        } else {
-            slice = new SliceSimple(ResponseBuilder.notFound().build());
-        }
-        return slice;
     }
 
     /**

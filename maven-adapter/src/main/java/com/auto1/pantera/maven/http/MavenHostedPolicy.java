@@ -21,15 +21,16 @@ package com.auto1.pantera.maven.http;
  *                  (WS4-maven.2). Default {@code false}.
  * @param releaseImmutable Reject redeploy of an existing non-SNAPSHOT
  *                          primary with 409 instead of overwriting it
- *                          (WS4-maven.6). Default {@code false}. SNAPSHOT
- *                          redeploys are always allowed regardless.
+ *                          (WS4-maven.6). Default {@code true}; a repository
+ *                          opts out with {@code releaseImmutable: false}.
+ *                          SNAPSHOT redeploys are always allowed regardless.
  * @since 2.3.0
  */
 public record MavenHostedPolicy(boolean verifyPgp, boolean releaseImmutable) {
 
     /**
-     * Legacy/default policy — byte-identical to pre-2.3.0 hosted-write
-     * behaviour: no signature verification, unconditional overwrite.
+     * Default policy: no PGP signature verification, and published release
+     * versions are immutable (a repository opts out with releaseImmutable: false).
      */
-    public static final MavenHostedPolicy DEFAULT = new MavenHostedPolicy(false, false);
+    public static final MavenHostedPolicy DEFAULT = new MavenHostedPolicy(false, true);
 }

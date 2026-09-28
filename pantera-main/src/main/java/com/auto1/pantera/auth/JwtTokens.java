@@ -18,6 +18,7 @@ import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.auth.Tokens;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.time.Instant;
@@ -66,6 +67,12 @@ public final class JwtTokens implements Tokens {
      * {@link UserEnabledCheck#ALWAYS_ENABLED} when not supplied.
      */
     private final UserEnabledCheck enabledCheck;
+
+    /**
+     * Lifetime of an API token issued to a password login from a
+     * package-manager client: the same 30-day default the token API uses.
+     */
+    private static final long CLIENT_LOGIN_TOKEN_SECONDS = 30L * 86_400L;
 
     /**
      * Default access token TTL in seconds (cached from settings on construction).
@@ -159,6 +166,74 @@ public final class JwtTokens implements Tokens {
     }
 
     /**
+     * Rotate: consume the presented refresh JTI, then issue a successor
+     * pair. The consume is an atomic DB update (live + owned + type
+     * refresh), so a replayed refresh token — or one belonging to another
+     * subject — is refused and mints nothing (SecOps token-revocation #23).
+     * Without a token store (no-DB boot) there is nothing to consume, so
+     * rotation degrades to plain issuance, matching pre-2.2.9 behaviour in
+     * that mode.
+     *
+     * @param user Authenticated subject of the presented refresh token
+     * @param refreshJti JTI of the presented refresh token
+     * @return Successor pair, or {@code null} when refused
+     */
+    @Override
+    public Tokens.TokenPair rotate(final AuthUser user, final String refreshJti) {
+        if (this.tokenDao != null) {
+            final UUID jti;
+            try {
+                jti = UUID.fromString(refreshJti);
+            } catch (final IllegalArgumentException ex) {
+                return null;
+            }
+            if (!this.tokenDao.consumeRefresh(jti, user.name())) {
+                EcsLogger.warn("com.auto1.pantera.auth")
+                    .message("Refresh rotation refused: presented JTI is not a live refresh token of this user")
+                    .eventCategory("authentication")
+                    .eventAction("token_refresh")
+                    .eventOutcome("failure")
+                    .field("user.name", user.name())
+                    .field("log.source", "application")
+                    .log();
+                return null;
+            }
+        }
+        return this.generatePair(user);
+    }
+
+    /**
+     * Named API token for a password login from a package-manager client
+     * ({@code npm login}): expires after the default API-token lifetime
+     * (30 days), shortened to the admin cap ({@code api_token_max_ttl_seconds},
+     * or the legacy {@code max_api_token_days}) when that is lower. Never
+     * permanent, so the "allow permanent API tokens" policy cannot be
+     * bypassed through a client login. Persisted like any other API token.
+     * Blocking (settings read and token store): call off the event loop.
+     *
+     * @param user User to issue the token for
+     * @param label Token label
+     * @return Signed JWT string
+     */
+    @Override
+    public String issueApiToken(final AuthUser user, final String label) {
+        long expiry = JwtTokens.CLIENT_LOGIN_TOKEN_SECONDS;
+        if (this.settingsDao != null) {
+            final long maxSeconds = this.settingsDao.getInt("api_token_max_ttl_seconds", 0);
+            final long cap;
+            if (maxSeconds > 0) {
+                cap = maxSeconds;
+            } else {
+                cap = 86_400L * this.settingsDao.getInt("max_api_token_days", 0);
+            }
+            if (cap > 0 && cap < expiry) {
+                expiry = cap;
+            }
+        }
+        return this.generateApiToken(user, (int) expiry, UUID.randomUUID(), label);
+    }
+
+    /**
      * Generate a named API token with a specific expiry and JTI.
      * When a DAO is present the JTI is persisted so the token can be validated and revoked.
      * @param user User to issue token for
@@ -171,15 +246,17 @@ public final class JwtTokens implements Tokens {
         final AuthUser user, final int expirySeconds,
         final UUID jti, final String label
     ) {
+        final Instant now = Instant.now();
         final var builder = JWT.create()
             .withSubject(user.name())
             .withClaim(AuthTokenRest.CONTEXT, user.authContext())
             .withClaim(AuthTokenRest.TYPE, TokenType.API.value())
             .withJWTId(jti.toString())
-            .withIssuedAt(Instant.now());
+            .withIssuedAt(now)
+            .withClaim(AuthTokenRest.IAT_MS, now.toEpochMilli());
         final Instant expiresAt;
         if (expirySeconds > 0) {
-            expiresAt = Instant.now().plusSeconds(expirySeconds);
+            expiresAt = now.plusSeconds(expirySeconds);
             builder.withExpiresAt(expiresAt);
         } else {
             expiresAt = null;
@@ -233,13 +310,15 @@ public final class JwtTokens implements Tokens {
         final int ttl = this.settingsDao != null
             ? this.settingsDao.getInt("access_token_ttl_seconds", 3600)
             : this.defaultAccessTtl;
+        final Instant now = Instant.now();
         return JWT.create()
             .withSubject(user.name())
             .withClaim(AuthTokenRest.CONTEXT, user.authContext())
             .withClaim(AuthTokenRest.TYPE, TokenType.ACCESS.value())
             .withJWTId(UUID.randomUUID().toString())
-            .withIssuedAt(Instant.now())
-            .withExpiresAt(Instant.now().plusSeconds(ttl))
+            .withIssuedAt(now)
+            .withClaim(AuthTokenRest.IAT_MS, now.toEpochMilli())
+            .withExpiresAt(now.plusSeconds(ttl))
             .sign(this.algorithm);
     }
 
@@ -251,13 +330,15 @@ public final class JwtTokens implements Tokens {
             ? this.settingsDao.getInt("refresh_token_ttl_seconds", 604800)
             : this.defaultRefreshTtl;
         final UUID jti = UUID.randomUUID();
-        final Instant expiresAt = Instant.now().plusSeconds(ttl);
+        final Instant now = Instant.now();
+        final Instant expiresAt = now.plusSeconds(ttl);
         final String token = JWT.create()
             .withSubject(user.name())
             .withClaim(AuthTokenRest.CONTEXT, user.authContext())
             .withClaim(AuthTokenRest.TYPE, TokenType.REFRESH.value())
             .withJWTId(jti.toString())
-            .withIssuedAt(Instant.now())
+            .withIssuedAt(now)
+            .withClaim(AuthTokenRest.IAT_MS, now.toEpochMilli())
             .withExpiresAt(expiresAt)
             .sign(this.algorithm);
         if (this.tokenDao != null) {

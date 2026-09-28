@@ -276,15 +276,45 @@ function browseUrl(data: SearchResult): string {
   ) {
     path = '/' + name
   } else if (rtype === 'file' || rtype === 'file-proxy' || rtype === 'file-group') {
-    const dir = parentDir(name)
-    path = '/' + (dir || '')
+    // artifact_path is the DOTTED display name -- the writer flattens every
+    // separator into a dot, and that is not reversible (filenames and versions
+    // contain dots of their own). It therefore holds no slashes at all, so
+    // parentDir() returns '' and the browse lands on the repository root.
+    // path_prefix carries the real storage key; browse to ITS parent. Rows
+    // indexed before that field was recorded still fall back to the old guess.
+    if (realKey) {
+      const dir = parentDir(realKey.replace(/^\/+/, ''))
+      path = '/' + (dir || '')
+    } else {
+      const dir = parentDir(name)
+      path = '/' + (dir || '')
+    }
   } else if (rtype.startsWith('docker')) {
-    path = '/'
+    // artifact_path is the image name, never a storage path, and the registry
+    // layout is not guessable from it: the adapter stores under
+    // docker/registry/v2/repositories/<image>/_manifests/... path_prefix is
+    // the tag's manifest link within that tree. Its parent holds a single link
+    // file, so cut at _manifests instead to land on the image directory --
+    // this reads the layout off the recorded key rather than hardcoding it.
+    const key = (realKey ?? '').replace(/^\/+/, '')
+    const marker = key.indexOf('/_manifests/')
+    if (marker > 0) {
+      path = '/' + key.slice(0, marker)
+    } else {
+      path = '/'
+    }
   } else {
     // helm/debian/rpm and any future type land here; the browse path must be
     // absolute like every other branch's, so the leading slash is not optional.
-    const dir = parentDir(name)
-    path = '/' + (dir || '')
+    // artifact_path is a package name (helm) or a name_arch composite
+    // (debian/rpm), neither of which is a directory, so prefer the real key.
+    if (realKey) {
+      const dir = parentDir(realKey.replace(/^\/+/, ''))
+      path = '/' + (dir || '')
+    } else {
+      const dir = parentDir(name)
+      path = '/' + (dir || '')
+    }
   }
   return `/repositories/${data.repo_name}?path=${encodeURIComponent(path)}&from=search`
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { listUsers, deleteUser, enableUser, disableUser, putUser } from '@/api/users'
 import { listRoles } from '@/api/roles'
 import { useNotificationStore } from '@/stores/notifications'
@@ -14,6 +14,9 @@ import InputText from 'primevue/inputtext'
 import Dialog from 'primevue/dialog'
 import Paginator from 'primevue/paginator'
 import MultiSelect from 'primevue/multiselect'
+import Message from 'primevue/message'
+import PasswordComplexityForm from '@/components/auth/PasswordComplexityForm.vue'
+import { apiErrorMessage } from '@/utils/apiError'
 import type { User, Role } from '@/types'
 
 const notify = useNotificationStore()
@@ -34,6 +37,13 @@ const newPassword = ref('')
 const newEmail = ref('')
 const newRoles = ref<string[]>([])
 const creating = ref(false)
+// The server enforces the password policy (PasswordPolicy.java) and the
+// role ceiling; the form mirrors the policy for live feedback and the
+// server's rejection message is shown inline so the admin can fix it.
+const newPasswordValid = ref(false)
+const createError = ref<string | null>(null)
+// Required prop of PasswordComplexityForm; ignored with hide-old-password.
+const unusedOldPassword = ref('')
 const availableRoles = ref<Role[]>([])
 
 async function load() {
@@ -53,7 +63,7 @@ async function handleDelete(name: string) {
       await deleteUser(name)
       notify.success('User deleted', name)
       load()
-    } catch { notify.error('Failed to delete user') }
+    } catch (err) { notify.error('Failed to delete user', apiErrorMessage(err, name)) }
   }
 }
 
@@ -67,11 +77,22 @@ async function toggleUser(user: User) {
       notify.info('User enabled', user.name)
     }
     load()
-  } catch { notify.error('Failed to toggle user') }
+  } catch (err) { notify.error('Failed to toggle user', apiErrorMessage(err, user.name)) }
 }
+
+function resetCreateForm() {
+  newUsername.value = ''
+  newPassword.value = ''
+  newEmail.value = ''
+  newRoles.value = []
+  createError.value = null
+}
+
+watch(createVisible, visible => { if (!visible) resetCreateForm() })
 
 async function handleCreate() {
   creating.value = true
+  createError.value = null
   try {
     const body: Record<string, unknown> = {
       password: newPassword.value,
@@ -83,13 +104,11 @@ async function handleCreate() {
     await putUser(newUsername.value, body)
     notify.success('User created', newUsername.value)
     createVisible.value = false
-    newUsername.value = ''
-    newPassword.value = ''
-    newEmail.value = ''
-    newRoles.value = []
     load()
-  } catch { notify.error('Failed to create user') }
-  finally { creating.value = false }
+  } catch (err) {
+    createError.value = apiErrorMessage(err, 'Failed to create user')
+    notify.error('Failed to create user', createError.value)
+  } finally { creating.value = false }
 }
 
 async function loadRoles() {
@@ -151,8 +170,15 @@ onMounted(() => { load(); loadRoles() })
       <!-- Create Dialog -->
       <Dialog v-model:visible="createVisible" header="Create User" modal class="w-[450px]">
         <div class="space-y-3">
-          <InputText v-model="newUsername" placeholder="Username" class="w-full" />
-          <InputText v-model="newPassword" type="password" placeholder="Password" class="w-full" />
+          <InputText v-model="newUsername" placeholder="Username" class="w-full" autocomplete="off" />
+          <PasswordComplexityForm
+            v-model:old-password="unusedOldPassword"
+            v-model:password="newPassword"
+            :username="newUsername"
+            :disabled="creating"
+            hide-old-password
+            @valid="(v: boolean) => newPasswordValid = v"
+          />
           <InputText v-model="newEmail" placeholder="Email (optional)" class="w-full" />
           <div>
             <label class="block text-sm font-medium mb-1">Roles (optional)</label>
@@ -164,10 +190,13 @@ onMounted(() => { load(); loadRoles() })
               display="chip"
             />
           </div>
+          <Message v-if="createError" severity="error" :closable="false" data-testid="create-user-error">
+            {{ createError }}
+          </Message>
         </div>
         <template #footer>
           <Button label="Cancel" severity="secondary" text @click="createVisible = false" />
-          <Button label="Create" :loading="creating" :disabled="!newUsername || !newPassword" @click="handleCreate" />
+          <Button label="Create" :loading="creating" :disabled="!newUsername || !newPasswordValid" @click="handleCreate" />
         </template>
       </Dialog>
     </div>

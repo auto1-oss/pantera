@@ -20,6 +20,8 @@ import java.util.stream.Collectors;
 import java.util.zip.GZIPOutputStream;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsNull;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -29,6 +31,44 @@ import org.junit.jupiter.api.io.TempDir;
  * @since 1.20.13
  */
 final class DebianScannerTest {
+
+    @Test
+    void recordsThePoolPathFromTheFilenameField(@TempDir final Path temp) throws IOException {
+        final Path dir = temp.resolve("dists/focal/main/binary-amd64");
+        Files.createDirectories(dir);
+        Files.writeString(
+            dir.resolve("Packages"),
+            String.join(
+                "\n",
+                "Package: curl",
+                "Version: 7.68.0-1ubuntu2.6",
+                "Architecture: amd64",
+                "Size: 161672",
+                "Filename: pool/main/c/curl/curl_7.68.0-1ubuntu2.6_amd64.deb",
+                "",
+                "Package: nofile",
+                "Version: 1.0",
+                "Architecture: all",
+                "Size: 10",
+                ""
+            )
+        );
+        final List<ArtifactRecord> records = new DebianScanner().scan(temp, "deb-repo")
+            .collect(Collectors.toList());
+        final ArtifactRecord curl = records.stream()
+            .filter(rec -> rec.name().startsWith("curl")).findFirst().orElseThrow();
+        MatcherAssert.assertThat(
+            "The pool path is the real storage key the tree browser needs",
+            curl.pathPrefix(),
+            new IsEqual<>("pool/main/c/curl/curl_7.68.0-1ubuntu2.6_amd64.deb")
+        );
+        final ArtifactRecord nofile = records.stream()
+            .filter(rec -> rec.name().startsWith("nofile")).findFirst().orElseThrow();
+        MatcherAssert.assertThat(
+            "A stanza without Filename records no key rather than a guess",
+            nofile.pathPrefix(), new IsNull<>()
+        );
+    }
 
     @Test
     void parsesUncompressedPackagesFile(@TempDir final Path temp)

@@ -19,7 +19,6 @@ import com.auto1.pantera.docker.Blob;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Layers;
 import com.auto1.pantera.docker.error.InvalidDigestException;
-import com.auto1.pantera.docker.error.NonContiguousChunkException;
 import io.reactivex.Flowable;
 import org.hamcrest.Description;
 import org.hamcrest.MatcherAssert;
@@ -114,56 +113,66 @@ class UploadTest {
      * chunk.
      */
     @Test
-    void shouldAppendMultipleChunksAndAssembleInOrder() {
+    void shouldAppendOrderedChunks() {
         this.upload.start().toCompletableFuture().join();
-        final byte[] first = "one-".getBytes();
-        final byte[] second = "two-three".getBytes();
-        final Long firstOffset = this.upload.append(new Content.From(first)).join();
-        MatcherAssert.assertThat(firstOffset, Matchers.is((long) first.length - 1));
-        final Long secondOffset = this.upload.append(new Content.From(second)).join();
+        final long first = this.upload.append(new Content.From("one".getBytes())).join();
+        final long second = this.upload.append(new Content.From("two".getBytes())).join();
         MatcherAssert.assertThat(
-            secondOffset, Matchers.is((long) (first.length + second.length) - 1)
+            "first chunk ends at offset 2",
+            first, new IsEqual<>(2L)
         );
-        final byte[] expected = new byte[first.length + second.length];
-        System.arraycopy(first, 0, expected, 0, first.length);
-        System.arraycopy(second, 0, expected, first.length, second.length);
-        MatcherAssert.assertThat(this.upload, new IsUploadWithContent(expected));
+        MatcherAssert.assertThat(
+            "second chunk ends at offset 5",
+            second, new IsEqual<>(5L)
+        );
+        MatcherAssert.assertThat(
+            "offset reports the total uploaded so far",
+            this.upload.offset().join(), new IsEqual<>(5L)
+        );
+        MatcherAssert.assertThat(
+            "the blob is the concatenation of the chunks",
+            this.upload, new IsUploadWithContent("onetwo".getBytes())
+        );
     }
 
-    /**
-     * WS4-docker.6: a chunk whose declared {@code Content-Range} start does
-     * not match what has actually been received so far must reject with
-     * {@link NonContiguousChunkException} (mapped to 416 by
-     * {@code PatchUploadSlice}) rather than silently accepting out-of-order
-     * data.
-     */
     @Test
-    void shouldRejectNonContiguousChunk() {
+    void shouldRejectOutOfOrderChunk() {
         this.upload.start().toCompletableFuture().join();
-        this.upload.append(new Content.From("first".getBytes())).join();
-        final Throwable cause = Assertions.assertThrows(
-            CompletionException.class,
-            () -> this.upload.append(
-                new Content.From("out-of-order".getBytes()), Optional.of(999L)
-            ).join()
-        ).getCause();
-        MatcherAssert.assertThat(cause, new IsInstanceOf(NonContiguousChunkException.class));
+        this.upload.append(new Content.From("one".getBytes()), Optional.of(0L)).join();
+        MatcherAssert.assertThat(
+            Assertions.assertThrows(
+                CompletionException.class,
+                () -> this.upload.append(new Content.From("two".getBytes()), Optional.of(7L))
+                    .join()
+            ).getCause(),
+            new IsInstanceOf(UploadRangeException.class)
+        );
     }
 
-    /**
-     * WS4-docker.6 regression: a correctly-contiguous declared start is
-     * accepted, not just an absent one.
-     */
     @Test
-    void shouldAcceptCorrectlyDeclaredContiguousStart() {
+    void shouldAcceptChunkStartingAtCurrentOffset() {
         this.upload.start().toCompletableFuture().join();
-        final byte[] first = "abc".getBytes();
-        this.upload.append(new Content.From(first), Optional.of(0L)).join();
-        final byte[] second = "def".getBytes();
-        final Long offset = this.upload.append(
-            new Content.From(second), Optional.of((long) first.length)
-        ).join();
-        MatcherAssert.assertThat(offset, Matchers.is((long) (first.length + second.length) - 1));
+        this.upload.append(new Content.From("one".getBytes()), Optional.of(0L)).join();
+        this.upload.append(new Content.From("two".getBytes()), Optional.of(3L)).join();
+        MatcherAssert.assertThat(
+            this.upload, new IsUploadWithContent("onetwo".getBytes())
+        );
+    }
+
+    @Test
+    void shouldFailPutWhenConcatenationMismatchesDigest() {
+        this.upload.start().toCompletableFuture().join();
+        this.upload.append(new Content.From("one".getBytes())).join();
+        this.upload.append(new Content.From("two".getBytes())).join();
+        MatcherAssert.assertThat(
+            Assertions.assertThrows(
+                CompletionException.class,
+                () -> this.upload.putTo(
+                    new CapturePutLayers(), new Digest.Sha256("twoone".getBytes())
+                ).join()
+            ).getCause(),
+            new IsInstanceOf(InvalidDigestException.class)
+        );
     }
 
     @Test
@@ -197,8 +206,9 @@ class UploadTest {
 
     /**
      * WS4-docker.9: a claimed digest that does not match the digest actually computed
-     * for the uploaded bytes must fail explicitly with {@code DIGEST_INVALID}, carrying
-     * both the calculated and expected digests — not an opaque chunk-key-miss.
+     * for the uploaded bytes must fail explicitly with {@code DIGEST_INVALID} naming the
+     * claimed digest — not an opaque chunk-key-miss — and must leave the staged chunk
+     * in place so the client can retry the commit.
      */
     @Test
     void shouldFailWithDigestInvalidOnClaimedVsComputedMismatch() {
@@ -218,11 +228,9 @@ class UploadTest {
             cause, new IsInstanceOf(InvalidDigestException.class)
         );
         final InvalidDigestException digestError = (InvalidDigestException) cause;
-        MatcherAssert.assertThat(digestError.code(), new IsEqual<>("DIGEST_INVALID"));
-        final String hash = new Digest.Sha256(chunk).hex();
         MatcherAssert.assertThat(
-            "Message must carry the actually-computed digest",
-            digestError.getMessage(), new StringContains(hash)
+            "Error code must be the OCI DIGEST_INVALID",
+            digestError.code(), new IsEqual<>("DIGEST_INVALID")
         );
         MatcherAssert.assertThat(
             "Message must carry the claimed digest",

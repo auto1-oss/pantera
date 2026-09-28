@@ -63,7 +63,12 @@ final class GemKeyPredicate implements Predicate<Key> {
     private static boolean testOne(final String name, final String target) {
         final int idx = target.lastIndexOf(name);
         boolean matches = false;
-        if (idx >= 0) {
+        // SECURITY (2.2.9): the name must begin a path segment (start of the
+        // key or immediately after '/'), not merely appear somewhere. Without
+        // this anchor a stored key like `evilbuilder-1.0.0.gem` matched the
+        // name `builder`, letting an attacker-planted key be selected for the
+        // gem metadata / dependency operations.
+        if (idx >= 0 && (idx == 0 || target.charAt(idx - 1) == '/')) {
             final String tail = target.substring(idx + name.length());
             if (tail.isEmpty() || PTN_TAIL.matcher(tail).matches()) {
                 matches = true;

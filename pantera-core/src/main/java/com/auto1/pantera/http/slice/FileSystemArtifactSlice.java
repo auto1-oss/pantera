@@ -168,7 +168,7 @@ public final class FileSystemArtifactSlice implements Slice {
                     .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError()
-                    .textBody("Failed to serve artifact: " + e.getMessage())
+                    .textBody("Failed to serve artifact")
                     .build();
             }
         }, BLOCKING_EXECUTOR);  // Use dedicated blocking executor

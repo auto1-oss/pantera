@@ -62,7 +62,10 @@ final class PypiJsonBaseLoaderTest {
     void warmCacheServesWithoutAnyUpstreamCall() throws Exception {
         final ScriptedUpstream upstream = new ScriptedUpstream();
         upstream.put("/pypi/requests/json", "{\"info\":{}}");
-        final Storage storage = new InMemoryStorage();
+        // CacheTimeControl treats a cached entry whose storage reports no
+        // updated-at as stale (never fresh forever), so a warm cache needs a
+        // storage that stamps one, as every real backend does.
+        final FakeMetaStorage storage = new FakeMetaStorage(new InMemoryStorage());
         final PypiJsonBaseLoader loader = newLoader(upstream, storage);
 
         final PypiJsonBaseLoader.Outcome first =
@@ -74,6 +77,8 @@ final class PypiJsonBaseLoaderTest {
         );
         final Key key = new Key.From("json-api", "pypi/requests/json");
         awaitPersisted(storage, key);
+        storage.stamp(key, Instant.now());
+        awaitSingleFlightSettled(loader);
 
         final PypiJsonBaseLoader.Outcome second =
             loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);

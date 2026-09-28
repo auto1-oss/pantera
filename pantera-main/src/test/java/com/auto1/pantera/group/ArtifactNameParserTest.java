@@ -197,6 +197,20 @@ final class ArtifactNameParserTest {
         );
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "/-/package/lodash/dist-tags", "/-/package/@qa-npm/pkg/dist-tags",
+        "/-/package/@qa-npm%2fpkg/dist-tags/beta",
+        "/-/npm/v1/keys", "/-/v1/search", "/-/npm/v1/attestations/lodash@4.17.21", "/-/all"
+    })
+    void npmRegistryEndpointsAreNotPackageNames(final String url) {
+        MatcherAssert.assertThat(
+            "a /-/ registry endpoint is not the package '-': " + url,
+            ArtifactNameParser.parse("npm-group", url),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
     // ---- Docker: manifest and blob requests ----
 
     @ParameterizedTest
@@ -278,6 +292,9 @@ final class ArtifactNameParserTest {
         "/github.com/gin-gonic/gin/@v/list, github.com/gin-gonic/gin",
         "/github.com/gin-gonic/gin/@latest, github.com/gin-gonic/gin",
         "/golang.org/x/text/@v/v0.14.0.info, golang.org/x/text",
+        // B84: the index records the real (decoded) module path
+        "/github.com/!burnt!sushi/toml/@v/v1.3.2.zip, github.com/BurntSushi/toml",
+        "/github.com/!azure/azure-sdk-for-go/@latest, github.com/Azure/azure-sdk-for-go",
     })
     void goPaths(final String url, final String expected) {
         MatcherAssert.assertThat(

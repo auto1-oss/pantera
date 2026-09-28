@@ -32,7 +32,7 @@ public final class StorageAliasHandlerTest extends AsyncApiTestBase {
      */
     private static final JsonObject ALIAS_BODY = new JsonObject()
         .put("type", "fs")
-        .put("path", "/var/pantera/data");
+        .put("path", "/tmp/pantera-alias");
 
     @Test
     void listGlobalAliasesReturnsArray(final Vertx vertx, final VertxTestContext ctx)
@@ -101,6 +101,56 @@ public final class StorageAliasHandlerTest extends AsyncApiTestBase {
             .toCompletionStage().toCompletableFuture()
             .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
         Assertions.assertEquals(200, del.statusCode());
+        ctx.completeNow();
+    }
+
+    @Test
+    void localPathAliasOutsideApprovedRootsIsRefused(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        // B12: an alias was never checked against the approved roots, so a
+        // repository referencing it by name mounted any host directory.
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> global = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/storages/host-etc")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put("type", "fs").put("path", "/etc"))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        final HttpResponse<Buffer> vertxFile = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/storages/host-etc-vx")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put("type", "vertx-file").put("path", "/etc"))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, global.statusCode(), "an fs alias outside the approved roots must be refused"
+        );
+        Assertions.assertEquals(
+            400, vertxFile.statusCode(),
+            "a vertx-file alias outside the approved roots must be refused"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
+    void s3EndpointOnCloudMetadataIsRefused(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // SECURITY (2.2.9): an alias endpoint was never validated, so an alias
+        // writer could point S3 traffic at the cloud metadata service (SSRF).
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/storages/ssrf")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject()
+                .put("type", "s3")
+                .put("bucket", "b")
+                .put("region", "eu-west-1")
+                .put("endpoint", "http://169.254.169.254/"))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "an alias endpoint on the cloud metadata address must be refused"
+        );
         ctx.completeNow();
     }
 }

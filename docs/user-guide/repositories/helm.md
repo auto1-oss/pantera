@@ -19,10 +19,11 @@ This page covers how to configure the Helm client to search, install, and push c
 Register the Pantera Helm repository with your Helm client:
 
 ```bash
-helm repo add pantera http://pantera-host:8080/helm-repo \
-  --username your-username \
-  --password your-jwt-token
+printf '%s' 'your-api-token' | helm repo add pantera http://pantera-host:8080/helm-repo \
+  --username 'your-username' --password-stdin
 ```
+
+The token is read from stdin so it stays out of the process list. A repository without any chart has no `index.yaml` yet, so `helm repo add` answers `404` until the first chart is uploaded.
 
 Update the local repository index:
 
@@ -94,9 +95,8 @@ helm package ./my-chart/
 Use curl to upload the packaged chart:
 
 ```bash
-curl -X PUT \
-  -H "Authorization: Basic $(echo -n your-username:your-jwt-token | base64)" \
-  --data-binary @my-chart-1.0.0.tgz \
+curl -fsS -u 'your-username:your-api-token' \
+  --upload-file my-chart-1.0.0.tgz \
   http://pantera-host:8080/helm-repo/my-chart-1.0.0.tgz
 ```
 

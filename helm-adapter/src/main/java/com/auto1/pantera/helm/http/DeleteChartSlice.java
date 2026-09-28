@@ -13,6 +13,7 @@ package com.auto1.pantera.helm.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.helm.ChartYaml;
 import com.auto1.pantera.helm.TgzArchive;
 import com.auto1.pantera.helm.metadata.IndexYaml;
@@ -22,7 +23,9 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
+import io.reactivex.Completable;
 import io.reactivex.Single;
 
 import java.net.URI;
@@ -31,6 +34,7 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -77,19 +81,30 @@ final class DeleteChartSlice implements Slice {
             final String chart = matcher.group("name");
             final String vers = matcher.group("version");
             if (vers.isEmpty()) {
-                return new IndexYaml(this.storage)
-                    .deleteByName(chart)
+                return this.locked(index -> index.deleteByName(chart))
                     .andThen(this.deleteArchives(chart, Optional.empty()))
                     .to(SingleInterop.get())
                     .toCompletableFuture();
             }
-            return new IndexYaml(this.storage)
-                .deleteByNameAndVersion(chart, vers)
+            return this.locked(index -> index.deleteByNameAndVersion(chart, vers))
                 .andThen(this.deleteArchives(chart, Optional.of(vers)))
                 .to(SingleInterop.get())
                 .toCompletableFuture();
         }
         return ResponseBuilder.badRequest().completedFuture();
+    }
+
+    /**
+     * Update index.yaml under the index lock every index writer takes.
+     * @param update Index update
+     * @return The operation result
+     */
+    private Completable locked(final Function<IndexYaml, Completable> update) {
+        return CompletableInterop.fromFuture(
+            new IndexUpdateLock(this.storage, IndexYaml.INDEX_YAML).run(
+                target -> update.apply(new IndexYaml(target)).to(CompletableInterop.await())
+            )
+        );
     }
 
     /**

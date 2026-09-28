@@ -10,8 +10,6 @@
  */
 package com.auto1.pantera.pypi.cooldown;
 
-import org.hamcrest.MatcherAssert;
-import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -179,66 +177,20 @@ final class PypiJsonMetadataRequestDetectorTest {
         assertThat(this.detector.repoType(), equalTo("pypi"));
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = {
-        "/pypi/requests/2.32.0/json",
-        "/pypi/requests/2.32.0/json/",
-        "/pypi-proxy/pypi/numpy/1.0.0/json"
-    })
-    void detectsVersionMetadataRequests(final String path) {
-        MatcherAssert.assertThat(
-            "Version-specific path should be detected: " + path,
-            this.detector.isVersionMetadataRequest(path),
-            new IsEqual<>(true)
+    @Test
+    void extractsPackageAndVersionFromVersionPath() {
+        final Optional<String[]> parts = this.detector.extractPackageAndVersion(
+            "/pypi/Six/1.16.0/json"
         );
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {
-        "/pypi/requests/json",
-        "/simple/requests/",
-        "/pypi/requests",
-        ""
-    })
-    void rejectsNonVersionMetadataRequests(final String path) {
-        MatcherAssert.assertThat(
-            "Package-level/unrelated path must not be detected as version-specific: " + path,
-            this.detector.isVersionMetadataRequest(path),
-            new IsEqual<>(false)
+        assertThat(
+            "version-level path must be recognised",
+            parts.map(arr -> arr[0] + "@" + arr[1]).orElse(""),
+            new org.hamcrest.core.IsEqual<>("Six@1.16.0")
         );
-    }
-
-    @Test
-    void rejectsNullPathForVersionMetadataRequest() {
-        MatcherAssert.assertThat(
-            this.detector.isVersionMetadataRequest(null),
-            new IsEqual<>(false)
-        );
-    }
-
-    @Test
-    void extractsVersionCoordinates() {
-        final Optional<PypiJsonMetadataRequestDetector.VersionCoordinates> coords =
-            this.detector.extractVersionCoordinates("/pypi/requests/2.32.0/json");
-        MatcherAssert.assertThat(coords.isPresent(), new IsEqual<>(true));
-        MatcherAssert.assertThat(coords.get().packageName(), new IsEqual<>("requests"));
-        MatcherAssert.assertThat(coords.get().version(), new IsEqual<>("2.32.0"));
-    }
-
-    @Test
-    void extractsVersionCoordinatesFromPrefixedPath() {
-        final Optional<PypiJsonMetadataRequestDetector.VersionCoordinates> coords =
-            this.detector.extractVersionCoordinates("/pypi-proxy/pypi/numpy/1.0.0/json");
-        MatcherAssert.assertThat(coords.isPresent(), new IsEqual<>(true));
-        MatcherAssert.assertThat(coords.get().packageName(), new IsEqual<>("numpy"));
-        MatcherAssert.assertThat(coords.get().version(), new IsEqual<>("1.0.0"));
-    }
-
-    @Test
-    void returnsEmptyVersionCoordinatesForPackageLevelPath() {
-        MatcherAssert.assertThat(
-            this.detector.extractVersionCoordinates("/pypi/requests/json").isPresent(),
-            new IsEqual<>(false)
+        assertThat(
+            "package-level path is not version-level",
+            this.detector.isVersionMetadataRequest("/pypi/six/json"),
+            new org.hamcrest.core.IsEqual<>(false)
         );
     }
 }

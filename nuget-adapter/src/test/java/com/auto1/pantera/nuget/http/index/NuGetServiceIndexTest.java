@@ -12,7 +12,6 @@ package com.auto1.pantera.nuget.http.index;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
-import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.hm.RsHasBody;
@@ -21,6 +20,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.nuget.AstoRepository;
 import com.auto1.pantera.nuget.http.NuGet;
+import com.auto1.pantera.nuget.http.TestAuthentication;
 import com.auto1.pantera.security.policy.Policy;
 import org.hamcrest.BaseMatcher;
 import org.hamcrest.Description;
@@ -65,7 +65,7 @@ class NuGetServiceIndexTest {
         this.nuget = new NuGet(
             this.url,
             new AstoRepository(new InMemoryStorage()),
-            Policy.FREE, (username, password) -> Optional.empty(), "*", Optional.empty()
+            Policy.FREE, new TestAuthentication(), "*", Optional.empty()
         );
     }
 
@@ -73,7 +73,7 @@ class NuGetServiceIndexTest {
     void shouldGetIndex() {
         final Response response = this.nuget.response(
             new RequestLine(RqMethod.GET, "/index.json"),
-            Headers.EMPTY,
+            TestAuthentication.HEADERS,
             Content.EMPTY
         ).join();
         MatcherAssert.assertThat(
@@ -116,7 +116,7 @@ class NuGetServiceIndexTest {
     void shouldFailPutIndex() {
         final Response response = this.nuget.response(
             new RequestLine(RqMethod.PUT, "/index.json"),
-            Headers.EMPTY,
+            TestAuthentication.HEADERS,
             Content.EMPTY
         ).join();
         MatcherAssert.assertThat(response, new RsHasStatus(RsStatus.METHOD_NOT_ALLOWED));

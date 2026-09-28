@@ -30,12 +30,24 @@ import org.reactivestreams.Publisher;
  * <p><strong>ENTERPRISE RECOMMENDATION:</strong> Limit use of this class to small metadata
  * files (&lt;1MB). For artifact storage, use direct streaming to avoid heap pressure.</p>
  *
- * <p>OPTIMIZATION: When size is known, this class now pre-allocates exact buffer capacity,
- * avoiding exponential 2x memory growth. Always provide size when available.</p>
+ * <p>OPTIMIZATION: When size is known, this class pre-allocates buffer capacity from
+ * it — but only up to {@link #MAX_PREALLOCATION}. The size hint is frequently the
+ * request's attacker-declared {@code Content-Length}; before 2.2.9 the exact
+ * declared size was used as the eagerly-allocated reduce seed, so an
+ * unauthenticated request declaring 2 GB and sending nothing reserved 2 GB of
+ * heap before a single body byte arrived (resource-dos F31). The seed is now a
+ * bounded hint and the buffer grows only as real bytes are received.</p>
  *
  * @since 0.17
  */
 public class Concatenation {
+
+    /**
+     * Upper bound on the capacity pre-allocated from a declared size hint
+     * (1 MiB). Beyond it the buffer grows on demand from real bytes, so an
+     * untrusted declared size can never drive the allocation.
+     */
+    public static final int MAX_PREALLOCATION = 1024 * 1024;
 
     /**
      * Source of byte buffers.
@@ -80,52 +92,43 @@ public class Concatenation {
      * @return Single buffer.
      */
     public Single<ByteBuffer> single() {
-        // OPTIMIZATION: Pre-allocate exact size when known (avoids all resizes)
-        if (this.expectedSize > 0 && this.expectedSize <= Integer.MAX_VALUE) {
-            return this.singleOptimized((int) this.expectedSize);
-        }
-        // Original behavior for unknown size (maintains backward compatibility)
+        // The declared size is a HINT bounded by MAX_PREALLOCATION: it is
+        // typically the attacker-controlled Content-Length, so it must never
+        // drive an eager allocation. Real bytes grow the buffer on demand.
+        final int seed = this.expectedSize > 0
+            ? (int) Math.min(this.expectedSize, MAX_PREALLOCATION)
+            : 0;
         return Flowable.fromPublisher(this.source).reduce(
-            ByteBuffer.allocate(0),
-            (left, right) -> {
-                right.mark();
-                final ByteBuffer result;
-                if (left.capacity() - left.limit() >= right.limit()) {
-                    left.position(left.limit());
-                    left.limit(left.limit() + right.limit());
-                    result = left.put(right);
-                } else {
-                    result = ByteBuffer.allocate(
-                        2 * Math.max(left.capacity(), right.capacity())
-                    ).put(left).put(right);
-                }
-                right.reset();
-                result.flip();
-                return result;
-            }
-        );
-    }
-
-    /**
-     * Optimized single() when size is known - pre-allocates exact capacity.
-     *
-     * @param size Known total size in bytes.
-     * @return Single buffer with exact capacity.
-     */
-    private Single<ByteBuffer> singleOptimized(final int size) {
-        return Flowable.fromPublisher(this.source).reduce(
-            ByteBuffer.allocate(size),
-            (left, right) -> {
-                right.mark();
-                // With exact pre-allocation, we should never need to resize
-                left.put(right);
-                right.reset();
-                return left;
-            }
+            ByteBuffer.allocate(seed),
+            Concatenation::append
         ).map(buf -> {
             buf.flip();
             return buf;
         });
+    }
+
+    /**
+     * Append {@code right} to the write-mode accumulator {@code left},
+     * growing it geometrically when it lacks room. The accumulator is kept
+     * in write mode (position = bytes written) and flipped once at the end.
+     *
+     * @param left Accumulator in write mode
+     * @param right Next chunk (its position is restored after the copy)
+     * @return The accumulator holding both, possibly a new larger buffer
+     */
+    private static ByteBuffer append(final ByteBuffer left, final ByteBuffer right) {
+        right.mark();
+        final ByteBuffer result;
+        if (left.remaining() >= right.remaining()) {
+            result = left.put(right);
+        } else {
+            final int needed = left.position() + right.remaining();
+            result = ByteBuffer.allocate(Math.max(2 * left.capacity(), needed));
+            left.flip();
+            result.put(left).put(right);
+        }
+        right.reset();
+        return result;
     }
 
     /**

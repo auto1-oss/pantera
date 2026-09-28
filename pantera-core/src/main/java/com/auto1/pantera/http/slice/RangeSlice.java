@@ -27,14 +27,16 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Slice decorator that adds HTTP Range request support for GET requests.
  * Enables resumable downloads of large artifacts.
  * 
- * <p>Supports byte ranges in format: Range: bytes=start-end</p>
+ * <p>Supports a single byte range: {@code bytes=start-end} (end clamped to
+ * the last byte), {@code bytes=start-} and the suffix form {@code bytes=-N}.</p>
  * <p>Returns 206 Partial Content with Content-Range header</p>
- * <p>Returns 416 Range Not Satisfiable if invalid</p>
+ * <p>Returns 416 Range Not Satisfiable when the first byte is past the end</p>
  * 
  * @since 1.0
  */
@@ -116,7 +118,7 @@ public final class RangeSlice implements Slice {
             final long rangeLength = rangeSpec.length(fileSize);
             final Content partialContent = skipAndLimit(
                 resp.body(),
-                rangeSpec.start(),
+                rangeSpec.start(fileSize),
                 rangeLength
             );
 
@@ -131,8 +133,7 @@ public final class RangeSlice implements Slice {
 
     /**
      * Skip bytes and limit content length.
-     * CRITICAL: Properly consumes upstream publisher to prevent connection leaks.
-     * 
+     *
      * @param content Original content
      * @param skip Number of bytes to skip
      * @param limit Number of bytes to return after skip
@@ -144,13 +145,13 @@ public final class RangeSlice implements Slice {
         final long limit
     ) {
         return new Content.From(
+            limit,
             new RangeLimitPublisher(content, skip, limit)
         );
     }
 
     /**
      * Publisher that skips and limits bytes.
-     * Ensures upstream is fully consumed to prevent connection leaks.
      */
     private static final class RangeLimitPublisher implements Publisher<ByteBuffer> {
         private final Publisher<ByteBuffer> upstream;
@@ -170,16 +171,23 @@ public final class RangeSlice implements Slice {
     }
 
     /**
-     * Subscriber that implements skip/limit logic.
-     * CRITICAL: Consumes all upstream data (even after limit) to prevent leaks.
+     * Subscriber that implements skip/limit logic with correct demand accounting.
+     *
+     * <p>Every upstream buffer consumes one unit of downstream demand. A buffer
+     * that is skipped entirely is therefore replaced by an extra
+     * {@code request(1)} upstream, otherwise the stream stalls once the range
+     * starts past the first chunk. When the limit is reached the upstream is
+     * cancelled (closing the file / connection) and downstream completes.</p>
      */
-    private static final class RangeLimitSubscriber implements Subscriber<ByteBuffer> {
+    private static final class RangeLimitSubscriber
+        implements Subscriber<ByteBuffer>, Subscription {
         private final Subscriber<? super ByteBuffer> downstream;
         private final long skip;
         private final long limit;
         private final AtomicLong skipped = new AtomicLong(0);
         private final AtomicLong emitted = new AtomicLong(0);
         private final AtomicBoolean completed = new AtomicBoolean(false);
+        private final AtomicReference<Subscription> upstream = new AtomicReference<>();
 
         RangeLimitSubscriber(
             final Subscriber<? super ByteBuffer> downstream,
@@ -193,60 +201,58 @@ public final class RangeSlice implements Slice {
 
         @Override
         public void onSubscribe(final Subscription subscription) {
-            this.downstream.onSubscribe(subscription);
+            if (!this.upstream.compareAndSet(null, subscription)) {
+                subscription.cancel();
+                return;
+            }
+            this.downstream.onSubscribe(this);
+            if (this.limit <= 0 && !this.completed.getAndSet(true)) {
+                subscription.cancel();
+                this.downstream.onComplete();
+            }
+        }
+
+        @Override
+        public void request(final long num) {
+            if (!this.completed.get()) {
+                this.upstream.get().request(num);
+            }
+        }
+
+        @Override
+        public void cancel() {
+            this.completed.set(true);
+            this.upstream.get().cancel();
         }
 
         @Override
         public void onNext(final ByteBuffer buffer) {
             if (this.completed.get()) {
-                // Already completed downstream - just consume and discard
-                // CRITICAL: Must consume to prevent connection leak
                 return;
             }
-
-            final int bufferSize = buffer.remaining();
-            final long currentSkipped = this.skipped.get();
-            final long currentEmitted = this.emitted.get();
-
-            // Still skipping?
-            if (currentSkipped < this.skip) {
-                final long toSkip = Math.min(this.skip - currentSkipped, bufferSize);
+            final long toSkip = Math.min(
+                this.skip - this.skipped.get(), (long) buffer.remaining()
+            );
+            if (toSkip > 0) {
                 this.skipped.addAndGet(toSkip);
-
-                if (toSkip >= bufferSize) {
-                    // Skip entire buffer - consume and request more
-                    return;
-                }
-
-                // Skip part of buffer
                 buffer.position((int) (buffer.position() + toSkip));
             }
-
-            // Reached limit?
-            if (currentEmitted >= this.limit) {
-                // Mark as completed but keep consuming upstream
-                if (!this.completed.getAndSet(true)) {
-                    this.downstream.onComplete();
-                }
-                // CRITICAL: Continue consuming upstream to prevent leak
+            if (!buffer.hasRemaining()) {
+                // Whole buffer skipped: it consumed downstream demand without
+                // producing anything, so ask upstream for its replacement.
+                this.upstream.get().request(1);
                 return;
             }
-
-            // Emit limited buffer
-            final long remaining = this.limit - currentEmitted;
-            if (buffer.remaining() > remaining) {
-                // Create limited view of buffer
+            final long remaining = this.limit - this.emitted.get();
+            if (buffer.remaining() >= remaining) {
                 final ByteBuffer limited = buffer.duplicate();
                 limited.limit((int) (limited.position() + remaining));
-                this.emitted.addAndGet(limited.remaining());
+                this.emitted.addAndGet(remaining);
+                this.completed.set(true);
                 this.downstream.onNext(limited);
-                
-                // Mark completed
-                if (!this.completed.getAndSet(true)) {
-                    this.downstream.onComplete();
-                }
+                this.upstream.get().cancel();
+                this.downstream.onComplete();
             } else {
-                // Emit full buffer
                 this.emitted.addAndGet(buffer.remaining());
                 this.downstream.onNext(buffer);
             }

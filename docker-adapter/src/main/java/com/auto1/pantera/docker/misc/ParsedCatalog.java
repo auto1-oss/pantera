@@ -17,7 +17,6 @@ import javax.json.Json;
 import javax.json.JsonString;
 import java.io.ByteArrayInputStream;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 
 /**
@@ -41,16 +40,6 @@ public final class ParsedCatalog implements Catalog {
     @Override
     public Content json() {
         return this.origin.json();
-    }
-
-    @Override
-    public boolean hasNext() {
-        return this.origin.hasNext();
-    }
-
-    @Override
-    public Optional<String> nextCursor() {
-        return this.origin.nextCursor();
     }
 
     /**

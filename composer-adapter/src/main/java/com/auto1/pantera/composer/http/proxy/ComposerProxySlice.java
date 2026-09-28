@@ -22,6 +22,7 @@ import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
@@ -29,7 +30,6 @@ import com.auto1.pantera.http.client.auth.AuthClientSlice;
 import com.auto1.pantera.http.client.auth.Authenticator;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -37,6 +37,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.publishdate.PublishDateRegistries;
 import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
@@ -52,13 +53,15 @@ import java.util.regex.Pattern;
  *
  * <p>Dispatch order (cooldown-aware):</p>
  * <ol>
+ *   <li>{@code HEAD} is answered exactly like the matching {@code GET}
+ *       with the body dropped (WS4-composer.8).</li>
+ *   <li>The catalog surfaces {@code /p2/available-packages.json} and
+ *       {@code /packages/list.json} are live passthroughs to the raw
+ *       upstream (WS4-composer.5/.6).</li>
  *   <li>{@link ComposerRootPackagesHandler} for {@code /packages.json}
- *       and {@code /repo.json} — fetches the raw upstream root
- *       (bootstraps a standalone proxy even with no local member),
- *       filters blocked versions out of inline root aggregation
- *       shapes, and rewrites every top-level URL field to a
- *       Pantera-local equivalent so a client cannot be steered
- *       straight to the upstream from the root.</li>
+ *       and {@code /repo.json} — serves the proxy's own root, whose
+ *       {@code metadata-url} points back at this proxy (the per-package
+ *       files carry the versions), and audits the listing view.</li>
  *   <li>{@link ComposerPackageMetadataHandler} for
  *       {@code /p2/<vendor>/<pkg>.json} and
  *       {@code /packages/<vendor>/<pkg>.json} — filters blocked
@@ -97,14 +100,16 @@ public class ComposerProxySlice implements Slice {
     private final ComposerPackageMetadataHandler packageHandler;
 
     /**
-     * Raw (unrewritten, uncached) upstream slice — shared with the root
-     * handler. Also backs the WS4-composer.5/.6 catalog-surface routes
-     * ({@code available-packages.json}, {@code packages/list.json}):
-     * these are live-passthrough (not cached) because, unlike a single
-     * package's metadata, the catalog surfaces enumerate the ENTIRE
-     * upstream registry (hundreds of thousands of packages on Packagist)
-     * — not meaningfully cacheable at per-repository scale, and rarely on
-     * the hot path of a {@code composer install}.
+     * Raw (unrewritten, uncached) upstream slice — shared with the
+     * primary-artifact fetch inside {@link CachedProxySlice} and
+     * {@link ProxyDownloadSlice}. Also backs the WS4-composer.5/.6
+     * catalog-surface routes ({@code available-packages.json},
+     * {@code packages/list.json}): these are live-passthrough (not cached)
+     * because, unlike a single package's metadata, the catalog surfaces
+     * enumerate the ENTIRE upstream registry (hundreds of thousands of
+     * packages on Packagist) — not meaningfully cacheable at
+     * per-repository scale, and rarely on the hot path of a
+     * {@code composer install}.
      */
     private final Slice rawRemote;
 
@@ -178,7 +183,7 @@ public class ComposerProxySlice implements Slice {
             new RegistryBackedInspector("composer", PublishDateRegistries.instance()),
             "http://localhost:8080");
     }
-    
+
     /**
      * Full constructor with cooldown support.
      * @param clients HTTP clients
@@ -239,7 +244,7 @@ public class ComposerProxySlice implements Slice {
         final String upstreamUrl
     ) {
         // Raw upstream slice — shared by the primary-artifact fetch inside
-        // CachedProxySlice, ProxyDownloadSlice, and the root handler.
+        // CachedProxySlice, ProxyDownloadSlice, and the catalog passthroughs.
         final Slice rawRemote = remote(clients, remote, auth);
         // Build the cache+rewrite slice once and share it between the
         // fallback SliceRoute (cooldown-off path) and the per-package
@@ -260,7 +265,29 @@ public class ComposerProxySlice implements Slice {
             baseUrl,
             upstreamUrl
         );
+        // The proxy's own repository root. Composer fetches /packages.json
+        // before anything else; the root only has to send the per-package
+        // lookups (metadata-url) back to this proxy, whose p2 path is served
+        // through the cache below. It is never fetched through the metadata
+        // cache: /packages.json is not a vendor/package name.
+        final Slice root = new SliceSimple(
+            () -> ResponseBuilder.ok()
+                .jsonBody(
+                    String.format(
+                        "{\"packages\":{},\"metadata-url\":\"%s/p2/%%package%%.json\"}",
+                        ComposerProxySlice.basePath(baseUrl, rname)
+                    )
+                )
+                .build()
+        );
         this.fallback = new SliceRoute(
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.ByPath(PackageMetadataSlice.ALL_PACKAGES),
+                    MethodRule.GET
+                ),
+                root
+            ),
             new RtRulePath(
                 new RtRule.All(
                     new RtRule.ByPath(PackageMetadataSlice.PACKAGE),
@@ -294,16 +321,15 @@ public class ComposerProxySlice implements Slice {
         // unfiltered — behaviourally identical to the old
         // skip-handlers-when-noop gate, minus the audit blackout.
         //
-        // The ROOT handler fetches the RAW remote — not cachedProxy.
+        // The ROOT handler serves the proxy's OWN root — not cachedProxy.
         // cachedProxy's package-merge path keys its cache/merge lookup on
         // a single package name derived from the request path; fed
         // "/packages.json" it mangles the path into a bogus package name
         // ("/packages"), which can never merge successfully and always
         // 404s. There is no per-package name for a root aggregation
-        // document, so the root is fetched directly and rewritten here
-        // (top-level URLs to Pantera-local via MetadataUrlRewriter,
-        // per-version cooldown filtering via ComposerRootPackagesFilter)
-        // rather than routed through the merge cache.
+        // document, and the proxy's root needs nothing from the upstream:
+        // its metadata-url sends every per-package lookup back here, so it
+        // is served even while the upstream is down.
         //
         // The PACKAGE handler fetches through the shared cache+rewrite
         // slice (rather than re-entering this dispatcher) — so metadata
@@ -315,15 +341,8 @@ public class ComposerProxySlice implements Slice {
         // uses {@code evaluateWithKnownDate} which skips inspector lookup
         // entirely. Mirrors the npm/PyPI packument-inline pattern landed
         // in {@code dbdde1736}.
-        // WS6.3: route the root aggregation surface through the same
-        // cache/storage this repository already uses for per-package
-        // metadata — TTL-cached, single-flighted, serve-stale-on-outage
-        // (ComposerRootBaseLoader), instead of hitting the upstream
-        // unconditionally on every /packages.json or /repo.json request.
-        // ComposerRootBaseLoader namespaces its keys so they never collide
-        // with the per-package cache entries.
         this.rootHandler = new ComposerRootPackagesHandler(
-            rawRemote, cache, repository.storage(), cooldown, rtype, rname, baseUrl
+            root, cooldown, rtype, rname
         );
         this.packageHandler = new ComposerPackageMetadataHandler(
             cachedProxy, cooldown, rtype, rname
@@ -342,15 +361,13 @@ public class ComposerProxySlice implements Slice {
         }
         final String path = line.uri().getPath();
         final String user = new Login(headers).getValue();
-        // Bound as early as possible — before any async hop — so the
+        // Captured at entry from the request's X-Pantera-Ctx-* headers —
+        // before any async hop, and never from MDC, which on a pooled
+        // thread can hold another request's values — so the
         // AuditLogger.resolution() call downstream in the cooldown
-        // handlers gets real trace.id / client.ip instead of nulls from
-        // a worker thread that never had EcsLoggingSlice's MDC bound.
+        // handlers carries this request's trace.id / client.ip.
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext auditCtx = new AuditContext(
-            org.slf4j.MDC.get(EcsMdc.TRACE_ID),
-            org.slf4j.MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext auditCtx = new AuditContext(headers);
         // WS4-composer.5/.6: available-packages / search-list catalog
         // surfaces. Checked ahead of rootHandler/packageHandler/fallback
         // so they resolve to an explicit passthrough rather than falling
@@ -444,6 +461,29 @@ public class ComposerProxySlice implements Slice {
             );
             return response;
         });
+    }
+
+    /**
+     * Host-relative path of this repository, used as the {@code metadata-url}
+     * prefix of the root. Host-relative so Composer resolves it against the
+     * host it was configured with (and sends its credentials there); the
+     * path comes from the repository URL so a reverse-proxy sub-path is kept.
+     *
+     * @param baseUrl Repository URL
+     * @param rname Repository name (fallback when the URL has no path)
+     * @return Path without a trailing slash, e.g. {@code /php_proxy}
+     */
+    private static String basePath(final String baseUrl, final String rname) {
+        String path = null;
+        try {
+            path = URI.create(baseUrl).getRawPath();
+        } catch (final IllegalArgumentException ignored) {
+            // Not a URI: fall back to the repository name below.
+        }
+        if (path == null || path.isBlank() || "/".equals(path)) {
+            path = "/" + rname;
+        }
+        return path.replaceAll("/+$", "");
     }
 
     /**

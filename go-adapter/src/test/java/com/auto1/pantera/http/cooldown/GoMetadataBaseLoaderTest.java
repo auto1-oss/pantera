@@ -63,7 +63,7 @@ final class GoMetadataBaseLoaderTest {
     void warmCacheServesWithoutAnyUpstreamCall() throws Exception {
         final ScriptedUpstream upstream = new ScriptedUpstream();
         upstream.put("/mod/@v/list", "v1.0.0\n");
-        final Storage storage = new InMemoryStorage();
+        final FakeMetaStorage storage = new FakeMetaStorage(new InMemoryStorage());
         final GoMetadataBaseLoader loader = newLoader(upstream, storage);
         final Key key = new KeyFromPath("/mod/@v/list");
 
@@ -78,6 +78,11 @@ final class GoMetadataBaseLoaderTest {
         // tees bytes to the caller while saving a copy in the background) —
         // wait for it to land before proving the second call is a cache hit.
         awaitPersisted(storage, key);
+        // A real storage reports the write time (file mtime / S3
+        // Last-Modified); InMemoryStorage reports none, which
+        // CacheTimeControl treats as no evidence of freshness. Stamp the
+        // write time the way a real storage would.
+        storage.stamp(key, Instant.now());
 
         final GoMetadataBaseLoader.Outcome second =
             loader.load("/mod/@v/list", "mod").get(5, TimeUnit.SECONDS);
@@ -89,6 +94,35 @@ final class GoMetadataBaseLoaderTest {
             upstream.hits("/mod/@v/list"),
             new IsEqual<>(1)
         );
+    }
+
+    @Test
+    void refetchesWhenStorageReportsNoWriteTime() throws Exception {
+        // A cached entry without an updated-at (InMemoryStorage reports
+        // none) gives no evidence of freshness, so it is refreshed rather
+        // than served as fresh forever — the cached copy still serves as a
+        // stale fallback if that refresh fails.
+        final ScriptedUpstream upstream = new ScriptedUpstream();
+        upstream.put("/mod/@v/list", "v1.0.0\n");
+        final Storage storage = new InMemoryStorage();
+        final GoMetadataBaseLoader loader = newLoader(upstream, storage);
+        final Key key = new KeyFromPath("/mod/@v/list");
+
+        loader.load("/mod/@v/list", "mod").get(5, TimeUnit.SECONDS);
+        awaitPersisted(storage, key);
+        upstream.fail(true);
+
+        final GoMetadataBaseLoader.Outcome second =
+            loader.load("/mod/@v/list", "mod").get(5, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "an entry of unknown age must be refreshed",
+            upstream.hits("/mod/@v/list"), new IsEqual<>(2)
+        );
+        MatcherAssert.assertThat(
+            "the copy of unknown age still serves when the refresh fails",
+            second.isAvailable(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(second.stale(), new IsEqual<>(true));
     }
 
     @Test

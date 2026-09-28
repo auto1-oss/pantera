@@ -5,6 +5,7 @@
 package com.auto1.pantera.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.http.OciErrorsSlice;
 import com.auto1.pantera.docker.perms.DockerActions;
 import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
 import com.auto1.pantera.http.auth.AuthzSlice;
@@ -79,7 +80,7 @@ public final class DockerRoutingSlice implements Slice {
         if (matcher.matches()) {
             final String group = matcher.group(1);
             if (group.isEmpty() || "/".equals(group)) {
-                return new AuthzSlice(
+                return new OciErrorsSlice(new AuthzSlice(
                     (l, h, b) -> ResponseBuilder.ok()
                         .header("Docker-Distribution-API-Version", "registry/2.0")
                         .completedFuture(),
@@ -91,7 +92,7 @@ public final class DockerRoutingSlice implements Slice {
                             : FreePermissions.INSTANCE,
                         new DockerRepositoryPermission("*", "*", DockerActions.PULL.mask())
                     )
-                ).response(line, headers, body);
+                )).response(line, headers, body);
             } else {
                 return this.origin.response(
                     new RequestLine(

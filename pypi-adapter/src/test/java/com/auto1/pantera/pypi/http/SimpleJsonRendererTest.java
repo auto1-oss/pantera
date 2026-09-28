@@ -185,6 +185,105 @@ class SimpleJsonRendererTest {
     }
 
     @Test
+    void rendersYankWithoutReasonAsBooleanTrue() {
+        // PEP 691: yanked is a boolean or a NON-EMPTY string. pip maps a
+        // falsy value ("" included) to "not yanked", so a reason-less yank
+        // rendered as "" was silently ignored by pip (B40).
+        final SimpleJsonRenderer.FileEntry entry = new SimpleJsonRenderer.FileEntry(
+            "mylib-0.9.0-py3-none-any.whl",
+            "0.9.0/mylib-0.9.0-py3-none-any.whl",
+            "cafebabe",
+            null,
+            null,
+            true,
+            Optional.empty(),
+            Optional.empty()
+        );
+        final JsonObject file = Json.createReader(new StringReader(
+            SimpleJsonRenderer.render("mylib", List.of(entry))
+        )).readObject().getJsonArray("files").getJsonObject(0);
+        MatcherAssert.assertThat(
+            file.get("yanked"),
+            new IsEqual<>(javax.json.JsonValue.TRUE)
+        );
+    }
+
+    @Test
+    void rendersYankWithBlankReasonAsBooleanTrue() {
+        final SimpleJsonRenderer.FileEntry entry = new SimpleJsonRenderer.FileEntry(
+            "mylib-0.9.0-py3-none-any.whl",
+            "0.9.0/mylib-0.9.0-py3-none-any.whl",
+            "cafebabe",
+            null,
+            null,
+            true,
+            Optional.of(""),
+            Optional.empty()
+        );
+        final JsonObject file = Json.createReader(new StringReader(
+            SimpleJsonRenderer.render("mylib", List.of(entry))
+        )).readObject().getJsonArray("files").getJsonObject(0);
+        MatcherAssert.assertThat(
+            file.get("yanked"),
+            new IsEqual<>(javax.json.JsonValue.TRUE)
+        );
+    }
+
+    @Test
+    void rendersPep700VersionsAndSize() {
+        // PEP 700 (api-version 1.1) makes the project-level "versions"
+        // array and the per-file "size" mandatory (B89).
+        final SimpleJsonRenderer.FileEntry nine = new SimpleJsonRenderer.FileEntry(
+            "mylib-0.0.9-py3-none-any.whl", "0.0.9/mylib-0.0.9-py3-none-any.whl",
+            "aa", null, null, false, Optional.empty(), Optional.empty(), 9L, "0.0.9"
+        );
+        final SimpleJsonRenderer.FileEntry ten = new SimpleJsonRenderer.FileEntry(
+            "mylib-0.0.10.tar.gz", "0.0.10/mylib-0.0.10.tar.gz",
+            "bb", null, null, false, Optional.empty(), Optional.empty(), 10L, "0.0.10"
+        );
+        final SimpleJsonRenderer.FileEntry tenwhl = new SimpleJsonRenderer.FileEntry(
+            "mylib-0.0.10-py3-none-any.whl", "0.0.10/mylib-0.0.10-py3-none-any.whl",
+            "cc", null, null, false, Optional.empty(), Optional.empty(), 11L, "0.0.10"
+        );
+        final JsonObject root = Json.createReader(new StringReader(
+            SimpleJsonRenderer.render("mylib", List.of(ten, nine, tenwhl))
+        )).readObject();
+        MatcherAssert.assertThat(
+            "versions must be the distinct versions in PEP 440 order",
+            root.getJsonArray("versions").getValuesAs(javax.json.JsonString.class)
+                .stream().map(javax.json.JsonString::getString)
+                .collect(java.util.stream.Collectors.toList()),
+            new IsEqual<>(List.of("0.0.9", "0.0.10"))
+        );
+        MatcherAssert.assertThat(
+            "each file must carry its size in bytes",
+            root.getJsonArray("files").getJsonObject(1).getJsonNumber("size").longValue(),
+            new IsEqual<>(9L)
+        );
+    }
+
+    @Test
+    void derivesVersionFromFilenameWhenNotGiven() {
+        final SimpleJsonRenderer.FileEntry whl = new SimpleJsonRenderer.FileEntry(
+            "my_lib-1.2.0-py3-none-any.whl", "my_lib-1.2.0-py3-none-any.whl",
+            "aa", null, null, false, Optional.empty(), Optional.empty(), 3L, null
+        );
+        final SimpleJsonRenderer.FileEntry sdist = new SimpleJsonRenderer.FileEntry(
+            "my-lib-1.1.0.tar.gz", "my-lib-1.1.0.tar.gz",
+            "bb", null, null, false, Optional.empty(), Optional.empty(), 3L, null
+        );
+        final JsonObject root = Json.createReader(new StringReader(
+            SimpleJsonRenderer.render("my-lib", List.of(whl, sdist))
+        )).readObject();
+        MatcherAssert.assertThat(
+            root.getJsonArray("versions").getValuesAs(javax.json.JsonString.class)
+                .stream().map(javax.json.JsonString::getString)
+                .collect(java.util.stream.Collectors.toList()),
+            new IsEqual<>(List.of("1.1.0", "1.2.0"))
+        );
+    }
+
+    @Test
     void emitsPep714CoreMetadataKeyNotHtmlAttributeName() {
         final SimpleJsonRenderer.FileEntry entry = new SimpleJsonRenderer.FileEntry(
             "mylib-1.0.0-py3-none-any.whl",
@@ -237,47 +336,24 @@ class SimpleJsonRendererTest {
             SimpleJsonRenderer.render("mylib", List.of(entry))
         )).readObject().getJsonArray("files").getJsonObject(0);
         MatcherAssert.assertThat(
+            "no core-metadata key without a digest",
             file.containsKey("core-metadata"),
             new IsEqual<>(false)
         );
         MatcherAssert.assertThat(
+            "no legacy dist-info-metadata key without a digest",
             file.containsKey("dist-info-metadata"),
             new IsEqual<>(false)
         );
     }
 
     @Test
-    void rendersTopLevelSortedDistinctVersions() {
-        final SimpleJsonRenderer.FileEntry sdist100 = new SimpleJsonRenderer.FileEntry(
-            "mylib-1.0.0.tar.gz", "mylib-1.0.0.tar.gz", "aaa", null, null,
-            false, Optional.empty(), Optional.empty(), 10L, "1.0.0"
-        );
-        final SimpleJsonRenderer.FileEntry wheel100 = new SimpleJsonRenderer.FileEntry(
-            "mylib-1.0.0-py3-none-any.whl", "mylib-1.0.0-py3-none-any.whl", "bbb", null, null,
-            false, Optional.empty(), Optional.empty(), 20L, "1.0.0"
-        );
-        final SimpleJsonRenderer.FileEntry sdist200 = new SimpleJsonRenderer.FileEntry(
-            "mylib-2.0.0.tar.gz", "mylib-2.0.0.tar.gz", "ccc", null, null,
-            false, Optional.empty(), Optional.empty(), 30L, "2.0.0"
-        );
-        final String json = SimpleJsonRenderer.render(
-            "mylib", List.of(sdist100, wheel100, sdist200)
-        );
-        final JsonArray versions = Json.createReader(new StringReader(json))
-            .readObject().getJsonArray("versions");
-        MatcherAssert.assertThat(
-            "versions[] must be the distinct, PEP-440-sorted version set",
-            versions.getValuesAs(javax.json.JsonString.class).stream()
-                .map(javax.json.JsonString::getString)
-                .toList(),
-            new IsEqual<>(List.of("1.0.0", "2.0.0"))
-        );
-    }
-
-    @Test
     void excludesFilesWithUnknownVersionFromVersionsArray() {
+        // No version directory and a filename with no "name-version" shape:
+        // the version cannot be determined, so the file is left out of
+        // versions[] rather than surfaced as a bogus entry.
         final SimpleJsonRenderer.FileEntry unknown = new SimpleJsonRenderer.FileEntry(
-            "legacy-file.tar.gz", "legacy-file.tar.gz", "aaa", null, null,
+            "legacyfile.tar.gz", "legacyfile.tar.gz", "aaa", null, null,
             false, Optional.empty(), Optional.empty(), 10L, null
         );
         final String json = SimpleJsonRenderer.render("mylib", List.of(unknown));

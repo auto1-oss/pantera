@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.http.context;
 
+import com.auto1.pantera.http.log.LogSanitizer;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -267,8 +268,11 @@ public record RequestContext(
             putIfNotNull(KEY_PACKAGE_NAME, this.artifact.name());
             putIfNotNull(KEY_PACKAGE_VERSION, this.artifact.version());
         }
-        putIfNotNull(KEY_URL_ORIGINAL, this.urlOriginal);
-        putIfNotNull(KEY_URL_PATH, this.urlPath);
+        // URLs can carry credentials (npm logout token path, conda /t/<token>/,
+        // signed query strings): only the redacted form may reach the MDC,
+        // which every log line on this thread emits.
+        putIfNotNull(KEY_URL_ORIGINAL, LogSanitizer.sanitizeUrl(this.urlOriginal));
+        putIfNotNull(KEY_URL_PATH, LogSanitizer.sanitizeUrl(this.urlPath));
         return new MdcRestore(prior);
     }
 

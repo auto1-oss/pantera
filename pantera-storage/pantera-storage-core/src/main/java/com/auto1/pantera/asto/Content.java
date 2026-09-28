@@ -75,6 +75,28 @@ public interface Content extends Publisher<ByteBuffer> {
     }
 
     /**
+     * Consumes (drains) the content WITHOUT materialising it.
+     *
+     * <p>Use this on every path that must honour the reactive-body contract
+     * (an unconsumed request publisher leaks the Vert.x request) but does not
+     * need the bytes — above all the authentication/authorization DENIAL
+     * paths. Before 2.2.9 those paths called {@link #asBytesFuture()}, which
+     * pre-allocated from the attacker-declared {@code Content-Length}: an
+     * unauthenticated request declaring 2 GB and sending nothing reserved
+     * 2 GB of heap before the 401 was written (resource-dos F31). Draining
+     * requests the chunks and drops them; heap use is one chunk at a time.</p>
+     *
+     * @return Completes when the publisher completes (or fails)
+     */
+    default CompletableFuture<Void> discard() {
+        return Flowable.fromPublisher(this)
+            .ignoreElements()
+            .to(hu.akarnokd.rxjava2.interop.CompletableInterop.await())
+            .toCompletableFuture()
+            .thenApply(ignored -> null);
+    }
+
+    /**
      * Reads bytes from content into memory.
      *
      * @return Byte array

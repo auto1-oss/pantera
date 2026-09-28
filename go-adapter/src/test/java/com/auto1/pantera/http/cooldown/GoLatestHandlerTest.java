@@ -28,6 +28,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.slice.KeyFromPath;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,6 +71,7 @@ final class GoLatestHandlerTest {
     private ScriptedSlice upstream;
     private ScriptedCooldown cooldown;
     private CooldownInspector inspector;
+    private WriteTimeStorage cacheStorage;
     private GoMetadataBaseLoader baseLoader;
     private GoLatestHandler handler;
 
@@ -78,18 +80,22 @@ final class GoLatestHandlerTest {
         this.upstream = new ScriptedSlice();
         this.cooldown = new ScriptedCooldown();
         this.inspector = new NullInspector();
-        this.baseLoader = newBaseLoader(this.upstream);
+        this.cacheStorage = new WriteTimeStorage(new InMemoryStorage());
+        this.baseLoader = newBaseLoader(this.upstream, this.cacheStorage);
         this.handler = new GoLatestHandler(
             this.baseLoader, this.cooldown, this.inspector, "go-proxy", "go-test"
         );
     }
 
     /**
-     * New loader over a fresh {@link InMemoryStorage}-backed cache, so
-     * each test starts with a cold, empty base-document cache.
+     * New loader over a fresh cache backed by {@code storage} (an
+     * {@link InMemoryStorage} reporting write times like a real storage,
+     * so warm entries are fresh), so each test starts with a cold, empty
+     * base-document cache.
      */
-    private static GoMetadataBaseLoader newBaseLoader(final Slice upstream) {
-        final Storage storage = new InMemoryStorage();
+    private static GoMetadataBaseLoader newBaseLoader(
+        final Slice upstream, final Storage storage
+    ) {
         final Cache cache = new FromStorageCache(storage);
         return new GoMetadataBaseLoader(
             upstream, cache, Optional.of(storage), "go-test"
@@ -305,6 +311,9 @@ final class GoLatestHandlerTest {
         this.baseLoader.load(listPath, "github.com/foo/bar").get();
         assertThat(this.upstream.hits(path), equalTo(1));
         assertThat(this.upstream.hits(listPath), equalTo(1));
+        // The stream-through cache writes land in the background.
+        this.cacheStorage.awaitPersisted(new KeyFromPath(path));
+        this.cacheStorage.awaitPersisted(new KeyFromPath(listPath));
 
         this.cooldown.block("v1.2.3");
         final Response resp = this.handler.handle(

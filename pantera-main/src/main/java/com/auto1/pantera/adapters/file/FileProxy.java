@@ -52,15 +52,14 @@ public final class FileProxy implements Slice {
         CooldownService cooldown
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
-        
         // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own FileProxySlice, evaluated in priority order
-        this.slice = new RaceSlice(
+        this.slice = new com.auto1.pantera.adapters.ReadOnlyProxySlice(new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> new FileProxySlice(
                     new AuthClientSlice(
                         new UriClientSlice(client, remote.uri()),
-                        GenericAuthenticator.create(client, remote.username(), remote.pwd())
+                        GenericAuthenticator.create(client, remote.uri(), remote.username(), remote.pwd())
                     ),
                     asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
                     asto.<Queue<ArtifactEvent>>flatMap(ignored -> events),
@@ -68,10 +67,12 @@ public final class FileProxy implements Slice {
                     cfg.type(),
                     cooldown,
                     remote.uri().toString(),
-                    Optional.<Storage>empty()
+                    // Cache-first: a stored copy is served before cooldown or any
+                    // upstream request, and cache-only group probes can answer.
+                    asto
                 )
             ).collect(Collectors.toList())
-        );
+        ));
     }
 
     @Override

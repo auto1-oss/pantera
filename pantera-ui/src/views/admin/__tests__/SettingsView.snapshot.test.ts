@@ -7,6 +7,7 @@ import SettingsView from '../SettingsView.vue'
 
 // Mock the settings / auth APIs the view uses on mount.
 const updateCooldownMock = vi.fn().mockResolvedValue(undefined)
+const updateEgressMock = vi.fn().mockResolvedValue(undefined)
 
 vi.mock('@/api/settings', () => ({
   getSettings: () => Promise.resolve({
@@ -43,6 +44,12 @@ vi.mock('@/api/auth', () => ({
   getUpstreamBreakerSettings: () => Promise.resolve({}),
   updateUpstreamBreakerSettings: vi.fn().mockResolvedValue(undefined),
   getClientBaseUrlSettings: () => Promise.resolve({}),
+  getRequestLimitsSettings: () => Promise.resolve({}),
+  updateRequestLimitsSettings: vi.fn().mockResolvedValue(undefined),
+  getEgressSettings: () => Promise.resolve({}),
+  updateEgressSettings: (...args: unknown[]) => updateEgressMock(...args),
+  getLoginThrottleSettings: () => Promise.resolve({}),
+  updateLoginThrottleSettings: vi.fn().mockResolvedValue(undefined),
   updateClientBaseUrlSettings: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -204,6 +211,31 @@ describe('SettingsView — unified save bar', () => {
     expect(wrapper.find('[data-testid="save-bar-chip-circuit_breaker"]').exists()).toBe(false)
   })
 
+  it('tracks the three 2.2.9 security policy cards as their own hot-reload sections', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('Request & Storage Limits')
+    expect(wrapper.text()).toContain('Outbound Egress Policy')
+    expect(wrapper.text()).toContain('Login Throttling')
+    const vm = wrapper.vm as unknown as {
+      maxRequestBodyMiB: number
+      egressBlockPrivate: boolean
+      loginThrottleMaxFailures: number
+    }
+    vm.maxRequestBodyMiB = 512
+    await flushPromises()
+    expect(wrapper.find('[data-testid="save-bar-chip-request_limits"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="save-bar-chip-egress"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="save-bar-chip-login_throttle"]').exists()).toBe(false)
+    vm.egressBlockPrivate = true
+    vm.loginThrottleMaxFailures = 3
+    await flushPromises()
+    expect(wrapper.find('[data-testid="save-bar-chip-egress"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="save-bar-chip-login_throttle"]').exists()).toBe(true)
+    // All three apply on save without a restart: no restart pill.
+    expect(wrapper.find('[data-testid="section-pill-egress"]').text()).not.toContain('Restart')
+  })
+
   it('tracks the client-facing base URL settings as their own section', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -240,5 +272,79 @@ describe('SettingsView — unified save bar', () => {
     expect((wrapper.vm as unknown as { cooldownAge: string }).cooldownAge).toBe('7d')
     // And the save bar hides because dirtyCount drops back to 0.
     expect(wrapper.find('[data-testid="settings-save-bar"]').exists()).toBe(false)
+  })
+})
+
+describe('SettingsView — save and discard outcomes', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    updateCooldownMock.mockReset()
+    updateEgressMock.mockReset()
+  })
+
+  it('keeps a section that the server rejected dirty and reports the server message', async () => {
+    updateEgressMock.mockRejectedValue({
+      response: { status: 400, data: { message: 'egress_allow_hosts: invalid host "a b"' } },
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      egressAllowHosts: string
+      cooldownAge: string
+      saveAll: () => Promise<void>
+    }
+    vm.egressAllowHosts = 'a b'
+    vm.cooldownAge = '30d'
+    await flushPromises()
+    await vm.saveAll()
+    await flushPromises()
+    const { useNotificationStore } = await import('@/stores/notifications')
+    const toasts = useNotificationStore().toasts
+    expect(
+      wrapper.find('[data-testid="save-bar-chip-egress"]').exists(),
+      'the rejected egress section must stay dirty',
+    ).toBe(true)
+    expect(
+      wrapper.find('[data-testid="save-bar-chip-cooldown"]').exists(),
+      'the cooldown section that saved must no longer be dirty',
+    ).toBe(false)
+    expect(
+      toasts.some(t => t.severity === 'error' && (t.detail ?? '').includes('invalid host')),
+      'the server rejection message must be shown',
+    ).toBe(true)
+    expect(
+      toasts.some(t => t.severity === 'success' && t.summary.startsWith('Saved')),
+      'no batch success toast may appear when a section failed',
+    ).toBe(false)
+  })
+
+  it('Discard reverts every field tracked by the baseline', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as Record<string, unknown> & {
+      baseline: Record<string, unknown>
+      discardAll: () => void
+      dirtyCount: number
+    }
+    const before = { ...vm.baseline }
+    for (const key of Object.keys(before)) {
+      if (key === 'cooldownRepoTypesJson') continue
+      const v = before[key]
+      vm[key] = typeof v === 'boolean' ? !v
+        : typeof v === 'number' ? v + 7
+          : v === null ? true
+            : `${String(v)}-edited`
+    }
+    await flushPromises()
+    vm.discardAll()
+    await flushPromises()
+    const reverted: Record<string, unknown> = {}
+    for (const key of Object.keys(before)) {
+      if (key !== 'cooldownRepoTypesJson') reverted[key] = vm[key]
+    }
+    const expected = { ...before }
+    delete expected.cooldownRepoTypesJson
+    expect(reverted).toEqual(expected)
+    expect(vm.dirtyCount).toBe(0)
   })
 })

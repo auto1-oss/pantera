@@ -19,6 +19,8 @@ A user's effective permissions are the union of all permissions from their assig
 
 ## Permission Types
 
+The keys of a role's `permissions` object are the permission types below; repository names go *inside* a type, never at the top level. `PUT /api/v1/roles/:name` refuses a role whose keys are not registered types with `400`, because the policy cannot load such a role and it would grant nothing.
+
 ### adapter_basic_permissions
 
 Controls read, write, and delete access to repositories.
@@ -56,8 +58,9 @@ docker_repository_permissions:
 | Value | Description |
 |-------|-------------|
 | `pull` | Pull Docker images |
-| `push` | Push Docker images |
-| `*` | All Docker operations |
+| `push` | Push Docker images: upload blobs, push new tags and new digests, and re-push a tag with the manifest it already points at |
+| `overwrite` | Move an existing tag to a different manifest. A push that would change the digest of an existing tag without `overwrite` fails with `403 DENIED`. Grant it (together with `push`) to CI users that re-push mutable tags such as `latest` |
+| `*` | All Docker operations, including `overwrite` |
 
 ### docker_registry_permissions
 
@@ -72,6 +75,8 @@ docker_registry_permissions:
 | Value | Description |
 |-------|-------------|
 | `base` | Access the Docker V2 API base endpoint |
+| `catalog` | List the images of a repository: `GET /v2/<repo>/_catalog`. A group's catalog needs `read` on the group and lists the members on which the user holds `catalog` |
+| `*` | Both of the above |
 
 ### all_permission
 
@@ -94,7 +99,7 @@ When a user authenticates to the REST API, Pantera resolves the following API pe
 | `api_repository_permissions` | `read`, `create`, `update`, `delete`, `move` | Repository CRUD |
 | `api_user_permissions` | `read`, `create`, `update`, `delete`, `enable`, `change_password` | User management |
 | `api_role_permissions` | `read`, `create`, `update`, `delete`, `enable` | Role management |
-| `api_alias_permissions` | `read`, `create`, `delete` | Storage alias management |
+| `api_storage_alias_permissions` | `read`, `create`, `delete` | Storage alias management |
 | `api_cooldown_permissions` | `read`, `write` | Cooldown configuration and unblocking |
 | `api_search_permissions` | `read`, `write` | Search queries and reindexing |
 
@@ -260,7 +265,7 @@ curl -X PUT http://pantera-host:8086/api/v1/users/newuser \
   }'
 ```
 
-**Change a user's password:**
+**Change a user's password** (your own needs `old_pass`; resetting someone else's needs `change_password`, no `old_pass`, and — unless you hold `all_permission` — a target that holds only roles you hold and no `all_permission`):
 
 ```bash
 curl -X POST http://pantera-host:8086/api/v1/users/newuser/password \
@@ -324,7 +329,8 @@ In HA deployments with Valkey, cache invalidation is propagated across nodes aut
 | `admin` | Full access | `all_permission: {}` |
 | `reader` | Read-only access to all repos | `adapter_basic_permissions: {"*": ["read"]}` |
 | `deployer` | CI/CD pipeline | `adapter_basic_permissions: {"maven": ["read","write"], "npm": ["read","write"]}` |
-| `docker-user` | Docker pull/push | `docker_repository_permissions: {"*": {"*": ["pull","push"]}}` |
+| `docker-user` | Docker pull/push of new tags | `docker_repository_permissions: {"*": {"*": ["pull","push"]}}` |
+| `docker-ci` | Docker pull/push, may move existing tags (`latest`) | `docker_repository_permissions: {"*": {"*": ["pull","push","overwrite"]}}` |
 | `security-admin` | Cooldown management only | API permissions for cooldown read/write |
 
 ---

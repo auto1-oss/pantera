@@ -20,7 +20,7 @@ For auth-related 4xx, see [Troubleshooting](troubleshooting.md).
 
 ## `500` with `X-Pantera-Fault: storage-unavailable`
 
-**What it means:** Pantera's storage backend (S3, filesystem, or OpenStack Swift) refused a read or write.
+**What it means:** Pantera's storage backend (S3, filesystem, or OpenStack Swift) refused a read or write. Through a group, this answer means a hosted member's storage failed; when the member that holds the file is a proxy whose upstream failed, the group answers `502` instead, or `503` with `Retry-After` while that upstream's circuit breaker is open.
 
 **Client action:** Retry with backoff. Most occurrences are transient (a momentary S3 5xx, a brief I/O spike). If the failure persists across several minutes of retries, it is a storage-layer outage and client-side retry will not recover it.
 
@@ -68,6 +68,8 @@ For auth-related 4xx, see [Troubleshooting](troubleshooting.md).
 ## `500` with `X-Pantera-Fault: internal`
 
 **What it means:** Catch-all for anything the fault could not be typed to more specifically. Every `internal` fault is logged on the server side with a full stack trace.
+
+The response body is always the fixed text `Internal Server Error` — it never carries exception detail, so there is nothing diagnostic to read from it. The detail is server-side only; quote the trace ID when escalating.
 
 **Client action:** Retry once; if it recurs, escalate to your administrator with the request's trace ID (carried in the `X-Request-Id` / `trace.id` field).
 

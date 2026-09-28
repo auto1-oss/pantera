@@ -538,6 +538,22 @@ async fn read_sidecar_checksums(
     Ok((md5, sha1, sha256))
 }
 
+/// Authorization header for every request to Pantera (uploads and the
+/// metadata merge): Basic with --username/--password, else Bearer --token.
+fn authorization_header(args: &Args) -> Result<String> {
+    if let (Some(user), Some(pass)) = (&args.username, &args.password) {
+        let credentials = format!("{}:{}", user, pass);
+        let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
+        Ok(format!("Basic {}", encoded))
+    } else if let Some(token) = &args.token {
+        Ok(format!("Bearer {}", token))
+    } else {
+        Err(anyhow::anyhow!(
+            "Either --token or both --username and --password must be provided"
+        ))
+    }
+}
+
 async fn upload_file(
     client: &Client,
     task: &UploadTask,
@@ -572,19 +588,7 @@ async fn upload_file(
         };
 
     // Determine authorization header once (outside retry loop)
-    let auth_header = if let (Some(user), Some(pass)) = (&args.username, &args.password) {
-        // Basic authentication
-        let credentials = format!("{}:{}", user, pass);
-        let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
-        format!("Basic {}", encoded)
-    } else if let Some(token) = &args.token {
-        // Bearer token authentication
-        format!("Bearer {}", token)
-    } else {
-        return Err(anyhow::anyhow!(
-            "Either --token or both --username and --password must be provided"
-        ));
-    };
+    let auth_header = authorization_header(args)?;
 
     for attempt in 1..=args.max_retries {
         debug!(
@@ -600,40 +604,24 @@ async fn upload_file(
         let stream = ReaderStream::new(file);
         let body = reqwest::Body::wrap_stream(stream);
 
-        // Build request with headers matching Java CLI exactly
+        // Build request with the X-Pantera-* import headers the server reads
+        // (see ImportHeaders in pantera-core). The artifact owner is not sent:
+        // the server records the authenticated caller.
         let mut request = client
             .put(&url)
             .header("Authorization", &auth_header)
-            // Core Artipie import headers (must match Java CLI)
-            .header("X-Artipie-Repo-Type", &task.repo_type)
-            .header("X-Artipie-Idempotency-Key", task.idempotency_key())
-            .header(
-                "X-Artipie-Artifact-Name",
-                task.file_path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string(),
-            )
-            .header("X-Artipie-Artifact-Version", "") // TODO: Extract from metadata
-            .header("X-Artipie-Artifact-Owner", "admin") // TODO: Make configurable
-            .header("X-Artipie-Artifact-Size", task.size.to_string())
-            .header("X-Artipie-Artifact-Created", task.created.to_string())
-            .header("X-Artipie-Checksum-Mode", policy.as_str())
             .timeout(Duration::from_secs(args.timeout))
             // Provide Content-Length to avoid server-side temp spooling
             .header(reqwest::header::CONTENT_LENGTH, task.size.to_string())
             .body(body);
-
-        // Optionally attach checksum headers when present
-        if let Some(v) = md5.as_ref() {
-            request = request.header("X-Artipie-Checksum-Md5", v);
-        }
-        if let Some(v) = sha1.as_ref() {
-            request = request.header("X-Artipie-Checksum-Sha1", v);
-        }
-        if let Some(v) = sha256.as_ref() {
-            request = request.header("X-Artipie-Checksum-Sha256", v);
+        for (name, value) in import_headers(
+            task,
+            &policy,
+            md5.as_deref(),
+            sha1.as_deref(),
+            sha256.as_deref(),
+        ) {
+            request = request.header(name, value);
         }
 
         match request.send().await {
@@ -696,56 +684,83 @@ async fn upload_file(
     Ok(failed_status)
 }
 
+/// Import headers for one upload, named exactly as the server's
+/// `ImportHeaders` constants (`X-Pantera-*`). The artifact name and version
+/// are left to the server, which derives them from the path.
+fn import_headers(
+    task: &UploadTask,
+    policy: &str,
+    md5: Option<&str>,
+    sha1: Option<&str>,
+    sha256: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let mut headers = vec![
+        ("X-Pantera-Repo-Type", task.repo_type.clone()),
+        ("X-Pantera-Idempotency-Key", task.idempotency_key()),
+        // No X-Pantera-Artifact-Name / -Version: the server derives the
+        // package name and version from the artifact path exactly as a
+        // native publish of the format records them.
+        ("X-Pantera-Artifact-Size", task.size.to_string()),
+        ("X-Pantera-Artifact-Created", task.created.to_string()),
+        ("X-Pantera-Checksum-Mode", policy.to_string()),
+    ];
+    if let Some(v) = md5 {
+        headers.push(("X-Pantera-Checksum-Md5", v.to_string()));
+    }
+    if let Some(v) = sha1 {
+        headers.push(("X-Pantera-Checksum-Sha1", v.to_string()));
+    }
+    if let Some(v) = sha256 {
+        headers.push(("X-Pantera-Checksum-Sha256", v.to_string()));
+    }
+    headers
+}
+
+/// Export folder name -> Pantera repository type (the value of
+/// `X-Pantera-Repo-Type`). Every folder `is_known_repo_dir` accepts maps to
+/// its own format; the server refuses a declared type that names a different
+/// format than the target repository is configured with.
+fn known_repo_type(dir_name: &str) -> Option<&'static str> {
+    match dir_name.to_lowercase().as_str() {
+        "maven" => Some("maven"),
+        "gradle" => Some("gradle"),
+        "npm" => Some("npm"),
+        "pypi" => Some("pypi"),
+        "nuget" => Some("nuget"),
+        "docker" | "oci" => Some("docker"),
+        "composer" | "php" => Some("php"),
+        "go" => Some("go"),
+        "debian" | "deb" => Some("deb"),
+        "helm" => Some("helm"),
+        "rpm" => Some("rpm"),
+        "gem" | "gems" => Some("gem"),
+        "conda" => Some("conda"),
+        "conan" => Some("conan"),
+        "hex" | "hexpm" => Some("hexpm"),
+        "files" | "generic" => Some("file"),
+        _ => None,
+    }
+}
+
 fn detect_repo_type_from_dir(dir_name: &str) -> String {
+    if let Some(known) = known_repo_type(dir_name) {
+        return known.to_string();
+    }
+    // Fallback: try to detect from directory name
     let lower = dir_name.to_lowercase();
-    match lower.as_str() {
-        "maven" => "maven".to_string(),
-        "gradle" => "gradle".to_string(),
-        "npm" => "npm".to_string(),
-        "pypi" => "pypi".to_string(),
-        "nuget" => "nuget".to_string(),
-        "docker" | "oci" => "docker".to_string(),
-        "composer" => "php".to_string(),
-        "go" => "go".to_string(),
-        "debian" => "deb".to_string(),
-        "helm" => "helm".to_string(),
-        "rpm" => "rpm".to_string(),
-        "files" | "generic" => "file".to_string(),
-        _ => {
-            // Fallback: try to detect from directory name
-            if lower.contains("maven") {
-                "maven".to_string()
-            } else if lower.contains("npm") {
-                "npm".to_string()
-            } else if lower.contains("docker") {
-                "docker".to_string()
-            } else {
-                "file".to_string()
-            }
-        }
+    if lower.contains("maven") {
+        "maven".to_string()
+    } else if lower.contains("npm") {
+        "npm".to_string()
+    } else if lower.contains("docker") {
+        "docker".to_string()
+    } else {
+        "file".to_string()
     }
 }
 
 fn is_known_repo_dir(dir_name: &str) -> bool {
-    matches!(
-        dir_name.to_lowercase().as_str(),
-        "maven"
-            | "gradle"
-            | "npm"
-            | "pypi"
-            | "nuget"
-            | "docker"
-            | "oci"
-            | "composer"
-            | "php"
-            | "go"
-            | "debian"
-            | "deb"
-            | "helm"
-            | "rpm"
-            | "files"
-            | "generic"
-    )
+    known_repo_type(dir_name).is_some()
 }
 
 #[derive(Debug, Clone)]
@@ -1148,6 +1163,7 @@ async fn trigger_repo_merge(
     client: &Client,
     server_url: &str,
     repo_name: &str,
+    auth_header: &str,
 ) -> Result<String> {
     info!("Triggering metadata merge for repository: {}", repo_name);
     
@@ -1156,6 +1172,8 @@ async fn trigger_repo_merge(
     
     let response = client
         .post(&merge_url)
+        // /.merge requires repo-scoped write, like the uploads
+        .header("Authorization", auth_header)
         .timeout(Duration::from_secs(300)) // Merge can take up to 5 minutes
         .send()
         .await
@@ -1489,8 +1507,9 @@ async fn main() -> Result<()> {
             info!("Merging {} PHP/Composer and PyPI repositories (use --auto-merge to include maven/gradle/helm)", merge_repos.len());
         }
         
+        let auth_header = authorization_header(&args)?;
         for repo_name in merge_repos {
-            match trigger_repo_merge(&client, &args.url, &repo_name).await {
+            match trigger_repo_merge(&client, &args.url, &repo_name, &auth_header).await {
                 Ok(result) => {
                     info!("✓ Merged {}: {}", repo_name, result);
                 }
@@ -1511,4 +1530,60 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(repo_type: &str) -> UploadTask {
+        UploadTask {
+            repo_name: "repo".to_string(),
+            repo_type: repo_type.to_string(),
+            relative_path: "dir/a.txt".to_string(),
+            file_path: PathBuf::from("/export/files/repo/dir/a.txt"),
+            size: 3,
+            created: 42,
+        }
+    }
+
+    #[test]
+    fn sends_only_pantera_import_headers() {
+        let headers = import_headers(&task("file"), "COMPUTE", Some("m"), Some("s1"), Some("s256"));
+        for (name, _) in &headers {
+            assert!(name.starts_with("X-Pantera-"), "unexpected header {}", name);
+        }
+        let get = |n: &str| headers.iter().find(|(k, _)| *k == n).map(|(_, v)| v.clone());
+        assert_eq!(get("X-Pantera-Repo-Type"), Some("file".to_string()));
+        assert_eq!(get("X-Pantera-Idempotency-Key"), Some("repo|dir/a.txt".to_string()));
+        // R41: the server derives the name and version a native publish of
+        // the format records from the path; a bare file name overrode that.
+        assert_eq!(get("X-Pantera-Artifact-Name"), None);
+        assert_eq!(get("X-Pantera-Artifact-Version"), None);
+        assert_eq!(get("X-Pantera-Checksum-Mode"), Some("COMPUTE".to_string()));
+        assert_eq!(get("X-Pantera-Checksum-Sha256"), Some("s256".to_string()));
+        assert_eq!(get("X-Pantera-Artifact-Owner"), None, "owner is the authenticated caller");
+    }
+
+    #[test]
+    fn omits_absent_checksums() {
+        let headers = import_headers(&task("maven"), "SKIP", None, None, None);
+        assert!(headers.iter().all(|(k, _)| !k.starts_with("X-Pantera-Checksum-Sha")));
+    }
+
+    #[test]
+    fn maps_every_known_folder_to_its_own_format() {
+        let cases = [
+            ("php", "php"), ("composer", "php"), ("deb", "deb"), ("debian", "deb"),
+            ("gems", "gem"), ("gem", "gem"), ("conda", "conda"), ("conan", "conan"),
+            ("hexpm", "hexpm"), ("hex", "hexpm"), ("files", "file"), ("maven", "maven"),
+            ("pypi", "pypi"), ("go", "go"), ("helm", "helm"), ("rpm", "rpm"),
+        ];
+        for (dir, expected) in cases {
+            assert!(is_known_repo_dir(dir), "{} must be a known folder", dir);
+            assert_eq!(detect_repo_type_from_dir(dir), expected, "folder {}", dir);
+        }
+        assert_eq!(detect_repo_type_from_dir("my-maven-export"), "maven");
+        assert!(!is_known_repo_dir("random"));
+    }
 }

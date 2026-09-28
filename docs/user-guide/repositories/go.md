@@ -9,55 +9,65 @@ This page covers how to configure the Go toolchain to fetch modules through Pant
 ## Prerequisites
 
 - Go 1.18+
-- A Pantera account with a JWT token (see [Getting Started](../getting-started.md))
-- The Pantera hostname and port (default: `pantera-host:8080`)
+- A Pantera account and an API token (see [Getting Started](../getting-started.md)), or generate one in the UI's **Set Me Up** page
+- Pantera served over **HTTPS** (see [Plain HTTP Registries](#plain-http-registries) below)
+
+The examples use `https://pantera-host/go-group`. Set Me Up in the UI (`/setup/go`) generates the same commands with your registry URL, repository and token filled in.
+
+---
+
+## Store Credentials in ~/.netrc
+
+Keep the token out of `GOPROXY`: URL credentials show up in `go env` and error output, and break on usernames containing `@`. Go reads `~/.netrc` (`%USERPROFILE%\_netrc` on Windows) for https proxies:
+
+```bash
+cat >> ~/.netrc <<'EOF'
+machine pantera-host login your-username password your-api-token
+EOF
+chmod 600 ~/.netrc
+```
+
+If the registry URL has a port, add a second line with `machine pantera-host:8443 ...`: Go 1.24+ matches `host:port`, while curl and older Go match the bare host name.
 
 ---
 
 ## Configure GOPROXY
 
-Set the `GOPROXY` environment variable to route module fetches through Pantera:
-
 ```bash
-export GOPROXY="http://your-username:your-jwt-token@pantera-host:8080/go-proxy,direct"
-export GOINSECURE="pantera-host:8080"
+go env -w GOPROXY=https://pantera-host/go-group GONOSUMDB=github.com/your-org/*
 ```
 
-Leave `GOSUMDB` at its default (`sum.golang.org`) — a `go-proxy` repository proxies `/sumdb/*` checksum-database requests to the same upstream(s) it fetches modules from (`lookup`/`tile` responses are cached immutably, `supported` is probed live), so clients keep full checksum verification **and** stay offline-safe for any module they have already fetched once. There is no need to disable it.
+`go env -w` persists the settings for every shell.
 
 | Variable | Purpose |
 |----------|---------|
-| `GOPROXY` | Routes module fetches through Pantera; falls back to `direct` if not found |
-| `GOSUMDB` | Leave unset/default — Pantera proxies sumdb lookups, so verification stays on. Only set to `off` as a blunt global escape hatch (see [Common Issues](#common-issues)); prefer `GOPRIVATE` for specific module prefixes |
-| `GOINSECURE` | Allows HTTP (non-HTTPS) for the Pantera host |
+| `GOPROXY` | Routes every module fetch through Pantera. There is deliberately **no `,direct`** fallback: with it, any 404 from Pantera sends `go` straight to the VCS host, bypassing the cache, cooldown and audit. Resolve through a group or proxy repository to get public modules too. |
+| `GONOSUMDB` | Private module path prefixes (comma-separated globs) that skip the public checksum database; public modules stay verified. Use `GONOSUMDB`, not `GOPRIVATE`: `GOPRIVATE` also makes `go` bypass the proxy for those modules. |
 
-For internal/private modules that are never published to the public Go checksum database (and therefore have no `sumdb` entry to look up), scope the exemption instead of disabling verification globally:
-
-```bash
-export GOPRIVATE="git.internal.example.com/*"
-```
-
-`GOPRIVATE` disables sum-database and proxy lookups only for module paths matching the prefix, leaving checksum verification intact for every other module.
-
-### Shell Profile
-
-Add the exports to your shell profile (`~/.bashrc`, `~/.zshrc`, or equivalent) for persistence:
-
-```bash
-# Pantera Go proxy
-export GOPROXY="http://your-username:your-jwt-token@pantera-host:8080/go-proxy,direct"
-export GOINSECURE="pantera-host:8080"
-```
+Checksum verification of public modules works through Pantera: a `go-proxy` repository (and a group that contains one) forwards the `go` command's checksum-database lookups (`/sumdb/sum.golang.org/...`) to its upstream and caches the answers, so `GOSUMDB` stays at its default and clients need no direct route to `sum.golang.org`.
 
 ### CI/CD Configuration
 
-In CI/CD pipelines, set the environment variables as secrets:
+In CI/CD pipelines, write `~/.netrc` from secrets and set the environment variables:
 
 ```yaml
 # GitHub Actions example
 env:
-  GOPROXY: "http://${{ secrets.PANTERA_USER }}:${{ secrets.PANTERA_TOKEN }}@pantera-host:8080/go-proxy,direct"
-  GOINSECURE: "pantera-host:8080"
+  GOPROXY: "https://pantera-host/go-group"
+  GONOSUMDB: "github.com/your-org/*"
+steps:
+  - run: |
+      printf 'machine pantera-host login %s password %s\n' "${{ secrets.PANTERA_USER }}" "${{ secrets.PANTERA_TOKEN }}" >> ~/.netrc
+      chmod 600 ~/.netrc
+```
+
+### Plain HTTP Registries
+
+The `go` command never sends credentials over plain HTTP: it refuses `user:token@` in an `http://` `GOPROXY`, and `~/.netrc` / `GOAUTH` apply to https only. `GOINSECURE` does not affect `GOPROXY`, and `-insecure` no longer exists. Since Pantera requires authentication, an `http://` registry cannot serve the `go` command — ask your administrator to serve Pantera over HTTPS. Until then, curl can download and publish module files with the same `~/.netrc`:
+
+```bash
+curl --netrc -fsS http://pantera-host:8080/go-group/rsc.io/quote/@v/list
+curl --netrc -fsSLO http://pantera-host:8080/go-group/rsc.io/quote/@v/v1.5.2.zip
 ```
 
 ---
@@ -67,20 +77,57 @@ env:
 Once `GOPROXY` is configured, standard Go commands work as expected:
 
 ```bash
-go get github.com/gin-gonic/gin
+go get rsc.io/quote@v1.5.2
 go mod download
 go build ./...
+go list -m -versions rsc.io/quote   # verify: lists the versions through Pantera
 ```
 
-The proxy caches downloaded modules locally. Subsequent fetches from any developer or CI pipeline are served from cache.
+The proxy caches downloaded modules. Subsequent fetches from any developer or CI pipeline are served from cache.
+
+When an administrator enables `download-mode: redirect` on a `go` repository stored in an object store, a `.zip` download may answer `302 Found` with a time-limited object-store URL instead of streaming the bytes; `.info`, `.mod`, `@v/list` and `@latest` are never redirected. The `go` command follows the redirect and `go.sum` verification is unchanged; your machine must be able to reach the object store directly (see [Streaming Downloads](../streaming-downloads.md#presigned-direct-download-redirects)).
+
+---
+
+## Publishing Modules
+
+The `go` command has no publish verb. Publish to a `go` local repository by uploading the module's `.info`, `.mod` and `.zip` files with curl.
+
+**1. Package the module** — in the module root, after committing and tagging:
+
+```bash
+MOD=$(go list -m)
+VER=v0.1.0
+ESC=$(printf %s "$MOD" | perl -pe 's/([A-Z])/!\l$1/g')
+STAGE=$(mktemp -d)
+mkdir -p "$STAGE/$MOD@$VER"
+git archive HEAD | tar -x -C "$STAGE/$MOD@$VER"
+(cd "$STAGE" && zip -qrD "$VER.zip" "$MOD@$VER")
+cp go.mod "$STAGE/$VER.mod"
+printf '{"Version":"%s","Time":"%s"}\n' "$VER" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STAGE/$VER.info"
+```
+
+`git archive` packs the committed files as `go` would fetch them from VCS. `zip -D` omits directory entries, which is required for `go mod verify` to pass for consumers. Uppercase letters in the module path are escaped (`!` + lowercase) for the URL, as the Go module protocol requires. Search shows and finds the module under its real path (`github.com/BurntSushi/toml`, not `github.com/!burnt!sushi/toml`).
+
+**2. Upload** — `.info` and `.mod` first, `.zip` last (the zip adds the version to `@v/list`, which Pantera keeps in semver order; `@v/list` itself cannot be uploaded and answers `405`; a path beneath it, such as `@v/list/x`, answers `409`). Each upload answers `201`:
+
+```bash
+for f in info mod zip; do
+  curl --netrc -fsS -T "$STAGE/$VER.$f" "https://pantera-host/go-local/$ESC/@v/$VER.$f"
+done
+```
+
+**Never reuse a version.** Go versions are immutable: republishing one with different content would break every consumer whose `go.sum` already recorded it. Pantera answers `409 Conflict` to an upload whose `.mod` or `.zip` differs from the stored file and keeps the original; re-uploading identical bytes answers `201`. The `.info` is not recorded in `go.sum`, so until the version's `.zip` is stored a new `.info` replaces the old one: if a publish fails before the `.zip` lands, rerun the same steps (a fresh `STAGE` is fine). Once the `.zip` is stored the version is published and a different `.info` also answers `409`. Bump `VER` to publish changes.
+
+`go get <module>` without a version asks `@latest`; a `go` repository answers with the highest release, or the highest prerelease when there is no release, or the highest pseudo-version when there is neither, considering only versions whose `.zip` is stored. A published version appears in `@v/list` and `@latest` immediately, also through a group that contains a `go-proxy` member.
 
 ---
 
 ## Go Proxy (`go-proxy`)
 
-A `go-proxy` repository caches modules from an upstream Go module proxy (typically `https://proxy.golang.org`) on first request, then serves subsequent requests from the local cache. Cached bytes survive upstream outages and are shared across all clients pointing at the same Pantera host. Version resolution (`go get`, `go list -m -versions`, and bare `go get <module>`) is cached too — up to a 12-hour freshness window, refreshed in the background on the next request past that window — so it keeps working against a cached module even while the upstream proxy is unreachable, falling back to the last-known version list if a refresh attempt fails.
+A `go-proxy` repository caches modules from an upstream Go module proxy (typically `https://proxy.golang.org`) on first request, then serves subsequent requests from the local cache. Cached bytes survive upstream outages and are shared across all clients pointing at the same Pantera host. The version list (`@v/list`, behind `go list -m -versions`) and `@latest` (behind `go get <module>` without a version) are cached too: Pantera re-fetches them from the upstream once the cached copy is older than 12 hours, concurrent requests for the same module share one upstream fetch, and when the upstream cannot be reached the last successfully fetched copy is served, so resolution keeps working for modules the proxy has seen before. Cooldown filtering of `@v/list` evaluates the newest 50 versions; older versions are always listed.
 
-Checksum-database (`sumdb`) requests (`/sumdb/<name>/supported|lookup|tile`) are proxied to the same upstream(s), per the standard GOPROXY-protocol convention. `lookup` and `tile` responses are content-addressed and cached immutably (once cached, served forever with no upstream call — offline-safe for any module already fetched); `supported` is a lightweight live probe, never cached. This is what lets `GOSUMDB` stay at its default instead of being disabled. `/sumdb/*` is only meaningful on a `go-proxy` — a `go` (local/hosted) or `go-group` repository has no upstream checksum database to proxy to and returns a plain `404` for it (scope pure-local modules out of sumdb entirely with `GOPRIVATE` instead, see [Configure GOPROXY](#configure-goproxy)).
+Checksum-database requests (`/sumdb/<name>/...`) are forwarded to the same upstream, as the GOPROXY protocol allows, so `GOSUMDB` stays at its default. `lookup` and `tile` answers never change and are cached permanently, so a module verified once stays verifiable while the upstream is unreachable; the `supported` probe is always asked live. A `go` local repository has no upstream and answers `404` for `/sumdb/`, after which the `go` command contacts `sum.golang.org` directly; a group forwards `/sumdb/` through its `go-proxy` member. Private modules that are not in the public checksum database go in `GONOSUMDB` (see [Configure GOPROXY](#configure-goproxy)).
 
 **When to use**
 
@@ -107,7 +154,7 @@ Point `GOPROXY` at the proxy URL (see [Configure GOPROXY](#configure-goproxy) ab
 
 ## Go Group (`go-group`)
 
-A `go-group` repository is a virtual repository that fans out requests across a list of member repositories (`go` locals and `go-proxy` proxies) in resolution order. The first member that serves the module wins. Groups do not store artifacts themselves — they delegate to members.
+A `go-group` repository is a virtual repository that fans out requests across a list of member repositories (`go` locals and `go-proxy` proxies) in resolution order. For each file (`.info`, `.mod`, `.zip`), the first member that serves it wins. The version list (`@v/list`) combines the lists of every member, so `go list -m -versions` shows both your private versions and the upstream ones. Checksum-database requests (`/sumdb/`) are answered by the `go-proxy` member. Groups do not store artifacts themselves — they delegate to members.
 
 **When to use**
 
@@ -125,7 +172,7 @@ repo:
     - go-proxy
 ```
 
-Clients set `GOPROXY` to the group URL (`http://pantera-host:8080/go-group`); Pantera handles fan-out. See the [Management UI guide](../ui-guide.md#adding-members-to-a-group-repository) for how to add, reorder, and create members from the web interface.
+Clients set `GOPROXY` to the group URL (`https://pantera-host/go-group`); Pantera handles fan-out. See the [Management UI guide](../ui-guide.md#adding-members-to-a-group-repository) for how to add, reorder, and create members from the web interface.
 
 ---
 
@@ -134,11 +181,14 @@ Clients set `GOPROXY` to the group URL (`http://pantera-host:8080/go-group`); Pa
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `410 Gone` | Module not found upstream and cached as absent | Clear the negative cache; ask admin to check proxy config |
-| `401 Unauthorized` | Token missing or expired | Regenerate the JWT token and update `GOPROXY` |
-| `proxyconnect tcp: tls: first record does not look like a TLS handshake` | Go trying HTTPS on an HTTP endpoint | Set `GOINSECURE=pantera-host:8080` |
-| `verifying module: checksum mismatch` | Rare: the proxied upstream's sumdb genuinely disagrees with the module bytes, or the module is internal/private and was never published to a public checksum database | For internal/private modules, set `GOPRIVATE=<module-prefix>` (preferred — scopes the exemption); `GOSUMDB=off` as a blunt global escape hatch otherwise. `go-proxy` proxies `/sumdb/*` itself, so this is not needed just to make `go get` work |
-| `go: module not found` with `direct` fallback | Module is genuinely missing | Verify the module path and version exist upstream |
-| `404` on `/sumdb/<name>/...` | Requested against a `go` (local/hosted) or `go-group` repository | Point `GOPROXY` at a `go-proxy` repository instead — only proxies have an upstream checksum database to forward to |
+| `401 Unauthorized` | Token missing or expired, or the `~/.netrc` entry does not match the host | Regenerate the token and update `~/.netrc` (add a `host:port` line if the URL has a port) |
+| `401` or refused credentials with an `http://` `GOPROXY` | Go never sends credentials over plain HTTP | Serve Pantera over HTTPS; meanwhile use curl (see [Plain HTTP Registries](#plain-http-registries)) |
+| `verifying module: checksum mismatch` | Sum database mismatch for a private module | Add the module's path prefix to `GONOSUMDB` |
+| `verifying module: ... sum.golang.org ...: dial tcp` or a timeout | `GOPROXY` points at a `go` local repository, which answers `404` for `/sumdb/`, so `go` contacts `sum.golang.org` directly and your network does not allow it | Resolve through a `go-proxy` or a group that contains one (Pantera forwards the checksum lookups), or add private module prefixes to `GONOSUMDB` |
+| `go mod verify` fails for a published module | Zip built with directory entries | Rebuild with `zip -qrD` and publish a new version |
+| `409 Conflict` on upload | The `.mod` or `.zip` for that version is already stored with different content, or the version's `.zip` is stored and the `.info` differs | Publish a new version; published versions are immutable. A publish that failed before its `.zip` was stored can be rerun as is |
+| `x509: certificate signed by unknown authority` | The registry's CA is not trusted | Add the CA to the operating system trust store; `GOINSECURE` does not apply to `GOPROXY` |
+| `go: module not found` | Module is genuinely missing, or you resolve from a local repository | Verify the module path and version exist upstream; resolve through a group or proxy |
 
 ---
 
@@ -186,5 +236,5 @@ repo:
 
 ## Related Pages
 
-- [Getting Started](../getting-started.md) -- Obtaining JWT tokens
+- [Getting Started](../getting-started.md) -- Obtaining API tokens
 - [Troubleshooting](../troubleshooting.md) -- Common error resolution

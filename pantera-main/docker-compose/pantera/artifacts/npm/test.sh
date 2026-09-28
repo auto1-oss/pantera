@@ -13,6 +13,7 @@
 #   ./test.sh --clients       # npm / yarn / pnpm installs only
 #   ./test.sh --corepack      # corepack only
 #   ./test.sh --rev           # packument revision lifecycle only
+#   ./test.sh --unpublish     # single-version unpublish via the npm CLI only
 # =================================================================
 set -euo pipefail
 
@@ -95,6 +96,7 @@ section_endpoints() {
   expect_status "group packument"  GET "$GROUP/$UPSTREAM_PKG" 200
   expect_status "group local pkg"  GET "$GROUP/$PKG" 200
   expect_status "local dist-tags"  GET "$LOCAL/-/package/$PKG_ENC/dist-tags" 200
+  expect_status "group dist-tags"  GET "$GROUP/-/package/$PKG_ENC/dist-tags" 200
 
   # Abbreviated (corgi) packument must be honoured in every mode.
   for base in "$LOCAL/$PKG" "$PROXY/$UPSTREAM_PKG" "$GROUP/$UPSTREAM_PKG"; do
@@ -105,21 +107,11 @@ section_endpoints() {
     fi
   done
 
-  # Identity on the hosted repo: answered from the caller's own credentials.
-  expect_status "whoami             $LOCAL" GET "$LOCAL/-/whoami" 200
-  expect_status "profile get        $LOCAL" GET "$LOCAL/-/npm/v1/user" 200
-
-  # Identity on proxy and group is not user-scoped yet. Both modes forbid
-  # /-/whoami outright, and /-/npm/v1/user has no route at all, so it falls
-  # through to the upstream passthrough and 404s. That is defect 7 in
-  # docs/superpowers/specs/2026-08-26-npm-cli-conformance-design.md; the fix
-  # (answer both from the JWT -- identity involves no member walk) is designed
-  # but belongs to WS-B, not to this release. These pin the shipped shape so a
-  # change in either direction is caught: WS-B flips these four to 200 in the
-  # same PR that changes the behaviour.
-  for base in "$PROXY" "$GROUP"; do
-    expect_status "whoami [WS-B]      $base" GET "$base/-/whoami" 403
-    expect_status "profile get [WS-B] $base" GET "$base/-/npm/v1/user" 404
+  # Identity is answered from the caller's own credentials in every mode
+  # (no member walk, no upstream call).
+  for base in "$LOCAL" "$PROXY" "$GROUP"; do
+    expect_status "whoami             $base" GET "$base/-/whoami" 200
+    expect_status "profile get        $base" GET "$base/-/npm/v1/user" 200
   done
 
   # Declined endpoints: fast, explicit, never 5xx.
@@ -145,6 +137,70 @@ section_rev() {
   expect_status "unpublish with a stale revision is refused" DELETE \
     "$LOCAL/$PKG/-rev/9-0000000000000000000000000000000" 409
   expect_status "package survived both refusals" GET "$LOCAL/$PKG" 200
+}
+
+section_unpublish() {
+  echo "--- 2b. Single-version unpublish: PUT packument, then DELETE tarball ---"
+  command -v npm >/dev/null 2>&1 || { fail "npm not installed"; return; }
+  local reg="$CLIENT_HOST/test_prefix/api/npm/"
+  local creds_b64
+  creds_b64=$(base64_creds "$CREDS")
+  local probe='@ayd/unpublish-probe'
+  local dir="$SCRATCH/unpublish"
+  mkdir -p "$dir"
+  {
+    printf 'registry=%s\n' "$reg"
+    printf 'cache=%s/.cache\n' "$dir"
+    printf '//localhost:8081/test_prefix/api/npm/:_auth=%s\n' "$creds_b64"
+  } > "$dir/.npmrc"
+  # Also use that file as the *user* config: npm resolves credentials by the
+  # longest matching nerf-dart key across every config level, so a stale
+  # //localhost:8081/...:_authToken in ~/.npmrc would silently replace these
+  # credentials on whichever request happens to match it best.
+  local npm_env="NPM_CONFIG_USERCONFIG=$dir/.npmrc"
+  # A leftover from an aborted run would make the publishes below collide.
+  local rev
+  rev=$(curl -s --max-time 30 -u "$CREDS" "$LOCAL/$probe" 2>/dev/null \
+        | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("_rev",""))
+except Exception: print("")')
+  if [ -n "$rev" ]; then
+    curl -s -o /dev/null --max-time 30 -u "$CREDS" -X DELETE "$LOCAL/$probe/-rev/$rev"
+  fi
+  for v in 1.0.0 2.0.0; do
+    printf '{"name":"%s","version":"%s","description":"unpublish probe"}\n' \
+      "$probe" "$v" > "$dir/package.json"
+    if ( cd "$dir" && env "$npm_env" npm publish --access public --silent >/dev/null 2>&1 ); then
+      pass "publish $probe@$v"
+    else
+      fail "publish $probe@$v"
+      return
+    fi
+  done
+  # The CLI reads the packument, PUTs it minus the version, re-reads it for
+  # the new revision, then DELETEs the version's tarball with that revision.
+  # Before 2.2.9 the last leg was answered 409 (the tarball path was taken
+  # for a package name), so the CLI reported failure after the version had
+  # already been removed and the tarball blob stayed behind.
+  if ( cd "$dir" && env "$npm_env" npm unpublish "$probe@1.0.0" --silent >/dev/null 2>&1 ); then
+    pass "npm unpublish $probe@1.0.0 exits 0"
+  else
+    fail "npm unpublish $probe@1.0.0"
+  fi
+  local has
+  has=$(curl -s --max-time 30 -u "$CREDS" "$LOCAL/$probe" \
+        | python3 -c 'import json,sys; print("1.0.0" in json.load(sys.stdin).get("versions",{}))')
+  if [ "$has" = "False" ]; then pass "1.0.0 is gone from the packument"; else
+    fail "1.0.0 is still in the packument"
+  fi
+  expect_status "1.0.0 tarball removed"  GET "$LOCAL/$probe/-/$probe-1.0.0.tgz" 404
+  expect_status "2.0.0 tarball survives" GET "$LOCAL/$probe/-/$probe-2.0.0.tgz" 200
+  if ( cd "$dir" && env "$npm_env" npm unpublish "$probe" --force --silent >/dev/null 2>&1 ); then
+    pass "npm unpublish $probe --force (cleanup)"
+  else
+    fail "npm unpublish $probe --force (cleanup)"
+  fi
+  expect_status "probe package fully removed" GET "$LOCAL/$probe" 404
 }
 
 section_clients() {
@@ -250,9 +306,10 @@ case "${1:-}" in
   --clients)   RUN_ALL=0; section_clients ;;
   --corepack)  RUN_ALL=0; section_corepack ;;
   --rev)       RUN_ALL=0; section_rev ;;
+  --unpublish) RUN_ALL=0; section_unpublish ;;
 esac
 if [ "$RUN_ALL" = "1" ]; then
-  section_endpoints; section_rev; section_clients; section_corepack
+  section_endpoints; section_rev; section_unpublish; section_clients; section_corepack
 fi
 
 echo

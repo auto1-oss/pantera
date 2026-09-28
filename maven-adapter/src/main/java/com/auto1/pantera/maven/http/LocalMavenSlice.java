@@ -321,12 +321,18 @@ final class LocalMavenSlice implements Slice {
                 this.storage, key,
                 // Use optimized value retrieval for metadata files too
                 () -> StorageArtifactSlice.optimizedValue(this.storage, key)
-                    .thenApply(val -> ResponseBuilder.ok().body(val).build())
+                    .thenApply(
+                        val -> ResponseBuilder.ok()
+                            .header(ArtifactHeaders.contentType(key))
+                            .body(val)
+                            .build()
+                    )
             );
             case HEAD -> plainResponse(this.storage, key,
                 () -> this.storage.metadata(key)
                     .thenApply(
                         meta -> ResponseBuilder.ok()
+                            .header(ArtifactHeaders.contentType(key))
                             .header(new ContentLength(meta.read(Meta.OP_SIZE).orElseThrow()))
                             .build()
                     )

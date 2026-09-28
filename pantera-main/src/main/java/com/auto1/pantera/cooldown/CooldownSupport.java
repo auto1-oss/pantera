@@ -218,8 +218,29 @@ public final class CooldownSupport {
             jdbc.setCacheInvalidationPubSub(bus);
             bus.register("cooldown-decisions", jdbc.cache());
             bus.register("cooldown-envelope", metadataCache);
+            // Fan out registry-driven envelope drops (upload / proxy-refresh
+            // invalidations) to peers on the same channel the receive side
+            // is registered on above. The receive path (Cleanable#invalidate)
+            // never re-publishes, so there is no loop.
+            metadataCache.setInvalidationPublisher(
+                key -> bus.publish("cooldown-envelope", key)
+            );
+            // Package-level change fan-out for caches that hold cooldown-
+            // filtered bytes outside the envelope cache (Maven group merged
+            // metadata). Its own channel: an envelope may not exist anywhere
+            // (nothing to piggy-back on) while a group still caches the view.
+            bus.register(
+                "cooldown-package",
+                com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                    .instance().packageReceiver()
+            );
+            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance()
+                .setPackagePublisher(
+                    pkg -> bus.publish("cooldown-package", pkg),
+                    () -> bus.publishAll("cooldown-package")
+                );
             EcsLogger.info("com.auto1.pantera.cooldown")
-                .message("Wired cooldown pub/sub fan-out (channels: cooldown-decisions, cooldown-envelope)")
+                .message("Wired cooldown pub/sub fan-out (channels: cooldown-decisions, cooldown-envelope, cooldown-package)")
                 .eventCategory("configuration")
                 .eventAction("cooldown_pubsub_wire")
                 .eventOutcome("success")

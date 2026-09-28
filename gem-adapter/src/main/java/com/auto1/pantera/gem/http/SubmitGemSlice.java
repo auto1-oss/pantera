@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.gem.Gem;
+import com.auto1.pantera.gem.InvalidGemException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -30,7 +31,9 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 
 /**
  * A slice, which servers gem packages.
@@ -129,7 +132,7 @@ final class SubmitGemSlice implements Slice {
                                     new Key.From(
                                         "gems", pair.getKey() + "-" + pair.getValue() + ".gem"
                                     ).string()
-                                );
+                                ).withRequestContext(headers);
                                 this.events.ifPresent(queue -> queue.add(event));
                                 com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
                                     .invalidateAfterUpload("gem", pair.getKey());
@@ -141,7 +144,44 @@ final class SubmitGemSlice implements Slice {
                     );
                 }
             )
-            .thenCompose(none -> this.storage.delete(key))
-            .thenApply(none -> ResponseBuilder.created().build());
+            // The upload key is temporary whether indexing succeeds or not:
+            // a leftover gems/<uuid>.gem would be served and folded into the
+            // next index rebuild.
+            .handle(
+                (none, err) -> this.storage.exists(key)
+                    .thenCompose(
+                        present -> present ? this.storage.delete(key)
+                            : CompletableFuture.<Void>completedFuture(null)
+                    )
+                    .<Response>thenApply(
+                        deleted -> {
+                            if (err == null) {
+                                return ResponseBuilder.created().build();
+                            }
+                            final Throwable cause = SubmitGemSlice.cause(err);
+                            if (cause instanceof InvalidGemException) {
+                                // A truncated or foreign file is the client's
+                                // error: say why instead of answering 500.
+                                return ResponseBuilder.badRequest()
+                                    .textBody(cause.getMessage())
+                                    .build();
+                            }
+                            throw new CompletionException(err);
+                        }
+                    )
+            ).thenCompose(Function.identity());
+    }
+
+    /**
+     * Unwrap completion wrappers.
+     * @param err Error
+     * @return Underlying cause
+     */
+    private static Throwable cause(final Throwable err) {
+        Throwable res = err;
+        while (res instanceof CompletionException && res.getCause() != null) {
+            res = res.getCause();
+        }
+        return res;
     }
 }

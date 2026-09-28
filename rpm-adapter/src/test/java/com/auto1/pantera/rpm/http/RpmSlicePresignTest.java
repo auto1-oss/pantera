@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.StringContains;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -61,16 +62,7 @@ final class RpmSlicePresignTest {
         final PresigningStorage storage = new PresigningStorage(new InMemoryStorage());
         storage.save(new Key.From("nginx-1.0.rpm"), content("rpm-bytes")).join();
         storage.save(new Key.From("repodata", "repomd.xml"), content("<repomd/>")).join();
-        final RpmSlice slice = new RpmSlice(
-            storage,
-            new PolicyByUsername(USER),
-            new Authentication.Single(USER, PASS),
-            null,
-            new RepoConfig.Simple(),
-            Optional.empty(),
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
-            new DownloadPolicy(DownloadMode.REDIRECT, 600L)
-        );
+        final RpmSlice slice = redirecting(storage);
 
         final Response rpm = get(slice, "/nginx-1.0.rpm");
         MatcherAssert.assertThat(
@@ -94,6 +86,45 @@ final class RpmSlicePresignTest {
         MatcherAssert.assertThat(
             "the metadata GET must not have triggered any further presign attempt",
             storage.presignCalls.get(), new IsEqual<>(1)
+        );
+    }
+
+    /**
+     * A repository with no metadata yet still generates and streams its empty
+     * {@code repodata/repomd.xml} under a REDIRECT policy: the 2.2.9
+     * empty-repodata bootstrap and the WS1.7 redirect gate coexist, and the
+     * generated metadata is never presigned.
+     */
+    @Test
+    void emptyRepositoryMetadataIsGeneratedAndStreamedUnderRedirectPolicy() {
+        final PresigningStorage storage = new PresigningStorage(new InMemoryStorage());
+        final RpmSlice slice = redirecting(storage);
+
+        final Response repomd = get(slice, "/repodata/repomd.xml");
+        MatcherAssert.assertThat(
+            "an empty repository must generate and stream repomd.xml (200)",
+            repomd.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the generated metadata must be a repomd document",
+            repomd.body().asString(), new StringContains("<repomd")
+        );
+        MatcherAssert.assertThat(
+            "generated metadata must never be presigned",
+            storage.presignCalls.get(), new IsEqual<>(0)
+        );
+    }
+
+    private static RpmSlice redirecting(final Storage storage) {
+        return new RpmSlice(
+            storage,
+            new PolicyByUsername(USER),
+            new Authentication.Single(USER, PASS),
+            null,
+            new RepoConfig.Simple(),
+            Optional.empty(),
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
+            new DownloadPolicy(DownloadMode.REDIRECT, 600L)
         );
     }
 

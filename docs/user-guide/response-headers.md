@@ -47,7 +47,7 @@ Stale-served responses today come from:
 
 ## `X-Pantera-Internal: true`
 
-Server-side-only marker on log events. This header is **not** emitted in client responses -- it tags internal Pantera-to-Pantera calls in the ECS access log so operators can filter them out of client-facing dashboards.
+Server-side-only marker that a group repository puts on its in-process calls to member repositories. It is **not** emitted in client responses, and Pantera discards it when a client sends it on a request.
 
 If you ever see this header reach a client, that is a bug; please report it.
 

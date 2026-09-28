@@ -21,7 +21,6 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
-import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.publishdate.PublishDateRegistries;
@@ -30,6 +29,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -38,14 +38,22 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Tests that {@link ProxyDownloadSlice} verifies dist archives against the
  * packument's declared {@code dist.shasum} (WS4-composer.3, S7 of
- * {@code 00-security-integrity-decisions.md}), fails closed on a mismatch,
- * and single-flights concurrent cold fetches (WS4-composer.4).
+ * {@code 00-security-integrity-decisions.md}) inside the stream-through
+ * cache tee — a mismatch keeps the cache empty — and single-flights
+ * concurrent cold fetches (WS4-composer.4).
+ *
+ * <p>The dist is streamed through to the client while it is being verified
+ * (see {@link ProxyDownloadSliceStreamingTest}), so the integrity outcome
+ * is proven on the cache and on the upstream invocation count — never on
+ * the in-flight response status, which is already committed when the
+ * digest comparison runs.</p>
  */
 final class ProxyDownloadSliceIntegrityTest {
 
@@ -64,8 +72,9 @@ final class ProxyDownloadSliceIntegrityTest {
     }
 
     @Test
+    @Timeout(20)
     @DisplayName("matching dist.shasum: cached and served")
-    void matchingShasumCachesAndServes() {
+    void matchingShasumCachesAndServes() throws Exception {
         this.seedMetadata(sha1Hex(DIST_BYTES));
         final FakeUpstream upstream = new FakeUpstream(DIST_BYTES);
         final ProxyDownloadSlice slice = this.buildSlice(upstream);
@@ -78,7 +87,13 @@ final class ProxyDownloadSliceIntegrityTest {
         Assertions.assertArrayEquals(
             DIST_BYTES, response.body().asBytesFuture().join(), "served bytes match upstream"
         );
-        Assertions.assertTrue(this.storage.exists(DIST_KEY).join(), "archive persisted to cache");
+        // The cache commit lands once the stream completes — poll for it.
+        awaitCached(this.storage, DIST_KEY);
+        Assertions.assertArrayEquals(
+            DIST_BYTES,
+            this.storage.value(DIST_KEY).join().asBytesFuture().join(),
+            "cached bytes are the verified upstream bytes"
+        );
         Assertions.assertEquals(1, upstream.calls(), "exactly one upstream fetch");
 
         // Second request is a pure cache hit — no further upstream call.
@@ -86,12 +101,16 @@ final class ProxyDownloadSliceIntegrityTest {
             new RequestLine(RqMethod.GET, DIST_PATH), Headers.EMPTY, Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.OK, second.status(), "cache-hit 200");
+        Assertions.assertArrayEquals(
+            DIST_BYTES, second.body().asBytesFuture().join(), "cache hit serves the same bytes"
+        );
         Assertions.assertEquals(1, upstream.calls(), "no upstream call on cache hit");
     }
 
     @Test
-    @DisplayName("mismatched dist.shasum: 502, X-Pantera-Fault, cache stays empty")
-    void mismatchedShasumRejectsAndDoesNotCache() {
+    @Timeout(20)
+    @DisplayName("mismatched dist.shasum: streamed to the client, never cached")
+    void mismatchedShasumIsNeverCached() throws Exception {
         this.seedMetadata("0000000000000000000000000000000000dead");
         final FakeUpstream upstream = new FakeUpstream(DIST_BYTES);
         final ProxyDownloadSlice slice = this.buildSlice(upstream);
@@ -100,30 +119,40 @@ final class ProxyDownloadSliceIntegrityTest {
             new RequestLine(RqMethod.GET, DIST_PATH), Headers.EMPTY, Content.EMPTY
         ).join();
 
+        // Stream-through: the response is committed before the digest can
+        // be compared, so the client receives the bytes (and verifies
+        // dist.shasum itself, as Composer always does) ...
         Assertions.assertEquals(
-            RsStatus.BAD_GATEWAY, response.status(), "502 on integrity mismatch"
+            RsStatus.OK, response.status(), "stream-through response is already committed"
         );
-        final List<Header> fault = response.headers().find("X-Pantera-Fault");
-        Assertions.assertFalse(fault.isEmpty(), "X-Pantera-Fault header present");
-        Assertions.assertEquals(
-            "upstream-integrity:sha1", fault.getFirst().getValue(), "fault names sha1"
+        Assertions.assertArrayEquals(
+            DIST_BYTES, response.body().asBytesFuture().join(), "the upstream bytes are relayed"
         );
+        // ... but the corrupted archive must never reach the cache.
         Assertions.assertFalse(
             this.storage.exists(DIST_KEY).join(), "corrupted archive NOT cached"
         );
 
-        // A subsequent clean fetch (upstream now serves a claim matching what
-        // it actually returns) must succeed — the earlier mismatch left no
-        // poisoned state behind.
+        // A subsequent clean fetch (the claim now matches what the upstream
+        // returns) must go upstream again and succeed — had the mismatching
+        // archive been cached, this would have been a cache hit with no
+        // second upstream call.
         this.seedMetadata(sha1Hex(DIST_BYTES));
         final Response retry = slice.response(
             new RequestLine(RqMethod.GET, DIST_PATH), Headers.EMPTY, Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.OK, retry.status(), "clean retry succeeds");
-        Assertions.assertTrue(this.storage.exists(DIST_KEY).join(), "clean retry is cached");
+        Assertions.assertArrayEquals(
+            DIST_BYTES, retry.body().asBytesFuture().join(), "clean retry relays the bytes"
+        );
+        Assertions.assertEquals(
+            2, upstream.calls(), "the retry re-fetched upstream: nothing poisoned was cached"
+        );
+        awaitCached(this.storage, DIST_KEY);
     }
 
     @Test
+    @Timeout(20)
     @DisplayName("concurrent cold fetches of the same archive collapse to one upstream call")
     void concurrentColdFetchesSingleFlight() {
         this.seedMetadata(sha1Hex(DIST_BYTES));
@@ -132,19 +161,28 @@ final class ProxyDownloadSliceIntegrityTest {
         final ProxyDownloadSlice slice = this.buildSlice(upstream);
 
         final int callers = 6;
-        final List<CompletableFuture<Response>> futures = new java.util.ArrayList<>();
+        final List<CompletableFuture<Served>> futures = new java.util.ArrayList<>();
         for (int i = 0; i < callers; i++) {
-            futures.add(slice.response(
-                new RequestLine(RqMethod.GET, DIST_PATH), Headers.EMPTY, Content.EMPTY
-            ));
+            // Consume each body as soon as its response arrives: the leader's
+            // stream-through body drives the cache commit that releases the
+            // followers, so no caller may wait on another's body.
+            futures.add(
+                slice.response(
+                    new RequestLine(RqMethod.GET, DIST_PATH), Headers.EMPTY, Content.EMPTY
+                ).thenCompose(
+                    resp -> resp.body().asBytesFuture().thenApply(
+                        bytes -> new Served(resp.status(), bytes)
+                    )
+                )
+            );
         }
-        awaitInflight(upstream, callers);
+        awaitInflight(upstream);
         upstream.hold(false);
-        for (final CompletableFuture<Response> future : futures) {
-            final Response response = future.join();
-            Assertions.assertEquals(RsStatus.OK, response.status(), "every caller gets 200");
+        for (final CompletableFuture<Served> future : futures) {
+            final Served served = future.join();
+            Assertions.assertEquals(RsStatus.OK, served.status(), "every caller gets 200");
             Assertions.assertArrayEquals(
-                DIST_BYTES, response.body().asBytesFuture().join(), "every caller gets full bytes"
+                DIST_BYTES, served.bytes(), "every caller gets full bytes"
             );
         }
         Assertions.assertEquals(
@@ -154,6 +192,7 @@ final class ProxyDownloadSliceIntegrityTest {
     }
 
     @Test
+    @Timeout(20)
     @DisplayName("HEAD returns GET's status with an empty body")
     void headMirrorsGetStatusWithNoBody() {
         this.seedMetadata(sha1Hex(DIST_BYTES));
@@ -171,13 +210,11 @@ final class ProxyDownloadSliceIntegrityTest {
     }
 
     /**
-     * Poll until {@code upstream} has observed {@code expected} in-flight
-     * calls, or fail the test via {@code assertTimeoutPreemptively}-style
-     * bound instead of a fixed sleep — the single-flight gate itself
-     * (holding the response) proves ordering, this just waits for every
-     * caller to have reached the upstream call.
+     * Poll until the leader has reached the upstream call. The single-flight
+     * gate itself (holding the response) proves ordering; this just waits
+     * for the leader to be in flight before releasing the hold.
      */
-    private static void awaitInflight(final FakeUpstream upstream, final int expected) {
+    private static void awaitInflight(final FakeUpstream upstream) {
         final long deadline = System.currentTimeMillis() + 5_000;
         while (upstream.calls() < 1 && System.currentTimeMillis() < deadline) {
             Thread.onSpinWait();
@@ -185,6 +222,21 @@ final class ProxyDownloadSliceIntegrityTest {
         Assertions.assertTrue(
             upstream.calls() >= 1, "leader reached the upstream call before timeout"
         );
+    }
+
+    /**
+     * Poll until {@code key} is durably present in {@code storage}: the
+     * stream-through cache write commits after the client has consumed the
+     * body, so poll for the eventual state instead of asserting instantly.
+     */
+    private static void awaitCached(final Storage storage, final Key key) throws Exception {
+        final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!storage.exists(key).join()) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("dist " + key.string() + " was never committed to the cache");
+            }
+            Thread.sleep(5);
+        }
     }
 
     private void seedMetadata(final String shasum) {
@@ -219,6 +271,12 @@ final class ProxyDownloadSliceIntegrityTest {
         } catch (final Exception ex) {
             throw new AssertionError(ex);
         }
+    }
+
+    /**
+     * A fully consumed response: status plus body bytes.
+     */
+    private record Served(RsStatus status, byte[] bytes) {
     }
 
     /**

@@ -44,8 +44,21 @@ import java.util.Objects;
  * @since 2.3.0
  */
 public record ClientBaseUrlSettings(
-    boolean trustForwardedHeaders, List<String> hostAllowlist, String canonicalBaseUrl
+    boolean trustForwardedHeaders, List<String> hostAllowlist, String canonicalBaseUrl,
+    String clientBaseScheme
 ) {
+
+    /**
+     * Derive the scheme from the request, i.e. the behaviour that predates
+     * this setting.
+     */
+    public static final String SCHEME_AUTO = "auto";
+
+    /**
+     * Accepted {@code clientBaseScheme} values.
+     */
+    private static final List<String> SCHEMES =
+        List.of(ClientBaseUrlSettings.SCHEME_AUTO, "http", "https");
 
     /**
      * Compact constructor -- validates and defensively copies {@code
@@ -60,6 +73,31 @@ public record ClientBaseUrlSettings(
         }
         hostAllowlist = List.copyOf(hostAllowlist);
         canonicalBaseUrl = ClientBaseUrlSettings.normalizeCanonicalBaseUrl(canonicalBaseUrl);
+        clientBaseScheme = ClientBaseUrlSettings.normalizeScheme(clientBaseScheme);
+    }
+
+    /**
+     * Validate and normalize the client-facing scheme setting.
+     *
+     * @param raw Raw value; blank is treated as {@link #SCHEME_AUTO}
+     * @return One of {@code auto}, {@code http}, {@code https}
+     */
+    private static String normalizeScheme(final String raw) {
+        final String result;
+        if (raw == null || raw.isBlank()) {
+            result = ClientBaseUrlSettings.SCHEME_AUTO;
+        } else {
+            result = raw.trim().toLowerCase(java.util.Locale.ROOT);
+            if (!ClientBaseUrlSettings.SCHEMES.contains(result)) {
+                throw new IllegalArgumentException(
+                    String.format(
+                        "clientBaseScheme must be one of %s: %s",
+                        ClientBaseUrlSettings.SCHEMES, raw
+                    )
+                );
+            }
+        }
+        return result;
     }
 
     /**
@@ -76,6 +114,22 @@ public record ClientBaseUrlSettings(
     }
 
     /**
+     * Convenience constructor for call sites that predate the client-facing
+     * scheme setting — delegates with the scheme left on {@code auto}.
+     *
+     * @param trustForwardedHeaders See the canonical constructor
+     * @param hostAllowlist See the canonical constructor
+     * @param canonicalBaseUrl See the canonical constructor
+     */
+    public ClientBaseUrlSettings(final boolean trustForwardedHeaders,
+        final List<String> hostAllowlist, final String canonicalBaseUrl) {
+        this(
+            trustForwardedHeaders, hostAllowlist, canonicalBaseUrl,
+            ClientBaseUrlSettings.SCHEME_AUTO
+        );
+    }
+
+    /**
      * Defaults: forwarded headers not trusted, allowlist empty (permissive
      * -- any {@code Host} is honoured), canonical base URL unset. Matches
      * Pantera's behaviour before any of these settings existed.
@@ -83,7 +137,9 @@ public record ClientBaseUrlSettings(
      * @return Default settings.
      */
     public static ClientBaseUrlSettings defaults() {
-        return new ClientBaseUrlSettings(false, List.of(), "");
+        return new ClientBaseUrlSettings(
+            false, List.of(), "", ClientBaseUrlSettings.SCHEME_AUTO
+        );
     }
 
     /**

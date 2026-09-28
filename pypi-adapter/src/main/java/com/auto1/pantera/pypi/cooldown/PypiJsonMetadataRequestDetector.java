@@ -29,10 +29,12 @@ import java.util.regex.Pattern;
  *       JSON endpoint.</li>
  * </ul>
  *
- * <p>We intentionally do NOT match the version-specific form
- * {@code /pypi/<name>/<version>/json} — those describe a single version
- * and are adequately covered by the artifact-layer cooldown check.
- * Filtering them separately would be redundant.</p>
+ * <p>{@link #isMetadataRequest(String)} matches only the package-level
+ * form. The version-specific form {@code /pypi/<name>/<version>/json} is
+ * recognised separately by {@link #isVersionMetadataRequest(String)} so the
+ * proxy routes it to the JSON API upstream with a per-version cooldown
+ * check instead of letting it fall through to the simple mirror (which
+ * does not serve it).</p>
  *
  * <p>Package name normalisation follows PEP 503: lowercase, collapse
  * runs of {@code [-_.]} to a single {@code -}. We expose the
@@ -73,10 +75,10 @@ public final class PypiJsonMetadataRequestDetector {
      * intent explicit for future readers.
      *
      * <p>Group 1 = package name, group 2 = version — used by
-     * {@link #extractVersionCoordinates(String)} so the version-level
+     * {@link #extractPackageAndVersion(String)} so the version-level
      * JSON endpoint can be routed through its own cooldown filter
-     * ({@code PypiJsonHandler#handleVersion}) instead of proxying
-     * upstream unfiltered.</p>
+     * ({@code PypiJsonHandler#handle}) instead of proxying upstream
+     * unfiltered.</p>
      */
     private static final Pattern VERSION_JSON_PATTERN = Pattern.compile(
         "^(?:.*/)?pypi/([^/]+)/([^/]+)/json/?$",
@@ -120,35 +122,37 @@ public final class PypiJsonMetadataRequestDetector {
     }
 
     /**
-     * Whether the given request path targets the version-specific legacy
-     * JSON endpoint {@code /pypi/<name>/<version>/json}. This endpoint was
-     * previously deliberately unmatched and proxied straight upstream,
-     * which leaked a cooldown-blocked version's metadata (WS4-pypi.9).
+     * Whether the given request path targets the version-level JSON API
+     * {@code /pypi/<name>/<version>/json}. A path that also reads as the
+     * package-level form is package-level (that form wins).
      *
      * @param path Request path
-     * @return true for {@code /pypi/<name>/<version>/json}, false otherwise
+     * @return true for {@code /pypi/<name>/<version>/json}
      */
     public boolean isVersionMetadataRequest(final String path) {
         return path != null && !path.isEmpty()
+            && !JSON_API_PATTERN.matcher(path).matches()
             && VERSION_JSON_PATTERN.matcher(path).matches();
     }
 
     /**
-     * Extract the package name and version from a
+     * Extract package name and version from a
      * {@code /pypi/<name>/<version>/json} path.
      *
      * @param path Request path
-     * @return Coordinates if parseable, else empty
+     * @return {@code [name, version]}, empty when the path is not version-level
      */
-    public Optional<VersionCoordinates> extractVersionCoordinates(final String path) {
-        if (path == null || path.isEmpty()) {
-            return Optional.empty();
+    public Optional<String[]> extractPackageAndVersion(final String path) {
+        final Optional<String[]> result;
+        if (this.isVersionMetadataRequest(path)) {
+            final Matcher matcher = VERSION_JSON_PATTERN.matcher(path);
+            result = matcher.matches()
+                ? Optional.of(new String[] {matcher.group(1), matcher.group(2)})
+                : Optional.empty();
+        } else {
+            result = Optional.empty();
         }
-        final Matcher matcher = VERSION_JSON_PATTERN.matcher(path);
-        if (!matcher.matches()) {
-            return Optional.empty();
-        }
-        return Optional.of(new VersionCoordinates(matcher.group(1), matcher.group(2)));
+        return result;
     }
 
     /**
@@ -158,14 +162,5 @@ public final class PypiJsonMetadataRequestDetector {
      */
     public String repoType() {
         return REPO_TYPE;
-    }
-
-    /**
-     * Package name + version parsed from a version-level legacy JSON path.
-     *
-     * @param packageName Raw (unnormalized) package name
-     * @param version Distribution version
-     */
-    public record VersionCoordinates(String packageName, String version) {
     }
 }

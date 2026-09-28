@@ -45,7 +45,7 @@ public final class UserDao implements CrudUsers {
     public JsonArray list() {
         final JsonArrayBuilder arr = Json.createArrayBuilder();
         final String sql = String.join(" ",
-            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password,",
+            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password, u.sso_subject,",
             "COALESCE(json_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '[]') AS roles",
             "FROM users u",
             "LEFT JOIN user_roles ur ON u.id = ur.user_id",
@@ -79,7 +79,7 @@ public final class UserDao implements CrudUsers {
         final String col = allowed.contains(sortField) ? sortField : "username";
         final String dir = ascending ? "ASC" : "DESC";
         final String sql = String.join(" ",
-            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password,",
+            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password, u.sso_subject,",
             "COALESCE(json_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '[]') AS roles,",
             "COUNT(*) OVER() AS total_count",
             "FROM users u",
@@ -117,7 +117,7 @@ public final class UserDao implements CrudUsers {
     @Override
     public Optional<JsonObject> get(final String uname) {
         final String sql = String.join(" ",
-            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password,",
+            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password, u.sso_subject,",
             "COALESCE(json_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '[]') AS roles",
             "FROM users u",
             "LEFT JOIN user_roles ur ON u.id = ur.user_id",
@@ -140,50 +140,10 @@ public final class UserDao implements CrudUsers {
 
     @Override
     public void addOrUpdate(final JsonObject info, final String uname) {
-        final String sql = String.join(" ",
-            "INSERT INTO users (username, password_hash, email, auth_provider)",
-            "VALUES (?, ?, ?, ?)",
-            "ON CONFLICT (username) DO UPDATE SET",
-            "password_hash = COALESCE(?, users.password_hash),",
-            "email = COALESCE(?, users.email),",
-            "auth_provider = COALESCE(?, users.auth_provider),",
-            "updated_at = NOW()"
-        );
         try (Connection conn = this.source.getConnection()) {
             conn.setAutoCommit(false);
             try {
-                final String rawPass;
-                if (info.containsKey("pass")) {
-                    rawPass = info.getString("pass");
-                } else if (info.containsKey("password")) {
-                    rawPass = info.getString("password");
-                } else {
-                    rawPass = null;
-                }
-                final String pass = rawPass != null
-                    ? BCrypt.hashpw(rawPass, BCrypt.gensalt()) : null;
-                final String email = info.containsKey("email")
-                    ? info.getString("email") : null;
-                // Map password format types (plain, sha256) to "local" provider.
-                // Only actual provider names (keycloak, okta) are stored literally.
-                final String rawType = info.containsKey("type")
-                    ? info.getString("type") : "local";
-                final String provider = "plain".equals(rawType) || "sha256".equals(rawType)
-                    ? "local" : rawType;
-                try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                    ps.setString(1, uname);
-                    ps.setString(2, pass);
-                    ps.setString(3, email);
-                    ps.setString(4, provider);
-                    ps.setString(5, pass);
-                    ps.setString(6, email);
-                    ps.setString(7, provider);
-                    ps.executeUpdate();
-                }
-                // Update role assignments if roles are provided
-                if (info.containsKey("roles")) {
-                    updateUserRoles(conn, uname, info.getJsonArray("roles"));
-                }
+                UserDao.upsert(conn, info, uname);
                 conn.commit();
             } catch (final Exception ex) {
                 conn.rollback();
@@ -193,6 +153,131 @@ public final class UserDao implements CrudUsers {
             }
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to add/update user: " + uname, ex);
+        }
+    }
+
+    /**
+     * Update an existing user and replace their password in ONE transaction
+     * (B48: the reset used to be two writes, so a failure between them left
+     * a partial update). The new password is validated first; the password
+     * fields of {@code info} are ignored.
+     *
+     * @param info Other fields to update (email, roles, ...)
+     * @param uname Existing username
+     * @param newPass New password
+     * @throws IllegalArgumentException When the password fails the policy
+     * @throws IllegalStateException When the user does not exist or the write fails
+     */
+    @Override
+    public void updateWithPassword(final JsonObject info, final String uname, final String newPass) {
+        final String failure = com.auto1.pantera.auth.PasswordPolicy.validate(uname, newPass);
+        if (failure != null) {
+            throw new IllegalArgumentException(failure);
+        }
+        final JsonObjectBuilder rest = Json.createObjectBuilder(info);
+        rest.remove("pass");
+        rest.remove("password");
+        rest.remove("type");
+        final String hashed = BCrypt.hashpw(newPass, BCrypt.gensalt());
+        try (Connection conn = this.source.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                UserDao.upsert(conn, rest.build(), uname);
+                try (PreparedStatement ps = conn.prepareStatement(
+                    "UPDATE users SET password_hash = ?, must_change_password = FALSE, "
+                        + "updated_at = NOW() WHERE username = ?"
+                )) {
+                    ps.setString(1, hashed);
+                    ps.setString(2, uname);
+                    ps.executeUpdate();
+                }
+                conn.commit();
+            } catch (final Exception ex) {
+                conn.rollback();
+                throw ex;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to update user: " + uname, ex);
+        }
+    }
+
+    /**
+     * Whether {@code pass} is the user's current LOCAL password: checked
+     * against the stored hash only — never a token or an external identity
+     * provider (B13).
+     *
+     * @param uname Username
+     * @param pass Candidate password
+     * @return True on a match
+     */
+    @Override
+    public boolean passwordMatches(final String uname, final String pass) {
+        return new com.auto1.pantera.auth.AuthFromDb(this.source).user(uname, pass).isPresent();
+    }
+
+    /**
+     * The user upsert, inside the caller's transaction.
+     *
+     * @param conn Connection with auto-commit off
+     * @param info User fields
+     * @param uname Username
+     * @throws Exception On a database error
+     */
+    private static void upsert(final Connection conn, final JsonObject info, final String uname)
+        throws Exception {
+        final String sql = String.join(" ",
+            "INSERT INTO users (username, password_hash, email, auth_provider, sso_subject)",
+            "VALUES (?, ?, ?, ?, ?)",
+            "ON CONFLICT (username) DO UPDATE SET",
+            "password_hash = COALESCE(?, users.password_hash),",
+            "email = COALESCE(?, users.email),",
+            "auth_provider = COALESCE(?, users.auth_provider),",
+            "sso_subject = COALESCE(?, users.sso_subject),",
+            "updated_at = NOW()"
+        );
+        final String rawPass;
+        if (info.containsKey("pass")) {
+            rawPass = info.getString("pass");
+        } else if (info.containsKey("password")) {
+            rawPass = info.getString("password");
+        } else {
+            rawPass = null;
+        }
+        final String pass = rawPass != null
+            ? BCrypt.hashpw(rawPass, BCrypt.gensalt()) : null;
+        final String email = info.containsKey("email")
+            ? info.getString("email") : null;
+        // Map password format types (plain, sha256) to "local" provider.
+        // Only actual provider names (keycloak, okta) are stored literally.
+        final String rawType = info.containsKey("type")
+            ? info.getString("type") : "local";
+        final String provider = "plain".equals(rawType) || "sha256".equals(rawType)
+            ? "local" : rawType;
+        // SSO identity binding (2.2.9): only the SSO callback supplies
+        // this; it is never cleared by a later upsert without it.
+        final String ssoSubject = info.containsKey("sso_subject")
+            ? info.getString("sso_subject") : null;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, uname);
+            ps.setString(2, pass);
+            ps.setString(3, email);
+            ps.setString(4, provider);
+            ps.setString(5, ssoSubject);
+            ps.setString(6, pass);
+            ps.setString(7, email);
+            // An update without an explicit type (e.g. a roles-only
+            // edit from the UI) keeps the stored provider: turning an
+            // SSO user into "local" made the 2.2.9 SSO identity
+            // binding reject that user's next login.
+            ps.setString(8, info.containsKey("type") ? provider : null);
+            ps.setString(9, ssoSubject);
+            ps.executeUpdate();
+        }
+        // Update role assignments if roles are provided
+        if (info.containsKey("roles")) {
+            updateUserRoles(conn, uname, info.getJsonArray("roles"));
         }
     }
 
@@ -213,7 +298,12 @@ public final class UserDao implements CrudUsers {
                  "DELETE FROM users WHERE username = ?"
              )) {
             ps.setString(1, uname);
-            ps.executeUpdate();
+            if (ps.executeUpdate() == 0) {
+                // Callers map IllegalStateException to 404 (as for roles).
+                throw new IllegalStateException("User not found: " + uname);
+            }
+        } catch (final IllegalStateException ex) { // NOPMD AvoidRethrowingException - rethrow preserves the "not-found" marker so callers can distinguish it from the generic Exception catch wrapped below
+            throw ex;
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to remove user: " + uname, ex);
         }
@@ -408,6 +498,10 @@ public final class UserDao implements CrudUsers {
         final String email = rs.getString("email");
         if (email != null) {
             bld.add("email", email);
+        }
+        final String ssoSubject = rs.getString("sso_subject");
+        if (ssoSubject != null) {
+            bld.add("sso_subject", ssoSubject);
         }
         final String rolesJson = rs.getString("roles");
         if (rolesJson != null) {

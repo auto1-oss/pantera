@@ -177,6 +177,7 @@ final class SettingsHandlerRuntimeTest {
             null,
             Optional.empty(),
             NoopCooldownService.INSTANCE,
+            com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService.INSTANCE,
             new TestSettings(),
             ArtifactIndex.NOP,
             sharedDs,
@@ -355,6 +356,26 @@ final class SettingsHandlerRuntimeTest {
                 MatcherAssert.assertThat(
                     res.bodyAsString(),
                     Matchers.containsString("range")
+                );
+            }
+        );
+    }
+
+    @Test
+    void patchMaxBelowMinReturns400AndWritesNothing(
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        // R45: each key was range-checked alone, so max_permits below the
+        // (default 5) min_permits was accepted.
+        adminGranted = true;
+        this.request(vertx, ctx, HttpMethod.PATCH,
+            "/api/v1/settings/runtime/http_client.bulkhead.max_permits",
+            new JsonObject().put("value", 3),
+            res -> {
+                Assertions.assertEquals(400, res.statusCode(),
+                    "max below min must be rejected; got body: " + res.bodyAsString());
+                Assertions.assertTrue(
+                    new SettingsDao(sharedDs).get("http_client.bulkhead.max_permits").isEmpty(),
+                    "nothing is written"
                 );
             }
         );

@@ -21,8 +21,10 @@ import com.auto1.pantera.http.rq.RqMethod;
 import io.reactivex.Flowable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
@@ -441,6 +443,47 @@ final class JettyClientSliceChunkLifecycleTest {
             String.format("Throughput was %.1f req/s, expected at least 100", rps),
             rps,
             greaterThan(100.0)
+        );
+    }
+
+    @Test
+    @Timeout(20)
+    @DisplayName("Acquire timeout bounds only connection acquisition, never the streaming body")
+    void acquireTimeoutDoesNotCapSlowStreamingBody() throws Exception {
+        // Body streams over ~1 s in 200 ms steps — longer than the 500 ms
+        // acquire timeout, but each gap is far below the idle timeout. With
+        // the pre-fix total request.timeout() this aborted at 500 ms ("Total
+        // timeout 500 ms elapsed"), the same failure that killed a 1.75 GB
+        // Docker layer at ~1.62 GB. The acquire timeout must bound only
+        // getting a connection, so a healthy slow transfer completes in full.
+        final int chunks = 6;
+        final byte[] chunk = new byte[1024];
+        java.util.Arrays.fill(chunk, (byte) 'Z');
+        this.server.update(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.ok()
+                    .body(
+                        Flowable.intervalRange(0, chunks, 0, 200, TimeUnit.MILLISECONDS)
+                            .map(tick -> ByteBuffer.wrap(chunk.clone()))
+                    )
+                    .build()
+            )
+        );
+        final int port = this.server.start();
+        this.slice = new JettyClientSlice(
+            this.clients.httpClient(), false, "localhost", port, 500L
+        );
+        final Response resp = this.slice.response(
+            new RequestLine(RqMethod.GET, "/"), Headers.EMPTY, Content.EMPTY
+        ).get(15, TimeUnit.SECONDS);
+        final byte[] received = resp.body().asBytesFuture().get(15, TimeUnit.SECONDS);
+        assertThat(
+            "a slow transfer is not aborted by the acquire timeout",
+            resp.status().code(), new IsEqual<>(200)
+        );
+        assertThat(
+            "the full body streams through despite exceeding the acquire timeout",
+            received.length, new IsEqual<>(chunks * chunk.length)
         );
     }
 }

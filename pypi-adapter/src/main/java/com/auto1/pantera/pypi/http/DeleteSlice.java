@@ -20,12 +20,11 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.pypi.meta.PypiIndexCleanup;
 import com.auto1.pantera.scheduling.RepositoryEvents;
-import org.slf4j.MDC;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -47,16 +46,20 @@ public final class DeleteSlice implements Slice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext ctx = new AuditContext(headers);
         final String owner = new Login(headers).getValue();
         final Key key = new KeyFromPath(line.uri().getPath());
 
         return this.asto.exists(key).thenCompose(
                 exists -> {
                     if (exists) {
-                        return this.asto.delete(key).thenApply(
+                        return this.asto.delete(key)
+                            .thenCompose(
+                                // The pre-generated simple index still lists the
+                                // file until it is regenerated from storage.
+                                nothing -> new PypiIndexCleanup(this.asto).afterDelete(key.string())
+                            )
+                            .thenApply(
                                 nothing -> {
                                     this.events.ifPresent(item -> item.addDeleteEventByKey(key));
                                     final String repoType = this.events.map(RepositoryEvents::repoType).orElse(null);

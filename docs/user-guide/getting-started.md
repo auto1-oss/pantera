@@ -74,11 +74,11 @@ maven-group
 
 ### First login after a fresh install
 
-A brand-new Pantera install ships with a **default admin user**:
+A brand-new Pantera install creates a single administrator so you can log in and finish setup:
 
 | Username | Password | Notes |
 |---|---|---|
-| `admin` | `admin` | **Must** change on first login. The server refuses every other API call until a compliant password is set. |
+| `admin` | Set by your operator via `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`, or a random password the operator reads from `<pantera.home>/bootstrap-admin-password` on the server (default `/var/pantera/bootstrap-admin-password`). Ask your administrator for it. | **Must** change on first login. The server refuses every other API call until a compliant password is set. |
 
 Your first login goes to the built-in force-password-change screen. The new password must meet these rules:
 
@@ -87,7 +87,7 @@ Your first login goes to the built-in force-password-change screen. The new pass
 - Not equal to the username
 - Not in the well-known weak-password list
 
-These rules are enforced server-side, so a direct API call with a weak password is rejected with `400 WEAK_PASSWORD`. **Change the default immediately in production.**
+These rules are enforced server-side, so a direct API call with a weak password is rejected with `400 WEAK_PASSWORD`. **Change this initial password on first sign-in.**
 
 ### Step 1: Get an Access Token
 
@@ -129,11 +129,10 @@ When your access token expires, exchange the refresh token for a new one:
 
 ```bash
 curl -X POST http://pantera-host:8086/api/v1/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+  -H "Authorization: Bearer $REFRESH_TOKEN"
 ```
 
-The Management UI handles token refresh automatically. If you are scripting against the API, store the refresh token and call this endpoint when you receive a `401`.
+The Management UI handles token refresh automatically. If you are scripting against the API, call this endpoint when you receive a `401` — refresh tokens are single-use, so each response returns a new `refresh_token`; store and use the latest one (reusing a spent refresh token is rejected with `401`).
 
 ### Step 2: Use the Token as Your Password
 

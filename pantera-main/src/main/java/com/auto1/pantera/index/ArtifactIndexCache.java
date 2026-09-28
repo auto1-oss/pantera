@@ -74,7 +74,7 @@ import java.util.stream.Collectors;
  *
  * @since 2.2.0
  */
-public final class ArtifactIndexCache implements ArtifactIndex {
+public final class ArtifactIndexCache implements ArtifactIndex, ScopedSearchIndex {
 
     /** Pub/sub namespace used to scope artifact-index deltas. */
     static final String PUBSUB_NAMESPACE = "artifact-index";
@@ -562,6 +562,16 @@ public final class ArtifactIndexCache implements ArtifactIndex {
     }
 
     @Override
+    public CompletableFuture<Integer> removeByPath(final String repoName, final String path) {
+        return this.delegate.removeByPath(repoName, path);
+    }
+
+    @Override
+    public CompletableFuture<Integer> removeRepo(final String repoName) {
+        return this.delegate.removeRepo(repoName);
+    }
+
+    @Override
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset
     ) {
@@ -575,6 +585,41 @@ public final class ArtifactIndexCache implements ArtifactIndex {
         final String sortBy, final boolean sortAsc
     ) {
         return this.delegate.search(query, maxResults, offset, repoType, repoName, sortBy, sortAsc);
+    }
+
+    @Override
+    public CompletableFuture<SearchResult> search(
+        final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName,
+        final String sortBy, final boolean sortAsc, final List<String> allowedRepos
+    ) {
+        // SECURITY (2.2.9): forward the caller's scope to the delegate so the
+        // DB index applies it in SQL (documents AND aggregates). A delegate
+        // that cannot push the scope down still gets the scope-safe
+        // post-filtering default from ArtifactIndex.
+        return this.delegate.search(
+            query, maxResults, offset, repoType, repoName, sortBy, sortAsc, allowedRepos
+        );
+    }
+
+    @Override
+    public CompletableFuture<SearchResult> searchScoped(
+        final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy,
+        final boolean sortAsc, final List<String> allowedRepos,
+        final List<SearchQueryParser.FieldFilter> fieldFilters
+    ) {
+        if (this.delegate instanceof ScopedSearchIndex) {
+            return ((ScopedSearchIndex) this.delegate).searchScoped(
+                query, maxResults, offset, repoType, repoName, sortBy, sortAsc,
+                allowedRepos, fieldFilters
+            );
+        }
+        // No structured-filter support in the delegate: still honour the
+        // repository scope via the scope-safe overload.
+        return this.delegate.search(
+            query, maxResults, offset, repoType, repoName, sortBy, sortAsc, allowedRepos
+        );
     }
 
     @Override
@@ -595,6 +640,13 @@ public final class ArtifactIndexCache implements ArtifactIndex {
     @Override
     public CompletableFuture<java.util.Map<String, Object>> getStats() {
         return this.delegate.getStats();
+    }
+
+    @Override
+    public CompletableFuture<java.util.Map<String, Object>> getStats(
+        final java.util.List<String> allowedRepos
+    ) {
+        return this.delegate.getStats(allowedRepos);
     }
 
     @Override

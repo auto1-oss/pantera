@@ -15,7 +15,6 @@ import com.auto1.pantera.docker.Tags;
 
 import javax.json.Json;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * {@link Tags} that is a page of given tags list.
@@ -24,7 +23,19 @@ public final class TagsPage implements Tags {
 
     private final String repoName;
 
-    private final Pagination.Page page;
+    private final List<String> tags;
+
+    private final Pagination pagination;
+
+    /**
+     * Whether every source of the tags answered.
+     */
+    private final boolean whole;
+
+    /**
+     * Whether a source holds the repository name.
+     */
+    private final boolean held;
 
     /**
      * @param repoName Repository name.
@@ -32,8 +43,47 @@ public final class TagsPage implements Tags {
      * @param pagination Pagination parameters.
      */
     public TagsPage(String repoName, List<String> tags, Pagination pagination) {
+        this(repoName, tags, pagination, true, true);
+    }
+
+    /**
+     * @param repoName Repository name.
+     * @param tags Tags.
+     * @param pagination Pagination parameters.
+     * @param complete Whether every source of the tags answered.
+     */
+    public TagsPage(
+        String repoName, List<String> tags, Pagination pagination, boolean complete
+    ) {
+        this(repoName, tags, pagination, complete, true);
+    }
+
+    /**
+     * @param repoName Repository name.
+     * @param tags Tags.
+     * @param pagination Pagination parameters.
+     * @param complete Whether every source of the tags answered.
+     * @param known Whether a source holds the repository name.
+     */
+    public TagsPage(
+        String repoName, List<String> tags, Pagination pagination, boolean complete,
+        boolean known
+    ) {
         this.repoName = repoName;
-        this.page = pagination.page(tags.stream());
+        this.tags = tags;
+        this.pagination = pagination;
+        this.whole = complete;
+        this.held = known;
+    }
+
+    @Override
+    public boolean known() {
+        return this.held;
+    }
+
+    @Override
+    public boolean complete() {
+        return this.whole;
     }
 
     @Override
@@ -41,20 +91,10 @@ public final class TagsPage implements Tags {
         return new Content.From(
             Json.createObjectBuilder()
                 .add("name", this.repoName)
-                .add("tags", this.page.json())
+                .add("tags", pagination.apply(tags.stream()))
                 .build()
                 .toString()
                 .getBytes()
         );
-    }
-
-    @Override
-    public boolean hasNext() {
-        return this.page.truncated();
-    }
-
-    @Override
-    public Optional<String> nextCursor() {
-        return this.page.cursor();
     }
 }

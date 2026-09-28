@@ -81,6 +81,13 @@ public final class CombinedAuthScheme implements AuthScheme {
             .map(Authorization::new)
             .map(
                 auth -> {
+                    if (!auth.parseable()) {
+                        // Scheme-less value (a raw token or key): answered
+                        // like a missing header (401 + challenge), never 500.
+                        return CompletableFuture.completedFuture(
+                            AuthScheme.result(AuthUser.ANONYMOUS, CombinedAuthScheme.CHALLENGE)
+                        );
+                    }
                     if (BasicAuthScheme.NAME.equals(auth.scheme())) {
                         return this.authenticateBasic(auth);
                     } else if (BearerAuthScheme.NAME.equals(auth.scheme())) {
@@ -112,6 +119,15 @@ public final class CombinedAuthScheme implements AuthScheme {
      */
     private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
+        try {
+            basic.username();
+            basic.password();
+        } catch (final IllegalArgumentException ex) {
+            // Undecodable Base64 or no ':' separator: a failed login (401).
+            return CompletableFuture.completedFuture(
+                AuthScheme.result(Optional.empty(), CombinedAuthScheme.CHALLENGE)
+            );
+        }
         final CompletionStage<Optional<AuthUser>> resolved;
         if (AuthWorkerPool.jwtShaped(basic.password())) {
             // Snapshot MDC on the calling (event-loop) thread — tokenAuth.user()

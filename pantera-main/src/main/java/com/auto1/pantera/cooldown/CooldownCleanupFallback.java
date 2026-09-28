@@ -168,6 +168,44 @@ public final class CooldownCleanupFallback {
                 .field("log.source", "application")
                 .log();
         }
+        this.purgeReleased(batchLimit);
+    }
+
+    /**
+     * Delete manually released (INACTIVE) rows whose cooldown window has
+     * ended — the fallback twin of the V144 {@code purge-released-cooldowns}
+     * cron. They were archived at release time, so nothing is archived here.
+     *
+     * @param batchLimit Rows per iteration
+     */
+    private void purgeReleased(final int batchLimit) {
+        long totalPurged = 0L;
+        for (int i = 0; i < MAX_BATCH_ITERATIONS; i++) {
+            final int purged;
+            try {
+                purged = this.repo.purgeReleasedBatch(batchLimit);
+            } catch (final RuntimeException err) {
+                EcsLogger.error("com.auto1.pantera.cooldown.cleanup")
+                    .message("fallback released-row purge iteration failed"
+                        + " (iteration=" + i
+                        + ", total_purged=" + totalPurged + ")")
+                    .error(err)
+                    .field("log.source", "application")
+                    .field("event.outcome", "failure")
+                    .log();
+                return;
+            }
+            totalPurged += purged;
+            if (purged < batchLimit) {
+                break;
+            }
+        }
+        if (totalPurged > 0L) {
+            EcsLogger.info("com.auto1.pantera.cooldown.cleanup")
+                .message("fallback released-row purge completed (purged=" + totalPurged + ")")
+                .field("log.source", "application")
+                .log();
+        }
     }
 
     /**

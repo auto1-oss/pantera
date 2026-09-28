@@ -18,7 +18,6 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
-import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.npm.security.NpmSigningKeys;
@@ -27,7 +26,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonObject;
-import org.slf4j.MDC;
 
 /**
  * {@code GET /-/npm/v1/keys} — serves the registry's own package-signing
@@ -69,9 +67,7 @@ public final class KeysSlice implements Slice {
         final RequestLine line, final Headers headers, final Content body
     ) {
         RequestContextHeaders.bindToMdc(headers);
-        final AuditContext ctx = new AuditContext(
-            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
-        );
+        final AuditContext ctx = new AuditContext(headers);
         final String owner = new Login(headers).getValue();
         return body.asBytesFuture().thenCompose(
             ignored -> this.keys.publicKey().thenApply(pair -> {

@@ -133,7 +133,7 @@ Search is case-insensitive and tokenizes on dots, dashes, slashes, and underscor
 
 ## Cooldown Management Panel
 
-The Cooldown page (`/admin/cooldown`) shows the current state of the cooldown system:
+The Cooldown page (`/cooldown`) shows the current state of the cooldown system. Administrators see two tabs, **Blocked artifacts** (described below) and **Inspect package**.
 
 ### Cooldown-Enabled Repositories
 
@@ -154,11 +154,59 @@ A paginated, searchable table of all currently blocked artifacts:
 | Version | Blocked version |
 | Repository | Which proxy repository the block applies to |
 | Type | Repository type |
-| Reason | Block reason (e.g., `TOO_YOUNG`) |
+| Reason | Block reason: `FRESH_RELEASE` (published upstream less than the minimum age ago) or `NEWER_THAN_CACHE` (newer than the cached version) |
 | Remaining | Time until the block expires (displayed as days/hours) |
 
 - Use the search bar to filter by package name, version, or repository.
 - Click the unlock button on a row to unblock that specific artifact (requires write permissions).
+
+### Inspect Package (administrators)
+
+The **Inspect package** tab answers "why is this version still hidden (or visible)?" for one package across every proxy and group repository of a type. Pick the repository type (or **Any type**) and start typing any part of the package name: after two characters the field suggests matching packages from the artifacts index and the cooldown records -- every typed word must appear in the name, so `http5`, `jackson databind` or `@types node` all work. Each suggestion shows its type, whether it is **indexed** and/or has **cooldown** records, and the repositories it was found in; choosing one switches to its type and inspects it (Maven and Gradle suggestions are already in the `groupId:artifactId` form the inspector needs). Pressing Enter inspects the text exactly as typed. Optionally narrow to one repository before inspecting. When nothing is known under the exact name, the page shows **No exact match for ... — did you mean:** with clickable alternatives.
+
+The versions table lists every known version with its cooldown state (`blocked`, `released`, `expired` or `none`), when the block ends, and the repositories whose served metadata shows or hides it. A red **mismatch** badge marks a version whose visibility contradicts its cooldown state: released but still hidden, or blocked but still visible. A mismatch means a cache layer still holds stale metadata.
+
+Below the table, one panel per repository shows its mode (and group members), the metadata the repository serves right now (HTTP status and number of visible versions, fetched in-process exactly as a client would get it), the filtered-metadata envelope in L1 (age) and L2 (remaining TTL), and any negative cache entries for the package. Formats whose metadata cannot be inspected yet say so. **Troubleshoot this** opens the Troubleshoot page on that repository's metadata URL.
+
+**Refresh package** clears every cache layer for the package on all nodes (filtered metadata, negative cache, cached upstream metadata), inspects again and shows a before/after summary: which versions became visible in each repository and the mismatch count before and after.
+
+The tab can be deep-linked: `/cooldown?tab=inspect&repoType=npm&package=lodash&repo=npm-proxy` (`repo` is optional).
+
+---
+
+## Set Me Up
+
+Set Me Up generates ready-to-paste client configuration for one repository, with your credentials filled in. It replaces the former Quick Setup page.
+
+**Entry points:**
+
+- **Set Me Up** in the sidebar (`/setup`) shows a searchable grid of formats with the number of repositories you can read for each. Pick a format to open `/setup/<format>`.
+- The **Set Me Up** button on a repository's detail page, and the Set Me Up row action on the repository list, open the same panel in a drawer, preselected for that repository.
+
+**Repositories.** The **Repository** picker lists the repositories of that format you can read, grouped into Group, Proxy and Local. A group is the usual choice: it serves your local packages and upstream packages through one URL. When the selected repository is a group or proxy, a **Publish to** picker offers the local repositories of the format, because groups and proxies are read-only and answer `405 Method Not Allowed` to uploads; it defaults to the group's first local member. If no local repository exists, the Publish tab explains that and asks you to contact an administrator.
+
+**Credentials.** The Credentials card shows your username and offers three sources for the token used in the snippets:
+
+- **Generate token** — creates an API token labelled `set-me-up:<format>:<repository>` with an expiry of 1, 7, 30 or 90 days, and fills it into every snippet. The token is masked (with a reveal and a copy button), held in memory only and never written to browser storage; it is gone when the panel closes, so copy it right away. Revoke it on your Profile page.
+- **Use my own token** — paste an existing API token. It only fills in the snippets and is not sent anywhere or saved.
+- **Placeholders** — snippets show `YOUR_USERNAME` / `YOUR_TOKEN` for you to replace.
+
+If your username contains `@`, snippets that put credentials in a URL use its percent-encoded form.
+
+**Clients and tabs.** Most formats offer several clients (for example npm, pnpm, Yarn 1 and Yarn Berry; pip, uv and Poetry; Docker and Podman; Gradle Kotlin and Groovy DSL). Each client's steps are split into four tabs:
+
+| Tab | Contents |
+|-----|----------|
+| Configure | One-time client configuration (config files, credentials) |
+| Resolve | Install / pull / download from the selected repository |
+| Publish | Deploy / push / upload to the publish repository |
+| Verify | Commands that confirm the setup works |
+
+Every step has a copy button; configuration files (for example `settings.xml`, `.npmrc`, `pip.conf`, `nuget.config`, `.netrc`) also have a **Download** button, and **Copy all** copies every snippet in the current tab.
+
+**Deep links.** The format page keeps its state in the URL: `/setup/<format>?repo=<repository>&client=<client>&tab=<configure|resolve|publish|verify>`. Share the link to point a colleague at the exact instructions.
+
+**Registry address.** Snippets use the registry URL configured by the administrator (with the global path prefix, if any), or a repository's own configured `url`. If no registry URL is configured, a banner warns that the instructions fall back to the UI's own address, which may not reach the registry; ask an administrator to set **Registry URL** in System Settings (see [Registry URL for Set Me Up](../admin-guide/ui-deployment.md#registry-url-for-set-me-up)).
 
 ---
 
@@ -181,8 +229,10 @@ Admin panels appear in the sidebar under **Administration** only if you have the
 | Repository Management | `api_repository_permissions:write` | Create, edit, delete repositories |
 | User Management | `api_user_permissions:write` | Create, edit, enable/disable users |
 | Roles & Permissions | `api_role_permissions:write` | Manage RBAC roles |
-| Storage Configuration | `api_alias_permissions:write` | Manage storage aliases |
+| Storage Configuration | `api_storage_alias_permissions:create` | Manage storage aliases |
 | System Settings | Admin role | Configure server settings, auth providers |
+| Negative Cache | Admin role | Find and clear cached "not found" answers |
+| Troubleshoot | Admin role | Explain why a URL fails or serves stale metadata |
 
 If you do not see the Administration section, you have read-only access. Contact your administrator for elevated permissions.
 
@@ -190,7 +240,7 @@ If you do not see the Administration section, you have read-only access. Contact
 
 The **Create Repository** page (`/admin/repositories/create`) allows administrators to create new repositories. The **Type** dropdown lists all supported repository formats:
 
-- **Maven**, **Gradle**, **Docker**, **npm**, **PyPI**, **Go**, **Helm**, **NuGet**, **Debian**, **RPM**, **Conda**, **RubyGems**, **Conan**, **Hex**, **PHP**, **File**, **Binary**
+- **Maven**, **Gradle**, **Docker**, **npm**, **PyPI**, **Go**, **Helm**, **NuGet**, **Debian**, **RPM**, **Conda**, **RubyGems**, **Conan**, **Hex**, **PHP**, **File**
 
 Each format supports Local, Proxy, and/or Group variants where applicable. For example, Go supports Local, Proxy, and Group; Gradle supports all three variants.
 
@@ -252,6 +302,32 @@ Submitting the modal creates the repository through the standard admin API and a
 ### Implementation Reference
 
 The group-member picker is implemented in `pantera-ui/src/components/admin/RepoConfigForm.vue` at lines 558-576 (the `AutoComplete` element), with the compatibility rule at `compatibleTypes()` (line 98) and the inline-create handler at `createMemberRepo()` (line 135).
+
+---
+
+## Negative Cache (administrators)
+
+The Negative Cache page (`/admin/neg-cache`) shows the cached "not found" answers that make Pantera return 404 without asking upstream again. With Valkey configured the list is cluster-wide: L2 (Valkey) entries merged with the L1 entries of the node that answered. Without Valkey only that node's L1 is visible. The header shows which node answered and the source (`L2+L1` or `L1-only`).
+
+- **Stats** -- L1 size (this node), L2 size (cluster), hit rate and status.
+- **Check a URL** -- paste the URL a client requested, or `/<repo>/<path>`. Every negative cache key the repository (and, for a group, each member) would use for that path is listed with its L1/L2 presence and remaining TTL, under a verdict: *This URL is shadowed by the negative cache* or *not shadowed*. Each present key has a **Clear** button; **Troubleshoot this** opens the Troubleshoot page for the URL.
+- **Entries** -- one search box matches package name, version and repository (case-insensitive substring); the Repository and Type dropdowns list the values present in the data. Each row shows scope, type, package, version, tiers (L1/L2) and remaining TTL. **Clear** removes that entry; **Clear package** (after a confirmation) removes every entry for the package in all repositories, tiers and nodes.
+- **Advanced** -- invalidation by pattern (exact match per field, `*` wildcard), behind a confirmation dialog and limited to 10 requests per minute.
+
+Every clear reports the number of entries actually removed from L1 and L2, then reloads the list and stats.
+
+---
+
+## Troubleshoot (administrators)
+
+The Troubleshoot page (`/admin/troubleshoot`) explains why a request fails or returns stale metadata. Enter a full client URL or `/<repo>/<path>` and click **Troubleshoot**. The page shows:
+
+- **Repository** -- name, type and mode; for a group, the members in walk order.
+- **Parsed request** -- package, version and kind (artifact or metadata), with a link to the cooldown inspector for the package.
+- **Response** -- the status, selected headers and the start of the body of an in-process request made as an administrator.
+- **Checks** -- one line per layer (repository, group, negative cache, cooldown, metadata, upstream) with an ok, problem or info status and a message. A problem that has a known remedy offers a button (for example clearing the package from the negative cache or refreshing its metadata); after the fix runs the troubleshoot is repeated automatically.
+
+The **Package** mode takes a repository type and package name and opens the cooldown inspector. Deep link: `/admin/troubleshoot?url=<url>`.
 
 ---
 

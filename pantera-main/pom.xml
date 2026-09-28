@@ -44,6 +44,13 @@ SOFTWARE.
             <version>2.3.0</version>
             <scope>compile</scope>
         </dependency>
+        <!-- Per-format storage scanners, reused by POST /api/v1/search/reindex. -->
+        <dependency>
+            <groupId>com.auto1.pantera</groupId>
+            <artifactId>pantera-backfill</artifactId>
+            <version>2.3.0</version>
+            <scope>compile</scope>
+        </dependency>
         <dependency>
             <groupId>com.auto1.pantera</groupId>
             <artifactId>pantera-storage-core</artifactId>
@@ -170,7 +177,7 @@ SOFTWARE.
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <version>42.7.11</version>
+            <version>42.7.12</version>
         </dependency>
         <dependency>
             <groupId>com.zaxxer</groupId>
@@ -241,7 +248,7 @@ SOFTWARE.
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-core</artifactId>
-            <version>2.25.4</version>
+            <version>2.25.5</version>
             <scope>runtime</scope>
         </dependency>
         <dependency>

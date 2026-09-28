@@ -59,12 +59,30 @@ public interface Publish {
         private final long size;
 
         /**
+         * Repo-relative storage path of the published tarball, or null.
+         */
+        private final String path;
+
+        /**
          * Ctor.
          * @param name Package name
          * @param version Version
          * @param size Package tar archive size
          */
         public PackageInfo(final String name, final String version, final long size) {
+            this(name, version, size, null);
+        }
+
+        /**
+         * Primary ctor.
+         * @param name Package name
+         * @param version Package version
+         * @param size Tarball size
+         * @param path Repo-relative storage path of the tarball, or null
+         */
+        public PackageInfo(final String name, final String version, final long size,
+            final String path) {
+            this.path = path;
             this.name = name;
             this.version = version;
             this.size = size;
@@ -76,6 +94,14 @@ public interface Publish {
          */
         public String packageName() {
             return this.name;
+        }
+
+        /**
+         * Package version.
+         * @return String SemVer compatible version
+         */
+        public String packagePath() {
+            return this.path;
         }
 
         /**

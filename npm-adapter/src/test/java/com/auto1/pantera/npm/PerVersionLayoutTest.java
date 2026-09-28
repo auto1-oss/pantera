@@ -175,6 +175,32 @@ final class PerVersionLayoutTest {
         );
     }
 
+    @Test
+    void generateMetaJsonFallsBackToHighestPrereleaseWhenNoStableVersion() {
+        this.addVersion("1.0.0-rc.1");
+        this.addVersion("1.0.0-rc.2");
+        MatcherAssert.assertThat(
+            this.metaJson().getJsonObject("dist-tags").getString("latest", null),
+            new IsEqual<>("1.0.0-rc.2")
+        );
+    }
+
+    @Test
+    void latestMovesToRemainingPrereleaseWhenLastStableIsUnpublished() {
+        this.addVersion("1.0.0");
+        this.addVersion("1.1.0-beta.1");
+        this.layout.writeTag(PerVersionLayoutTest.PKG, "latest", "1.0.0")
+            .toCompletableFuture().join();
+        this.layout.deleteVersion(PerVersionLayoutTest.PKG, "1.0.0")
+            .thenCompose(
+                ignored -> this.layout.removeTagsPointingAt(PerVersionLayoutTest.PKG, "1.0.0")
+            ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            this.metaJson().getJsonObject("dist-tags").getString("latest", null),
+            new IsEqual<>("1.1.0-beta.1")
+        );
+    }
+
     /**
      * Publish a bare version file (name comes from the fixed test package).
      * @param version Version to publish

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { getCooldownOverview, getCooldownBlocked, getCooldownHistory } from '@/api/settings'
 import { unblockArtifact, unblockAll } from '@/api/repos'
 import { useNotificationStore } from '@/stores/notifications'
@@ -7,6 +8,7 @@ import { useAuthStore } from '@/stores/auth'
 import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
 import { useConfirmDelete } from '@/composables/useConfirmDelete'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
+import CooldownInspector, { type InspectQuery } from '@/components/admin/CooldownInspector.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
@@ -21,9 +23,65 @@ import Paginator from 'primevue/paginator'
 import type { CooldownRepo, BlockedArtifact, HistoryArtifact } from '@/types'
 
 type Mode = 'active' | 'history'
+type PageTab = 'blocked' | 'inspect'
 
 const notify = useNotificationStore()
 const auth = useAuthStore()
+const route = useRoute()
+const router = useRouter()
+
+// "Inspect package" is backed by an admin-only endpoint, so the tab is
+// offered to admins only. State lives in the route query so the inspector
+// can be deep-linked: ?tab=inspect&repoType=npm&package=lodash&repo=npm-proxy
+const canInspect = computed(() => auth.isAdmin)
+function queryStr(v: unknown): string {
+  return typeof v === 'string' ? v : ''
+}
+const activeTab = ref<PageTab>(
+  queryStr(route.query.tab) === 'inspect' && auth.isAdmin ? 'inspect' : 'blocked',
+)
+const inspectInitial = computed(() => ({
+  repoType: queryStr(route.query.repoType),
+  package: queryStr(route.query.package),
+  repo: queryStr(route.query.repo),
+}))
+function serializeInspect(q: { repoType: string; package: string; repo?: string }): string {
+  return `${q.repoType}|${q.package}|${q.repo ?? ''}`
+}
+// Remount the inspector when the query changes from outside (a deep link
+// followed while already on this page), but not for our own replace().
+const inspectorKey = ref(0)
+let ownQuery = serializeInspect(inspectInitial.value)
+watch(
+  () => [route.query.tab, route.query.repoType, route.query.package, route.query.repo],
+  () => {
+    if (queryStr(route.query.tab) === 'inspect' && canInspect.value) activeTab.value = 'inspect'
+    const current = serializeInspect(inspectInitial.value)
+    if (current !== ownQuery) {
+      ownQuery = current
+      inspectorKey.value++
+    }
+  },
+)
+
+const PAGE_TABS: ReadonlyArray<{ value: PageTab; label: string; icon: string }> = [
+  { value: 'blocked', label: 'Blocked artifacts', icon: 'pi pi-lock' },
+  { value: 'inspect', label: 'Inspect package', icon: 'pi pi-search' },
+]
+
+function selectTab(tab: PageTab) {
+  activeTab.value = tab
+  // Keep the inspected package in the query so switching back re-inspects it.
+  const { tab: _previous, ...rest } = route.query
+  router.replace({ query: tab === 'inspect' ? { ...rest, tab } : rest })
+}
+
+function onInspectQuery(q: InspectQuery) {
+  ownQuery = serializeInspect(q)
+  const query: Record<string, string> = { tab: 'inspect', repoType: q.repoType, package: q.package }
+  if (q.repo) query.repo = q.repo
+  router.replace({ query })
+}
 const canWrite = auth.hasAction('api_cooldown_permissions', 'write')
 // The history feed is gated by its own narrower permission
 // (api_cooldown_history_permissions.read). A user can have api_cooldown.read
@@ -318,291 +376,326 @@ onMounted(() => {
         <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Cooldown</h1>
       </div>
 
-      <!--
-        Global filter bar: single source of truth for search, repo, type
-        and active/history mode. Drives both the tile grid (client-side
-        filter via filteredRepos) and the blocked-artifacts DataTable
-        (server-side via loadBlocked params).
-      -->
-      <div class="flex flex-wrap items-end gap-3">
-        <div class="flex flex-col gap-1 flex-1 min-w-[16rem]">
-          <label class="text-sm text-gray-500" for="cooldown-filter-search">Search</label>
-          <span class="relative">
-            <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            <InputText
-              id="cooldown-filter-search"
-              v-model="search"
-              placeholder="Search by package, version or repo..."
-              class="w-full !pl-10"
-            />
-          </span>
-        </div>
-        <div class="flex flex-col gap-1">
-          <label class="text-sm text-gray-500" for="cooldown-filter-repo">Repository</label>
-          <Select
-            id="cooldown-filter-repo"
-            v-model="repoFilter"
-            :options="repoOptions"
-            option-label="label"
-            option-value="value"
-            placeholder="All repos"
-            class="w-48"
-          />
-        </div>
-        <div class="flex flex-col gap-1">
-          <label class="text-sm text-gray-500" for="cooldown-filter-type">Type</label>
-          <Select
-            id="cooldown-filter-type"
-            v-model="typeFilter"
-            :options="typeOptions"
-            option-label="label"
-            option-value="value"
-            placeholder="All types"
-            class="w-40"
-          />
-        </div>
-        <SelectButton
-          v-if="canReadHistory"
-          v-model="mode"
-          :options="[
-            { label: 'Active', value: 'active' },
-            { label: 'History', value: 'history' },
-          ]"
-          option-label="label"
-          option-value="value"
-          :allow-empty="false"
-          aria-label="Toggle active vs. history view"
-        />
-        <!--
-          Refresh control. Sits at the right edge of the filter bar,
-          vertically aligned with the input row via an invisible label
-          spacer so the icon button stops floating above the dropdowns.
-          Primary outlined for visibility (the old secondary-outlined
-          variant in the page header was too low-contrast); the freshness
-          annotation under the button doubles as passive staleness
-          feedback so users know when a manual click is worth it.
-        -->
-        <div class="flex flex-col gap-1 ml-auto">
-          <label class="text-sm text-gray-500 select-none invisible" aria-hidden="true">
-            &nbsp;
-          </label>
-          <Button
-            v-tooltip.left="lastRefreshLabel"
-            icon="pi pi-refresh"
-            label="Refresh"
-            outlined
-            :loading="loading"
-            :pt="{ root: { class: '!py-2' } }"
-            aria-label="Reload cooldown data without refreshing the page"
-            @click="refresh"
-          />
-        </div>
+      <div
+        v-if="canInspect"
+        role="tablist"
+        class="flex gap-1 border-b border-gray-200 dark:border-gray-800"
+        data-testid="cooldown-tabs"
+      >
+        <button
+          v-for="t in PAGE_TABS"
+          :key="t.value"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === t.value"
+          :data-testid="`cooldown-tab-${t.value}`"
+          class="flex items-center gap-2 px-4 py-2 -mb-px border-b-2 text-sm transition-colors"
+          :class="activeTab === t.value
+            ? 'border-amber-500 text-amber-600 dark:text-amber-400 font-medium'
+            : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'"
+          @click="selectTab(t.value)"
+        >
+          <i :class="t.icon" />
+          {{ t.label }}
+        </button>
       </div>
 
-      <Card class="shadow-sm">
-        <template #title>
-          <div class="flex items-center gap-2">
-            <span>Cooldown-Enabled Repositories</span>
-            <span class="text-sm font-normal text-gray-500">
-              ({{ filteredRepos.length }} of {{ repos.length }})
+      <CooldownInspector
+        v-if="activeTab === 'inspect' && canInspect"
+        :key="inspectorKey"
+        :initial-repo-type="inspectInitial.repoType"
+        :initial-package="inspectInitial.package"
+        :initial-repo="inspectInitial.repo"
+        @query="onInspectQuery"
+      />
+
+      <template v-else>
+        <!--
+          Global filter bar: single source of truth for search, repo, type
+          and active/history mode. Drives both the tile grid (client-side
+          filter via filteredRepos) and the blocked-artifacts DataTable
+          (server-side via loadBlocked params).
+        -->
+        <div class="flex flex-wrap items-end gap-3">
+          <div class="flex flex-col gap-1 flex-1 min-w-[16rem]">
+            <label class="text-sm text-gray-500" for="cooldown-filter-search">Search</label>
+            <span class="relative">
+              <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <InputText
+                id="cooldown-filter-search"
+                v-model="search"
+                placeholder="Search by package, version or repo..."
+                class="w-full !pl-10"
+              />
             </span>
           </div>
-        </template>
-        <template #content>
-          <div
-            v-if="repos.length === 0"
-            class="text-center text-gray-400 py-4"
-          >
-            No cooldown-enabled repositories
+          <div class="flex flex-col gap-1">
+            <label class="text-sm text-gray-500" for="cooldown-filter-repo">Repository</label>
+            <Select
+              id="cooldown-filter-repo"
+              v-model="repoFilter"
+              :options="repoOptions"
+              option-label="label"
+              option-value="value"
+              placeholder="All repos"
+              class="w-48"
+            />
           </div>
-          <div
-            v-else-if="filteredRepos.length === 0"
-            class="text-sm text-gray-500 py-2"
-          >
-            No repositories match current filters.
+          <div class="flex flex-col gap-1">
+            <label class="text-sm text-gray-500" for="cooldown-filter-type">Type</label>
+            <Select
+              id="cooldown-filter-type"
+              v-model="typeFilter"
+              :options="typeOptions"
+              option-label="label"
+              option-value="value"
+              placeholder="All types"
+              class="w-40"
+            />
           </div>
-          <div
-            v-else
-            class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3"
-          >
+          <SelectButton
+            v-if="canReadHistory"
+            v-model="mode"
+            :options="[
+              { label: 'Active', value: 'active' },
+              { label: 'History', value: 'history' },
+            ]"
+            option-label="label"
+            option-value="value"
+            :allow-empty="false"
+            aria-label="Toggle active vs. history view"
+          />
+          <!--
+            Refresh control. Sits at the right edge of the filter bar,
+            vertically aligned with the input row via an invisible label
+            spacer so the icon button stops floating above the dropdowns.
+            Primary outlined for visibility (the old secondary-outlined
+            variant in the page header was too low-contrast); the freshness
+            annotation under the button doubles as passive staleness
+            feedback so users know when a manual click is worth it.
+          -->
+          <div class="flex flex-col gap-1 ml-auto">
+            <label class="text-sm text-gray-500 select-none invisible" aria-hidden="true">
+              &nbsp;
+            </label>
+            <Button
+              v-tooltip.left="lastRefreshLabel"
+              icon="pi pi-refresh"
+              label="Refresh"
+              outlined
+              :loading="loading"
+              :pt="{ root: { class: '!py-2' } }"
+              aria-label="Reload cooldown data without refreshing the page"
+              @click="refresh"
+            />
+          </div>
+        </div>
+
+        <Card class="shadow-sm">
+          <template #title>
+            <div class="flex items-center gap-2">
+              <span>Cooldown-Enabled Repositories</span>
+              <span class="text-sm font-normal text-gray-500">
+                ({{ filteredRepos.length }} of {{ repos.length }})
+              </span>
+            </div>
+          </template>
+          <template #content>
             <div
-              v-for="repo in pagedRepos"
-              :key="repo.name"
-              class="border border-surface-200 dark:border-surface-700 rounded-lg p-3 flex flex-col gap-2 bg-surface-card"
-              data-testid="cooldown-repo-tile"
+              v-if="repos.length === 0"
+              class="text-center text-gray-400 py-4"
             >
-              <div class="flex items-center gap-2 min-w-0">
-                <span
-                  class="font-semibold truncate text-color"
-                  :title="repo.name"
-                >
-                  {{ repo.name }}
-                </span>
-              </div>
-              <div class="flex items-center gap-2 min-w-0">
-                <RepoTypeBadge :type="repo.type" />
-              </div>
-              <div class="flex items-center justify-between mt-1">
-                <span class="text-xs text-gray-500">
-                  {{ repo.cooldown }} &middot; {{ repo.active_blocks ?? 0 }} active
-                </span>
-                <Button
-                  v-if="(repo.active_blocks ?? 0) > 0 && canWrite"
-                  v-tooltip="'Unblock all'"
-                  icon="pi pi-eraser"
-                  severity="danger"
-                  text
-                  rounded
-                  size="small"
-                  :aria-label="`Unblock all ${repo.active_blocks} blocks in ${repo.name}`"
-                  @click="confirmUnblockAll(repo)"
-                />
+              No cooldown-enabled repositories
+            </div>
+            <div
+              v-else-if="filteredRepos.length === 0"
+              class="text-sm text-gray-500 py-2"
+            >
+              No repositories match current filters.
+            </div>
+            <div
+              v-else
+              class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3"
+            >
+              <div
+                v-for="repo in pagedRepos"
+                :key="repo.name"
+                class="border border-surface-200 dark:border-surface-700 rounded-lg p-3 flex flex-col gap-2 bg-surface-card"
+                data-testid="cooldown-repo-tile"
+              >
+                <div class="flex items-center gap-2 min-w-0">
+                  <span
+                    class="font-semibold truncate text-color"
+                    :title="repo.name"
+                  >
+                    {{ repo.name }}
+                  </span>
+                </div>
+                <div class="flex items-center gap-2 min-w-0">
+                  <RepoTypeBadge :type="repo.type" />
+                </div>
+                <div class="flex items-center justify-between mt-1">
+                  <span class="text-xs text-gray-500">
+                    {{ repo.cooldown }} &middot; {{ repo.active_blocks ?? 0 }} active
+                  </span>
+                  <Button
+                    v-if="(repo.active_blocks ?? 0) > 0 && canWrite"
+                    v-tooltip="'Unblock all'"
+                    icon="pi pi-eraser"
+                    severity="danger"
+                    text
+                    rounded
+                    size="small"
+                    :aria-label="`Unblock all ${repo.active_blocks} blocks in ${repo.name}`"
+                    @click="confirmUnblockAll(repo)"
+                  />
+                </div>
               </div>
             </div>
-          </div>
-          <Paginator
-            v-if="filteredRepos.length > repoPageSize"
-            v-model:first="repoPaginatorFirst"
-            :rows="repoPageSize"
-            :total-records="filteredRepos.length"
-            class="mt-3"
-          />
-        </template>
-      </Card>
+            <Paginator
+              v-if="filteredRepos.length > repoPageSize"
+              v-model:first="repoPaginatorFirst"
+              :rows="repoPageSize"
+              :total-records="filteredRepos.length"
+              class="mt-3"
+            />
+          </template>
+        </Card>
 
-      <Dialog v-model:visible="unblockAllVisible" header="Confirm Unblock All" modal class="w-96">
-        <p>
-          Unblock all active artifacts in
-          <strong>{{ unblockAllTarget }}</strong>? This cannot be undone.
-        </p>
-        <template #footer>
-          <Button label="Cancel" severity="secondary" text @click="rejectUnblockAll" />
-          <Button label="Unblock all" severity="danger" @click="acceptUnblockAll" />
-        </template>
-      </Dialog>
+        <Dialog v-model:visible="unblockAllVisible" header="Confirm Unblock All" modal class="w-96">
+          <p>
+            Unblock all active artifacts in
+            <strong>{{ unblockAllTarget }}</strong>? This cannot be undone.
+          </p>
+          <template #footer>
+            <Button label="Cancel" severity="secondary" text @click="rejectUnblockAll" />
+            <Button label="Unblock all" severity="danger" @click="acceptUnblockAll" />
+          </template>
+        </Dialog>
 
-      <Card class="shadow-sm">
-        <template #title>
-          <div class="flex items-center justify-between">
-            <span>{{ mode === 'active' ? 'Blocked Artifacts' : 'Cooldown history' }}</span>
-            <span class="text-sm font-normal text-gray-400">{{ blockedTotal }} total</span>
-          </div>
-        </template>
-        <template #content>
-          <DataTable
-            :value="blocked"
-            :loading="loading"
-            striped-rows
-            :lazy="true"
-            :sort-field="sortField ?? undefined"
-            :sort-order="sortOrder"
-            @sort="onSort"
-          >
-            <Column field="package_name" header="Package" sortable>
-              <template #body="{ data }">
-                <span class="break-all whitespace-normal">{{ data.package_name }}</span>
-              </template>
-            </Column>
-            <Column field="version" header="Version" sortable>
-              <template #body="{ data }">
-                <span :title="data.version">{{ formatVersion(data.version) }}</span>
-              </template>
-            </Column>
-            <Column field="repo" header="Repository" sortable>
-              <template #body="{ data }">
-                <span class="break-all whitespace-normal">{{ data.repo }}</span>
-              </template>
-            </Column>
-            <Column field="repo_type" header="Type" sortable>
-              <template #body="{ data }">
-                <RepoTypeBadge :type="data.repo_type" />
-              </template>
-            </Column>
-            <Column field="reason" header="Reason" sortable>
-              <template #body="{ data }">
-                <Tag :value="data.reason" severity="info" />
-              </template>
-            </Column>
-            <Column field="release_date" header="Release Date" sortable>
-              <template #body="{ data }">
-                <span v-if="data.release_date">{{ new Date(data.release_date).toLocaleDateString() }}</span>
-                <span v-else class="text-gray-400">&mdash;</span>
-              </template>
-            </Column>
-            <Column
-              v-if="mode === 'active'"
-              field="blocked_date"
-              header="Blocked at"
-              sortable
-            />
-            <Column
-              v-if="mode === 'active'"
-              field="remaining_hours"
-              header="Remaining"
-              sortable
+        <Card class="shadow-sm">
+          <template #title>
+            <div class="flex items-center justify-between">
+              <span>{{ mode === 'active' ? 'Blocked Artifacts' : 'Cooldown history' }}</span>
+              <span class="text-sm font-normal text-gray-400">{{ blockedTotal }} total</span>
+            </div>
+          </template>
+          <template #content>
+            <DataTable
+              :value="blocked"
+              :loading="loading"
+              striped-rows
+              :lazy="true"
+              :sort-field="sortField ?? undefined"
+              :sort-order="sortOrder"
+              @sort="onSort"
             >
-              <template #body="{ data }">
-                <span>{{ formatRemaining(data.blocked_until) }}</span>
+              <Column field="package_name" header="Package" sortable>
+                <template #body="{ data }">
+                  <span class="break-all whitespace-normal">{{ data.package_name }}</span>
+                </template>
+              </Column>
+              <Column field="version" header="Version" sortable>
+                <template #body="{ data }">
+                  <span :title="data.version">{{ formatVersion(data.version) }}</span>
+                </template>
+              </Column>
+              <Column field="repo" header="Repository" sortable>
+                <template #body="{ data }">
+                  <span class="break-all whitespace-normal">{{ data.repo }}</span>
+                </template>
+              </Column>
+              <Column field="repo_type" header="Type" sortable>
+                <template #body="{ data }">
+                  <RepoTypeBadge :type="data.repo_type" />
+                </template>
+              </Column>
+              <Column field="reason" header="Reason" sortable>
+                <template #body="{ data }">
+                  <Tag :value="data.reason" severity="info" />
+                </template>
+              </Column>
+              <Column field="release_date" header="Release Date" sortable>
+                <template #body="{ data }">
+                  <span v-if="data.release_date">{{ new Date(data.release_date).toLocaleDateString() }}</span>
+                  <span v-else class="text-gray-400">&mdash;</span>
+                </template>
+              </Column>
+              <Column
+                v-if="mode === 'active'"
+                field="blocked_date"
+                header="Blocked at"
+                sortable
+              />
+              <Column
+                v-if="mode === 'active'"
+                field="remaining_hours"
+                header="Remaining"
+                sortable
+              >
+                <template #body="{ data }">
+                  <span>{{ formatRemaining(data.blocked_until) }}</span>
+                </template>
+              </Column>
+              <Column
+                v-if="mode === 'active' && canWrite"
+                header="Actions"
+              >
+                <template #body="{ data }">
+                  <Button
+                    v-tooltip="'Unblock'"
+                    icon="pi pi-unlock"
+                    text
+                    size="small"
+                    severity="danger"
+                    @click="handleUnblock(data)"
+                  />
+                </template>
+              </Column>
+              <Column
+                v-if="mode === 'history'"
+                field="archived_at"
+                header="Unblocked date"
+                sortable
+              />
+              <Column
+                v-if="mode === 'history'"
+                field="archived_by"
+                header="Unblocked by"
+                sortable
+              />
+              <Column
+                v-if="mode === 'history'"
+                field="archive_reason"
+                header="Unblocked reason"
+                sortable
+              >
+                <template #body="{ data }">
+                  <Tag :value="data.archive_reason" severity="secondary" />
+                </template>
+              </Column>
+              <template #empty>
+                <div class="text-center text-gray-400 py-4">
+                  {{ mode === 'active' ? 'No blocked artifacts' : 'No archived artifacts' }}
+                </div>
               </template>
-            </Column>
-            <Column
-              v-if="mode === 'active' && canWrite"
-              header="Actions"
-            >
-              <template #body="{ data }">
-                <Button
-                  v-tooltip="'Unblock'"
-                  icon="pi pi-unlock"
-                  text
-                  size="small"
-                  severity="danger"
-                  @click="handleUnblock(data)"
-                />
-              </template>
-            </Column>
-            <Column
-              v-if="mode === 'history'"
-              field="archived_at"
-              header="Unblocked date"
-              sortable
+            </DataTable>
+            <Paginator
+              v-if="blockedTotal > blockedSize"
+              :rows="blockedSize"
+              :total-records="blockedTotal"
+              :first="blockedPage * blockedSize"
+              @page="
+                (e: any) => {
+                  blockedPage = e.page
+                  blockedSize = e.rows
+                  loadBlocked()
+                }
+              "
             />
-            <Column
-              v-if="mode === 'history'"
-              field="archived_by"
-              header="Unblocked by"
-              sortable
-            />
-            <Column
-              v-if="mode === 'history'"
-              field="archive_reason"
-              header="Unblocked reason"
-              sortable
-            >
-              <template #body="{ data }">
-                <Tag :value="data.archive_reason" severity="secondary" />
-              </template>
-            </Column>
-            <template #empty>
-              <div class="text-center text-gray-400 py-4">
-                {{ mode === 'active' ? 'No blocked artifacts' : 'No archived artifacts' }}
-              </div>
-            </template>
-          </DataTable>
-          <Paginator
-            v-if="blockedTotal > blockedSize"
-            :rows="blockedSize"
-            :total-records="blockedTotal"
-            :first="blockedPage * blockedSize"
-            @page="
-              (e: any) => {
-                blockedPage = e.page
-                blockedSize = e.rows
-                loadBlocked()
-              }
-            "
-          />
-        </template>
-      </Card>
+          </template>
+        </Card>
+      </template>
     </div>
   </AppLayout>
 </template>

@@ -101,6 +101,8 @@ Example slow-request query (>5s):
 | `url.port` | Target port |
 | `url.full` | Complete URL including scheme |
 
+Credentials carried in a URL are masked as `***REDACTED***` in every URL field, in `file.path`, in `message` / `error.message` / `error.stack_trace`, and in every other string field (such as a `repository.name` parsed from a request path): query parameters such as `token`, `signature` or `api_key`, `user:password@` userinfo, JWTs and JWT fragments anywhere in the text (a raw token split across path segments, such as the payload and signature a conda client moves after the repository name), the token segment of `/-/user/token/<token>` (sent by `npm logout`) and `/-/npm/v1/tokens/token/<key>`, and the conda token segment of `/t/<token>/`.
+
 ### User and Auth Fields
 
 | Field | Description |

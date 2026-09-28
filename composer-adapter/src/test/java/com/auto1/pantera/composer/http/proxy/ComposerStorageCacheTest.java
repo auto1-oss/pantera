@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.composer.AstoRepository;
 import com.auto1.pantera.composer.Repository;
@@ -25,8 +26,10 @@ import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsNot;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import javax.json.Json;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -74,21 +77,41 @@ final class ComposerStorageCacheTest {
     }
 
     @Test
-    void getsContentFromCache() {
+    void getsContentFromCache(@TempDir final Path dir) {
         final byte[] body = "some info".getBytes();
         final String key = "p2/vendor/package";
-        // Save the cached content (filesystem timestamp is auto-created)
-        this.storage.save(
+        // FileStorage reports updated-at (as S3 does), so a just-saved
+        // entry is fresh; InMemoryStorage reports none and would be stale.
+        final Storage files = new FileStorage(dir);
+        files.save(
             new Key.From(String.format("%s.json", key)),
             new Content.From(body)
         ).join();
         MatcherAssert.assertThat(
-            new ComposerStorageCache(this.repo).load(
+            new ComposerStorageCache(new AstoRepository(files)).load(
                 new Key.From(key),
                 () -> CompletableFuture.completedFuture(Optional.empty()),
-                new CacheTimeControl(this.storage)
+                new CacheTimeControl(files)
             ).toCompletableFuture().join().orElseThrow().asBytes(),
             new IsEqual<>(body)
+        );
+    }
+
+    @Test
+    void refetchesWhenStorageReportsNoTimestamp() {
+        final String key = "p2/vendor/package";
+        this.storage.save(
+            new Key.From(String.format("%s.json", key)),
+            new Content.From("old".getBytes())
+        ).join();
+        final byte[] fresh = "new".getBytes();
+        MatcherAssert.assertThat(
+            new ComposerStorageCache(this.repo).load(
+                new Key.From(key),
+                () -> CompletableFuture.completedFuture(Optional.of(new Content.From(fresh))),
+                new CacheTimeControl(this.storage)
+            ).toCompletableFuture().join().orElseThrow().asBytes(),
+            new IsEqual<>(fresh)
         );
     }
 

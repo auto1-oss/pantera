@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.FromRemoteCache;
+import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.composer.AstoRepository;
 import com.auto1.pantera.http.Headers;
@@ -28,8 +29,10 @@ import com.auto1.pantera.http.rq.RqMethod;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -63,12 +66,18 @@ final class CachedProxySliceConditionalGetTest {
      * probes on a subsequent request — with {@code Cache.NOP} every
      * request unconditionally re-enters {@code fetchThroughCache}, which
      * would defeat the point of this test (proving a warm-cache hit takes
-     * no second upstream call).
+     * no second upstream call). Backed by a {@link FileStorage}, which
+     * reports {@code updated-at}, so the just-written entry is fresh;
+     * {@link InMemoryStorage} reports no timestamp, which
+     * {@code CacheTimeControl} treats as stale and revalidates in the
+     * background — an upstream call this test must not see.
      */
     @Test
     @Timeout(10)
-    void clientConditionalGetOnWarmCacheReturns304WithoutUpstreamCall() throws Exception {
-        final Storage storage = new InMemoryStorage();
+    void clientConditionalGetOnWarmCacheReturns304WithoutUpstreamCall(
+        @TempDir final Path dir
+    ) throws Exception {
+        final Storage storage = new FileStorage(dir);
         final ConditionalUpstream upstream = new ConditionalUpstream();
         final CachedProxySlice slice = new CachedProxySlice(
             upstream, new AstoRepository(storage), new FromRemoteCache(storage),
@@ -124,8 +133,8 @@ final class CachedProxySliceConditionalGetTest {
      */
     @Test
     @Timeout(10)
-    void clientConditionalGetWithOlderDateGetsFullBody() throws Exception {
-        final Storage storage = new InMemoryStorage();
+    void clientConditionalGetWithOlderDateGetsFullBody(@TempDir final Path dir) throws Exception {
+        final Storage storage = new FileStorage(dir);
         final ConditionalUpstream upstream = new ConditionalUpstream();
         final CachedProxySlice slice = new CachedProxySlice(
             upstream, new AstoRepository(storage), new FromRemoteCache(storage),
@@ -190,7 +199,7 @@ final class CachedProxySliceConditionalGetTest {
         // Conditional revalidation — upstream honours If-Modified-Since
         // with a 304; the merge/rewrite/save pipeline must not run again.
         final Response revalidated = slice.revalidateOrRefresh(
-            new RequestLine(RqMethod.GET, PACKAGE_PATH), PACKAGE_NAME
+            new RequestLine(RqMethod.GET, PACKAGE_PATH), Headers.EMPTY, PACKAGE_NAME
         ).join();
 
         Assertions.assertEquals(RsStatus.OK, revalidated.status(), "304 surfaces as a served 200 to the caller");

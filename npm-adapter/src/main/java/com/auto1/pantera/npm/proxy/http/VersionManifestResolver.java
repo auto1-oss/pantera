@@ -182,7 +182,7 @@ public final class VersionManifestResolver {
                 );
             } else {
                 result = this.cooldownMetadata.filterMetadata(
-                    this.repoType, this.repoName, pkg, raw,
+                    this.repoType, this.repoName, "full", pkg, raw,
                     new NpmMetadataParser(), new NpmMetadataFilter(), new NpmMetadataRewriter(),
                     auditCtx, owner
                 ).handle((filtered, ex) -> {

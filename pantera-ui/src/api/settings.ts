@@ -11,9 +11,18 @@ export async function getSettings(): Promise<Settings> {
   return data
 }
 
-// UI settings — available to all authenticated users (grafana_url, registry_url, etc.)
-export async function getUiSettings(): Promise<{ ui: { grafana_url?: string; registry_url?: string } }> {
-  const { data } = await getApiClient().get<{ ui: { grafana_url?: string; registry_url?: string } }>('/settings/ui')
+export interface UiSettings {
+  ui: {
+    grafana_url?: string
+    registry_url?: string
+    /** Global path prefixes (`global_prefixes`); the first one is part of every client URL */
+    prefixes?: string[]
+  }
+}
+
+// UI settings — available to all authenticated users (grafana_url, registry_url, prefixes)
+export async function getUiSettings(): Promise<UiSettings> {
+  const { data } = await getApiClient().get<UiSettings>('/settings/ui')
   return data
 }
 

@@ -52,6 +52,7 @@ final class DeleteTokenSlice implements Slice {
 
         Optional<String> opt = new RqHeaders(headers, Authorization.NAME)
             .stream().findFirst().map(Authorization::new)
+            .filter(Authorization::parseable)
             .map(auth -> new Authorization.Token(auth.credentials()).token());
         if (opt.isPresent()) {
             String token = opt.get();

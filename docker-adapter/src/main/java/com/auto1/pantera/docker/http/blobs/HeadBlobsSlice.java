@@ -39,6 +39,9 @@ public class HeadBlobsSlice extends DockerActionSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         BlobsRequest request = BlobsRequest.from(line);
+        if (!request.wellFormed()) {
+            return body.discard().thenApply(ignored -> request.invalidDigest());
+        }
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         // HEAD requests should have empty body, but we must consume it to complete the request
         return body.asBytesFuture().thenCompose(ignored ->

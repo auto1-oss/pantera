@@ -27,6 +27,7 @@ import java.util.Set;
 import javax.sql.DataSource;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -121,6 +122,40 @@ final class CooldownCleanupFallbackTest {
                 h.archivedBy(), Matchers.is("system")
             );
         }
+    }
+
+    @Test
+    void runCleanupOncePurgesReleasedRowsPastTheirWindowOnly() {
+        final long nowMs = Instant.now().toEpochMilli();
+        this.insertLiveRaw(
+            "npm-proxy", "repo-a", "released-done", "1.0.0",
+            nowMs - Duration.ofDays(8).toMillis(), nowMs - Duration.ofMinutes(5).toMillis()
+        );
+        this.insertLiveRaw(
+            "npm-proxy", "repo-a", "released-running", "1.0.0",
+            nowMs - Duration.ofHours(1).toMillis(), nowMs + Duration.ofDays(3).toMillis()
+        );
+        final JdbcCooldownService service = new JdbcCooldownService(
+            this.settings, this.repository, Runnable::run
+        );
+        service.unblock("npm-proxy", "repo-a", "released-done", "1.0.0", "alice").join();
+        service.unblock("npm-proxy", "repo-a", "released-running", "1.0.0", "alice").join();
+        this.fallback.runCleanupOnce();
+        MatcherAssert.assertThat(
+            "released row past blocked_until is purged",
+            this.repository.find("npm-proxy", "repo-a", "released-done", "1.0.0").isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "released row still inside its window is kept",
+            this.repository.find("npm-proxy", "repo-a", "released-running", "1.0.0").isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "purge writes no extra history (release already archived both)",
+            this.repository.countHistory(Set.of("repo-a"), null, null, null),
+            new IsEqual<>(2L)
+        );
     }
 
     @Test

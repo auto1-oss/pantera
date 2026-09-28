@@ -45,10 +45,13 @@ public class ConanUploadUrlsTest {
         final String path = "/test/path/to/file";
         final String host = "test_hostname.com";
         final ItemTokenizer tokenizer = new ItemTokenizer(Vertx.vertx(), com.auto1.pantera.conan.TestRsaKeys.publicKey(), com.auto1.pantera.conan.TestRsaKeys.privateKey());
-        final String token = tokenizer.generateToken(path, host);
+        final String token = tokenizer.generateToken(path, host, "my-conan", "alice");
         final ItemInfo item = tokenizer.authenticateToken(token).toCompletableFuture().join().orElseThrow();
         MatcherAssert.assertThat("Decoded path must match", item.getPath().equals(path));
         MatcherAssert.assertThat("Decoded host must match", item.getHostname().equals(host));
+        MatcherAssert.assertThat(
+            "Decoded repository must match", item.getRepository().equals("my-conan")
+        );
     }
 
     @Test
@@ -57,7 +60,7 @@ public class ConanUploadUrlsTest {
         final String payload =
             "{\"conan_export.tgz\": \"\", \"conanfile.py\":\"\", \"conanmanifest.txt\": \"\"}";
         final byte[] data = payload.getBytes(StandardCharsets.UTF_8);
-        final Response response = new ConanUpload.UploadUrls(storage, new ItemTokenizer(Vertx.vertx(), com.auto1.pantera.conan.TestRsaKeys.publicKey(), com.auto1.pantera.conan.TestRsaKeys.privateKey()))
+        final Response response = new ConanUpload.UploadUrls(storage, new ItemTokenizer(Vertx.vertx(), com.auto1.pantera.conan.TestRsaKeys.publicKey(), com.auto1.pantera.conan.TestRsaKeys.privateKey()), "my-conan")
             .response(
             new RequestLine(
                 "POST", "/v1/conans/zmqpp/4.2.0/_/_/upload_urls"

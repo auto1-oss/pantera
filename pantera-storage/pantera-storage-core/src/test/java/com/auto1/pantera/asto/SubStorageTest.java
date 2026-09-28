@@ -11,8 +11,11 @@
 package com.auto1.pantera.asto;
 
 import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
@@ -21,6 +24,7 @@ import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -267,6 +271,23 @@ class SubStorageTest {
         MatcherAssert.assertThat(
             "Runs exclusively a storage key with ROOT prefix",
             rtfinished, new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void resolvesPathUnderPrefixOfFileOrigin(@TempDir final Path dir) {
+        MatcherAssert.assertThat(
+            new SubStorage(new Key.From("my-repo"), new FileStorage(dir)).pathFor(Key.ROOT),
+            new IsEqual<>(Optional.of(dir.resolve("my-repo")))
+        );
+    }
+
+    @Test
+    void hasNoPathOverStorageWithoutOne() {
+        MatcherAssert.assertThat(
+            new SubStorage(new Key.From("my-repo"), new InMemoryStorage())
+                .pathFor(new Key.From("a")),
+            new IsEqual<>(Optional.empty())
         );
     }
 }

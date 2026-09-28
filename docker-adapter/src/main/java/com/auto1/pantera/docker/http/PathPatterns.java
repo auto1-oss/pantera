@@ -18,6 +18,10 @@ public interface PathPatterns {
     Pattern TAGS = Pattern.compile("^/v2/(?<name>.*)/tags/list$");
     Pattern BLOBS = Pattern.compile("^/v2/(?<name>.*)/blobs/(?<digest>(?!(uploads/)).*)$");
     Pattern UPLOADS = Pattern.compile("^/v2/(?<name>.*)/blobs/uploads/(?<uuid>[^/]*).*$");
-    Pattern CATALOG = Pattern.compile("^/v2/_catalog$");
+    /**
+     * Catalog: {@code /v2/_catalog} on a port-bound repository, or
+     * {@code /v2/<repo>/_catalog} when repositories are routed by path.
+     */
+    Pattern CATALOG = Pattern.compile("^/v2/(?:[^/]+/)?_catalog$");
     Pattern REFERRERS = Pattern.compile("^/v2/(?<name>.*)/referrers/(?<digest>.*)$");
 }

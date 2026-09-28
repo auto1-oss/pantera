@@ -389,17 +389,7 @@ public final class PerVersionLayout {
         // Build versions object
         final JsonObject versionsObj = versionsBuilder.build();
 
-        // Find latest STABLE version using semver (exclude prereleases)
-        final String latestVersion;
-        if (!versionsObj.isEmpty()) {
-            final List<String> stableVersions = new com.auto1.pantera.npm.misc.DescSortedVersions(
-                versionsObj,
-                true  // excludePrereleases = true
-            ).value();
-            latestVersion = stableVersions.isEmpty() ? null : stableVersions.get(0);
-        } else {
-            latestVersion = null;
-        }
+        final String latestVersion = PerVersionLayout.computedLatest(versionsObj);
 
         if (packageName != null) {
             metaBuilder.add("name", packageName);
@@ -418,6 +408,32 @@ public final class PerVersionLayout {
                 return metaBuilder.build();
             }
         );
+    }
+
+    /**
+     * The computed {@code latest}: the highest stable version, or -- when
+     * every version is a prerelease -- the highest version overall, so a
+     * package always has a {@code latest} tag (npm install without a range
+     * fails with ETARGET otherwise). A {@code latest} in the dist-tags
+     * sidecar still wins over this value.
+     *
+     * @param versions Versions object
+     * @return Latest version, or {@code null} when there are no versions
+     */
+    private static String computedLatest(final JsonObject versions) {
+        String latest = null;
+        if (!versions.isEmpty()) {
+            final List<String> stable =
+                new com.auto1.pantera.npm.misc.DescSortedVersions(versions, true).value();
+            if (stable.isEmpty()) {
+                final List<String> all =
+                    new com.auto1.pantera.npm.misc.DescSortedVersions(versions, false).value();
+                latest = all.isEmpty() ? null : all.get(0);
+            } else {
+                latest = stable.get(0);
+            }
+        }
+        return latest;
     }
 
     /**

@@ -71,14 +71,41 @@ final class PypiJsonHandlerTest {
     void matchesJsonPathButNotSimple() {
         assertThat(this.handler.matches("/pypi/foo/json"), is(true));
         assertThat(this.handler.matches("/simple/foo/"), is(false));
-        assertThat(this.handler.matches("/pypi/foo/1.0.0/json"), is(false));
+        assertThat(this.handler.matches("/pypi/foo/1.0.0/json"), is(true));
     }
 
     @Test
-    void matchesVersionPathButNotPackageLevel() {
-        assertThat(this.handler.matchesVersion("/pypi/foo/1.0.0/json"), is(true));
-        assertThat(this.handler.matchesVersion("/pypi/foo/json"), is(false));
-        assertThat(this.handler.matchesVersion("/simple/foo/"), is(false));
+    void perVersionJsonForAllowedVersionPassesThrough() throws Exception {
+        final String body = "{\"info\":{\"name\":\"foo\",\"version\":\"1.0.0\"},"
+            + "\"urls\":[" + fileObject("1.0.0") + "]}";
+        this.upstream.put("/pypi/foo/1.0.0/json", body);
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/pypi/foo/1.0.0/json"), "alice", Headers.EMPTY
+        ).get();
+        assertThat(
+            "allowed per-version document must be forwarded",
+            new String(bodyBytes(resp), StandardCharsets.UTF_8),
+            new org.hamcrest.core.IsEqual<>(body)
+        );
+        assertThat(
+            "cooldown must be evaluated for the requested version",
+            this.cooldown.lastArtifact(),
+            new org.hamcrest.core.IsEqual<>("foo")
+        );
+    }
+
+    @Test
+    void perVersionJsonForBlockedVersionIs404() throws Exception {
+        this.upstream.put(
+            "/pypi/foo/2.0.0/json",
+            "{\"info\":{\"name\":\"foo\",\"version\":\"2.0.0\"},\"urls\":[]}"
+        );
+        this.cooldown.block("2.0.0");
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/pypi/foo/2.0.0/json"), "alice", Headers.EMPTY
+        ).get();
+        resp.body().asBytesFuture().get();
+        assertThat(resp.status().code(), new org.hamcrest.core.IsEqual<>(404));
     }
 
     @Test
@@ -91,7 +118,7 @@ final class PypiJsonHandlerTest {
             pypiVersionJson("1.0.0", "2024-01-01T00:00:00Z")
         );
         this.cooldown.block("1.0.0");
-        final Response resp = this.handler.handleVersion(
+        final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/pypi/foo/1.0.0/json"), "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().code(), equalTo(404));
@@ -108,7 +135,7 @@ final class PypiJsonHandlerTest {
             "/pypi/foo/2.0.0/json",
             pypiVersionJson("2.0.0", "2024-06-01T00:00:00Z")
         );
-        final Response resp = this.handler.handleVersion(
+        final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/pypi/foo/2.0.0/json"), "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().success(), is(true));
@@ -122,7 +149,7 @@ final class PypiJsonHandlerTest {
 
     @Test
     void handleVersionUpstream404ForwardedUnchanged() throws Exception {
-        final Response resp = this.handler.handleVersion(
+        final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/pypi/missing/9.9.9/json"), "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().code(), equalTo(404));
@@ -131,7 +158,7 @@ final class PypiJsonHandlerTest {
     @Test
     void handleVersionMalformedUpstreamPassesThrough() throws Exception {
         this.upstream.put("/pypi/foo/1.0.0/json", "not-json-at-all");
-        final Response resp = this.handler.handleVersion(
+        final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/pypi/foo/1.0.0/json"), "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().success(), is(true));
@@ -147,7 +174,7 @@ final class PypiJsonHandlerTest {
             "/pypi/Foo_Bar/1.0.0/json",
             pypiVersionJson("1.0.0", "2024-01-01T00:00:00Z")
         );
-        this.handler.handleVersion(
+        this.handler.handle(
             new RequestLine(RqMethod.GET, "/pypi/Foo_Bar/1.0.0/json"), "alice", Headers.EMPTY
         ).get();
         assertThat(this.cooldown.lastArtifact(), equalTo("foo-bar"));

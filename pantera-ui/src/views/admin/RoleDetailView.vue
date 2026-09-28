@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getRole, putRole } from '@/api/roles'
 import { useNotificationStore } from '@/stores/notifications'
+import { apiErrorMessage } from '@/utils/apiError'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
@@ -34,8 +35,9 @@ async function handleSave() {
   try {
     await putRole(props.name, { permissions: JSON.parse(permissionsJson.value) })
     notify.success('Role updated')
-  } catch { notify.error('Failed to update role') }
-  finally { saving.value = false }
+  } catch (err: unknown) {
+    notify.error('Failed to update role', apiErrorMessage(err, props.name))
+  } finally { saving.value = false }
 }
 </script>
 
