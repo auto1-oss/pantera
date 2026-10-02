@@ -11,6 +11,8 @@
 package com.auto1.pantera.composer.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.composer.ComposerBaseUrl;
+import com.auto1.pantera.composer.MetadataLinks;
 import com.auto1.pantera.composer.Name;
 import com.auto1.pantera.composer.Packages;
 import com.auto1.pantera.composer.Repository;
@@ -18,6 +20,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 
 import java.util.Optional;
@@ -26,9 +29,11 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.json.JsonException;
 
 /**
- * Slice that serves package metadata.
+ * Slice that serves package metadata, with its links re-rooted at the base URL
+ * resolved for the request (see {@link ComposerBaseUrl}, {@link MetadataLinks}).
  */
 public final class PackageMetadataSlice implements Slice {
 
@@ -49,23 +54,43 @@ public final class PackageMetadataSlice implements Slice {
     private final Repository repository;
 
     /**
-     * @param repository Repository.
+     * Client-facing base URL of this repository.
      */
-    PackageMetadataSlice(final Repository repository) {
+    private final ComposerBaseUrl base;
+
+    /**
+     * Link rewriter.
+     */
+    private final MetadataLinks links;
+
+    /**
+     * @param repository Repository.
+     * @param base Client-facing base URL of this repository.
+     */
+    PackageMetadataSlice(final Repository repository, final ComposerBaseUrl base) {
         this.repository = repository;
+        this.base = base;
+        this.links = new MetadataLinks(base.repository());
     }
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         // GET requests should have empty body, but we must consume it to complete the request
+        final String path = line.uri().getPath();
         return body.asBytesFuture().thenCompose(ignored ->
-            this.packages(line.uri().getPath())
+            this.packages(path)
                 .toCompletableFuture()
                 .thenApply(
                     opt -> opt.map(
                         packages -> packages.content()
-                            .thenApply(cnt -> ResponseBuilder.ok().body(cnt).build())
+                            .thenCompose(Content::asBytesFuture)
+                            .thenApply(
+                                stored -> ResponseBuilder.ok()
+                                    .varyHeader(this.base.vary(headers))
+                                    .body(this.relinked(path, stored, headers))
+                                    .build()
+                            )
                     ).orElse(
                         CompletableFuture.completedFuture(
                             ResponseBuilder.notFound().build()
@@ -73,6 +98,36 @@ public final class PackageMetadataSlice implements Slice {
                     )
                 ).thenCompose(Function.identity())
         );
+    }
+
+    /**
+     * Re-root the links of a stored document at the base resolved for the
+     * request; a document that is not valid JSON is served as stored.
+     *
+     * @param path Request path
+     * @param stored Stored document
+     * @param headers Request headers
+     * @return Response body
+     */
+    private byte[] relinked(final String path, final byte[] stored, final Headers headers) {
+        final String resolved = this.base.resolve(headers);
+        try {
+            return ALL_PACKAGES.matcher(path).matches()
+                ? this.links.root(stored, resolved)
+                : this.links.packages(stored, resolved);
+        } catch (final JsonException ex) {
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("Stored Composer metadata is not valid JSON, serving it without re-rooting its links")
+                .eventCategory("web")
+                .eventAction("composer_metadata_relink")
+                .eventOutcome("failure")
+                .field("repository.name", this.base.repository())
+                .field("url.path", path)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+            return stored;
+        }
     }
 
     /**

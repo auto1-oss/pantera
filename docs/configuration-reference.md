@@ -839,9 +839,9 @@ the inbound request -- scheme `http` and the `Host` header by default
 admin setting is enabled (see [7.8](#78-miscellaneous)). All three settings
 are DB-backed and hot-reloadable via the admin API/UI -- see [Client-facing
 base URL settings](#client-facing-base-url-settings-auth_settings-table)
-below. `url:` remains hard-required for exactly four repository types, whose adapters
+below. `url:` remains hard-required for exactly three repository types, whose adapters
 construct absolute URLs without this derivation
-([2.5](#25-type-specific-settings)): `php`, `helm`, `nuget`, `conda`. Every
+([2.5](#25-type-specific-settings)): `helm`, `nuget`, `conda`. Every
 other type works with no `url:` at all. (`conan` is not among them despite
 emitting absolute `download_urls`: it builds them from the request `Host`
 directly -- note that this bypasses `client_base_url` and
@@ -862,6 +862,19 @@ more than one hostname should leave `url:` unset, and each client gets
 `dist.tarball` links under the hostname it used; setting `url:` pins every
 client to that one host, whatever hostname they asked for. `npm-proxy` and
 `npm-group` behaved this way already.
+
+Since 2.2.10 hosted **`php`** is no longer one of them either. Its served
+metadata -- `packages.json` (`metadata-url`, `available-packages-url`) and
+every `p2/<vendor>/<package>.json` -- is re-rooted per request with the same
+three tiers, the last one being the request origin plus the repository name.
+The `dist.url` frozen into stored metadata is not served as-is: a `dist.url`
+that points into this repository is served as `<resolved base>/<path inside
+the repository>`, whatever host it was stored with (an older `url:`, or a URL
+imported from another registry; a `direct-dists/` alias segment is dropped),
+and a dist hosted elsewhere is left untouched. Through a group the links are
+therefore under the group. Without `url:` new uploads store a
+repository-relative `dist.url`; with it they keep storing an absolute one, and
+`url:` still pins every client to that host.
 
 ```yaml
 # File: maven.yaml
@@ -1045,12 +1058,11 @@ repo:
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `url` | string | Yes | -- | Public URL for packages.json resolution |
+| `url` | string | No | -- | Client-facing base URL. Unset: served links are resolved per request ([2.2](#22-local-repository)). Set: pins every client to this host |
 
 ```yaml
 repo:
   type: php
-  url: http://pantera:8080/my-php
   storage:
     type: fs
     path: /var/pantera/data

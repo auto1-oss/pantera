@@ -26,7 +26,12 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.TrimPathSlice;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.http.PhpComposer;
 import com.auto1.pantera.composer.http.proxy.ComposerProxySlice;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
+import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.composer.http.proxy.ComposerStorageCache;
 import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
@@ -286,6 +291,46 @@ public final class ComposerGroupSliceTest {
         MatcherAssert.assertThat(
             "the proxy is not asked for a locally owned name",
             proxyCalls.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void hostedMemberEmitsDistUrlsUnderTheGroup() throws Exception {
+        // SliceByPath stamps the base of the repository the client addressed
+        // (the group); the hosted member re-roots its stored dist URLs there.
+        final InMemoryStorage storage = new InMemoryStorage();
+        storage.save(
+            new Key.From("p2", "acme", "private.json"),
+            new Content.From(
+                ("{\"packages\":{\"acme/private\":{\"1.0.0\":{\"version\":\"1.0.0\",\"dist\":{"
+                    + "\"type\":\"zip\",\"url\":"
+                    + "\"https://legacy.example.com/artifactory/local/artifacts/acme/private-1.0.0.zip\""
+                    + "}}}}}").getBytes(StandardCharsets.UTF_8)
+            )
+        ).join();
+        final Map<String, Slice> members = new HashMap<>();
+        members.put(
+            "local",
+            new TrimPathSlice(
+                new PhpComposer(
+                    new AstoRepository(storage), Policy.FREE,
+                    new Authentication.Single("alice", "secret"), "local", Optional.empty()
+                ),
+                "local"
+            )
+        );
+        members.put("proxy", status(RsStatus.NOT_FOUND));
+        final Response resp = ComposerGroupSliceTest.group(members, "local", "proxy").response(
+            new RequestLine("GET", "/p2/acme/private.json"),
+            Headers.from(new Authorization.Basic("alice", "secret"))
+                .copy().add(ClientBaseUrl.HEADER, "https://packages.example.com/php-group"),
+            Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            new String(resp.body().asBytes(), StandardCharsets.UTF_8),
+            Matchers.containsString(
+                "\"url\":\"https://packages.example.com/php-group/artifacts/acme/private-1.0.0.zip\""
+            )
         );
     }
 

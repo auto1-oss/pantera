@@ -1,5 +1,12 @@
 # Changelog
 
+## Version 2.2.10
+
+### 🌟 New features
+
+- **`url:` is now optional for hosted Composer (`php`) repositories, and their links follow the host the client used** — `packages.json` and every `p2/<vendor>/<package>.json` are served with `dist.url`, `metadata-url` and `available-packages-url` re-rooted at the base resolved per request (the base stamped for the repository the client addressed, else the configured `url:`, else the request's own origin plus the repository name), so one hosted repository can serve several hostnames and a group serves its hosted members' archives under the group. A `dist.url` stored earlier under another host — an older `url:`, or one imported from another registry — is re-rooted the same way without rewriting any metadata; dists hosted elsewhere are left untouched. A configured `url:` still wins and still pins every client to that host; without one, new uploads store a repository-relative `dist.url`.
+  ([@dmitry-auto1](https://github.com/dmitry-auto1))
+
 ## Version 2.2.9
 
 This release contains security hardening and a broad set of bug fixes across formats. Upgrading is recommended. Some specifics of the hardening are intentionally withheld here to protect deployments that have not yet upgraded; the operational changes an administrator must be aware of are listed below. For coordinated-disclosure details, contact the maintainers.

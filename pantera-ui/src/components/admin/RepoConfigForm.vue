@@ -625,9 +625,9 @@ defineExpose({
           overriding the <code>client_base_url</code> admin setting and
           <code>Host</code>/<code>X-Forwarded-*</code> derivation — leave it
           empty if you serve the same repository over more than one domain.
-          Required for local <code>helm</code>, <code>php</code>,
-          <code>nuget</code>, <code>conan</code> and <code>conda</code>
-          repositories, whose adapters build absolute URLs directly.
+          Required for local <code>helm</code>, <code>nuget</code> and
+          <code>conda</code> repositories, whose adapters build absolute URLs
+          directly.
         </p>
       </div>
     </template>
