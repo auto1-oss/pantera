@@ -17,10 +17,14 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.headers.ContentLength;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.security.policy.Policy;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
@@ -246,11 +250,114 @@ final class UploadSliceImmutabilityTest {
         );
     }
 
+    @Test
+    void explicitlyImmutableRepositoryRefusesDifferentContent() {
+        this.slice = new UploadSlice(
+            this.asto, Optional.of(this.events), "maven", SyncArtifactIndexer.NOOP, true
+        );
+        this.put(JAR, "one");
+        MatcherAssert.assertThat(
+            "identical re-upload accepted",
+            this.put(JAR, "one"), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "different re-upload refused",
+            this.put(JAR, "two"), new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the published bytes are unchanged",
+            this.read(JAR), new IsEqual<>("one")
+        );
+    }
+
+    @Test
+    void mutableRepositoryOverwritesAReleaseFile() {
+        this.slice = new UploadSlice(
+            this.asto, Optional.of(this.events), "maven", SyncArtifactIndexer.NOOP, false
+        );
+        this.put(JAR, "one");
+        this.events.clear();
+        MatcherAssert.assertThat(
+            "re-deploy with different bytes accepted",
+            this.put(JAR, "two"), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the release bytes are replaced",
+            this.read(JAR), new IsEqual<>("two")
+        );
+        MatcherAssert.assertThat(
+            "the sha1 sidecar is regenerated from the new bytes",
+            this.read(JAR + ".sha1"), new IsEqual<>(hex("SHA-1", "two"))
+        );
+        MatcherAssert.assertThat(
+            "the sha256 sidecar is regenerated from the new bytes",
+            this.read(JAR + ".sha256"), new IsEqual<>(hex("SHA-256", "two"))
+        );
+        MatcherAssert.assertThat(
+            "the overwrite is published so the search index is upserted",
+            this.events.size(), new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "the published event carries the new checksum",
+            this.events.peek().checksum(), new IsEqual<>(hex("SHA-256", "two"))
+        );
+    }
+
+    @Test
+    void mutableRepositoryAcceptsTheClientChecksumOfTheNewBytes() {
+        this.slice = new UploadSlice(
+            this.asto, Optional.of(this.events), "maven", SyncArtifactIndexer.NOOP, false
+        );
+        this.put(JAR, "one");
+        this.put(JAR + ".sha1", hex("SHA-1", "one"));
+        this.put(JAR, "two");
+        MatcherAssert.assertThat(
+            "client checksum of the overwritten bytes accepted",
+            this.put(JAR + ".sha1", hex("SHA-1", "two")),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "a checksum of the old bytes is refused",
+            this.put(JAR + ".md5", hex("MD5", "one")),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+    }
+
+    @Test
+    void mavenSliceThreadsTheImmutableFlag() {
+        final Slice mutable = new MavenSlice(
+            this.asto, Policy.FREE, new Authentication.Single("alice", "secret"), null,
+            "maven", Optional.of(this.events), SyncArtifactIndexer.NOOP, false
+        );
+        final Slice immutable = new MavenSlice(
+            this.asto, Policy.FREE, new Authentication.Single("alice", "secret"), null,
+            "maven", Optional.of(this.events), SyncArtifactIndexer.NOOP, true
+        );
+        final String other = "/com/example/lib/2.0/lib-2.0.jar";
+        this.slice = immutable;
+        this.put(other, "one");
+        MatcherAssert.assertThat(
+            "immutable repository refuses different bytes",
+            this.put(other, "two"), new IsEqual<>(RsStatus.CONFLICT)
+        );
+        this.slice = mutable;
+        MatcherAssert.assertThat(
+            "mutable repository overwrites",
+            this.put(other, "two"), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the stored bytes are the new ones",
+            this.read(other), new IsEqual<>("two")
+        );
+    }
+
     private RsStatus put(final String path, final String body) {
         final byte[] data = body.getBytes(StandardCharsets.UTF_8);
         return this.slice.response(
             new RequestLine(RqMethod.PUT, path),
-            Headers.from(new ContentLength(data.length)),
+            Headers.from(
+                new ContentLength(data.length), new Authorization.Basic("alice", "secret")
+            ),
             new Content.From(data)
         ).join().status();
     }

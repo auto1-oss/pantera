@@ -203,17 +203,52 @@ final class NpmAccountRoutingTest {
 
     @Test
     void proxyWriteRefusalNamesTheAllowedMethods(@TempDir final Path tmp) throws Exception {
-        for (final RqMethod method : List.of(RqMethod.PUT, RqMethod.DELETE)) {
-            MatcherAssert.assertThat(
-                String.format("%s to a proxy lists the allowed methods", method),
-                NpmAccountRoutingTest.slices(tmp).slice(new Key.From("npm-proxy"), 8080).response(
-                    new RequestLine(method, "/npm-proxy/@qa%2fpkg"),
-                    Headers.from(new Authorization.Bearer(NpmAccountRoutingTest.TOKEN)),
-                    new Content.From("{}".getBytes(StandardCharsets.UTF_8))
-                ).get(30, TimeUnit.SECONDS).headers().values("Allow"),
-                new IsEqual<>(List.of("GET, HEAD"))
-            );
-        }
+        MatcherAssert.assertThat(
+            NpmAccountRoutingTest.slices(tmp).slice(new Key.From("npm-proxy"), 8080).response(
+                new RequestLine(RqMethod.PUT, "/npm-proxy/@qa%2fpkg"),
+                Headers.from(new Authorization.Bearer(NpmAccountRoutingTest.TOKEN)),
+                new Content.From("{}".getBytes(StandardCharsets.UTF_8))
+            ).get(30, TimeUnit.SECONDS).headers().values("Allow"),
+            new IsEqual<>(List.of("GET, HEAD"))
+        );
+    }
+
+    /**
+     * 2.2.10: a DELETE of a package path on a proxy evicts the cached copy
+     * instead of answering 405; an unpublish ({@code -rev}) stays refused.
+     */
+    @Test
+    void proxyDeleteEvictsTheCachedPackage(@TempDir final Path tmp) throws Exception {
+        final RepositorySlices slices = NpmAccountRoutingTest.slices(tmp);
+        final com.auto1.pantera.asto.Storage cache = slices.repositories()
+            .config("npm-proxy").orElseThrow().storage();
+        cache.save(
+            new Key.From("@qa/pkg/meta.json"),
+            new Content.From("{}".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        MatcherAssert.assertThat(
+            "the eviction answers 204",
+            slices.slice(new Key.From("npm-proxy"), 8080).response(
+                new RequestLine(RqMethod.DELETE, "/npm-proxy/@qa%2fpkg"),
+                Headers.from(new Authorization.Bearer(NpmAccountRoutingTest.TOKEN)),
+                Content.EMPTY
+            ).get(30, TimeUnit.SECONDS).status().code(),
+            new IsEqual<>(204)
+        );
+        MatcherAssert.assertThat(
+            "the cached packument is gone",
+            cache.exists(new Key.From("@qa/pkg/meta.json")).join(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "an unpublish of a proxied package is still refused",
+            slices.slice(new Key.From("npm-proxy"), 8080).response(
+                new RequestLine(RqMethod.DELETE, "/npm-proxy/@qa%2fpkg/-rev/1-abc"),
+                Headers.from(new Authorization.Bearer(NpmAccountRoutingTest.TOKEN)),
+                Content.EMPTY
+            ).get(30, TimeUnit.SECONDS).status().code(),
+            new IsEqual<>(405)
+        );
     }
 
     @Test

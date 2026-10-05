@@ -139,6 +139,34 @@ public final class ConanSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, policy, auth, tokens, tokenizer, name, events, false);
+    }
+
+    /**
+     * Ctor with the immutability switch.
+     * @param storage Storage object.
+     * @param policy Access policy.
+     * @param auth Authentication parameters.
+     * @param tokens User auth token generator.
+     * @param tokenizer Tokens provider for repository items.
+     * @param name Repository name.
+     * @param events Optional artifact events queue
+     * @param immutable When {@code true} {@code upload_urls} naming a stored
+     *  file answers 404 and a PUT of a stored file answers 409, nothing is
+     *  written; when {@code false} URLs are issued for stored files and the
+     *  PUT overwrites them
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public ConanSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication auth,
+        final Tokens tokens,
+        final ItemTokenizer tokenizer,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean immutable
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -349,7 +377,7 @@ public final class ConanSlice extends Slice.Wrap {
                         MethodRule.POST
                     ),
                     new BearerAuthzSlice(
-                        new ConanUpload.UploadUrls(storage, tokenizer, name),
+                        new ConanUpload.UploadUrls(storage, tokenizer, name, immutable),
                         tokens.auth(),
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
@@ -365,7 +393,8 @@ public final class ConanSlice extends Slice.Wrap {
                     ConanSlice.upload(
                         new ConanUpload.PutFile(
                             storage, tokenizer, name,
-                            events.map(queue -> new RepositoryEvents("conan", name, queue))
+                            events.map(queue -> new RepositoryEvents("conan", name, queue)),
+                            immutable
                         ),
                         tokens, tokenizer,
                         new OperationControl(

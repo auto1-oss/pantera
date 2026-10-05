@@ -137,6 +137,35 @@ public final class GoSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex, true);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting.
+     *
+     * @param storage Storage
+     * @param policy Security policy
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When true a published {@code .mod}/{@code .zip} (and
+     *  the {@code .info} once the zip is stored) cannot be replaced: identical
+     *  re-upload 201, different content 409. When false every module file is
+     *  overwritten and {@code @v/list} is kept in step with the stored zips.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GoSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
         this.origin = new SliceRoute(
             GoSlice.pathHead(
                 ".+/@v/(v.*\\.(info|mod|zip)|list)",
@@ -183,7 +212,7 @@ public final class GoSlice implements Slice {
             new RtRulePath(
                 MethodRule.PUT,
                 GoSlice.createAuthSlice(
-                    new GoUploadSlice(storage, name, events, syncIndex),
+                    new GoUploadSlice(storage, name, events, syncIndex, immutable),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

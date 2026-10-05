@@ -88,6 +88,33 @@ public final class PhpComposer extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, true);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting.
+     * @param repository Repository
+     * @param policy Access permissions
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact repository events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When true a published release cannot be overwritten
+     *  (identical re-upload: 201, different content: 409); when false release
+     *  uploads overwrite. Dev versions are always mutable.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -141,7 +168,7 @@ public final class PhpComposer extends Slice.Wrap {
                         MethodRule.PUT
                     ),
                     PhpComposer.createAuthSlice(
-                        new AddSlice(repository),
+                        new AddSlice(repository, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
@@ -155,7 +182,7 @@ public final class PhpComposer extends Slice.Wrap {
                         MethodRule.PUT
                     ),
                     PhpComposer.createAuthSlice(
-                        new AddArchiveSlice(repository, events, name, syncIndex),
+                        new AddArchiveSlice(repository, events, name, syncIndex, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

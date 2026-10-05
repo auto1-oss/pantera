@@ -122,7 +122,13 @@ public final class NuGet implements Slice {
     private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Whether an existing package version may never be replaced by a push.
+     */
+    private final boolean immutable;
+
+    /**
+     * Ctor with synchronous artifact-index writer; existing package versions
+     * are immutable.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public NuGet(
@@ -135,6 +141,34 @@ public final class NuGet implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(url, repository, policy, basicAuth, tokenAuth, name, events, syncIndex, true);
+    }
+
+    /**
+     * Primary ctor.
+     * @param url Base URL.
+     * @param repository Storage for packages.
+     * @param policy Access policy.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication, may be null.
+     * @param name Repository name
+     * @param events Events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether an existing package version may never be
+     *  replaced by a push (409); when false a push overwrites it
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NuGet(
+        final URL url,
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
         this.url = url;
         this.repository = repository;
         this.policy = policy;
@@ -143,6 +177,7 @@ public final class NuGet implements Slice {
         this.name = name;
         this.events = events;
         this.syncIndex = syncIndex;
+        this.immutable = immutable;
     }
 
     @Override
@@ -167,7 +202,7 @@ public final class NuGet implements Slice {
      */
     private Resource resource(final String path) {
         final PackagePublish publish = new PackagePublish(
-            this.repository, this.events, this.name, this.syncIndex
+            this.repository, this.events, this.name, this.syncIndex, this.immutable
         );
         final PackageContent content = new PackageContent(this.url, this.repository);
         final PackageMetadata metadata = new PackageMetadata(this.repository, content);

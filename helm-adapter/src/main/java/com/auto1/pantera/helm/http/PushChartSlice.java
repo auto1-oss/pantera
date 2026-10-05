@@ -22,6 +22,7 @@ import com.auto1.pantera.helm.metadata.IndexYaml;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -85,6 +86,14 @@ final class PushChartSlice implements Slice {
     private final long maxChartBytes;
 
     /**
+     * Whether a pushed chart version may never be replaced. When {@code true}
+     * a push of an already stored name+version answers 409 and writes
+     * nothing; when {@code false} the archive is overwritten and its
+     * {@code index.yaml} entry rewritten.
+     */
+    private final boolean immutable;
+
+    /**
      * Legacy ctor (no synchronous index writer).
      * @param storage The storage.
      * @param events Events queue
@@ -120,11 +129,26 @@ final class PushChartSlice implements Slice {
     PushChartSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
         final String rname,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
-        this(storage, events, rname, syncIndex, PushChartSlice.DEFAULT_MAX_CHART_BYTES);
+        this(storage, events, rname, syncIndex, false);
     }
 
     /**
-     * Canonical ctor.
+     * Ctor with synchronous index writer and the immutability switch.
+     * @param storage The storage.
+     * @param events Events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether an already pushed chart version is refused
+     */
+    PushChartSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable) {
+        this(storage, events, rname, syncIndex, PushChartSlice.DEFAULT_MAX_CHART_BYTES, immutable);
+    }
+
+    /**
+     * Ctor with an explicit chart cap (overwrite allowed).
      * @param storage The storage.
      * @param events Events queue
      * @param rname Repository name
@@ -135,11 +159,29 @@ final class PushChartSlice implements Slice {
         final String rname,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final long maxChartBytes) {
+        this(storage, events, rname, syncIndex, maxChartBytes, false);
+    }
+
+    /**
+     * Canonical ctor.
+     * @param storage The storage.
+     * @param events Events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param maxChartBytes Cap on an uploaded chart archive, in bytes
+     * @param immutable Whether an already pushed chart version is refused
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    PushChartSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final long maxChartBytes, final boolean immutable) {
         this.storage = storage;
         this.events = events;
         this.rname = rname;
         this.syncIndex = syncIndex;
         this.maxChartBytes = maxChartBytes;
+        this.immutable = immutable;
     }
 
     @Override
@@ -160,10 +202,7 @@ final class PushChartSlice implements Slice {
                     // Organize by chart name: <chart_name>/<chart_name>-<version>.tgz
                     final ChartYaml chart = tgz.chartYaml();
                     final Key artifactKey = new Key.From(chart.name(), tgz.name());
-                    return new RxStorageWrapper(this.storage).save(
-                        artifactKey,
-                        new Content.From(tgz.bytes())
-                    ).andThen(
+                    return this.store(artifactKey, tgz).andThen(
                         Completable.defer(
                             () -> {
                                 final Completable res;
@@ -218,11 +257,71 @@ final class PushChartSlice implements Slice {
                 if (com.auto1.pantera.http.RequestBodyTooLargeException.isCause(error)) {
                     return ResponseBuilder.payloadTooLarge().build();
                 }
+                final Optional<ChartVersionExistsException> exists =
+                    PushChartSlice.versionExists(error);
+                if (exists.isPresent()) {
+                    return ResponseBuilder.from(RsStatus.CONFLICT)
+                        .textBody(exists.get().getMessage())
+                        .build();
+                }
                 if (error instanceof RuntimeException runtime) {
                     throw runtime;
                 }
                 throw new java.util.concurrent.CompletionException(error);
             });
+    }
+
+    /**
+     * Store the chart archive. On an immutable repository the existence check
+     * and the save run under a lock on the archive key, so two concurrent
+     * pushes of the same version cannot both pass the check; an existing
+     * archive fails with {@link ChartVersionExistsException} before anything
+     * is written.
+     * @param key Archive key
+     * @param tgz Chart archive
+     * @return Completion of the save
+     */
+    private Completable store(final Key key, final TgzArchive tgz) {
+        final Completable res;
+        if (this.immutable) {
+            res = CompletableInterop.fromFuture(
+                new IndexUpdateLock(this.storage, key).run(
+                    locked -> locked.exists(key).thenCompose(
+                        present -> {
+                            final CompletableFuture<Void> saved;
+                            if (present) {
+                                saved = CompletableFuture.failedFuture(
+                                    new ChartVersionExistsException(tgz.chartYaml())
+                                );
+                            } else {
+                                saved = locked.save(key, new Content.From(tgz.bytes()));
+                            }
+                            return saved;
+                        }
+                    )
+                )
+            );
+        } else {
+            res = new RxStorageWrapper(this.storage).save(key, new Content.From(tgz.bytes()));
+        }
+        return res;
+    }
+
+    /**
+     * Find a {@link ChartVersionExistsException} in an error's cause chain.
+     * @param error Error
+     * @return The refusal, if the push failed on it
+     */
+    private static Optional<ChartVersionExistsException> versionExists(final Throwable error) {
+        Optional<ChartVersionExistsException> found = Optional.empty();
+        Throwable cur = error;
+        while (cur != null && found.isEmpty()) {
+            if (cur instanceof ChartVersionExistsException refusal) {
+                found = Optional.of(refusal);
+            }
+            cur = cur.getCause();
+        }
+        return found;
     }
 
     /**

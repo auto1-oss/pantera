@@ -421,6 +421,15 @@ public final class RepositoryHandler {
                 return;
             }
         }
+        if (repo.containsKey("immutable")) {
+            final javax.json.JsonValue.ValueType vt = repo.get("immutable").getValueType();
+            if (vt != javax.json.JsonValue.ValueType.TRUE
+                && vt != javax.json.JsonValue.ValueType.FALSE) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "immutable must be a boolean");
+                return;
+            }
+        }
         final Optional<String> urlError = RepositoryHandler.urlError(repo);
         if (urlError.isPresent()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", urlError.get());

@@ -23,6 +23,7 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
@@ -37,6 +38,11 @@ public final class UniquePackage implements Package {
      * Package index items separator.
      */
     private static final String SEP = "\n\n";
+
+    /**
+     * Prefix of the {@code Filename} field of an index record.
+     */
+    private static final String FILENAME = "Filename:";
 
     /**
      * Abstract storage.
@@ -63,7 +69,9 @@ public final class UniquePackage implements Package {
                 }
                 return duplicates;
             }
-        ).thenCompose(this::remove);
+        ).thenCompose(
+            duplicates -> this.remove(UniquePackage.replaced(duplicates, items))
+        );
     }
 
     public CompletionStage<Void> delete(final Iterable<String> items, final Key index) {
@@ -82,6 +90,28 @@ public final class UniquePackage implements Package {
                         nothing1 -> this.asto.move(new Key.From(index.string() + "_new"), index)
                 )
         );
+    }
+
+    /**
+     * Files of the replaced index records that must be removed: every
+     * duplicate's {@code Filename} except the ones the new records point to.
+     * An upload that overwrites a package at the same path replaces its
+     * record, and the file it points to is the freshly uploaded one, so it
+     * must stay.
+     * @param duplicates {@code Filename}s of the replaced records
+     * @param items New records
+     * @return Files to remove
+     */
+    private static List<String> replaced(final List<String> duplicates,
+        final Iterable<String> items) {
+        final Set<String> kept = StreamSupport.stream(items.spliterator(), false)
+            .flatMap(item -> Stream.of(item.split("\n")))
+            .filter(line -> line.startsWith(UniquePackage.FILENAME))
+            .map(line -> line.substring(UniquePackage.FILENAME.length()).trim())
+            .collect(Collectors.toSet());
+        return duplicates.stream()
+            .filter(file -> !kept.contains(file))
+            .collect(Collectors.toList());
     }
 
     /**

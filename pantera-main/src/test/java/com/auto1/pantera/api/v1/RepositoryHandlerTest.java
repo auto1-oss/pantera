@@ -591,6 +591,35 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void putWithNonBooleanImmutableReturns400(
+        final Vertx vertx, final VertxTestContext ctx
+    ) throws Exception {
+        // immutable = "false" (a string) — must be a real JSON boolean.
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "file")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                    .put("immutable", "false")
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/immutable-bad",
+            body,
+            res -> {
+                Assertions.assertEquals(400, res.statusCode());
+                final JsonObject resp = res.bodyAsJsonObject();
+                Assertions.assertEquals("BAD_REQUEST", resp.getString("error"));
+                Assertions.assertTrue(
+                    resp.getString("message").contains("immutable"),
+                    "Error message should mention 'immutable'"
+                );
+            }
+        );
+    }
+
+    @Test
     void putWithRelativeUrlReturns400(
         final Vertx vertx, final VertxTestContext ctx
     ) throws Exception {

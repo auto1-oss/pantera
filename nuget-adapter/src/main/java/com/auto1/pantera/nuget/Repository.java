@@ -33,12 +33,26 @@ public interface Repository {
     CompletionStage<Optional<Content>> content(Key key);
 
     /**
-     * Adds NuGet package in .nupkg file format from storage.
+     * Adds NuGet package in .nupkg file format from storage; an existing
+     * package version is never replaced.
      *
      * @param content Content of .nupkg package.
      * @return Completion of adding package.
      */
-    CompletionStage<PackageInfo> add(Content content);
+    default CompletionStage<PackageInfo> add(Content content) {
+        return this.add(content, true);
+    }
+
+    /**
+     * Adds NuGet package in .nupkg file format from storage.
+     *
+     * @param content Content of .nupkg package.
+     * @param immutable When {@code true} an existing package version is never
+     *  replaced (the push fails with {@link PackageVersionAlreadyExistsException});
+     *  when {@code false} it is overwritten in place.
+     * @return Completion of adding package.
+     */
+    CompletionStage<PackageInfo> add(Content content, boolean immutable);
 
     /**
      * Enumerates package versions.

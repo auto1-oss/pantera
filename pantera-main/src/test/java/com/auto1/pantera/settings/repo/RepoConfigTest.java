@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.http.client.RemoteConfig;
+import com.auto1.pantera.misc.Json2Yaml;
 import com.auto1.pantera.settings.StorageByAlias;
 import com.auto1.pantera.test.TestStoragesCache;
 import org.junit.jupiter.api.Assertions;
@@ -191,6 +192,68 @@ public final class RepoConfigTest {
     @Test
     public void cooldownDurationEmptyWhenFullConfigHasNoCooldown() throws Exception {
         Assertions.assertEquals(Optional.empty(), readFull().cooldownDuration());
+    }
+
+    @Test
+    void immutableByDefault() throws Exception {
+        Assertions.assertTrue(readMin().immutable());
+    }
+
+    @Test
+    void immutableFalseOnlyWhenExplicitlyFalse() {
+        Assertions.assertAll(
+            () -> Assertions.assertFalse(
+                withImmutable("false").immutable(), "explicit false is mutable"
+            ),
+            () -> Assertions.assertFalse(
+                withImmutable("FALSE").immutable(), "false is case-insensitive"
+            ),
+            () -> Assertions.assertTrue(
+                withImmutable("true").immutable(), "explicit true is immutable"
+            ),
+            () -> Assertions.assertTrue(
+                withImmutable("no").immutable(), "anything but false is immutable"
+            )
+        );
+    }
+
+    @Test
+    void immutableReadsDatabaseJsonBooleans() {
+        Assertions.assertAll(
+            () -> Assertions.assertFalse(
+                fromJson("{\"repo\":{\"type\":\"file\",\"immutable\":false}}").immutable(),
+                "JSON false is mutable"
+            ),
+            () -> Assertions.assertTrue(
+                fromJson("{\"repo\":{\"type\":\"file\",\"immutable\":true}}").immutable(),
+                "JSON true is immutable"
+            ),
+            () -> Assertions.assertTrue(
+                fromJson("{\"repo\":{\"type\":\"file\"}}").immutable(),
+                "missing key is immutable"
+            )
+        );
+    }
+
+    private RepoConfig withImmutable(final String value) {
+        return RepoConfig.from(
+            Yaml.createYamlMappingBuilder().add(
+                "repo", Yaml.createYamlMappingBuilder()
+                    .add("type", "file")
+                    .add("immutable", value)
+                    .build()
+            ).build(),
+            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
+            new Key.From("repo-immutable"), cache, false
+        );
+    }
+
+    private RepoConfig fromJson(final String json) {
+        return RepoConfig.from(
+            new Json2Yaml().apply(json),
+            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
+            new Key.From("repo-json"), cache, false
+        );
     }
 
     private RepoConfig readFull() throws Exception {

@@ -168,6 +168,70 @@ class AstoRepositoryTest {
     }
 
     @Test
+    void immutableAddRefusesExistingVersionAndLeavesNoUpload() throws Exception {
+        this.repository.add(new Content.From(this.nupkg().bytes()), true)
+            .toCompletableFuture().join();
+        final Throwable cause = Assertions.assertThrows(
+            CompletionException.class,
+            () -> this.repository.add(new Content.From(this.nupkg().repacked()), true)
+                .toCompletableFuture().join()
+        ).getCause();
+        MatcherAssert.assertThat(
+            "immutable: an existing version is refused",
+            cause,
+            new IsInstanceOf(PackageVersionAlreadyExistsException.class)
+        );
+        final PackageIdentity identity = new PackageIdentity(
+            new PackageId("newtonsoft.json"), new Version("12.0.3")
+        );
+        MatcherAssert.assertThat(
+            "immutable: the stored package is untouched",
+            this.storage.value(identity.nupkgKey()),
+            new IsEqual<>(this.nupkg().bytes())
+        );
+        MatcherAssert.assertThat(
+            "immutable: the refused upload is not left behind",
+            this.storage.list(Key.ROOT).stream()
+                .noneMatch(key -> !key.string().startsWith("newtonsoft.json/")),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void mutableAddOverwritesExistingVersion() throws Exception {
+        this.repository.add(new Content.From(this.nupkg().bytes()), false)
+            .toCompletableFuture().join();
+        final byte[] repacked = this.nupkg().repacked();
+        this.repository.add(new Content.From(repacked), false).toCompletableFuture().join();
+        final PackageId id = new PackageId("newtonsoft.json");
+        final PackageIdentity identity = new PackageIdentity(id, new Version("12.0.3"));
+        MatcherAssert.assertThat(
+            "mutable: the nupkg is replaced",
+            this.storage.value(identity.nupkgKey()),
+            new IsEqual<>(repacked)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the hash matches the new nupkg",
+            new String(this.storage.value(identity.hashKey()), StandardCharsets.US_ASCII),
+            new IsEqual<>(
+                java.util.Base64.getEncoder().encodeToString(
+                    java.security.MessageDigest.getInstance("SHA-512").digest(repacked)
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "mutable: the nuspec is present",
+            this.storage.exists(identity.nuspecKey()),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the version is listed exactly once",
+            this.versions(new PackageKeys(id).versionsKey()),
+            new IsEqual<>(List.of("12.0.3"))
+        );
+    }
+
+    @Test
     void shouldReadNuspec() throws Exception {
         final PackageIdentity identity = new PackageIdentity(
             new PackageId("UsefulLib"),

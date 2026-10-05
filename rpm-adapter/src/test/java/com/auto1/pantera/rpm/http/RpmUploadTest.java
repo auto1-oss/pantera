@@ -124,6 +124,102 @@ public final class RpmUploadTest {
     }
 
     @Test
+    void immutableRepoRefusesOverrideFlag() throws Exception {
+        final byte[] content = "first package content".getBytes(StandardCharsets.UTF_8);
+        final Key key = new Key.From("immutable.rpm");
+        final Optional<Queue<ArtifactEvent>> events = Optional.of(new LinkedList<>());
+        new BlockingStorage(this.storage).save(key, content);
+        MatcherAssert.assertThat(
+            "immutable: ?override=true is refused with 409",
+            this.upload(true, events, "/immutable.rpm?override=true",
+                Files.readAllBytes(new TestRpm.Abc().path())).status(),
+            new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "immutable: the stored package is untouched",
+            new BlockingStorage(this.storage).value(key),
+            new IsEqual<>(content)
+        );
+        MatcherAssert.assertThat(
+            "immutable: nothing is staged for indexing",
+            new BlockingStorage(this.storage).list(RpmUpload.TO_ADD).isEmpty(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "immutable: nothing is published", events.get().isEmpty(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void immutableRepoRefusesPlainReupload() throws Exception {
+        final byte[] content = "first package content".getBytes(StandardCharsets.UTF_8);
+        final Key key = new Key.From("immutable.rpm");
+        new BlockingStorage(this.storage).save(key, content);
+        MatcherAssert.assertThat(
+            "immutable: a plain re-upload is refused with 409",
+            this.upload(true, Optional.empty(), "/immutable.rpm",
+                Files.readAllBytes(new TestRpm.Abc().path())).status(),
+            new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "immutable: the stored package is untouched",
+            new BlockingStorage(this.storage).value(key),
+            new IsEqual<>(content)
+        );
+    }
+
+    @Test
+    void mutableRepoOverridesWithFlagAndKeepsOneMetadataEntry(
+        @org.junit.jupiter.api.io.TempDir final java.nio.file.Path temp
+    ) throws Exception {
+        final byte[] content = Files.readAllBytes(new TestRpm.Abc().path());
+        final Optional<Queue<ArtifactEvent>> events = Optional.of(new LinkedList<>());
+        MatcherAssert.assertThat(
+            "mutable: the first upload is accepted",
+            this.upload(false, events, "/mutable.rpm", content).status(),
+            new IsEqual<>(RsStatus.ACCEPTED)
+        );
+        MatcherAssert.assertThat(
+            "mutable: ?override=true replaces the package",
+            this.upload(false, events, "/mutable.rpm?override=true", content).status(),
+            new IsEqual<>(RsStatus.ACCEPTED)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the stored package is the new upload",
+            new BlockingStorage(this.storage).value(new Key.From("mutable.rpm")),
+            new IsEqual<>(content)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the repodata lists the overwritten package once",
+            this.storage,
+            new com.auto1.pantera.rpm.hm.StorageHasMetadata(
+                1, new RepoConfig.Simple().filelists(), temp
+            )
+        );
+        MatcherAssert.assertThat(
+            "mutable: both uploads are published", events.get().size(), new IsEqual<>(2)
+        );
+    }
+
+    @Test
+    void mutableRepoWithoutFlagConflicts() throws Exception {
+        final byte[] content = "first package content".getBytes(StandardCharsets.UTF_8);
+        final Key key = new Key.From("mutable.rpm");
+        new BlockingStorage(this.storage).save(key, content);
+        MatcherAssert.assertThat(
+            "mutable: a re-upload without ?override=true is refused with 409",
+            this.upload(false, Optional.empty(), "/mutable.rpm",
+                Files.readAllBytes(new TestRpm.Abc().path())).status(),
+            new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the stored package is untouched",
+            new BlockingStorage(this.storage).value(key),
+            new IsEqual<>(content)
+        );
+    }
+
+    @Test
     void skipsUpdateWhenParamSkipIsTrue() throws Exception {
         final byte[] content = Files.readAllBytes(new TestRpm.Abc().path());
         Assertions.assertEquals(RsStatus.ACCEPTED,
@@ -169,5 +265,15 @@ public final class RpmUploadTest {
             new BlockingStorage(this.storage).list(new Key.From("repodata")).isEmpty(),
             new IsEqual<>(true)
         );
+    }
+
+    private com.auto1.pantera.http.Response upload(
+        final boolean immutable, final Optional<Queue<ArtifactEvent>> events,
+        final String path, final byte[] body
+    ) {
+        return new RpmUpload(
+            this.storage, new RepoConfig.Simple(), events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, immutable
+        ).response(new RequestLine("PUT", path), Headers.EMPTY, new Content.From(body)).join();
     }
 }

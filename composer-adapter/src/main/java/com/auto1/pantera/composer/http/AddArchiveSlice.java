@@ -114,10 +114,33 @@ final class AddArchiveSlice implements Slice {
         final String rname,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(repository, events, rname, syncIndex, true);
+    }
+
+    /** Whether published releases are immutable. */
+    private final boolean immutable;
+
+    /**
+     * Ctor with the repository's {@code immutable} setting.
+     * @param repository Repository
+     * @param events Artifact events
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When true a published release cannot be overwritten
+     *  (identical re-upload: 201, different content: 409); when false a
+     *  release upload overwrites the archive and its metadata entry
+     */
+    AddArchiveSlice(
+        final Repository repository, final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
         this.repository = repository;
         this.events = events;
         this.rname = rname;
         this.syncIndex = syncIndex;
+        this.immutable = immutable;
     }
 
     @Override
@@ -266,7 +289,7 @@ final class AddArchiveSlice implements Slice {
         }
         final Archive archive = this.archive(parts[0], parts[1], version, upload);
         final String sanitizedVersion = archive.name().version();
-        return new ReleaseGuard(this.repository).check(
+        return new ReleaseGuard(this.repository, this.immutable).check(
             archive.name().artifact(), packageName, sanitizedVersion, upload.zip(), bytes
         ).thenCompose(verdict -> {
             if (verdict == ReleaseGuard.Verdict.CONFLICT) {

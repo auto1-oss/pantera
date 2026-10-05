@@ -21,6 +21,7 @@ import com.auto1.pantera.npm.Publish;
 import com.auto1.pantera.npm.TgzArchive;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 import javax.json.JsonObject;
@@ -52,11 +53,28 @@ final class CurlPublish implements Publish {
     private final Storage storage;
 
     /**
-     * Constructor.
+     * Whether published versions are immutable.
+     */
+    private final boolean immutable;
+
+    /**
+     * Constructor of a mutable repository's publish front.
      * @param storage The storage.
      */
     CurlPublish(final Storage storage) {
+        this(storage, false);
+    }
+
+    /**
+     * Constructor.
+     * @param storage The storage.
+     * @param immutable When true a publish of an already published version
+     *  fails with {@link com.auto1.pantera.npm.VersionExistsException}
+     *  before anything is written
+     */
+    CurlPublish(final Storage storage, final boolean immutable) {
         this.storage = storage;
+        this.immutable = immutable;
     }
 
     @Override
@@ -106,12 +124,19 @@ final class CurlPublish implements Publish {
     private CompletableFuture<Void> saveAndUpdate(
         final TgzArchive uploaded, final String name, final String vers, final byte[] bytes
     ) {
-        return CompletableFuture.allOf(
-            this.storage.save(
-                new Key.From(name, "-", String.format("%s-%s.tgz", name, vers)),
-                new Content.From(bytes)
-            ),
-            new MetaUpdate.ByTgz(uploaded).update(new Key.From(name), this.storage)
+        final Key tarball = new Key.From(name, "-", String.format("%s-%s.tgz", name, vers));
+        final CompletableFuture<Void> guard;
+        if (this.immutable) {
+            guard = new ImmutableVersionGuard(this.storage)
+                .check(new Key.From(name), vers, List.of(tarball));
+        } else {
+            guard = CompletableFuture.completedFuture(null);
+        }
+        return guard.thenCompose(
+            ignored -> CompletableFuture.allOf(
+                this.storage.save(tarball, new Content.From(bytes)),
+                new MetaUpdate.ByTgz(uploaded).update(new Key.From(name), this.storage)
+            )
         );
     }
 

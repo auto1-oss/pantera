@@ -208,6 +208,100 @@ class UploadSliceTest {
         MatcherAssert.assertThat("Events queue has one item", this.events.size() == 2);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void immutableRepoRefusesExistingRelease(final boolean replace) throws Exception {
+        final Slice immutable = this.slice(true);
+        MatcherAssert.assertThat(
+            "immutable: the first upload is created",
+            this.post(immutable, "/publish?replace=false", UploadSliceTest.tar).status(),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+        final byte[] replacement = Files.readAllBytes(
+            new ResourceUtil("tarballs/extended_decimal-2.0.0.tar").asPath()
+        );
+        final Response rsp = this.post(
+            immutable, String.format("/publish?replace=%s", replace), replacement
+        );
+        MatcherAssert.assertThat(
+            "immutable: an existing release is refused with 422",
+            rsp.status(),
+            new IsEqual<>(RsStatus.UNPROCESSABLE_ENTITY)
+        );
+        MatcherAssert.assertThat(
+            "immutable: the release keeps the original checksum",
+            this.checkPackage("decimal", "2.0.0", DigestUtils.sha256Hex(UploadSliceTest.tar)),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "immutable: the original tarball is untouched",
+            this.storage.value(new Key.From("tarballs", "decimal-2.0.0.tar")).join(),
+            new ContentIs(UploadSliceTest.tar)
+        );
+        MatcherAssert.assertThat(
+            "immutable: only the first upload is published",
+            this.events.size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void mutableRepoReplacesExistingReleaseWithFlag() throws Exception {
+        final Slice mutable = this.slice(false);
+        this.post(mutable, "/publish?replace=false", UploadSliceTest.tar);
+        final byte[] replacement = Files.readAllBytes(
+            new ResourceUtil("tarballs/extended_decimal-2.0.0.tar").asPath()
+        );
+        MatcherAssert.assertThat(
+            "mutable: ?replace=true overwrites the release",
+            this.post(mutable, "/publish?replace=true", replacement).status(),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the release carries the new checksum",
+            this.checkPackage("decimal", "2.0.0", DigestUtils.sha256Hex(replacement)),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the tarball is replaced",
+            this.storage.value(new Key.From("tarballs", "decimal-2.0.0.tar")).join(),
+            new ContentIs(replacement)
+        );
+    }
+
+    @Test
+    void mutableRepoRefusesExistingReleaseWithoutFlag() throws Exception {
+        final Slice mutable = this.slice(false);
+        this.post(mutable, "/publish?replace=false", UploadSliceTest.tar);
+        MatcherAssert.assertThat(
+            "mutable: a re-publish without ?replace=true is refused with 422",
+            this.post(mutable, "/publish", UploadSliceTest.tar).status(),
+            new IsEqual<>(RsStatus.UNPROCESSABLE_ENTITY)
+        );
+        MatcherAssert.assertThat(
+            "mutable: only the first upload is published",
+            this.events.size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    private Slice slice(final boolean immutable) {
+        return new UploadSlice(
+            this.storage, Optional.of(this.events), "my-hexpm-test",
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, immutable
+        );
+    }
+
+    private Response post(final Slice target, final String path, final byte[] body) {
+        final Response rsp = target.response(
+            new RequestLine(RqMethod.POST, path),
+            Headers.from(new ContentLength(body.length)),
+            new Content.From(body)
+        ).join();
+        rsp.body().asBytes();
+        return rsp;
+    }
+
     @Test
     void releaseEndpointAnswersATermTheHexClientCanDecode() {
         // mix hex.publish decodes the answer with binary_to_term: an empty

@@ -857,7 +857,8 @@ public final class VertxMain {
             // per-verticle stack made unblocks invisible to the serving path.
             () -> new AsyncApiVerticle(
                 settings, apiPort, null, sharedDs.orElse(null), jwtTokens,
-                slices.cooldownService(), slices.cooldownMetadataService(), diagnostics
+                slices.cooldownService(), slices.cooldownMetadataService(), diagnostics,
+                slices.storageMetaCache()
             ),
             deployOpts,
             result -> {

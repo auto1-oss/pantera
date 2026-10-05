@@ -80,7 +80,8 @@ public final class RpmSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer; an existing package is
+     * replaced only with {@code ?override=true}.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public RpmSlice(
@@ -92,9 +93,35 @@ public final class RpmSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(storage, policy, basicAuth, tokenAuth, config, events, syncIndex, false);
+    }
+
+    /**
+     * Primary ctor.
+     * @param storage Storage
+     * @param policy Access policy.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication, may be null.
+     * @param config Repository configuration.
+     * @param events Artifact events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether an existing package may never be replaced,
+     *  not even with {@code ?override=true}
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public RpmSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final RepoConfig config,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
         super(
             RpmSlice.createSliceRoute(
-                storage, policy, basicAuth, tokenAuth, config, events, syncIndex
+                storage, policy, basicAuth, tokenAuth, config, events, syncIndex, immutable
             )
         );
     }
@@ -107,7 +134,10 @@ public final class RpmSlice extends Slice.Wrap {
      * @param tokenAuth Token authentication
      * @param config Repository configuration
      * @param events Artifact events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether an existing package may never be replaced
      * @return Slice route
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private static SliceRoute createSliceRoute(
         final Storage storage,
@@ -116,7 +146,8 @@ public final class RpmSlice extends Slice.Wrap {
         final TokenAuthentication tokenAuth,
         final RepoConfig config,
         final Optional<Queue<ArtifactEvent>> events,
-        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
     ) {
         return new SliceRoute(
             new RtRulePath(
@@ -133,7 +164,7 @@ public final class RpmSlice extends Slice.Wrap {
             new RtRulePath(
                 MethodRule.PUT,
                 RpmSlice.createAuthSlice(
-                    new RpmUpload(storage, config, events, syncIndex),
+                    new RpmUpload(storage, config, events, syncIndex, immutable),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

@@ -51,4 +51,34 @@ public final class NewtonJsonResource {
     public byte[] bytes() {
         return new TestResource(String.format("newtonsoft.json/12.0.3/%s", this.name)).asBytes();
     }
+
+    /**
+     * Same archive repacked with one extra entry: an upload of the same
+     * package id and version whose bytes differ from {@link #bytes()}.
+     *
+     * @return Binary data.
+     */
+    public byte[] repacked() {
+        final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (
+            java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(
+                new java.io.ByteArrayInputStream(this.bytes())
+            );
+            java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(out)
+        ) {
+            java.util.zip.ZipEntry entry = in.getNextEntry();
+            while (entry != null) {
+                zip.putNextEntry(new java.util.zip.ZipEntry(entry.getName()));
+                in.transferTo(zip);
+                zip.closeEntry();
+                entry = in.getNextEntry();
+            }
+            zip.putNextEntry(new java.util.zip.ZipEntry("extra.txt"));
+            zip.write("rebuilt".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zip.closeEntry();
+        } catch (final java.io.IOException ex) {
+            throw new java.io.UncheckedIOException(ex);
+        }
+        return out.toByteArray();
+    }
 }

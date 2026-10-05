@@ -80,15 +80,41 @@ public final class RpmUpload implements Slice {
     private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
 
     /**
-     * Ctor with synchronous index writer.
+     * Whether an existing package may never be replaced, not even with
+     * {@code ?override=true}.
+     */
+    private final boolean immutable;
+
+    /**
+     * Ctor with synchronous index writer; an existing package is replaced
+     * only with {@code ?override=true}.
      */
     RpmUpload(final Storage storage, final RepoConfig config,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+        this(storage, config, events, syncIndex, false);
+    }
+
+    /**
+     * Primary ctor.
+     *
+     * @param storage Storage
+     * @param config Repository configuration
+     * @param events Pantera artifact upload/remove events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether an existing package may never be replaced:
+     *  {@code true} answers 409 even with {@code ?override=true}; {@code false}
+     *  replaces it when the client sends {@code ?override=true}
+     */
+    RpmUpload(final Storage storage, final RepoConfig config,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable) {
         this.asto = storage;
         this.config = config;
         this.events = events;
         this.syncIndex = syncIndex;
+        this.immutable = immutable;
     }
 
     @Override
@@ -98,7 +124,7 @@ public final class RpmUpload implements Slice {
         final Request request = new Request(line);
         final Key key = request.file();
         final CompletionStage<Boolean> conflict;
-        if (request.override()) {
+        if (request.override() && !this.immutable) {
             conflict = CompletableFuture.completedFuture(false);
         } else {
             conflict = this.asto.exists(key);

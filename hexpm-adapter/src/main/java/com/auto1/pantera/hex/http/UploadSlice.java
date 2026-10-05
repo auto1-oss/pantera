@@ -97,6 +97,12 @@ public final class UploadSlice implements Slice {
     private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
 
     /**
+     * Whether an existing release may never be replaced, not even with
+     * {@code ?replace=true}.
+     */
+    private final boolean immutable;
+
+    /**
      * Legacy ctor (no synchronous index writer).
      * @param storage Repository storage.
      * @param events Artifact events
@@ -118,10 +124,28 @@ public final class UploadSlice implements Slice {
     public UploadSlice(Storage storage, Optional<Queue<ArtifactEvent>> events,
                        String repoName,
                        com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+        this(storage, events, repoName, syncIndex, false);
+    }
+
+    /**
+     * Primary ctor.
+     * @param storage Repository storage.
+     * @param events Artifact events
+     * @param repoName Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether an existing release may never be replaced:
+     *  {@code true} answers 422 even with {@code ?replace=true}; {@code false}
+     *  replaces it when the client sends {@code ?replace=true}
+     */
+    public UploadSlice(Storage storage, Optional<Queue<ArtifactEvent>> events,
+                       String repoName,
+                       com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+                       boolean immutable) {
         this.storage = storage;
         this.events = events;
         this.rname = repoName;
         this.syncIndex = syncIndex;
+        this.immutable = immutable;
     }
 
     @Override
@@ -172,7 +196,9 @@ public final class UploadSlice implements Slice {
                                 releases,
                                 packagekey
                             ).thenAccept(
-                                ignored -> UploadSlice.handleReleases(releases, replace, version)
+                                ignored -> UploadSlice.handleReleases(
+                                    releases, replace, this.immutable, version
+                                )
                             ).thenApply(
                                 ignored -> UploadSlice.constructSignedPackage(
                                     name, version, innerchcksum, outerchcksum, releases,
@@ -256,12 +282,15 @@ public final class UploadSlice implements Slice {
      *
      * @param releases List of releases from storage
      * @param replace Need replace for release
+     * @param immutable Whether an existing release may never be replaced
      * @param version Version for searching
-     * @throws PanteraException if realise exist in releases and don't need to replace.
+     * @throws ReleaseExistsException if the release exists and either the
+     *  repository is immutable or the client did not ask to replace it.
      */
     private static void handleReleases(
         final AtomicReference<List<PackageOuterClass.Release>> releases,
         final boolean replace,
+        final boolean immutable,
         final AtomicReference<String> version
     ) {
         final List<PackageOuterClass.Release> releaseslist = releases.get();
@@ -276,6 +305,15 @@ public final class UploadSlice implements Slice {
             } else {
                 filtered.add(release);
             }
+        }
+        if (versionexist && immutable) {
+            throw new ReleaseExistsException(
+                String.format(
+                    "Version %s already exists and this repository does not allow"
+                        + " replacing releases; publish a new version instead",
+                    version.get()
+                )
+            );
         }
         if (versionexist && !replace) {
             throw new ReleaseExistsException(

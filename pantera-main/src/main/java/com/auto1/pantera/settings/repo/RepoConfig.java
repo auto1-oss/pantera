@@ -333,6 +333,21 @@ public final class RepoConfig {
         return Optional.of(Duration.parse(duration));
     }
 
+    /**
+     * Whether published artifacts of this repository are immutable: an
+     * existing artifact can never be overwritten. Flat {@code repo.immutable}
+     * key; a missing key means {@code true}. Only an explicit {@code false}
+     * (any case) makes the repository overwritable -- any other value keeps
+     * the safe default. Database configs reach here through
+     * {@code Json2Yaml}, so a JSON boolean arrives as the scalar
+     * {@code true} / {@code false}.
+     *
+     * @return False only when {@code immutable: false} is configured
+     */
+    public boolean immutable() {
+        return !"false".equalsIgnoreCase(this.repoYaml().string("immutable"));
+    }
+
     public Optional<HttpClientSettings> httpClientSettings() {
         final YamlMapping client = this.repoYaml().yamlMapping("http_client");
         return client != null ? Optional.of(HttpClientSettings.from(client)) : Optional.empty();

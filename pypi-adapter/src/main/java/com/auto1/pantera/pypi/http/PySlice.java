@@ -93,7 +93,8 @@ public final class PySlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer; published files are
+     * immutable.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public PySlice(
@@ -104,6 +105,32 @@ public final class PySlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> queue,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, queue, syncIndex, true);
+    }
+
+    /**
+     * Primary ctor.
+     * @param storage Storage
+     * @param policy Security policy
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication, may be null
+     * @param name Repository name
+     * @param queue Artifact events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether a published file may never be replaced by a
+     *  re-upload with different content
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PySlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> queue,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
     ) {
         super(
             new SliceRoute(
@@ -132,7 +159,7 @@ public final class PySlice extends Slice.Wrap {
                         )
                     ),
                     PySlice.createAuthSlice(
-                        new WheelSlice(storage, queue, name, syncIndex),
+                        new WheelSlice(storage, queue, name, syncIndex, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
