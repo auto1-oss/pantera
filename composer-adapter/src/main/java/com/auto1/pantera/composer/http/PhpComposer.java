@@ -118,12 +118,40 @@ public final class PhpComposer extends Slice.Wrap {
     }
 
     /**
-     * Full ctor additionally carrying the WS1.7 (spec {@code
+     * Ctor with the repository's {@code immutable} setting.
+     * @param repository Repository
+     * @param policy Access permissions
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact repository events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When true a published release cannot be overwritten
+     *  (identical re-upload: 201, different content: 409); when false release
+     *  uploads overwrite. Dev versions are always mutable.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, ArtifactIndex.NOP,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Ctor additionally carrying the WS1.7 (spec {@code
      * WS1-storage-for-scale.md} &sect;3.B2) download policy. Only the two
      * dist-archive download routes ({@link DownloadArchiveSlice}) become
      * redirect-eligible under a non-{@link DownloadPolicy#streamOnly()} policy;
      * every metadata route ({@code /p2/}, {@code available-packages.json},
-     * {@code packages/list.json}) always streams.
+     * {@code packages/list.json}) always streams. Releases are immutable.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public PhpComposer(
@@ -136,6 +164,39 @@ public final class PhpComposer extends Slice.Wrap {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final ArtifactIndex artifactIndex,
         final DownloadPolicy downloadPolicy
+    ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, artifactIndex,
+            downloadPolicy, true);
+    }
+
+    /**
+     * Full ctor: read-side artifact index, WS1.7 download policy and the
+     * repository's {@code immutable} setting.
+     * @param repository Repository
+     * @param policy Access permissions
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact repository events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param artifactIndex Read-side shared artifact index
+     * @param downloadPolicy Per-repo download policy (dist archives only)
+     * @param immutable When true a published release cannot be overwritten
+     *  (identical re-upload: 201, different content: 409); when false release
+     *  uploads overwrite. Dev versions are always mutable.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
     ) {
         super(
             new SliceRoute(
@@ -228,7 +289,7 @@ public final class PhpComposer extends Slice.Wrap {
                         MethodRule.PUT
                     ),
                     PhpComposer.createAuthSlice(
-                        new AddSlice(repository),
+                        new AddSlice(repository, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
@@ -242,7 +303,7 @@ public final class PhpComposer extends Slice.Wrap {
                         MethodRule.PUT
                     ),
                     PhpComposer.createAuthSlice(
-                        new AddArchiveSlice(repository, events, name, syncIndex),
+                        new AddArchiveSlice(repository, events, name, syncIndex, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

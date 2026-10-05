@@ -131,7 +131,7 @@ public final class MavenSlice extends Slice.Wrap {
     /**
      * Ctor with synchronous index writer for read-after-write consistency.
      * Uses {@link MavenHostedPolicy#DEFAULT} (no PGP verify, release
-     * immutability on) — a repository opts out with releaseImmutable: false.
+     * immutability on) — a repository opts out with {@code immutable: false}.
      * @param storage The storage.
      * @param policy Access policy.
      * @param basicAuth Basic authentication.
@@ -154,6 +154,34 @@ public final class MavenSlice extends Slice.Wrap {
     }
 
     /**
+     * Ctor with the repository's {@code immutable} setting (no PGP verify).
+     * @param storage The storage.
+     * @param policy Access policy.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Artifact events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When true a published release file can never be
+     *  overwritten (identical re-upload is an idempotent 201, different bytes
+     *  are a 409); when false a differing release file overwrites
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public MavenSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            new MavenHostedPolicy(false, immutable));
+    }
+
+    /**
      * Ctor with synchronous index writer AND hosted-write policy
      * (WS4-maven.2/.6 — PGP verify, release immutability).
      * @param storage The storage.
@@ -163,7 +191,7 @@ public final class MavenSlice extends Slice.Wrap {
      * @param name Repository name
      * @param events Artifact events
      * @param syncIndex Synchronous artifact-index writer
-     * @param hostedPolicy Hosted-write policy (verifyPgp / releaseImmutable)
+     * @param hostedPolicy Hosted-write policy (verifyPgp / immutable)
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public MavenSlice(
@@ -193,7 +221,7 @@ public final class MavenSlice extends Slice.Wrap {
      * @param name Repository name
      * @param events Artifact events
      * @param syncIndex Synchronous artifact-index writer
-     * @param hostedPolicy Hosted-write policy (verifyPgp / releaseImmutable)
+     * @param hostedPolicy Hosted-write policy (verifyPgp / immutable)
      * @param downloadPolicy WS1.7 presigned-direct-download policy
      * @checkstyle ParameterNumberCheck (5 lines)
      */

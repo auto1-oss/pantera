@@ -178,6 +178,50 @@ public final class GemSlice extends Slice.Wrap {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final DownloadPolicy downloadPolicy
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex, downloadPolicy, false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
+     * @param immutable When {@code true} a push of an already stored gem
+     *  version answers 409 Conflict; when {@code false} it overwrites the gem
+     *  and rebuilds the specs index
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GemSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable When {@code true} a push of an already stored gem
+     *  version answers 409 Conflict; when {@code false} it overwrites the gem
+     *  and rebuilds the specs index
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GemSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -186,7 +230,7 @@ public final class GemSlice extends Slice.Wrap {
                         new RtRule.ByPath("/api/v1/gems")
                     ),
                     GemSlice.createAuthSlice(
-                        new SubmitGemSlice(storage, events, name, syncIndex),
+                        new SubmitGemSlice(storage, events, name, syncIndex, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

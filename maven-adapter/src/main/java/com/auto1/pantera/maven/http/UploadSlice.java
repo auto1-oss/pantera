@@ -123,8 +123,8 @@ public final class UploadSlice implements Slice {
     private final SyncArtifactIndexer syncIndex;
 
     /**
-     * Hosted-write policy (WS4-maven.2/.6): {@code verifyPgp} and
-     * {@code releaseImmutable}. Defaults to {@link MavenHostedPolicy#DEFAULT}
+     * Hosted-write policy (WS4-maven.2/.6): {@code verifyPgp} and the
+     * repository's {@code immutable} setting. Defaults to {@link MavenHostedPolicy#DEFAULT}
      * (byte-identical to pre-2.3.0 behaviour) for every ctor overload that
      * predates this flag.
      */
@@ -167,6 +167,25 @@ public final class UploadSlice implements Slice {
         final SyncArtifactIndexer syncIndex
     ) {
         this(storage, events, rname, syncIndex, MavenHostedPolicy.DEFAULT);
+    }
+
+    /**
+     * Ctor with synchronous index writer and the repository's
+     * {@code immutable} setting (no PGP verify).
+     * @param storage Storage
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether published release files are immutable
+     */
+    public UploadSlice(
+        final Storage storage,
+        final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(storage, events, rname, syncIndex, new MavenHostedPolicy(false, immutable));
     }
 
     /**
@@ -319,11 +338,15 @@ public final class UploadSlice implements Slice {
             return this.handleSignatureUpload(key, keyPath, body, headers, owner, size, auditCtx);
         }
 
-        // Published release files are immutable: an identical re-upload
-        // (CI retry) is idempotent, different bytes are a 409 Conflict.
-        // SNAPSHOT directories stay writable. A repository opts out with
-        // releaseImmutable: false (WS4-maven.6).
-        if (this.policy.releaseImmutable() && isReleaseFile(keyPath)) {
+        // In an immutable repository published release files can never be
+        // overwritten: an identical re-upload (CI retry) is idempotent,
+        // different bytes are a 409 Conflict. SNAPSHOT directories stay
+        // writable. A mutable repository (immutable: false; the deprecated
+        // releaseImmutable alias) overwrites through the normal save path,
+        // which regenerates the checksum sidecars from the new bytes (so the
+        // client's own checksum upload that follows verifies) and emits the
+        // publish event that upserts the search index.
+        if (this.policy.immutable() && isReleaseFile(keyPath)) {
             return this.storage.exists(key).thenCompose(
                 exists -> {
                     if (exists) {

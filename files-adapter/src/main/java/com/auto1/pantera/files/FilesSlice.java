@@ -140,6 +140,42 @@ public final class FilesSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final DownloadPolicy downloadPolicy
     ) {
+        this(storage, perms, basicAuth, tokenAuth, name, events, downloadPolicy, false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
+     * @param immutable When true a stored file can never be overwritten
+     *  (identical re-upload is an idempotent 201, different bytes are a 409);
+     *  when false a re-upload overwrites it
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public FilesSlice(
+        final Storage storage, final Policy<?> perms, final Authentication basicAuth,
+        final TokenAuthentication tokenAuth, final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean immutable
+    ) {
+        this(storage, perms, basicAuth, tokenAuth, name, events, DownloadPolicy.streamOnly(),
+            immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable When true a stored file can never be overwritten
+     *  (identical re-upload is an idempotent 201, different bytes are a 409);
+     *  when false a re-upload overwrites it
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public FilesSlice(
+        final Storage storage, final Policy<?> perms, final Authentication basicAuth,
+        final TokenAuthentication tokenAuth, final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -227,13 +263,7 @@ public final class FilesSlice extends Slice.Wrap {
                 new RtRulePath(
                     MethodRule.PUT,
                     FilesSlice.createAuthSlice(
-                        new SliceUpload(
-                            storage,
-                            KeyFromPath::new,
-                            events.map(
-                                queue -> new RepositoryEvents(FilesSlice.REPO_TYPE, name, queue)
-                            )
-                        ),
+                        FilesSlice.uploadSlice(storage, name, events, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
@@ -263,6 +293,30 @@ public final class FilesSlice extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    /**
+     * Upload slice: plain {@link SliceUpload} for a mutable repository,
+     * guarded by {@link ImmutableUploadSlice} for an immutable one.
+     * @param storage Storage
+     * @param name Repository name
+     * @param events Repository artifact events
+     * @param immutable Whether stored files are immutable
+     * @return Upload slice
+     */
+    private static Slice uploadSlice(
+        final Storage storage, final String name,
+        final Optional<Queue<ArtifactEvent>> events, final boolean immutable
+    ) {
+        final Slice upload = new SliceUpload(
+            storage,
+            KeyFromPath::new,
+            events.map(queue -> new RepositoryEvents(FilesSlice.REPO_TYPE, name, queue))
+        );
+        if (immutable) {
+            return new ImmutableUploadSlice(upload, storage, name);
+        }
+        return upload;
     }
 
     /**

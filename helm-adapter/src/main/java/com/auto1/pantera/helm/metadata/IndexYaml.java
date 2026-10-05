@@ -57,8 +57,10 @@ public final class IndexYaml {
     }
 
     /**
-     * Update the index file.
-     * @param arch New archive in a repo for which metadata is missing.
+     * Update the index file. An entry already present for the archive's
+     * name+version is replaced when its digest differs from the archive's,
+     * and kept untouched when it matches.
+     * @param arch Archive stored in the repo.
      * @return The operation result
      */
     public Completable update(final TgzArchive arch) {
@@ -148,18 +150,15 @@ public final class IndexYaml {
         final Map<String, Object> copy = new HashMap<>(index);
         final IndexYamlMapping yaml = new IndexYamlMapping(copy);
         final ChartYaml chart = tgz.chartYaml();
-        if (
-            !yaml
-                .byChartAndVersion(
-                    chart.name(),
-                    chart.version()
-                )
-                .isPresent()
-        ) {
-            yaml.addChartVersions(
-                chart.name(),
-                Collections.singletonList(tgz.metadata(Optional.empty()))
-            );
+        final Map<String, Object> meta = tgz.metadata(Optional.empty());
+        final Optional<Map<String, Object>> existing =
+            yaml.byChartAndVersion(chart.name(), chart.version());
+        // A re-push of the same bytes keeps the entry as is (idempotent); a
+        // re-push of different bytes (an overwrite on a mutable repository)
+        // replaces the entry, so digest, created and urls describe the
+        // archive actually stored.
+        if (existing.isEmpty() || !meta.get("digest").equals(existing.get().get("digest"))) {
+            yaml.addChartVersions(chart.name(), Collections.singletonList(meta));
         }
         return copy;
     }

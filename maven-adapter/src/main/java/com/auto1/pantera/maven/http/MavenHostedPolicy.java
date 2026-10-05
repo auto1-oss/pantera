@@ -19,18 +19,20 @@ package com.auto1.pantera.maven.http;
  * @param verifyPgp Verify a primary's {@code .asc} signature against the
  *                  admin-managed keyring before acknowledging it
  *                  (WS4-maven.2). Default {@code false}.
- * @param releaseImmutable Reject redeploy of an existing non-SNAPSHOT
- *                          primary with 409 instead of overwriting it
- *                          (WS4-maven.6). Default {@code true}; a repository
- *                          opts out with {@code releaseImmutable: false}.
- *                          SNAPSHOT redeploys are always allowed regardless.
+ * @param immutable Reject redeploy of an existing non-SNAPSHOT primary with
+ *                  409 instead of overwriting it (an identical re-upload is
+ *                  an idempotent 201). Fed from the repository's
+ *                  {@code immutable} setting (deprecated alias:
+ *                  {@code releaseImmutable}). Default {@code true}; a
+ *                  repository opts out with {@code immutable: false}.
+ *                  SNAPSHOT redeploys are always allowed regardless.
  * @since 2.3.0
  */
-public record MavenHostedPolicy(boolean verifyPgp, boolean releaseImmutable) {
+public record MavenHostedPolicy(boolean verifyPgp, boolean immutable) {
 
     /**
      * Default policy: no PGP signature verification, and published release
-     * versions are immutable (a repository opts out with releaseImmutable: false).
+     * versions are immutable (a repository opts out with {@code immutable: false}).
      */
     public static final MavenHostedPolicy DEFAULT = new MavenHostedPolicy(false, true);
 }

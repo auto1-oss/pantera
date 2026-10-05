@@ -13,6 +13,7 @@ package com.auto1.pantera.pypi.http;
 import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.ext.ContentDigest;
@@ -84,6 +85,13 @@ final class WheelSlice implements Slice {
     private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
 
     /**
+     * Whether a published file may never be replaced. When {@code false}
+     * a re-upload of an existing file name with different bytes
+     * overwrites it and regenerates its sidecar and indexes.
+     */
+    private final boolean immutable;
+
+    /**
      * Legacy ctor (no synchronous index writer).
      *
      * @param storage Storage.
@@ -107,10 +115,27 @@ final class WheelSlice implements Slice {
     WheelSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
         final String rname,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+        this(storage, events, rname, syncIndex, true);
+    }
+
+    /**
+     * Primary ctor.
+     *
+     * @param storage Storage.
+     * @param events Events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether a published file may never be replaced
+     */
+    WheelSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable) {
         this.storage = storage;
         this.events = events;
         this.rname = rname;
         this.syncIndex = syncIndex;
+        this.immutable = immutable;
     }
 
     @Override
@@ -276,10 +301,12 @@ final class WheelSlice implements Slice {
      * index is rebuilt from the wrong prefix and hides every earlier
      * release.</p>
      *
-     * <p>A released file is immutable (PyPI file-name reuse policy): an
-     * identical re-upload is an idempotent 200, a different file under an
-     * existing name is refused with 400 "File already exists" so pinned
-     * hashes keep verifying.</p>
+     * <p>On an immutable repository a released file cannot be replaced
+     * (PyPI file-name reuse policy): an identical re-upload is an idempotent
+     * 200, a different file under an existing name is refused with 400
+     * "File already exists" so pinned hashes keep verifying. On a mutable
+     * repository the different file overwrites the existing one (201) and
+     * its sidecar and both indexes are regenerated.</p>
      *
      * @param temp Temporary key holding the upload
      * @param filename Uploaded filename
@@ -298,7 +325,7 @@ final class WheelSlice implements Slice {
             exists -> {
                 final CompletionStage<Response> res;
                 if (exists) {
-                    res = this.existing(temp, name, filename);
+                    res = this.existing(temp, name, packageName, extracted, headers);
                 } else {
                     res = this.store(temp, name, packageName, extracted, headers)
                         .thenApply(ignored -> ResponseBuilder.from(RsStatus.CREATED).build());
@@ -313,49 +340,75 @@ final class WheelSlice implements Slice {
      *
      * @param temp Temporary key holding the upload
      * @param name Existing file key
-     * @param filename Uploaded filename
-     * @return 200 when the bytes are identical, 400 otherwise
+     * @param packageName Normalized package name
+     * @param extracted Package metadata (and PEP 658 METADATA) read from the archive
+     * @param headers Request headers
+     * @return 200 when the bytes are identical; otherwise 201 after an
+     *  overwrite on a mutable repository, 400 on an immutable one
      */
     private CompletionStage<Response> existing(
-        final Key temp, final Key name, final String filename
+        final Key temp, final Key name, final String packageName,
+        final Metadata.Extracted extracted, final Headers headers
     ) {
         return this.sha256(temp).thenCombine(this.sha256(name), String::equals)
             .thenCompose(
-                same -> this.storage.delete(temp).thenApply(
-                    nothing -> {
-                        final Response response;
-                        if (same) {
-                            response = ResponseBuilder.ok().build();
-                        } else {
-                            EcsLogger.warn("com.auto1.pantera.pypi")
-                                .message(
-                                    "Refused re-upload of an existing file with different content"
-                                )
-                                .eventCategory("web")
-                                .eventAction("artifact_upload")
-                                .eventOutcome("failure")
-                                .field("event.reason", "file_exists")
-                                .field("repository.name", this.rname)
-                                .field("file.name", filename)
-                                .field("log.source", "application")
-                                .log();
-                            response = ResponseBuilder.badRequest()
-                                // twine prints only the status line: say why there,
-                                // as PyPI does.
-                                .header(new ReasonPhrase("File already exists"))
-                                .textBody(
-                                    String.format(
-                                        "File already exists: '%s'. A published file cannot be"
-                                            + " replaced; publish a new version instead.",
-                                        filename
-                                    )
-                                )
-                                .build();
-                        }
-                        return response;
+                same -> {
+                    final CompletionStage<Response> res;
+                    if (same) {
+                        res = this.storage.delete(temp)
+                            .thenApply(nothing -> ResponseBuilder.ok().build());
+                    } else if (this.immutable) {
+                        res = this.storage.delete(temp)
+                            .thenApply(nothing -> this.refuse(new KeyLastPart(name).get()));
+                    } else {
+                        res = this.store(temp, name, packageName, extracted, headers).thenApply(
+                            ignored -> {
+                                EcsLogger.info("com.auto1.pantera.pypi")
+                                    .message("Overwrote an existing file on a mutable repository")
+                                    .eventCategory("web")
+                                    .eventAction("artifact_upload")
+                                    .eventOutcome("success")
+                                    .field("repository.name", this.rname)
+                                    .field("file.name", new KeyLastPart(name).get())
+                                    .field("log.source", "application")
+                                    .log();
+                                return ResponseBuilder.from(RsStatus.CREATED).build();
+                            }
+                        );
                     }
-                )
+                    return res;
+                }
             );
+    }
+
+    /**
+     * Refuse the replacement of an existing file with different content.
+     *
+     * @param filename Uploaded filename
+     * @return 400 "File already exists"
+     */
+    private Response refuse(final String filename) {
+        EcsLogger.warn("com.auto1.pantera.pypi")
+            .message("Refused re-upload of an existing file with different content")
+            .eventCategory("web")
+            .eventAction("artifact_upload")
+            .eventOutcome("failure")
+            .field("event.reason", "file_exists")
+            .field("repository.name", this.rname)
+            .field("file.name", filename)
+            .field("log.source", "application")
+            .log();
+        return ResponseBuilder.badRequest()
+            // twine prints only the status line: say why there, as PyPI does.
+            .header(new ReasonPhrase("File already exists"))
+            .textBody(
+                String.format(
+                    "File already exists: '%s'. A published file cannot be"
+                        + " replaced; publish a new version instead.",
+                    filename
+                )
+            )
+            .build();
     }
 
     /**

@@ -129,9 +129,53 @@ public final class RpmSlice extends Slice.Wrap {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final DownloadPolicy downloadPolicy
     ) {
+        this(storage, policy, basicAuth, tokenAuth, config, events, syncIndex, downloadPolicy,
+            false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
+     * @param immutable Whether an existing package may never be replaced,
+     *  not even with {@code ?override=true}
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public RpmSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final RepoConfig config,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, config, events, syncIndex,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable Whether an existing package may never be replaced,
+     *  not even with {@code ?override=true}
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public RpmSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final RepoConfig config,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
         super(
             RpmSlice.createSliceRoute(
-                storage, policy, basicAuth, tokenAuth, config, events, syncIndex, downloadPolicy
+                storage, policy, basicAuth, tokenAuth, config, events, syncIndex, downloadPolicy,
+                immutable
             )
         );
     }
@@ -146,6 +190,7 @@ public final class RpmSlice extends Slice.Wrap {
      * @param events Artifact events queue
      * @param syncIndex Synchronous artifact-index writer
      * @param downloadPolicy WS1.7 download policy for the catch-all GET route
+     * @param immutable Whether an existing package may never be replaced
      * @return Slice route
      * @checkstyle ParameterNumberCheck (5 lines)
      */
@@ -157,7 +202,8 @@ public final class RpmSlice extends Slice.Wrap {
         final RepoConfig config,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
-        final DownloadPolicy downloadPolicy
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
     ) {
         return new SliceRoute(
             new RtRulePath(
@@ -178,7 +224,7 @@ public final class RpmSlice extends Slice.Wrap {
             new RtRulePath(
                 MethodRule.PUT,
                 RpmSlice.createAuthSlice(
-                    new RpmUpload(storage, config, events, syncIndex),
+                    new RpmUpload(storage, config, events, syncIndex, immutable),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

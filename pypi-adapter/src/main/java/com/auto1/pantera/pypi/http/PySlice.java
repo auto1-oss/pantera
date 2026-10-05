@@ -130,6 +130,48 @@ public final class PySlice extends Slice.Wrap {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final DownloadPolicy downloadPolicy
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, queue, syncIndex, downloadPolicy, true);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
+     * @param immutable Whether a published file may never be replaced by a
+     *  re-upload with different content
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PySlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> queue,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, queue, syncIndex,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable Whether a published file may never be replaced by a
+     *  re-upload with different content
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PySlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> queue,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
         super(
             new SliceRoute(
                 // PEP 658 .metadata files. Placed before the general
@@ -183,7 +225,7 @@ public final class PySlice extends Slice.Wrap {
                         )
                     ),
                     PySlice.createAuthSlice(
-                        new WheelSlice(storage, queue, name, syncIndex),
+                        new WheelSlice(storage, queue, name, syncIndex, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

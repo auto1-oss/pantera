@@ -133,6 +133,53 @@ public final class HelmSlice extends Slice.Wrap {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final DownloadPolicy downloadPolicy
     ) {
+        this(storage, base, policy, basicAuth, tokenAuth, name, events, syncIndex, downloadPolicy,
+            false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
+     * @param immutable When {@code true} a push of an already stored chart
+     *  name+version answers 409 Conflict; when {@code false} it overwrites the
+     *  archive and its {@code index.yaml} entry
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public HelmSlice(
+        final Storage storage,
+        final String base,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(storage, base, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable When {@code true} a push of an already stored chart
+     *  name+version answers 409 Conflict; when {@code false} it overwrites the
+     *  archive and its {@code index.yaml} entry
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public HelmSlice(
+        final Storage storage,
+        final String base,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -140,7 +187,7 @@ public final class HelmSlice extends Slice.Wrap {
                         MethodRule.PUT, MethodRule.POST
                     ),
                     HelmSlice.createAuthSlice(
-                        new PushChartSlice(storage, events, name, syncIndex),
+                        new PushChartSlice(storage, events, name, syncIndex, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

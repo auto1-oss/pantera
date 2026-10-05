@@ -57,6 +57,11 @@ public final class PackagePublish implements Route {
     private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
 
     /**
+     * Whether an existing package version may never be replaced.
+     */
+    private final boolean immutable;
+
+    /**
      * Legacy ctor (no synchronous index writer).
      *
      * @param repository Repository for adding package.
@@ -79,10 +84,27 @@ public final class PackagePublish implements Route {
     public PackagePublish(final Repository repository, final Optional<Queue<ArtifactEvent>> events,
         final String name,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+        this(repository, events, name, syncIndex, true);
+    }
+
+    /**
+     * Primary ctor.
+     *
+     * @param repository Repository for adding package.
+     * @param events Repository events queue
+     * @param name Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether an existing package version may never be replaced
+     */
+    public PackagePublish(final Repository repository, final Optional<Queue<ArtifactEvent>> events,
+        final String name,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable) {
         this.repository = repository;
         this.events = events;
         this.name = name;
         this.syncIndex = syncIndex;
+        this.immutable = immutable;
     }
 
     @Override
@@ -92,7 +114,9 @@ public final class PackagePublish implements Route {
 
     @Override
     public Resource resource(final String path) {
-        return new NewPackage(this.repository, this.events, this.name, this.syncIndex);
+        return new NewPackage(
+            this.repository, this.events, this.name, this.syncIndex, this.immutable
+        );
     }
 
     /**
@@ -120,7 +144,12 @@ public final class PackagePublish implements Route {
         private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
 
         /**
-         * Ctor with synchronous index writer.
+         * Whether an existing package version may never be replaced.
+         */
+        private final boolean immutable;
+
+        /**
+         * Ctor with synchronous index writer; existing versions are immutable.
          *
          * @param repository Repository for adding package.
          * @param events Repository events
@@ -130,10 +159,27 @@ public final class PackagePublish implements Route {
         public NewPackage(final Repository repository, final Optional<Queue<ArtifactEvent>> events,
             final String name,
             final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+            this(repository, events, name, syncIndex, true);
+        }
+
+        /**
+         * Primary ctor.
+         *
+         * @param repository Repository for adding package.
+         * @param events Repository events
+         * @param name Repository name
+         * @param syncIndex Synchronous artifact-index writer
+         * @param immutable Whether an existing package version may never be replaced
+         */
+        public NewPackage(final Repository repository, final Optional<Queue<ArtifactEvent>> events,
+            final String name,
+            final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+            final boolean immutable) {
             this.repository = repository;
             this.events = events;
             this.name = name;
             this.syncIndex = syncIndex;
+            this.immutable = immutable;
         }
 
         @Override
@@ -145,7 +191,7 @@ public final class PackagePublish implements Route {
         public CompletableFuture<Response> put(Headers headers, Content body) {
             return CompletableFuture.supplyAsync(
                 () -> new Multipart(headers, body).first()
-            ).thenCompose(this.repository::add).thenCompose(
+            ).thenCompose(pkg -> this.repository.add(pkg, this.immutable)).thenCompose(
                 info -> {
                     final ArtifactEvent event = new ArtifactEvent(
                         PackagePublish.REPO_TYPE, this.name,

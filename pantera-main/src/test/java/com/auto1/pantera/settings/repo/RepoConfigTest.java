@@ -18,6 +18,7 @@ import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.http.client.RemoteConfig;
+import com.auto1.pantera.misc.Json2Yaml;
 import com.auto1.pantera.settings.StorageByAlias;
 import com.auto1.pantera.test.TestStoragesCache;
 import org.junit.jupiter.api.Assertions;
@@ -239,6 +240,29 @@ public final class RepoConfigTest {
     }
 
     @Test
+    void immutableByDefault() throws Exception {
+        Assertions.assertTrue(readMin().immutable());
+    }
+
+    @Test
+    void immutableFalseOnlyWhenExplicitlyFalse() {
+        Assertions.assertAll(
+            () -> Assertions.assertFalse(
+                withImmutable("false").immutable(), "explicit false is mutable"
+            ),
+            () -> Assertions.assertFalse(
+                withImmutable("FALSE").immutable(), "false is case-insensitive"
+            ),
+            () -> Assertions.assertTrue(
+                withImmutable("true").immutable(), "explicit true is immutable"
+            ),
+            () -> Assertions.assertTrue(
+                withImmutable("no").immutable(), "anything but false is immutable"
+            )
+        );
+    }
+
+    @Test
     public void downloadPolicyBundlesModeAndTtl() {
         final RepoConfig cfg = repoCustomWithSettings(
             builder -> builder.add("download-mode", "redirect").add("presign-ttl-seconds", "300")
@@ -264,6 +288,79 @@ public final class RepoConfigTest {
             ).build(),
             new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
             new Key.From("repo-download-mode.yml"), cache, false
+        );
+    }
+
+    @Test
+    void immutableReadsDatabaseJsonBooleans() {
+        Assertions.assertAll(
+            () -> Assertions.assertFalse(
+                fromJson("{\"repo\":{\"type\":\"file\",\"immutable\":false}}").immutable(),
+                "JSON false is mutable"
+            ),
+            () -> Assertions.assertTrue(
+                fromJson("{\"repo\":{\"type\":\"file\",\"immutable\":true}}").immutable(),
+                "JSON true is immutable"
+            ),
+            () -> Assertions.assertTrue(
+                fromJson("{\"repo\":{\"type\":\"file\"}}").immutable(),
+                "missing key is immutable"
+            )
+        );
+    }
+
+    @Test
+    void releaseImmutableIsADeprecatedAliasWhenImmutableIsAbsent() {
+        Assertions.assertAll(
+            () -> Assertions.assertFalse(
+                fromJson("{\"repo\":{\"type\":\"maven\",\"releaseImmutable\":false}}")
+                    .immutable(),
+                "releaseImmutable: false alone makes the repository mutable"
+            ),
+            () -> Assertions.assertTrue(
+                fromJson("{\"repo\":{\"type\":\"maven\",\"releaseImmutable\":true}}")
+                    .immutable(),
+                "releaseImmutable: true alone keeps it immutable"
+            )
+        );
+    }
+
+    @Test
+    void immutableTakesPrecedenceOverReleaseImmutable() {
+        Assertions.assertAll(
+            () -> Assertions.assertTrue(
+                fromJson(
+                    "{\"repo\":{\"type\":\"maven\",\"immutable\":true,\"releaseImmutable\":false}}"
+                ).immutable(),
+                "immutable: true wins over releaseImmutable: false"
+            ),
+            () -> Assertions.assertFalse(
+                fromJson(
+                    "{\"repo\":{\"type\":\"maven\",\"immutable\":false,\"releaseImmutable\":true}}"
+                ).immutable(),
+                "immutable: false wins over releaseImmutable: true"
+            )
+        );
+    }
+
+    private RepoConfig withImmutable(final String value) {
+        return RepoConfig.from(
+            Yaml.createYamlMappingBuilder().add(
+                "repo", Yaml.createYamlMappingBuilder()
+                    .add("type", "file")
+                    .add("immutable", value)
+                    .build()
+            ).build(),
+            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
+            new Key.From("repo-immutable"), cache, false
+        );
+    }
+
+    private RepoConfig fromJson(final String json) {
+        return RepoConfig.from(
+            new Json2Yaml().apply(json),
+            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
+            new Key.From("repo-json"), cache, false
         );
     }
 

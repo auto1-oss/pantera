@@ -93,6 +93,15 @@ public interface MetaUpdate {
         }
 
         /**
+         * The version this update writes.
+         *
+         * @return Version string, or {@code null} when the json carries none
+         */
+        public String version() {
+            return this.extractVersion();
+        }
+
+        /**
          * Extract the dist-tags the npm CLI asked to be set as part of this
          * publish. A normal {@code npm publish} sends
          * {@code {"latest": "<version>"}}; {@code npm publish --tag beta}

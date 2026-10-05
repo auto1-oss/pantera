@@ -34,7 +34,8 @@ import javax.json.JsonObjectBuilder;
  * Re-uploading it with
  * different content is a conflict; re-uploading identical content is
  * idempotent. Dev branches ({@code dev-*}, {@code *-dev}) move by design
- * and may be overwritten.</p>
+ * and may be overwritten. In a repository configured {@code immutable: false}
+ * every upload is new: releases are overwritten too.</p>
  *
  * @since 2.2.9
  */
@@ -78,12 +79,38 @@ final class ReleaseGuard {
     private final Executor executor;
 
     /**
-     * Ctor.
+     * Whether published releases are immutable. When false every upload is
+     * {@link Verdict#NEW}: a release is overwritten like a dev branch.
+     */
+    private final boolean immutable;
+
+    /**
+     * Ctor of an immutable repository's guard.
      *
      * @param repository Repository
      */
     ReleaseGuard(final Repository repository) {
-        this(repository, StorageExecutors.WRITE);
+        this(repository, true);
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param repository Repository
+     * @param immutable Whether published releases are immutable
+     */
+    ReleaseGuard(final Repository repository, final boolean immutable) {
+        this(repository, StorageExecutors.WRITE, immutable);
+    }
+
+    /**
+     * Ctor of an immutable repository's guard.
+     *
+     * @param repository Repository
+     * @param executor Executor for fingerprinting (CPU work off the event loop)
+     */
+    ReleaseGuard(final Repository repository, final Executor executor) {
+        this(repository, executor, true);
     }
 
     /**
@@ -91,10 +118,14 @@ final class ReleaseGuard {
      *
      * @param repository Repository
      * @param executor Executor for fingerprinting (CPU work off the event loop)
+     * @param immutable Whether published releases are immutable
      */
-    ReleaseGuard(final Repository repository, final Executor executor) {
+    ReleaseGuard(
+        final Repository repository, final Executor executor, final boolean immutable
+    ) {
         this.repository = repository;
         this.executor = executor;
+        this.immutable = immutable;
     }
 
     /**
@@ -114,7 +145,7 @@ final class ReleaseGuard {
         final boolean zip,
         final byte[] upload
     ) {
-        if (ReleaseGuard.mutable(version)) {
+        if (!this.immutable || ReleaseGuard.mutable(version)) {
             return CompletableFuture.completedFuture(Verdict.NEW);
         }
         return this.published(pkg, version).thenCompose(
@@ -186,7 +217,7 @@ final class ReleaseGuard {
     CompletableFuture<Verdict> checkEntry(
         final String pkg, final String version, final JsonObject entry
     ) {
-        if (ReleaseGuard.mutable(version)) {
+        if (!this.immutable || ReleaseGuard.mutable(version)) {
             return CompletableFuture.completedFuture(Verdict.NEW);
         }
         return this.repository.packages(new Name(pkg)).toCompletableFuture().thenCompose(

@@ -67,13 +67,31 @@ public final class CliPublish implements Publish {
     private final NpmPackageSigner signer;
 
     /**
-     * Constructor.
+     * Whether published versions are immutable.
+     */
+    private final boolean immutable;
+
+    /**
+     * Constructor of a mutable repository's publish front: a re-publish
+     * overwrites the version.
      * @param storage The storage.
      */
     public CliPublish(final Storage storage) {
+        this(storage, false);
+    }
+
+    /**
+     * Constructor.
+     * @param storage The storage.
+     * @param immutable When true a publish of an already published version
+     *  fails with {@link com.auto1.pantera.npm.VersionExistsException}
+     *  before anything is written; when false it overwrites the version
+     */
+    public CliPublish(final Storage storage, final boolean immutable) {
         this.storage = storage;
         this.attestations = new AttestationStore(storage);
         this.signer = new NpmPackageSigner(storage);
+        this.immutable = immutable;
     }
 
     @Override
@@ -81,7 +99,8 @@ public final class CliPublish implements Publish {
         final Key prefix, final Key artifact
     ) {
         return this.artifactJson(artifact).thenCompose(
-            uploaded -> new MetaUpdate.ByJson(uploaded).update(prefix, this.storage)
+            uploaded -> this.guard(prefix, uploaded)
+                .thenCompose(ignored -> new MetaUpdate.ByJson(uploaded).update(prefix, this.storage))
                 .thenCompose(ignored -> this.signPublishedVersion(prefix, uploaded))
                 .thenCompose(ignored -> this.updateSourceArchives(uploaded))
                 .thenApply(
@@ -103,10 +122,36 @@ public final class CliPublish implements Publish {
     @Override
     public CompletableFuture<Void> publish(final Key prefix, final Key artifact) {
         return this.artifactJson(artifact).thenCompose(
-            uploaded -> new MetaUpdate.ByJson(uploaded).update(prefix, this.storage)
+            uploaded -> this.guard(prefix, uploaded)
+                .thenCompose(ignored -> new MetaUpdate.ByJson(uploaded).update(prefix, this.storage))
                 .thenCompose(ignored -> this.signPublishedVersion(prefix, uploaded))
                 .thenCompose(ignored -> this.updateSourceArchives(uploaded))
                 .thenAccept(size -> { })
+        );
+    }
+
+    /**
+     * In an immutable repository, refuse a publish that would overwrite the
+     * version metadata or a tarball already stored.
+     * @param prefix Package key
+     * @param uploaded The uploaded json
+     * @return Completion, failed when the version is already published
+     */
+    private CompletableFuture<Void> guard(final Key prefix, final JsonObject uploaded) {
+        if (!this.immutable) {
+            return CompletableFuture.completedFuture(null);
+        }
+        final List<Key> tarballs = new ArrayList<>(0);
+        final JsonObject attachments = uploaded.getJsonObject(CliPublish.ATTACHMENTS);
+        if (attachments != null) {
+            for (final String file : attachments.keySet()) {
+                if (!CliPublish.isAttestationBundle(file, attachments.getJsonObject(file))) {
+                    tarballs.add(new Key.From(uploaded.getString("name"), "-", file));
+                }
+            }
+        }
+        return new ImmutableVersionGuard(this.storage).check(
+            prefix, new MetaUpdate.ByJson(uploaded).version(), tarballs
         );
     }
 

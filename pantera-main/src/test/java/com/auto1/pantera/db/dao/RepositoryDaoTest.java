@@ -131,6 +131,67 @@ class RepositoryDaoTest {
             () -> this.dao.value(new RepositoryName.Simple("nope")));
     }
 
+    /**
+     * V146 pins the overwrite behaviour of pre-2.2.10 repositories of the
+     * types that overwrote on re-upload, and leaves everything else alone.
+     */
+    @Test
+    void v146PinsOverwritableTypesToMutable() throws Exception {
+        saveTestRepo("files", "file");
+        saveTestRepo("npm-local", "npm");
+        saveTestRepo("conan-local", "conan");
+        saveTestRepo("maven-local", "maven");
+        saveTestRepo("files-proxy", "file-proxy");
+        this.dao.save(
+            new RepositoryName.Simple("helm-pinned"),
+            Json.createObjectBuilder()
+                .add("repo", Json.createObjectBuilder()
+                    .add("type", "helm")
+                    .add("storage", "default")
+                    .add("immutable", true))
+                .build(),
+            "admin"
+        );
+        try (var conn = ds.getConnection(); var stmt = conn.createStatement()) {
+            stmt.execute(
+                new String(
+                    RepositoryDaoTest.class.getResourceAsStream(
+                        "/db/migration/V146__repo_immutable_preserve_overwrite.sql"
+                    ).readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8
+                )
+            );
+        }
+        assertAll(
+            () -> assertFalse(
+                repoOf("files").getBoolean("immutable"), "file repo pinned to mutable"
+            ),
+            () -> assertFalse(
+                repoOf("npm-local").getBoolean("immutable"), "npm repo pinned to mutable"
+            ),
+            () -> assertFalse(
+                repoOf("conan-local").getBoolean("immutable"), "conan repo pinned to mutable"
+            ),
+            () -> assertFalse(
+                repoOf("maven-local").containsKey("immutable"), "maven keeps the default"
+            ),
+            () -> assertFalse(
+                repoOf("files-proxy").containsKey("immutable"), "proxies keep the default"
+            ),
+            () -> assertTrue(
+                repoOf("helm-pinned").getBoolean("immutable"), "explicit value is kept"
+            ),
+            () -> assertEquals(
+                "default", repoOf("files").getString("storage"), "rest of config kept"
+            )
+        );
+    }
+
+    private JsonObject repoOf(final String name) {
+        return this.dao.value(new RepositoryName.Simple(name))
+            .asJsonObject().getJsonObject("repo");
+    }
+
     private void saveTestRepo(final String name, final String type) {
         this.dao.save(
             new RepositoryName.Simple(name),

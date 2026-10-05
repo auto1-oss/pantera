@@ -160,6 +160,52 @@ public final class GoSlice implements Slice {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final DownloadPolicy downloadPolicy
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex, downloadPolicy, true);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
+     * @param immutable When true a published {@code .mod}/{@code .zip} (and
+     *  the {@code .info} once the zip is stored) cannot be replaced: identical
+     *  re-upload 201, different content 409. When false every module file is
+     *  overwritten and {@code @v/list} is kept in step with the stored zips.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GoSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable When true a published {@code .mod}/{@code .zip} (and
+     *  the {@code .info} once the zip is stored) cannot be replaced: identical
+     *  re-upload 201, different content 409. When false every module file is
+     *  overwritten and {@code @v/list} is kept in step with the stored zips.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GoSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
         this.origin = new SliceRoute(
             GoSlice.pathHead(
                 ".+/@v/(v.*\\.(info|mod|zip)|list)",
@@ -219,7 +265,7 @@ public final class GoSlice implements Slice {
             new RtRulePath(
                 MethodRule.PUT,
                 GoSlice.createAuthSlice(
-                    new GoUploadSlice(storage, name, events, syncIndex),
+                    new GoUploadSlice(storage, name, events, syncIndex, immutable),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

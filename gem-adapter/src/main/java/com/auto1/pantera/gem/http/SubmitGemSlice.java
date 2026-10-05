@@ -15,10 +15,12 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.gem.Gem;
+import com.auto1.pantera.gem.GemExistsException;
 import com.auto1.pantera.gem.InvalidGemException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -91,8 +93,25 @@ final class SubmitGemSlice implements Slice {
     SubmitGemSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
         final String name,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+        this(storage, events, name, syncIndex, false);
+    }
+
+    /**
+     * Ctor with synchronous index writer and the immutability switch.
+     *
+     * @param storage The storage.
+     * @param events Artifact events
+     * @param name Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When {@code true} an upload of an already stored gem
+     *  version answers 409 Conflict; when {@code false} it overwrites it
+     */
+    SubmitGemSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
+        final String name,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable) {
         this.storage = storage;
-        this.gem = new Gem(storage);
+        this.gem = new Gem(storage, immutable);
         this.events = events;
         this.name = name;
         this.syncIndex = syncIndex;
@@ -159,6 +178,11 @@ final class SubmitGemSlice implements Slice {
                                 return ResponseBuilder.created().build();
                             }
                             final Throwable cause = SubmitGemSlice.cause(err);
+                            if (cause instanceof GemExistsException) {
+                                return ResponseBuilder.from(RsStatus.CONFLICT)
+                                    .textBody(cause.getMessage())
+                                    .build();
+                            }
                             if (cause instanceof InvalidGemException) {
                                 // A truncated or foreign file is the client's
                                 // error: say why instead of answering 500.

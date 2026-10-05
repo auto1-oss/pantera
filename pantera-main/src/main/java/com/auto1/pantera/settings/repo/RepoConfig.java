@@ -350,6 +350,31 @@ public final class RepoConfig {
         return Optional.of(Duration.parse(duration));
     }
 
+    /**
+     * Whether published artifacts of this repository are immutable: an
+     * existing artifact can never be overwritten. Flat {@code repo.immutable}
+     * key; a missing key means {@code true}. Only an explicit {@code false}
+     * (any case) makes the repository overwritable -- any other value keeps
+     * the safe default. Database configs reach here through
+     * {@code Json2Yaml}, so a JSON boolean arrives as the scalar
+     * {@code true} / {@code false}.
+     *
+     * <p>{@code releaseImmutable} (the Maven-only key of 2.3.0 pre-releases)
+     * is read as a deprecated alias, and only when {@code immutable} is
+     * absent: {@code immutable} always wins when both are set.
+     *
+     * @return False only when {@code immutable: false} (or, without an
+     *  {@code immutable} key, {@code releaseImmutable: false}) is configured
+     */
+    public boolean immutable() {
+        final YamlMapping repo = this.repoYaml();
+        String value = repo.string("immutable");
+        if (value == null) {
+            value = repo.string("releaseImmutable");
+        }
+        return !"false".equalsIgnoreCase(value);
+    }
+
     public Optional<HttpClientSettings> httpClientSettings() {
         final YamlMapping client = this.repoYaml().yamlMapping("http_client");
         return client != null ? Optional.of(HttpClientSettings.from(client)) : Optional.empty();
@@ -368,20 +393,6 @@ public final class RepoConfig {
      */
     public boolean verifyPgp() {
         return Boolean.parseBoolean(this.repoYaml().string("verifyPgp"));
-    }
-
-    /**
-     * Release-redeploy immutability (WS4-maven.6). When {@code true}, a
-     * hosted deploy that would overwrite an existing non-SNAPSHOT primary
-     * artifact is rejected with 409 Conflict instead of silently
-     * overwriting it. SNAPSHOT redeploys are always allowed regardless of
-     * this setting. Default {@code true} (immutable); a repository opts out only
-     * with an explicit {@code releaseImmutable: false}.
-     *
-     * @return True when release redeploys are rejected for this repo
-     */
-    public boolean releaseImmutable() {
-        return !"false".equalsIgnoreCase(this.repoYaml().string("releaseImmutable"));
     }
 
     /**

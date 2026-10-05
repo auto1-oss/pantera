@@ -110,6 +110,48 @@ public final class DebianSlice extends Slice.Wrap {
             final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
             final DownloadPolicy downloadPolicy
     ) {
+        this(storage, policy, users, config, events, syncIndex, downloadPolicy, false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
+     * @param immutable When {@code true} an upload to the key of a stored
+     *  {@code .deb} answers 409 Conflict; when {@code false} it overwrites the
+     *  package and regenerates the indexes
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public DebianSlice(
+            final Storage storage,
+            final Policy<?> policy,
+            final Authentication users,
+            final Config config,
+            final Optional<Queue<ArtifactEvent>> events,
+            final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+            final boolean immutable
+    ) {
+        this(storage, policy, users, config, events, syncIndex, DownloadPolicy.streamOnly(),
+            immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable When {@code true} an upload to the key of a stored
+     *  {@code .deb} answers 409 Conflict; when {@code false} it overwrites the
+     *  package and regenerates the indexes
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public DebianSlice(
+            final Storage storage,
+            final Policy<?> policy,
+            final Authentication users,
+            final Config config,
+            final Optional<Queue<ArtifactEvent>> events,
+            final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+            final DownloadPolicy downloadPolicy,
+            final boolean immutable
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -131,7 +173,7 @@ public final class DebianSlice extends Slice.Wrap {
                         MethodRule.PUT, MethodRule.POST
                     ),
                     new BasicAuthzSlice(
-                        new ReleaseSlice(new UpdateSlice(storage, config, events, syncIndex), storage, config),
+                        new ReleaseSlice(new UpdateSlice(storage, config, events, syncIndex, immutable), storage, config),
                         users,
                         new OperationControl(
                             policy,

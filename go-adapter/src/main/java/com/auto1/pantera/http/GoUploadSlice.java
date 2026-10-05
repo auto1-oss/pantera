@@ -111,6 +111,12 @@ final class GoUploadSlice implements Slice {
     private final SyncArtifactIndexer syncIndex;
 
     /**
+     * Whether published module versions are immutable. When false every
+     * module file is overwritten on re-upload.
+     */
+    private final boolean fixed;
+
+    /**
      * New Go upload slice (legacy ctor — no synchronous index writer).
      *
      * @param storage Repository storage
@@ -139,10 +145,30 @@ final class GoUploadSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final SyncArtifactIndexer syncIndex
     ) {
+        this(storage, repo, events, syncIndex, true);
+    }
+
+    /**
+     * New Go upload slice with the repository's {@code immutable} setting.
+     *
+     * @param storage Repository storage
+     * @param repo Repository name
+     * @param events Metadata events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether published module versions are immutable
+     */
+    GoUploadSlice(
+        final Storage storage,
+        final String repo,
+        final Optional<Queue<ArtifactEvent>> events,
+        final SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
         this.storage = storage;
         this.repo = repo;
         this.events = events;
         this.syncIndex = syncIndex;
+        this.fixed = immutable;
     }
 
     @Override
@@ -228,6 +254,10 @@ final class GoUploadSlice implements Slice {
      * freshly generated {@code .info}. Once the zip is stored the version is
      * published and its {@code .info} is immutable too.</p>
      *
+     * <p>In a repository configured {@code immutable: false} nothing is
+     * fixed: every file is overwritten, and a replaced zip goes through the
+     * normal publish path (index upsert, event, {@code @v/list} update).</p>
+     *
      * @param ext File extension: info, mod or zip
      * @param module Module path
      * @param version Version without leading {@code v}
@@ -236,6 +266,9 @@ final class GoUploadSlice implements Slice {
     private Supplier<CompletableFuture<Boolean>> immutable(
         final String ext, final String module, final String version
     ) {
+        if (!this.fixed) {
+            return () -> CompletableFuture.completedFuture(false);
+        }
         if ("info".equals(ext)) {
             final Key zip = new Key.From(String.format("%s/@v/v%s.zip", module, version));
             return () -> this.storage.exists(zip);

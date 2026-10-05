@@ -121,7 +121,7 @@ public final class NpmSlice implements Slice {
     ) {
         this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, false,
             null, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
-            DownloadPolicy.streamOnly());
+            DownloadPolicy.streamOnly(), false);
     }
 
     /**
@@ -147,7 +147,7 @@ public final class NpmSlice implements Slice {
     ) {
         this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
             null, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
-            DownloadPolicy.streamOnly());
+            DownloadPolicy.streamOnly(), false);
     }
 
     /**
@@ -176,7 +176,7 @@ public final class NpmSlice implements Slice {
     ) {
         this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
             tokens, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
-            DownloadPolicy.streamOnly());
+            DownloadPolicy.streamOnly(), false);
     }
 
     /**
@@ -198,7 +198,7 @@ public final class NpmSlice implements Slice {
         final ArtifactIndex artifactIndex
     ) {
         this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
-            tokens, syncIndex, artifactIndex, DownloadPolicy.streamOnly());
+            tokens, syncIndex, artifactIndex, DownloadPolicy.streamOnly(), false);
     }
 
     /**
@@ -221,8 +221,43 @@ public final class NpmSlice implements Slice {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final ArtifactIndex artifactIndex
     ) {
+        this(base, storage, policy, basicAuth, tokenAuth, tokens, name, events, jwtOnly,
+            syncIndex, artifactIndex, false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting.
+     * @param base Configured {@code url:}, or empty when the repository has none.
+     * @param storage Storage.
+     * @param policy Policy.
+     * @param basicAuth Basic auth.
+     * @param tokenAuth Token auth.
+     * @param tokens Token service (optional).
+     * @param name Repository name.
+     * @param events Events queue.
+     * @param jwtOnly Use JWT-only mode.
+     * @param syncIndex Synchronous artifact-index writer.
+     * @param artifactIndex Shared search index backing {@code /-/v1/search}.
+     * @param immutable When true a publish of an already published version
+     *  (even byte-identical) is refused with 409; when false it overwrites
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NpmSlice(
+        final Optional<URL> base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Tokens tokens,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final boolean immutable
+    ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            syncIndex, artifactIndex, DownloadPolicy.streamOnly());
+            syncIndex, artifactIndex, DownloadPolicy.streamOnly(), immutable);
     }
 
     /**
@@ -246,7 +281,7 @@ public final class NpmSlice implements Slice {
         final DownloadPolicy downloadPolicy
     ) {
         this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
-            tokens, syncIndex, artifactIndex, downloadPolicy);
+            tokens, syncIndex, artifactIndex, downloadPolicy, false);
     }
 
     /**
@@ -271,8 +306,48 @@ public final class NpmSlice implements Slice {
         final ArtifactIndex artifactIndex,
         final DownloadPolicy downloadPolicy
     ) {
+        this(base, storage, policy, basicAuth, tokenAuth, tokens, name, events, jwtOnly,
+            syncIndex, artifactIndex, downloadPolicy, false);
+    }
+
+    /**
+     * Full public ctor: optional {@code url:}, WS1.7 download policy (only the
+     * {@code .tgz} tarball-byte route is redirect-eligible) and the
+     * repository's {@code immutable} setting -- the combination
+     * {@code RepositorySlices} wires for a configured repository.
+     * @param base Configured {@code url:}, or empty when the repository has none.
+     * @param storage Storage.
+     * @param policy Policy.
+     * @param basicAuth Basic auth.
+     * @param tokenAuth Token auth.
+     * @param tokens Token service (optional).
+     * @param name Repository name.
+     * @param events Events queue.
+     * @param jwtOnly Use JWT-only mode.
+     * @param syncIndex Synchronous artifact-index writer.
+     * @param artifactIndex Shared search index backing {@code /-/v1/search}.
+     * @param downloadPolicy WS1.7 download policy.
+     * @param immutable When true a publish of an already published version
+     *  (even byte-identical) is refused with 409; when false it overwrites
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NpmSlice(
+        final Optional<URL> base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Tokens tokens,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            syncIndex, artifactIndex, downloadPolicy);
+            syncIndex, artifactIndex, downloadPolicy, immutable);
     }
 
     /**
@@ -293,6 +368,7 @@ public final class NpmSlice implements Slice {
      *  tarball-byte route is made redirect-eligible under a non-{@link
      *  DownloadPolicy#streamOnly()} policy. Packument ({@code .json}) and
      *  every other metadata route always stream.
+     * @param immutable Whether published versions are immutable.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     private NpmSlice(
@@ -307,7 +383,8 @@ public final class NpmSlice implements Slice {
         final Tokens tokens,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final ArtifactIndex artifactIndex,
-        final DownloadPolicy downloadPolicy
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
     ) {
         this.tokens = tokens;
         final TokenAuthentication npmTokenAuth = jwtOnly
@@ -432,7 +509,10 @@ public final class NpmSlice implements Slice {
                     )
                 ),
                 NpmSlice.createAuthSlice(
-                    new UploadSlice(new CliPublish(storage), storage, events, name, syncIndex),
+                    new UploadSlice(
+                        new CliPublish(storage, immutable), storage, events, name, syncIndex,
+                        immutable
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -480,7 +560,10 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(CurlPublish.PTRN)
                 ),
                 NpmSlice.createAuthSlice(
-                    new UploadSlice(new CurlPublish(storage), storage, events, name, syncIndex),
+                    new UploadSlice(
+                        new CurlPublish(storage, immutable), storage, events, name, syncIndex,
+                        immutable
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -496,7 +579,10 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath("^/(@[^/]+/)?[^/]+$")  // Matches package names, not paths with /
                 ),
                 NpmSlice.createAuthSlice(
-                    new UploadSlice(new CliPublish(storage), storage, events, name, syncIndex),
+                    new UploadSlice(
+                        new CliPublish(storage, immutable), storage, events, name, syncIndex,
+                        immutable
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(

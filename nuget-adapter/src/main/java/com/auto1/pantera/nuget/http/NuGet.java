@@ -126,8 +126,13 @@ public final class NuGet implements Slice {
     private final DownloadPolicy downloadPolicy;
 
     /**
+     * Whether an existing package version may never be replaced by a push.
+     */
+    private final boolean immutable;
+
+    /**
      * Ctor with synchronous artifact-index writer -- stream-only download
-     * policy (pre-WS1.7 behaviour).
+     * policy (pre-WS1.7 behaviour); existing package versions are immutable.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public NuGet(
@@ -163,6 +168,51 @@ public final class NuGet implements Slice {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final DownloadPolicy downloadPolicy
     ) {
+        this(url, repository, policy, basicAuth, tokenAuth, name, events, syncIndex, downloadPolicy,
+            true);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
+     * @param immutable Whether an existing package version may never be
+     *  replaced by a push (409); when false a push overwrites it
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NuGet(
+        final URL url,
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(url, repository, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable Whether an existing package version may never be
+     *  replaced by a push (409); when false a push overwrites it
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NuGet(
+        final URL url,
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
         this.url = url;
         this.repository = repository;
         this.policy = policy;
@@ -172,6 +222,7 @@ public final class NuGet implements Slice {
         this.events = events;
         this.syncIndex = syncIndex;
         this.downloadPolicy = downloadPolicy;
+        this.immutable = immutable;
     }
 
     @Override
@@ -196,7 +247,7 @@ public final class NuGet implements Slice {
      */
     private Resource resource(final String path) {
         final PackagePublish publish = new PackagePublish(
-            this.repository, this.events, this.name, this.syncIndex
+            this.repository, this.events, this.name, this.syncIndex, this.immutable
         );
         final PackageContent content =
             new PackageContent(this.url, this.repository, this.downloadPolicy);

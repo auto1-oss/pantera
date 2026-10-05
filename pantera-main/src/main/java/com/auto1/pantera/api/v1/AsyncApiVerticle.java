@@ -141,6 +141,13 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     private final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics;
 
     /**
+     * Tree-view storage metadata cache, shared with the repository-path
+     * {@code DELETE} of the serving slices so a delete through either entry
+     * point evicts what the tree listing shows.
+     */
+    private final StorageMetaCache metaCache;
+
+    /**
      * Primary constructor.
      * @param caches Pantera settings caches
      * @param configsStorage Pantera settings storage
@@ -178,7 +185,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         this(
             caches, configsStorage, port, security, keystore, jwt, events, cooldown,
             cooldownMetadata, settings, artifactIndex, dataSource, jwtTokens,
-            new com.auto1.pantera.api.v1.admin.AdminDiagnostics()
+            new com.auto1.pantera.api.v1.admin.AdminDiagnostics(), new StorageMetaCache()
         );
     }
 
@@ -198,6 +205,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * @param dataSource Database data source, nullable
      * @param jwtTokens RS256 tokens provider for token issuance
      * @param diagnostics Serving-side access for the admin cache tools
+     * @param metaCache Tree-view storage metadata cache shared with the
+     *  serving slices
      * @checkstyle ParameterNumberCheck (20 lines)
      */
     public AsyncApiVerticle(
@@ -214,9 +223,11 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final ArtifactIndex artifactIndex,
         final DataSource dataSource,
         final JwtTokens jwtTokens,
-        final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics
+        final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics,
+        final StorageMetaCache metaCache
     ) {
         this.diagnostics = diagnostics;
+        this.metaCache = metaCache;
         this.caches = caches;
         this.configsStorage = configsStorage;
         this.port = port;
@@ -246,13 +257,16 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * @param cooldown Serving cooldown service (shared with the slices)
      * @param cooldownMetadata Serving cooldown metadata service (shared)
      * @param diagnostics Serving-side access for the admin cache tools
+     * @param metaCache Tree-view storage metadata cache shared with the
+     *  serving slices
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public AsyncApiVerticle(final Settings settings, final int port,
         final JWTAuth jwt, final DataSource dataSource,
         final JwtTokens jwtTokens, final CooldownService cooldown,
         final CooldownMetadataService cooldownMetadata,
-        final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics) {
+        final com.auto1.pantera.api.v1.admin.AdminDiagnostics diagnostics,
+        final StorageMetaCache metaCache) {
         this(
             settings.caches(), settings.configStorage(),
             port, settings.authz(), settings.keyStore(), jwt,
@@ -263,7 +277,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             settings.artifactIndex(),
             dataSource,
             jwtTokens,
-            diagnostics
+            diagnostics,
+            metaCache
         );
     }
 
@@ -562,7 +577,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         new DashboardHandler(crs, this.dataSource, this.security.policy()).register(router);
         new ArtifactHandler(
             crs, this.repoData(),
-            this.security.policy(), this.dataSource, this.artifactIndex
+            this.security.policy(), this.dataSource, this.artifactIndex, this.metaCache
         ).register(router);
         new CooldownHandler(
             this.cooldown, this.cooldownMetadata,

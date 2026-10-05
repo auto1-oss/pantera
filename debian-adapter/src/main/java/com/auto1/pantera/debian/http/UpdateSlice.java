@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.streams.ContentAsStream;
 import com.auto1.pantera.debian.Config;
 import com.auto1.pantera.debian.metadata.Control;
@@ -25,6 +26,7 @@ import com.auto1.pantera.debian.metadata.UniquePackage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -36,9 +38,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -60,6 +64,11 @@ public final class UpdateSlice implements Slice {
         Pattern.compile("^/(?!dists/)(?:[^/]+/)*[^/]+\\.u?deb$");
 
     /**
+     * Temporary upload directory.
+     */
+    private static final Key TMP = new Key.From(".upload");
+
+    /**
      * Abstract storage.
      */
     private final Storage asto;
@@ -78,6 +87,11 @@ public final class UpdateSlice implements Slice {
     private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
 
     /**
+     * Whether a stored package may never be replaced by an upload.
+     */
+    private final boolean immutable;
+
+    /**
      * Legacy ctor (no synchronous index writer).
      * @param asto Abstract storage
      * @param config Repository configuration
@@ -90,7 +104,8 @@ public final class UpdateSlice implements Slice {
     }
 
     /**
-     * Ctor with synchronous index writer.
+     * Ctor with synchronous index writer; an upload to the key of a stored
+     * package overwrites it.
      * @param asto Abstract storage
      * @param config Repository configuration
      * @param events Artifact events
@@ -100,10 +115,28 @@ public final class UpdateSlice implements Slice {
         final Storage asto, final Config config, final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(asto, config, events, syncIndex, false);
+    }
+
+    /**
+     * Ctor with synchronous index writer and the immutability switch.
+     * @param asto Abstract storage
+     * @param config Repository configuration
+     * @param events Artifact events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When {@code true} an upload to the key of a stored
+     *  {@code .deb} answers 409 Conflict before anything is saved; when
+     *  {@code false} it overwrites the package and regenerates the indexes
+     */
+    public UpdateSlice(
+        final Storage asto, final Config config, final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex, final boolean immutable
+    ) {
         this.asto = asto;
         this.config = config;
         this.events = events;
         this.syncIndex = syncIndex;
+        this.immutable = immutable;
     }
 
     @Override
@@ -123,8 +156,40 @@ public final class UpdateSlice implements Slice {
             );
         }
         final Key key = new KeyFromPath(path);
-        return this.asto.save(key, new Content.From(body))
-            .thenCompose(nothing -> this.asto.value(key))
+        return this.asto.exists(key).thenCompose(
+            existed -> {
+                final CompletableFuture<Response> res;
+                if (this.immutable && existed) {
+                    res = body.discard().thenApply(
+                        nothing -> UpdateSlice.conflict(key)
+                    );
+                } else {
+                    res = this.publish(key, headers, body);
+                }
+                return res;
+            }
+        );
+    }
+
+    /**
+     * Store an upload under a temporary key, validate it, move it to its
+     * package key and regenerate the indexes. A rejected or failed upload
+     * never touches a package already stored under the key: only the
+     * temporary upload is removed (and the package key, when this request
+     * created it).
+     * @param key Package key
+     * @param headers Request headers
+     * @param body Request body
+     * @return Response
+     */
+    private CompletableFuture<Response> publish(final Key key, final Headers headers,
+        final Content body) {
+        final Key temp = new Key.From(
+            UpdateSlice.TMP, String.format("%s.deb", UUID.randomUUID().toString())
+        );
+        final AtomicBoolean created = new AtomicBoolean();
+        return this.asto.save(temp, new Content.From(body))
+            .thenCompose(nothing -> this.asto.value(temp))
             .thenCompose(
                 content -> new ContentAsStream<String>(content)
                     .process(UpdateSlice::control)
@@ -137,8 +202,8 @@ public final class UpdateSlice implements Slice {
                         .collect(Collectors.toList());
                     final CompletableFuture<Response> res;
                     if (common.isEmpty()) {
-                        res = this.asto.delete(key).thenApply(
-                            nothing -> ResponseBuilder.badRequest()
+                        res = CompletableFuture.completedFuture(
+                            ResponseBuilder.badRequest()
                                 .textBody(
                                     String.format(
                                         "Package architecture '%s' is not one of this repository's architectures (%s)",
@@ -152,37 +217,125 @@ public final class UpdateSlice implements Slice {
                         // synchronous index UPSERT, which we must complete
                         // before responding so a follow-up read sees the
                         // package via the artifact index.
-                        final CompletionStage<Void> upd =
-                            this.generateIndexes(key, control, common)
-                                .thenCompose(nothing ->
-                                    this.logEvents(key, control, common, headers)
-                                );
-                        res = upd.thenApply(nothing -> ResponseBuilder.ok().build())
+                        res = this.place(temp, key, created)
+                            .thenCompose(nothing -> this.generateIndexes(key, control, common))
+                            .thenCompose(nothing -> this.logEvents(key, control, common, headers))
+                            .thenApply(nothing -> ResponseBuilder.ok().build())
                             .toCompletableFuture();
                     }
                     return res;
                 }
             ).handle(
-                (resp, throwable) -> {
-                    final CompletableFuture<Response> res;
-                    if (throwable == null) {
-                        return CompletableFuture.completedFuture(resp);
-                    } else {
-                        final Throwable cause = UpdateSlice.cause(throwable);
-                        res = this.asto.delete(key).thenApply(
-                            nothing -> {
-                                if (cause instanceof InvalidPackageException) {
-                                    return ResponseBuilder.badRequest()
-                                        .textBody(cause.getMessage())
-                                        .build();
-                                }
-                                return ResponseBuilder.internalError().build();
-                            }
-                        );
-                    }
-                    return res;
-                }
+                (resp, throwable) -> UpdateSlice.deleteIfExists(this.asto, temp).thenCompose(
+                    nothing -> this.finish(resp, throwable, key, created.get())
+                )
             ).thenCompose(Function.identity());
+    }
+
+    /**
+     * Move a validated upload to its package key. On an immutable repository
+     * the move runs under a lock on the package key and re-checks that the
+     * key is still free, so two concurrent uploads of the same path cannot
+     * both land.
+     * @param temp Temporary upload key
+     * @param key Package key
+     * @param created Set once this request moved the upload to the key while
+     *  the key held nothing
+     * @return Completion of the move
+     */
+    private CompletionStage<Void> place(final Key temp, final Key key,
+        final AtomicBoolean created) {
+        final CompletionStage<Void> res;
+        if (this.immutable) {
+            res = new IndexUpdateLock(this.asto, key).run(
+                locked -> locked.exists(key).thenCompose(
+                    present -> {
+                        final CompletableFuture<Void> moved;
+                        if (present) {
+                            moved = CompletableFuture.failedFuture(
+                                new PackageExistsException(key)
+                            );
+                        } else {
+                            moved = locked.move(temp, key)
+                                .thenRun(() -> created.set(true));
+                        }
+                        return moved;
+                    }
+                )
+            );
+        } else {
+            res = this.asto.exists(key).thenCompose(
+                present -> this.asto.move(temp, key).thenRun(() -> created.set(!present))
+            );
+        }
+        return res;
+    }
+
+    /**
+     * Finish an upload: map a failure to its response, removing the package
+     * key only when this request created it.
+     * @param resp Response of a completed upload
+     * @param throwable Failure, null on success
+     * @param key Package key
+     * @param created Whether this request created the package key
+     * @return Response
+     */
+    private CompletionStage<Response> finish(final Response resp, final Throwable throwable,
+        final Key key, final boolean created) {
+        final CompletionStage<Response> res;
+        if (throwable == null) {
+            res = CompletableFuture.completedFuture(resp);
+        } else {
+            final Throwable cause = UpdateSlice.cause(throwable);
+            final CompletionStage<Void> cleanup;
+            if (created) {
+                cleanup = UpdateSlice.deleteIfExists(this.asto, key);
+            } else {
+                cleanup = CompletableFuture.completedFuture(null);
+            }
+            res = cleanup.thenApply(
+                nothing -> {
+                    final Response failed;
+                    if (cause instanceof InvalidPackageException) {
+                        failed = ResponseBuilder.badRequest()
+                            .textBody(cause.getMessage())
+                            .build();
+                    } else if (cause instanceof PackageExistsException) {
+                        failed = UpdateSlice.conflict(key);
+                    } else {
+                        failed = ResponseBuilder.internalError().build();
+                    }
+                    return failed;
+                }
+            );
+        }
+        return res;
+    }
+
+    /**
+     * Refusal of an upload to the key of a stored package.
+     * @param key Package key
+     * @return 409 Conflict response
+     */
+    private static Response conflict(final Key key) {
+        return ResponseBuilder.from(RsStatus.CONFLICT)
+            .textBody(
+                String.format(
+                    "Package %s already exists and the repository is immutable", key.string()
+                )
+            ).build();
+    }
+
+    /**
+     * Delete a key when it exists.
+     * @param asto Storage
+     * @param key Key
+     * @return Completion
+     */
+    private static CompletionStage<Void> deleteIfExists(final Storage asto, final Key key) {
+        return asto.exists(key).thenCompose(
+            present -> present ? asto.delete(key) : CompletableFuture.<Void>completedFuture(null)
+        );
     }
 
     /**
@@ -303,6 +456,24 @@ public final class UpdateSlice implements Slice {
             res = res.getCause();
         }
         return res;
+    }
+
+    /**
+     * The package key was taken by a concurrent upload on an immutable
+     * repository.
+     * @since 2.2.10
+     */
+    private static final class PackageExistsException extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Ctor.
+         * @param key Package key
+         */
+        PackageExistsException(final Key key) {
+            super(String.format("Package %s already exists", key.string()));
+        }
     }
 
     /**

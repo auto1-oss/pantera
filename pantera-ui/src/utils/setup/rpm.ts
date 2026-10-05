@@ -47,7 +47,8 @@ function dnfClient(ctx: SnippetCtx): Client {
           description:
             `<code>-T</code> sends an HTTP PUT; the trailing <code>/</code> makes curl append the file name. `
             + `The repository metadata is regenerated after the upload. An existing file name answers `
-            + `<code>409</code>; to replace it, upload to <code>${ctx.pubUrl}/FILE.rpm?override=true</code>.`,
+            + `<code>409</code>; to replace it on a repository whose <em>Immutable artifacts</em> setting is off, `
+            + `upload to <code>${ctx.pubUrl}/FILE.rpm?override=true</code>.`,
           code: `curl -f -u '${ctx.user}:${ctx.token}' \\\n  -T ${RPM_FILE} \\\n  ${ctx.pubUrl}/`,
         },
       ]

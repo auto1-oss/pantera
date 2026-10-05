@@ -407,6 +407,101 @@ class WheelSliceTest {
     }
 
     @Test
+    void immutableRepoRefusesDifferingReupload() throws IOException {
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] original = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        this.upload("/", filename, original, true);
+        final byte[] tampered = WheelSliceTest.tamper(original);
+        final com.auto1.pantera.http.Response response =
+            this.upload("/", filename, tampered, true);
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "immutable: re-upload with different bytes is refused",
+            response.status(),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "immutable: the stored file is untouched",
+            this.asto.value(new Key.From("pantera-sample", "0.2", filename)).join().asBytes(),
+            new IsEqual<>(original)
+        );
+    }
+
+    @Test
+    void mutableRepoOverwritesDifferingReuploadAndRegeneratesIndex() throws IOException {
+        final String filename = "pantera-sample-0.2.tar";
+        final Key key = new Key.From("pantera-sample", "0.2", filename);
+        final byte[] original = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        this.upload("/", filename, original, false);
+        final byte[] tampered = WheelSliceTest.tamper(original);
+        final com.auto1.pantera.http.Response response =
+            this.upload("/", filename, tampered, false);
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "mutable: re-upload with different bytes is accepted",
+            response.status(),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the stored file is replaced",
+            this.asto.value(key).join().asBytes(),
+            new IsEqual<>(tampered)
+        );
+        final String index = new String(
+            this.asto.value(new Key.From(".pypi", "pantera-sample", "pantera-sample.html"))
+                .join().asBytes(),
+            StandardCharsets.UTF_8
+        );
+        MatcherAssert.assertThat(
+            "mutable: the simple index serves the new hash",
+            index.contains(String.format("#sha256=%s", WheelSliceTest.sha256(tampered))),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the simple index no longer serves the old hash",
+            index.contains(String.format("#sha256=%s", WheelSliceTest.sha256(original))),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the sidecar is present after the overwrite",
+            this.asto.exists(com.auto1.pantera.pypi.meta.PypiSidecar.sidecarKey(key)).join(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the overwrite is published",
+            this.queue.size(),
+            new IsEqual<>(2)
+        );
+        MatcherAssert.assertThat(
+            "mutable: no temporary upload is left behind",
+            this.asto.list(Key.ROOT).join().stream()
+                .filter(item -> !item.string().startsWith(".pypi")
+                    && !item.string().startsWith("pantera-sample/"))
+                .count(),
+            new IsEqual<>(0L)
+        );
+    }
+
+    @Test
+    void mutableRepoIdenticalReuploadIsIdempotent() throws IOException {
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] body = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        this.upload("/", filename, body, false);
+        final com.auto1.pantera.http.Response response = this.upload("/", filename, body, false);
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "mutable: identical re-upload answers 200",
+            response.status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "mutable: identical re-upload is not a second publish",
+            this.queue.size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
     void badRequestExplainsFilenameMetadataMismatch() throws IOException {
         // B91: the 400 for a filename/metadata mismatch had an empty body,
         // so twine printed only "Bad Request".
@@ -430,14 +525,39 @@ class WheelSliceTest {
     private com.auto1.pantera.http.Response upload(
         final String path, final String filename, final byte[] body
     ) throws IOException {
+        return this.upload(path, filename, body, true);
+    }
+
+    private com.auto1.pantera.http.Response upload(
+        final String path, final String filename, final byte[] body, final boolean immutable
+    ) throws IOException {
         final String boundary = "b0undary";
-        return new WheelSlice(this.asto, Optional.of(this.queue), "test").response(
+        return new WheelSlice(
+            this.asto, Optional.of(this.queue), "test",
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, immutable
+        ).response(
             new RequestLine(RqMethod.POST, path),
             Headers.from(
                 ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
             ),
             new Content.From(this.multipartBody(body, boundary, filename))
         ).join();
+    }
+
+    private static byte[] tamper(final byte[] original) {
+        final byte[] tampered = original.clone();
+        tampered[tampered.length - 1] = (byte) (tampered[tampered.length - 1] ^ 0x1);
+        return tampered;
+    }
+
+    private static String sha256(final byte[] bytes) {
+        try {
+            return java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            );
+        } catch (final java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     private byte[] multipartBody(final byte[] input, final String boundary, final String filename)

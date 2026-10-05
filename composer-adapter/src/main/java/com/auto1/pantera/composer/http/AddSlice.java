@@ -48,10 +48,26 @@ final class AddSlice implements Slice {
     private final Repository repository;
 
     /**
+     * Whether published releases are immutable.
+     */
+    private final boolean immutable;
+
+    /**
+     * Ctor of an immutable repository's slice.
      * @param repository Repository.
      */
     AddSlice(final Repository repository) {
+        this(repository, true);
+    }
+
+    /**
+     * Ctor.
+     * @param repository Repository.
+     * @param immutable Whether published releases are immutable
+     */
+    AddSlice(final Repository repository, final boolean immutable) {
         this.repository = repository;
+        this.immutable = immutable;
     }
 
     @Override
@@ -112,6 +128,6 @@ final class AddSlice implements Slice {
             || pkg.getString().split("/").length != 2) {
             return CompletableFuture.completedFuture(ReleaseGuard.Verdict.NEW);
         }
-        return new ReleaseGuard(this.repository).checkEntry(pkg.getString(), version.get(), json);
+        return new ReleaseGuard(this.repository, this.immutable).checkEntry(pkg.getString(), version.get(), json);
     }
 }
