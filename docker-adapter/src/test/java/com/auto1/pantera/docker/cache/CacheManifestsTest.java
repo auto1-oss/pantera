@@ -44,6 +44,7 @@ import org.slf4j.MDC;
 
 import javax.json.Json;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
@@ -609,7 +610,7 @@ final class CacheManifestsTest {
         }
 
         @Override
-        public CompletableFuture<Void> delete(final ManifestReference ref) {
+        public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
             throw new UnsupportedOperationException();
         }
     }
@@ -758,7 +759,7 @@ final class CacheManifestsTest {
         }
 
         @Override
-        public CompletableFuture<Void> delete(final ManifestReference ref) {
+        public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
             throw new UnsupportedOperationException();
         }
     }
@@ -796,7 +797,7 @@ final class CacheManifestsTest {
         }
 
         @Override
-        public CompletableFuture<Void> delete(final ManifestReference ref) {
+        public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
             throw new UnsupportedOperationException();
         }
     }
@@ -843,7 +844,7 @@ final class CacheManifestsTest {
         }
 
         @Override
-        public CompletableFuture<Void> delete(final ManifestReference ref) {
+        public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
             throw new UnsupportedOperationException();
         }
     }

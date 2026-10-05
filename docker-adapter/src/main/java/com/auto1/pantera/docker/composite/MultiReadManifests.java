@@ -20,6 +20,7 @@ import com.auto1.pantera.docker.misc.Pagination;
 import com.auto1.pantera.http.log.EcsLogger;
 import org.slf4j.MDC;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -57,7 +58,7 @@ public final class MultiReadManifests implements Manifests {
     }
 
     @Override
-    public CompletableFuture<Void> delete(final ManifestReference ref) {
+    public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
         // Deletes target the authoritative (local) store only — see
         // WS4-docker.5 §3. Maps to 405 via ErrorHandlingSlice.
         throw new UnsupportedOperationException();

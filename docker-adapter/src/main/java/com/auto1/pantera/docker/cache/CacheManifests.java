@@ -156,7 +156,7 @@ public final class CacheManifests implements Manifests {
     }
 
     @Override
-    public CompletableFuture<Void> delete(final ManifestReference ref) {
+    public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
         // Deletes target the authoritative (local) store only — see
         // WS4-docker.5 §3. Maps to 405 via ErrorHandlingSlice.
         throw new UnsupportedOperationException();

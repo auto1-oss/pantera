@@ -15,6 +15,7 @@ import com.auto1.pantera.docker.manifest.Manifest;
 import com.auto1.pantera.docker.manifest.Referrers;
 import com.auto1.pantera.docker.misc.Pagination;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -103,13 +104,17 @@ public interface Manifests {
     /**
      * Delete manifest by reference (tag or digest).
      *
-     * <p>Removes the link {@code ref} resolves to, and — when {@code ref}
-     * is not itself the canonical by-digest reference — also the by-digest
-     * link, so nothing is left pointing at a manifest with no remaining
-     * named reference. Other tags that independently reference the same
-     * digest are unaffected (each tag's own link is a separate key). If the
-     * deleted manifest carried an OCI 1.1 {@code subject}, its referrers-index
-     * entry is pruned too, so it stops appearing in {@code oras discover}.
+     * <p>By tag: removes only that tag's link (OCI distribution semantics).
+     * The manifest stays pullable by digest, and other tags that reference
+     * the same digest are untouched.
+     *
+     * <p>By digest: removes the by-digest link and untags every tag of the
+     * image whose link points at that digest (registry semantics — a client
+     * such as {@code skopeo delete} resolves a tag to its digest and deletes
+     * by digest), so the manifest is no longer reachable by any reference.
+     * If the deleted manifest carried an OCI 1.1 {@code subject}, its
+     * referrers-index entry is pruned too, so it stops appearing in
+     * {@code oras discover}.
      *
      * <p>Fails (does not silently no-op) when {@code ref} does not resolve
      * to an existing manifest, so the HTTP slice can answer {@code 404
@@ -120,8 +125,9 @@ public interface Manifests {
      * blobs may be referenced by more than one manifest.
      *
      * @param ref Manifest reference to delete.
-     * @return Completion signal; fails if {@code ref} does not resolve to
-     *         an existing manifest.
+     * @return Names of the tags removed by this delete (possibly empty for a
+     *         digest no tag points at); fails if {@code ref} does not
+     *         resolve to an existing manifest.
      */
-    CompletableFuture<Void> delete(ManifestReference ref);
+    CompletableFuture<Collection<String>> delete(ManifestReference ref);
 }

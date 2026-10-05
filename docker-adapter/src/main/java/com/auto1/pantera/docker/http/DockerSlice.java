@@ -139,6 +139,12 @@ public final class DockerSlice extends Slice.Wrap {
             // body is drained by UnsupportedSlice.
             routes.add(RtRulePath.route(MethodRule.PUT, PathPatterns.MANIFESTS,
                 new UnsupportedSlice()));
+            // Deletes target the authoritative (hosted) store only; a
+            // proxy's local tier is a read-through cache.
+            routes.add(RtRulePath.route(MethodRule.DELETE, PathPatterns.MANIFESTS,
+                new UnsupportedSlice()));
+            routes.add(RtRulePath.route(MethodRule.DELETE, PathPatterns.BLOBS,
+                new UnsupportedSlice()));
             for (final RtRule method : List.of(
                 MethodRule.POST, MethodRule.PATCH, MethodRule.PUT,
                 MethodRule.GET, MethodRule.DELETE
@@ -203,7 +209,7 @@ public final class DockerSlice extends Slice.Wrap {
                 // or the blob and answers 202 Accepted. A read-only slice
                 // never reaches these routes -- its 405 is matched above.
                 RtRulePath.route(MethodRule.DELETE, PathPatterns.MANIFESTS,
-                    auth(new DeleteManifestSlice(docker), policy, auth)
+                    auth(new DeleteManifestSlice(docker, events.orElse(null)), policy, auth)
                 ),
                 RtRulePath.route(MethodRule.DELETE, PathPatterns.BLOBS,
                     auth(new DeleteBlobSlice(docker), policy, auth)

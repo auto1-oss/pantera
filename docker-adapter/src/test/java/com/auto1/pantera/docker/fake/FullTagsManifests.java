@@ -18,6 +18,7 @@ import com.auto1.pantera.docker.manifest.Manifest;
 import com.auto1.pantera.docker.misc.ImageTag;
 import com.auto1.pantera.docker.misc.Pagination;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
@@ -60,7 +61,7 @@ public final class FullTagsManifests implements Manifests {
     }
 
     @Override
-    public CompletableFuture<Void> delete(final ManifestReference ref) {
+    public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
         throw new UnsupportedOperationException();
     }
 

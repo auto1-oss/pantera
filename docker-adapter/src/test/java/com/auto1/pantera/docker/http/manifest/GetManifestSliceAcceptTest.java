@@ -33,6 +33,7 @@ import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -164,7 +165,7 @@ final class GetManifestSliceAcceptTest {
                         }
 
                         @Override
-                        public CompletableFuture<Void> delete(final ManifestReference ref) {
+                        public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
                             throw new UnsupportedOperationException();
                         }
                     };

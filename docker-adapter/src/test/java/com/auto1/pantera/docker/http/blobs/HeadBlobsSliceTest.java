@@ -33,6 +33,7 @@ import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -127,7 +128,7 @@ final class HeadBlobsSliceTest {
                         }
 
                         @Override
-                        public CompletableFuture<Void> delete(ManifestReference ref) {
+                        public CompletableFuture<Collection<String>> delete(ManifestReference ref) {
                             throw new UnsupportedOperationException();
                         }
                     };

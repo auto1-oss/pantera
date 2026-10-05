@@ -38,6 +38,7 @@ import org.junit.jupiter.api.Test;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
@@ -158,7 +159,7 @@ final class HeadManifestSliceTest {
                         }
 
                         @Override
-                        public CompletableFuture<Void> delete(ManifestReference ref) {
+                        public CompletableFuture<Collection<String>> delete(ManifestReference ref) {
                             throw new UnsupportedOperationException();
                         }
                     };

@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -156,7 +157,7 @@ final class HeadManifestSliceMdcTest {
                         }
 
                         @Override
-                        public CompletableFuture<Void> delete(final ManifestReference mref) {
+                        public CompletableFuture<Collection<String>> delete(final ManifestReference mref) {
                             throw new UnsupportedOperationException();
                         }
                     };

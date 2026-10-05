@@ -35,6 +35,7 @@ import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsNot;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -250,7 +251,7 @@ final class ProxyManifestAcceptVariantTest {
                 }
 
                 @Override
-                public CompletableFuture<Void> delete(final ManifestReference ref) {
+                public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
                     throw new UnsupportedOperationException();
                 }
             };

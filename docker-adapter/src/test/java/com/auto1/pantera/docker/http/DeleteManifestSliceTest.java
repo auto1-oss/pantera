@@ -24,18 +24,23 @@ import com.auto1.pantera.docker.asto.TrustedBlobSource;
 import com.auto1.pantera.docker.asto.Uploads;
 import com.auto1.pantera.docker.composite.MultiReadManifests;
 import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.docker.perms.DockerActions;
+import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.hm.ResponseAssert;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -67,6 +72,93 @@ final class DeleteManifestSliceTest {
                 .join()
                 .isPresent(),
             new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void shouldDropDeletedTagFromSearchIndex() {
+        final Queue<ArtifactEvent> events = new LinkedList<>();
+        this.slice = new DockerSlice(this.docker, events);
+        this.push("my-alpine", "2");
+        events.clear();
+        ResponseAssert.check(this.delete("/v2/my-alpine/manifests/2"), RsStatus.ACCEPTED);
+        final ArtifactEvent event = events.poll();
+        MatcherAssert.assertThat(
+            "A tag delete enqueues a version delete",
+            event.eventType(),
+            new IsEqual<>(ArtifactEvent.Type.DELETE_VERSION)
+        );
+        MatcherAssert.assertThat(
+            "The event targets the pushed image name",
+            event.artifactName(),
+            new IsEqual<>("my-alpine")
+        );
+        MatcherAssert.assertThat(
+            "The event targets the deleted tag",
+            event.artifactVersion(),
+            new IsEqual<>("2")
+        );
+    }
+
+    @Test
+    void shouldUntagAndDeindexEveryTagWhenDeletingByDigest() {
+        final Queue<ArtifactEvent> events = new LinkedList<>();
+        this.slice = new DockerSlice(this.docker, events);
+        this.push("my-alpine", "1");
+        this.push("my-alpine", "2");
+        events.clear();
+        final Digest digest = this.docker.repo("my-alpine").manifests()
+            .get(ManifestReference.fromTag("1")).join().orElseThrow().digest();
+        ResponseAssert.check(
+            this.delete(String.format("/v2/my-alpine/manifests/%s", digest.string())),
+            RsStatus.ACCEPTED
+        );
+        MatcherAssert.assertThat(
+            "Every pointing tag is gone from tags/list",
+            this.docker.repo("my-alpine").manifests().tags(Pagination.empty())
+                .join().json().asString(),
+            new IsEqual<>("{\"name\":\"my-alpine\",\"tags\":[]}")
+        );
+        MatcherAssert.assertThat(
+            "One index delete per removed tag",
+            events.stream().map(ArtifactEvent::artifactVersion).toList(),
+            new IsEqual<>(List.of("1", "2"))
+        );
+        MatcherAssert.assertThat(
+            "Index events are version deletes",
+            events.stream().allMatch(
+                event -> event.eventType() == ArtifactEvent.Type.DELETE_VERSION
+            ),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void pushPullOverwriteDoNotImplyDelete() {
+        MatcherAssert.assertThat(
+            new DockerRepositoryPermission(
+                "test_registry", "my-alpine",
+                DockerActions.PULL.mask() | DockerActions.PUSH.mask()
+                    | DockerActions.OVERWRITE.mask()
+            ).implies(
+                new DockerRepositoryPermission(
+                    "test_registry", "my-alpine", DockerActions.DELETE.mask()
+                )
+            ),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void deleteActionParsesFromConfiguredName() {
+        MatcherAssert.assertThat(
+            new DockerRepositoryPermission("test_registry", "my-alpine", List.of("delete"))
+                .implies(
+                    new DockerRepositoryPermission(
+                        "test_registry", "my-alpine", DockerActions.DELETE.mask()
+                    )
+                ),
+            new IsEqual<>(true)
         );
     }
 
