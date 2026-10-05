@@ -137,32 +137,41 @@ Both endpoints page with `?n=<count>&last=<name>`. On every repository type, a f
 
 ## Delete Images
 
-Local (`docker`) repositories support the standard Distribution-spec delete
-endpoints, so `skopeo delete`, `crane delete` and manual cleanup work:
+Local (`docker`) repositories support the Distribution-spec delete endpoints, so `skopeo delete`, `crane delete` and manual cleanup work. They need the `delete` action in `docker_repository_permissions`; `pull`, `push` and `overwrite` do not include it.
 
 ```bash
-# Resolve the tag to its digest and delete the manifest reference
-skopeo delete docker://pantera-host:8080/docker-local/myapp:1.0.0
+# Delete an image (skopeo resolves the tag to its digest and deletes that)
+skopeo delete --creds 'your-username:your-api-token' \
+    docker://pantera-host:8080/docker-local/myapp:1.0.0
 
-# Delete an unreferenced blob directly by digest (registry GC)
+# Delete one tag only; the image stays pullable by digest
+curl -X DELETE -u 'your-username:your-api-token' \
+    http://pantera-host:8080/v2/docker-local/myapp/manifests/1.0.0
+
+# Delete a blob of this image by digest (before deleting the manifest, see below)
 curl -X DELETE -u 'your-username:your-api-token' \
     http://pantera-host:8080/v2/docker-local/myapp/blobs/sha256:<digest>
 ```
 
-Deleting a manifest removes the tag/digest reference (and, if it was pushed
-with an OCI `subject`, its referrers-index entry) and returns `202 Accepted`.
-It does **not** delete the underlying blobs: they are content-addressed and
-may be shared by other manifests, so blob removal is the separate
-`DELETE .../blobs/<digest>` call, matching standard registry GC behavior.
-Deleting a reference or digest that does not exist returns `404`.
+| Request | Effect |
+|---------|--------|
+| `DELETE /v2/<repo>/<image>/manifests/<tag>` | Removes that tag only. The manifest and any other tags pointing at it stay, and the image stays pullable by digest |
+| `DELETE /v2/<repo>/<image>/manifests/<digest>` | Removes the manifest and every tag that points at it. This is what `skopeo delete` sends, so it removes all tags of that image. A manifest pushed with an OCI `subject` (a signature, SBOM or attestation) also leaves the subject's referrers listing |
+| `DELETE /v2/<repo>/<image>/blobs/<digest>` | Removes the blob's data, if only this image uses it (see below). The image's manifests are left in place |
 
-**Scope:** the registry API deletes only on hosted (`docker`) repositories.
-On `docker-proxy` and `docker-group` repositories,
-`DELETE /v2/<repo>/<image>/manifests/<reference>` and
-`DELETE /v2/<repo>/<image>/blobs/<digest>` answer `405 UNSUPPORTED` (so
-`skopeo delete` and `crane delete` report the operation as unsupported, not
-the image as missing) — deletes always target the authoritative store, never
-a proxy cache or a group.
+Manifest deletes answer `202 Accepted`, or `404 MANIFEST_UNKNOWN` for an unknown tag or digest. Removed tags disappear from search. Deleting a manifest never deletes its blobs.
+
+Blobs are stored once per registry and can be shared by several images, so a blob delete is checked against every image:
+
+| Blob state | Answer |
+|------------|--------|
+| No manifest of `<image>` is, or references, the digest (including a blob that was uploaded but never referenced by a manifest) | `404 BLOB_UNKNOWN` |
+| A manifest of any other image (including an OCI referrer such as a signature or SBOM, tagged or not) also references the digest, or another image's manifest cannot be read to rule that out | `409` with code `DENIED`; nothing is removed |
+| Only `<image>` references it | `202 Accepted`; the blob data is removed |
+
+A blob can therefore only be deleted while a manifest of the image still references it: to free an image's layers, delete its blobs first and its manifest last. Once the manifest is gone, its blobs answer `404` and cannot be removed through the registry API. Deleting a blob that a remaining manifest references makes that manifest unpullable.
+
+The registry API deletes only on local (`docker`) repositories. On `docker-proxy` and `docker-group` repositories the same requests answer `405 UNSUPPORTED` (so `skopeo delete` and `crane delete` report the operation as unsupported, not the image as missing). Docker repositories have no `immutable` setting and no `DELETE /<repo>/<path>` file delete; moving an existing tag is governed by the `overwrite` action.
 
 Alternatively, delete a tag from a local repository in the UI (repository browser), or with the REST API (needs `api_repository_permissions: delete`):
 
@@ -309,6 +318,10 @@ calls are unaffected either way.
 | `denied: requested access to the resource is denied` | User lacks push permission | Contact admin for write access to the Docker local repository |
 | `denied` when re-pushing an existing tag (e.g. `latest`) with new content | Moving an existing tag needs the `overwrite` action on top of `push` | Push a new tag, or ask the admin to grant `overwrite` |
 | Push fails with `unsupported` (405) | The target is a proxy or group repository | Push to a local (`docker`) repository instead |
+| `skopeo delete` / `crane delete` reports `unsupported` (405 `UNSUPPORTED`) | The target is a `docker-proxy` or `docker-group` repository | Delete against the local (`docker`) repository directly |
+| `skopeo delete` / `crane delete` reports `denied` (403) | The user lacks the `delete` action on the image | Ask the admin to grant `delete` in `docker_repository_permissions` |
+| Blob `DELETE` answers `404 BLOB_UNKNOWN` although the blob exists | No manifest of that image references the digest (the manifest was already deleted, or the blob was never referenced) | Delete blobs before the manifest that references them |
+| Blob `DELETE` answers `409 DENIED` | Another image in the registry references the same blob | Nothing to do: the blob is still in use. Delete the other images first if the blob must go |
 | `name unknown` (404 `NAME_UNKNOWN`) on a tags list | The repository holds no tags for that image name | Check the image path (`<repo>/<image>`, include `library/` for official images) |
 | `size invalid` (413 `SIZE_INVALID`) during push | A layer exceeds the server's request-body limit | Ask the admin to raise the limit |
 | `manifest unknown` | Image not cached in proxy yet | Verify the image path matches upstream (include `library/` for official images) |

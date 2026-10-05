@@ -244,6 +244,8 @@ The **Create Repository** page (`/admin/repositories/create`) allows administrat
 
 Each format supports Local, Proxy, and/or Group variants where applicable. For example, Go supports Local, Proxy, and Group; Gradle supports all three variants.
 
+For local repositories of every format except Docker, the form has a **Publishing** card with an **Immutable artifacts** checkbox (the repository's `immutable` setting). It is checked for a new repository: a stored artifact can then never be overwritten, and a re-upload is refused (usually with `409 Conflict`). Uncheck it to let users with `write` permission overwrite. Users with `delete` permission can delete artifacts either way. Editing a repository shows its current value, and saving writes the choice explicitly. Proxy, group and Docker repositories do not show the card (Docker tag moves are controlled by the `overwrite` permission). See [Overwrite rules](getting-started.md#overwrite-rules-immutable).
+
 ### Configuring Group Members
 
 When creating or editing a **Group** repository (e.g., `maven-group`), the **Group Members** section provides:

@@ -829,6 +829,7 @@ A local repository stores artifacts directly in the configured storage backend.
 | `storage` | map | Yes | -- | Storage backend configuration |
 | `url` | string | No | -- | Client-facing base URL for this repository (see note below); still required for some types -- [2.5](#25-type-specific-settings) |
 | `port` | int | No | -- | Dedicated port (conan only) |
+| `immutable` | boolean | No | `true` | Whether a stored artifact can be overwritten -- see [Immutable artifacts](#immutable-artifacts) below. Not used by `docker` |
 | `settings` | map | No | -- | Type-specific settings |
 | `download-mode` | string | No | `stream` | `stream`\|`redirect`\|`auto` -- presigned direct-download of binary artifacts from S3-backed storage; see [3.8](#38-presigned-direct-download-ws17) |
 | `presign-ttl-seconds` | long | No | `600` | Presigned URL validity window; only read when `download-mode` is not `stream` -- see [3.8](#38-presigned-direct-download-ws17) |
@@ -890,6 +891,86 @@ repo:
     type: fs
     path: /var/pantera/data
 ```
+
+#### Immutable artifacts
+
+`immutable` is a flat boolean under `repo:` (next to `type`). It applies to
+every local repository type except `docker`; proxies and groups ignore it.
+A missing key means `true`. Only an explicit `false` turns it off: any other
+value, including a misspelling, keeps the repository immutable. Through the
+REST API the value must be a JSON boolean (anything else answers `400`), and
+because `PUT /api/v1/repositories/:name` replaces the whole configuration, a
+body that omits the key makes the repository immutable. Changes through the
+API or UI apply on every node without a restart.
+
+| | `immutable: true` (default) | `immutable: false` |
+|---|---|---|
+| Re-upload of a stored artifact | Refused; the stored artifact is kept | Overwrites it, for any user with `write` on the repository; the format metadata (indexes, checksums, digests) and the search index follow the new content |
+| RPM `?override=true`, Hex `?replace=true` | Refused like any re-upload | Required to overwrite, as the protocol defines |
+| Delete | Allowed with `delete` | Allowed with `delete` |
+
+Refusal per format: `maven`/`gradle`, `php`, `go`, `nuget`, `rpm`, `helm`,
+`gem`, `conda`, `deb`, `file`, `npm` answer `409 Conflict`; `pypi` answers
+`400` with the reason `File already exists`; `hexpm` answers `422`; `conan`
+answers `404` to the `upload_urls` request (naming the stored file) and `409`
+to an upload to a signed URL of a stored file. A byte-identical re-upload is
+accepted without change for `maven`/`gradle`, `php`, `go`, `pypi` and
+`file`; the other formats refuse it too (npm and RubyGems never republish a
+version). For `deb` and `rpm` the check is by storage path (file name).
+
+Files that change by design stay writable whatever the setting: Maven
+`-SNAPSHOT` versions, `maven-metadata.xml` and checksums, Composer dev
+branches (`dev-*`, `*-dev`), a Go version's `.info` until its `.zip` is
+stored, and index files Pantera regenerates. Docker tag moves are governed by
+the `overwrite` action in `docker_repository_permissions` instead. The
+import endpoint (`PUT /.import/...`) always refuses to replace a file with
+different content, whatever the setting.
+
+On upgrade to 2.2.10, migration `V146` adds `immutable: false` to existing
+database-stored repositories of type `file`, `npm`, `gem`, `conda`, `deb`,
+`helm`, `rpm`, `hexpm` and `conan` that have no `immutable` key, because those
+types overwrote before. Repositories read from YAML files are not migrated;
+see [Upgrade Procedures](admin-guide/upgrade-procedures.md#upgrading-to-2210).
+
+`releaseImmutable` (the Maven/Gradle-only key of 2.3.0 pre-releases) is read
+as a deprecated alias of `immutable`, and only when `immutable` is absent:
+`releaseImmutable: false` alone makes the repository mutable, and
+`immutable` wins when both are set. The UI replaces it with `immutable` when
+the repository is saved; replace it in YAML files the same way.
+
+```yaml
+# File: bin.yaml
+repo:
+  type: file
+  immutable: false   # allow overwrites by users with write
+  storage:
+    type: fs
+    path: /var/pantera/data
+```
+
+#### HTTP DELETE on repository paths
+
+Every local repository except `docker`, `pypi`, `rpm` and `deb` accepts
+`DELETE /<repo>/<path>` (Basic or token authentication, `delete` permission on
+the repository). A file path deletes the file; a directory path deletes the
+subtree. The answer is `204`, `404` when nothing is stored or indexed at the
+path, and `400` for the repository root or an invalid path. The search index,
+the tree view, the format's own metadata and the `artifact_delete` audit
+record are updated exactly as by `DELETE /api/v1/repositories/:name/artifacts`
+([REST API Reference](rest-api-reference.md#delete-apiv1repositoriesnamepackages)).
+Native protocol deletes stay with the adapter: npm unpublish and dist-tag
+removal, the Helm chart API (`/charts/<name>[/<version>]`), conda token
+revocation, NuGet `dotnet nuget delete` (`/package/<id>/<version>`), the Hex
+release revert (`/packages/<name>/releases/<version>`), and the whole
+`DELETE` handling of `pypi`, `rpm` and `deb`. These deletes also remove the
+artifact from search. Docker deletes through the registry API
+(`/v2/.../manifests|blobs/...`).
+
+On `file-proxy`, `maven-proxy`, `gradle-proxy`, `npm-proxy`, `pypi-proxy`,
+`go-proxy` and `php-proxy`, the same request evicts the cached copy (file or
+subtree, checksum and metadata sidecars, search index rows, and the
+repository's negative-cache and metadata-cache entries for the path) without
+contacting the upstream. `docker-proxy` and group repositories answer `405`.
 
 ---
 
@@ -1112,7 +1193,7 @@ repo:
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `verifyPgp` | bool | No | `false` | Applies to `local` **and** `proxy` modes. When `true`, a detached `.asc`/`.sig` signature is verified against the admin-managed PGP keyring (`/api/v1/admin/pgp-keys`) before the primary artifact is trusted. `proxy` mode: verified before the fetched artifact is committed to cache. `local` (hosted) mode: an uploaded primary's own `PUT` always returns `201 Created`, but the artifact is quarantined (not resolvable by any client, excluded from `maven-metadata.xml`) until a matching signature verifies — regardless of whether the primary or its signature is uploaded first. A primary that never gets a valid signature is never servable. An empty keyring rejects every signed artifact — enabling this without uploading trusted keys blocks all signed fetches/uploads (fail-closed by design, never fail-open). |
-| `releaseImmutable` | bool | No | `true` | `local` mode only. Redeploying an existing non-SNAPSHOT (release) coordinate with different content is rejected with `409 Conflict` (an identical re-upload is accepted); set to `false` to opt out and allow overwrites. SNAPSHOT redeploys are always allowed regardless of this setting. |
+| `releaseImmutable` | bool | No | -- | **Deprecated** alias of the repository-level [`immutable`](#immutable-artifacts) key, read only when `immutable` is absent. Use `immutable` instead. |
 
 ```yaml
 repo:
@@ -1121,7 +1202,7 @@ repo:
     type: fs
     path: /var/pantera/data
   verifyPgp: true
-  releaseImmutable: true
+  immutable: true   # release versions cannot be overwritten (the default)
 ```
 
 ```yaml
@@ -1629,7 +1710,7 @@ User files are YAML files stored under the policy storage path, typically inside
 | Permission Key | Scope | Values |
 |---------------|-------|--------|
 | `adapter_basic_permissions` | Per-repository | `read`, `write`, `delete`, `*` (all) |
-| `docker_repository_permissions` | Per-registry, per-repo | `pull`, `push`, `overwrite`, `*` |
+| `docker_repository_permissions` | Per-registry, per-repo | `pull`, `push`, `overwrite`, `delete`, `*` |
 | `docker_registry_permissions` | Per-registry | `base`, `catalog`, `*` |
 | `all_permission` | Global | `{}` (grants everything) |
 
@@ -1719,7 +1800,7 @@ permissions:
 | Permission Type | Key Pattern | Allowed Values |
 |----------------|-------------|----------------|
 | `adapter_basic_permissions` | `<repo_name>` -> list | `read`, `write`, `delete`, `*` |
-| `docker_repository_permissions` | `<registry>` -> `<repo>` -> list | `pull`, `push`, `overwrite`, `*` |
+| `docker_repository_permissions` | `<registry>` -> `<repo>` -> list | `pull`, `push`, `overwrite`, `delete`, `*` (`*` includes `delete`) |
 | `docker_registry_permissions` | `<registry>` -> list | `base`, `catalog`, `*` |
 | `all_permission` | `{}` | Grants unrestricted access to all repositories |
 

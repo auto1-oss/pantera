@@ -41,7 +41,15 @@ If this returns your user info, the token is valid. If it returns 401, generate 
 |-----------|-------------------|
 | Pull/download artifacts | `read` on the repository |
 | Push/upload artifacts | `write` on the repository |
-| Delete artifacts | `delete` on the repository |
+| Overwrite an existing artifact (repository with **Immutable artifacts** off) | `write` on the repository |
+| Delete artifacts, or evict a cached file from a proxy (`DELETE /<repo>/<path>`) | `delete` on the repository |
+| Delete Docker manifests or blobs | `delete` in `docker_repository_permissions` |
+
+---
+
+## Upload Refused Because the Artifact Exists
+
+A local repository with the **Immutable artifacts** setting on (the default) never overwrites a stored artifact. The refusal depends on the format: `409 Conflict` for most formats, `400 File already exists` for PyPI, `422` for Hex, and for Conan a `404` from `upload_urls` naming the stored file. Publish a new version, or delete the stored artifact first (needs `delete`). An administrator can turn the setting off for the repository. See [Overwrite rules](getting-started.md#overwrite-rules-immutable).
 
 ---
 
@@ -140,6 +148,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 |-------|-----|
 | `<server><id>` does not match `<repository><id>` | Both must use the same id value |
 | `Return code is: 405` on deploy | Deploy to a local repo, not proxy/group |
+| `409 Conflict` on deploy | The release is already published with different content and the repository is immutable; bump the version or delete the published one first |
 | SNAPSHOT not updating | Run with `-U` flag: `mvn install -U` |
 | Certificate errors | Add `<insecure>true</insecure>` under `<server>` or configure TLS |
 
@@ -150,7 +159,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | Publishing goes to npmjs.org | Add `publishConfig.registry` in `package.json` |
 | Scoped packages not found | Add `@scope:registry=http://pantera-host:8080/npm-group` to `.npmrc` |
 | `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | Set `strict-ssl=false` in `.npmrc` (non-HTTPS) |
-| `ERR! code E409` on publish | Package version already exists; bump the version |
+| `ERR! code E409` on publish | The version already exists and the repository is immutable; bump the version, or unpublish the existing one first |
 
 ### Docker
 
@@ -159,6 +168,8 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | `http: server gave HTTP response to HTTPS client` | Add to `insecure-registries` in `daemon.json` |
 | `manifest unknown` for official images | Include `library/` prefix: `docker pull pantera-host:8080/proxy/library/ubuntu:latest` |
 | Push hangs or times out | Increase Nginx `proxy_read_timeout` and `client_max_body_size 0` |
+| `skopeo delete` / `crane delete` reports `unsupported` (405) | Delete against the local (`docker`) repository; proxy and group repositories do not delete |
+| `skopeo delete` / `crane delete` reports `denied` (403) | Ask the admin for the `delete` action in `docker_repository_permissions` |
 
 ### PyPI / pip
 
@@ -167,7 +178,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | `SSLError` | Add `trusted-host = pantera-host` to pip.conf |
 | `No matching distribution found` | Ensure index-url ends with `/simple` |
 | Old version installed | Run with `--no-cache-dir` |
-| `400 File already exists` on upload (twine: `HTTPError: 400 Bad Request` followed by `File already exists`) | Published files are immutable; bump the version (an identical re-upload succeeds) |
+| `400 File already exists` on upload (twine: `HTTPError: 400 Bad Request` followed by `File already exists`) | The repository is immutable; bump the version (an identical re-upload succeeds), or delete the published file first |
 
 ### Composer
 
@@ -186,7 +197,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | `verifying module: checksum mismatch` | Keep `GOSUMDB` at its default: a `go-proxy` repository forwards checksum-database lookups (`/sumdb/...`) to its upstream, so public modules verify through the registry. For a private module unknown to the public checksum database, add its path prefix to `GONOSUMDB` (or `GOPRIVATE`) |
 | `404` fetching `/sumdb/...` | Only a `go-proxy` repository has an upstream checksum database to forward to; `go` (local) and `go-group` repositories answer `404`. Point `GOPROXY` at the `go-proxy` repository, or set `GONOSUMDB`/`GOPRIVATE` for modules that only exist in a local repository |
 | `SECURITY ERROR ... does NOT match an earlier download recorded in go.sum` | The version's content changed after `go.sum` recorded it. Do not bypass it with `GONOSUMDB`; the module owner must publish a new version |
-| `409 Conflict` when uploading a module file | That version's `.mod` or `.zip` is already stored with different content, or its `.zip` is stored and the `.info` differs; Go versions are immutable, so publish a new version. A publish that stopped before its `.zip` was stored can be rerun as is |
+| `409 Conflict` when uploading a module file | That version's `.mod` or `.zip` is already stored with different content, or its `.zip` is stored and the `.info` differs; the repository is immutable, so publish a new version. A publish that stopped before its `.zip` was stored can be rerun as is |
 
 ### Helm
 
@@ -194,6 +205,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 |-------|-----|
 | `not a valid chart repository` | Verify the URL and ensure the Helm repo has `index.yaml` |
 | Charts not found after push | Run `helm repo update` |
+| `409 Conflict` on push | The chart version is already stored and the repository is immutable; bump the chart `version` or delete the stored one first |
 
 ---
 

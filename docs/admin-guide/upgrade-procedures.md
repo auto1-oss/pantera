@@ -10,9 +10,29 @@ This page covers the process for upgrading Pantera to a new version, including p
 
 ### Upgrading to 2.3.0
 
-**Coming from 2.2.8 or earlier: skip 2.2.9.** The 2.2.9 image cannot start against a database created by an earlier release: it shipped a comment edit inside the already-applied migration `V116`, and Flyway stops with `Migration checksum mismatch for migration version 116`. 2.3.0 restores the original file, so upgrade from 2.2.8 directly to 2.3.0 with no database action.
+2.3.0 contains everything shipped in 2.2.10. The upgrade path depends on the release you run:
 
-**Coming from 2.2.9:** a database that first ran `V116` under 2.2.9 (a fresh 2.2.9 install, or one where the checksum was rewritten to get 2.2.9 started) recorded the 2.2.9 checksum and fails the same validation against 2.3.0. Before starting 2.3.0, set it back to the original value:
+- **Coming from 2.2.10:** no database action. The 2.2.10 notes below (the `immutable` setting, HTTP `DELETE`, migration `V146`) are already in effect.
+- **Coming from 2.2.9 or earlier:** read [Upgrading to 2.2.10](#upgrading-to-2210) first — every note there applies to an upgrade straight to 2.3.0, including the `V116` checksum fix for a database that first ran `V116` under 2.2.9 (run the `UPDATE` before starting 2.3.0) and the `immutable` default for YAML-only deployments. Coming from 2.2.8 or earlier, skip 2.2.9.
+
+**No database migration of its own.** 2.3.0 adds no Flyway migration beyond 2.2.10's `V146` (the highest version is `V146`), and an existing `pantera.yml`, repository YAMLs and environment load unchanged. The storage and download features are opt-in per storage/repository:
+
+- **Index-accelerated S3 cache** (`cache.mode: index`) — serves cache hits from an in-memory index with async durable write-back and byte-bounded LRU/LFU eviction. Default is unchanged (`mode: disk`, the prior disk cache). See [Index Cache Mode](storage-backends.md#index-cache-mode-cachemode-index).
+- **S3-API-compatible backends** — the S3 backend also targets MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS Gateway, or GCS's S3-interop endpoint via `endpoint`/`region`/`path-style`/`credentials`; `storage-class` selects the object storage class. See [S3-API-Compatible Object Stores](storage-backends.md#s3-api-compatible-object-stores).
+- **Presigned direct-download** — a per-repository `download-mode` (`stream` default / `redirect` / `auto`) can `302` binary artifact GETs on hosted repositories to a time-limited object-store URL (`presign-ttl-seconds`, default `600`), removing Pantera from the byte path; metadata is never redirected, `conan` and all proxy/group repositories keep streaming, and a redirect falls back to streaming when the object is not durably stored or the storage has no presigner. Clients must be able to reach the object store directly before you enable it. See [Presigned Direct-Download](storage-backends.md#presigned-direct-download-ws17).
+
+Leave these keys unset to upgrade with no functional change. Behavior that changes without any configuration:
+
+- **Maven/Gradle release immutability follows the repository's `immutable` setting** (default on, as in 2.2.10). `releaseImmutable`, the Maven-only key of 2.3.0 pre-releases, is still read as a deprecated alias, but only when `immutable` is absent; replace `releaseImmutable: false` with `immutable: false` (the UI does this when the repository is saved). `verifyPgp` (PGP-verified quarantine against the `/api/v1/admin/pgp-keys` keyring) stays off unless enabled.
+- **Docker manifest `GET`/`HEAD` honour the client's `Accept` header** and answer `406` when the stored manifest's media type is not acceptable; an absent `Accept` or `*/*` is unaffected. Registry API deletes (shipped in 2.2.10) also maintain the OCI 1.1 referrers index: deleting a referrer manifest by digest removes it from `GET .../referrers/<digest>`.
+- **`go-proxy` proxies the Go checksum database** (`/sumdb/...`) to its upstream, so clients can keep `GOSUMDB` at its default; `go` and `go-group` repositories answer `404` for `/sumdb/`.
+- **Per-node event draining.** Each node drains its own artifact-events queue and proxy package processors on a local scheduler instead of the cluster-shared Quartz job store; a Quartz firing that lands on a node without the job's dependencies is skipped and logged (`event.action=job_skip_unresolved`) rather than deleting the job. No operator action is required.
+
+### Upgrading to 2.2.10
+
+**Coming from 2.2.8 or earlier: skip 2.2.9.** The 2.2.9 image cannot start against a database created by an earlier release: it shipped a comment edit inside the already-applied migration `V116`, and Flyway stops with `Migration checksum mismatch for migration version 116`. 2.2.10 restores the original file, so upgrade from 2.2.8 directly to 2.2.10 with no database action.
+
+**Coming from 2.2.9:** a database that first ran `V116` under 2.2.9 (a fresh 2.2.9 install, or one where the checksum was rewritten to get 2.2.9 started) recorded the 2.2.9 checksum and fails the same validation against 2.2.10. Before starting 2.2.10, set it back to the original value:
 
 ```sql
 UPDATE flyway_schema_history SET checksum = -1980887255
@@ -21,18 +41,32 @@ UPDATE flyway_schema_history SET checksum = -1980887255
 
 The statement is a no-op on every other database. See [Troubleshooting](troubleshooting.md#startup-failure-migration-checksum-mismatch-for-migration-version-116).
 
-**No database migration.** 2.3.0 adds no Flyway migration (the highest version stays `V145`), and an existing `pantera.yml`, repository YAMLs and environment load unchanged. The storage and download features are opt-in per storage/repository:
+**Overwrite behaviour: the new `immutable` repository setting.** 2.2.10 adds a per-repository `immutable` flag (see [Immutable artifacts](../configuration-reference.md#immutable-artifacts)). A missing key means `true`: a stored artifact is never overwritten. Hosted `maven`, `gradle`, `php`, `go`, `pypi` and `nuget` repositories already refused overwrites, so the default changes nothing for them. Hosted `file`, `npm`, `gem`, `conda`, `deb`, `helm`, `rpm`, `hexpm` and `conan` repositories overwrote on a re-upload (`rpm` with `?override=true`, `hexpm` with `?replace=true`), so:
 
-- **Index-accelerated S3 cache** (`cache.mode: index`) — serves cache hits from an in-memory index with async durable write-back and byte-bounded LRU/LFU eviction. Default is unchanged (`mode: disk`, the prior disk cache). See [Index Cache Mode](storage-backends.md#index-cache-mode-cachemode-index).
-- **S3-API-compatible backends** — the S3 backend also targets MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS Gateway, or GCS's S3-interop endpoint via `endpoint`/`region`/`path-style`/`credentials`; `storage-class` selects the object storage class. See [S3-API-Compatible Object Stores](storage-backends.md#s3-api-compatible-object-stores).
-- **Presigned direct-download** — a per-repository `download-mode` (`stream` default / `redirect` / `auto`) can `302` binary artifact GETs on hosted repositories to a time-limited object-store URL (`presign-ttl-seconds`, default `600`), removing Pantera from the byte path; metadata is never redirected, `conan` and all proxy/group repositories keep streaming, and a redirect falls back to streaming when the object is not durably stored or the storage has no presigner. Clients must be able to reach the object store directly before you enable it. See [Presigned Direct-Download](storage-backends.md#presigned-direct-download-ws17).
+- **Database-backed deployments:** migration `V146` runs automatically at startup and adds `"immutable": false` to every stored repository of those types that has no `immutable` key, so they keep overwriting. Repositories created after the upgrade are immutable unless created with `immutable: false`. To make an existing repository immutable, tick **Immutable artifacts** on its *Publishing* card in the UI, or send `"immutable": true` in `PUT /api/v1/repositories/:name`. To list the repositories the migration left mutable:
 
-Leave these keys unset to upgrade with no functional change. Behavior that changes without any configuration:
+  ```sql
+  SELECT name, type FROM repositories WHERE config->'repo'->>'immutable' = 'false';
+  ```
 
-- **Hosted Maven/Gradle releases are immutable by default.** Re-deploying an existing non-SNAPSHOT coordinate with different bytes is rejected with `409 Conflict` (an identical re-deploy is an idempotent `201`); a client checksum sidecar that does not match the stored primary is rejected with `400`. Pipelines that overwrite release versions must either publish new versions or set `releaseImmutable: false` on that repository. `verifyPgp` (PGP-verified quarantine against the `/api/v1/admin/pgp-keys` keyring) stays off unless enabled.
-- **Docker registry API deletes work on hosted repositories.** `DELETE /v2/<name>/manifests/<reference>` and `DELETE /v2/<name>/blobs/<digest>` answer `202` on a `docker` repository (previously `405`); proxy and group repositories still answer `405 UNSUPPORTED`. Manifest `GET`/`HEAD` now honour the client's `Accept` header and answer `406` when the stored manifest's media type is not acceptable; an absent `Accept` or `*/*` is unaffected.
-- **`go-proxy` proxies the Go checksum database** (`/sumdb/...`) to its upstream, so clients can keep `GOSUMDB` at its default; `go` and `go-group` repositories answer `404` for `/sumdb/`.
-- **Per-node event draining.** Each node drains its own artifact-events queue and proxy package processors on a local scheduler instead of the cluster-shared Quartz job store; a Quartz firing that lands on a node without the job's dependencies is skipped and logged (`event.action=job_skip_unresolved`) rather than deleting the job. No operator action is required.
+- **YAML-only deployments (no database):** there is no migration. Repositories of those types become immutable on upgrade, and a re-upload of an existing artifact is refused (`409 Conflict` for most, `422` for Hex, `404` from Conan's `upload_urls`). Before upgrading, add `immutable: false` under `repo:` in each repository file that must keep accepting overwrites:
+
+  ```yaml
+  repo:
+    type: npm
+    immutable: false
+    storage:
+      type: fs
+      path: /var/pantera/data
+  ```
+
+- A `PUT /api/v1/repositories/:name` replaces the whole configuration. Automation that writes repository configurations must include `"immutable": false` where it is wanted, or the repository becomes immutable on the next write.
+
+**`delete` now covers HTTP `DELETE` on repository URLs.** Users holding `delete` (or `*`) in `adapter_basic_permissions` on a repository can now delete artifacts with `DELETE /<repo>/<path>` on local repositories, and evict cached files with the same request on `file`, `maven`, `gradle`, `npm`, `pypi`, `go` and `php` proxies, which answered `405` before. Review roles that grant `delete` or `*` on repositories, in particular `"*": ["*"]`.
+
+**Docker roles with `*` gain `delete`.** The new `delete` action in `docker_repository_permissions` enables `DELETE /v2/<repo>/<image>/manifests/<reference>` and `.../blobs/<digest>` on local `docker` repositories. `*` includes it, so a role granted `["*"]` can now delete images and tags. Replace `*` with `["pull", "push", "overwrite"]` in roles that must not delete. `docker-proxy` and `docker-group` repositories still answer `405 UNSUPPORTED` to these requests.
+
+**UI:** deploy the 2.2.10 `pantera-ui` together with the backend. Older UI builds do not show the *Publishing* card, and their role editor does not offer the Docker `delete` action.
 
 ---
 

@@ -142,7 +142,14 @@ Without the `publications` block, `./gradlew publish` succeeds but uploads nothi
 ./gradlew publish
 ```
 
-Published release versions are immutable: publishing different bytes for an existing release file answers `409 Conflict`, while an identical re-publish succeeds. `-SNAPSHOT` versions stay writable. See [Maven: Re-deploying and checksums](maven.md#re-deploying-and-checksums).
+In a repository with the **Immutable artifacts** setting on (the default), publishing different bytes for an existing release file answers `409 Conflict`, while an identical re-publish succeeds; when the setting is off, a re-publish with `write` permission overwrites the release. `-SNAPSHOT` versions stay writable either way. See [Maven: Re-deploying and checksums](maven.md#re-deploying-and-checksums).
+
+To delete a version (or a single file), send an HTTP `DELETE` of its path; it needs the `delete` permission and also updates `maven-metadata.xml` and search. See [Maven: Delete an artifact or version](maven.md#delete-an-artifact-or-version).
+
+```bash
+curl -u your-username:your-api-token -X DELETE \
+  http://pantera-host:8080/gradle-local/com/example/my-lib/1.0.0
+```
 
 ---
 
