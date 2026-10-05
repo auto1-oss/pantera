@@ -31,4 +31,9 @@ public final class Absent implements Resource {
     public CompletableFuture<Response> put(Headers headers, Content body) {
         return ResponseBuilder.notFound().completedFuture();
     }
+
+    @Override
+    public CompletableFuture<Response> delete(final Headers headers) {
+        return ResponseBuilder.notFound().completedFuture();
+    }
 }

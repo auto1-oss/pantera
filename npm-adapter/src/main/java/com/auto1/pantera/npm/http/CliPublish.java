@@ -14,15 +14,18 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.npm.InvalidPublishException;
 import com.auto1.pantera.npm.MetaUpdate;
 import com.auto1.pantera.npm.PerVersionLayout;
 import com.auto1.pantera.npm.Publish;
+import com.auto1.pantera.npm.PublishedVersion;
 import com.auto1.pantera.npm.TgzArchive;
 import com.auto1.pantera.npm.http.attestation.AttestationStore;
 import com.auto1.pantera.npm.security.NpmPackageSigner;
 
 import javax.json.Json;
 import javax.json.JsonObject;
+import javax.json.JsonValue;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -48,6 +51,11 @@ public final class CliPublish implements Publish {
      * Attachments json field name.
      */
     private static final String ATTACHMENTS = "_attachments";
+
+    /**
+     * Package name json field name.
+     */
+    private static final String NAME = "name";
 
     /**
      * The storage.
@@ -99,60 +107,98 @@ public final class CliPublish implements Publish {
         final Key prefix, final Key artifact
     ) {
         return this.artifactJson(artifact).thenCompose(
-            uploaded -> this.guard(prefix, uploaded)
-                .thenCompose(ignored -> new MetaUpdate.ByJson(uploaded).update(prefix, this.storage))
-                .thenCompose(ignored -> this.signPublishedVersion(prefix, uploaded))
-                .thenCompose(ignored -> this.updateSourceArchives(uploaded))
-                .thenApply(
-                    size -> new PackageInfo(
-                        prefix.toString(),
-                        CliPublish.packageVersion(uploaded), size,
-                        new Key.From(
-                            prefix.string(), "-",
-                            String.format(
-                                "%s-%s.tgz", prefix.string(),
-                                CliPublish.packageVersion(uploaded)
-                            )
-                        ).string()
+            uploaded -> {
+                final String version;
+                try {
+                    version = new PublishedVersion(uploaded).validated();
+                } catch (final InvalidPublishException ex) {
+                    return CompletableFuture.failedFuture(ex);
+                }
+                return this.guard(prefix, uploaded, version)
+                    .thenCompose(
+                        ignored -> new MetaUpdate.ByJson(uploaded).update(prefix, this.storage)
                     )
-                )
+                    .thenCompose(ignored -> this.signPublishedVersion(prefix, uploaded, version))
+                    .thenCompose(ignored -> this.updateSourceArchives(uploaded, version))
+                    .thenApply(
+                        size -> new PackageInfo(
+                            prefix.toString(), version, size,
+                            new Key.From(
+                                prefix.string(), "-",
+                                String.format("%s-%s.tgz", prefix.string(), version)
+                            ).string()
+                        )
+                    );
+            }
         );
     }
 
     @Override
     public CompletableFuture<Void> publish(final Key prefix, final Key artifact) {
-        return this.artifactJson(artifact).thenCompose(
-            uploaded -> this.guard(prefix, uploaded)
-                .thenCompose(ignored -> new MetaUpdate.ByJson(uploaded).update(prefix, this.storage))
-                .thenCompose(ignored -> this.signPublishedVersion(prefix, uploaded))
-                .thenCompose(ignored -> this.updateSourceArchives(uploaded))
-                .thenAccept(size -> { })
-        );
+        return this.publishWithInfo(prefix, artifact).thenAccept(info -> { });
     }
 
     /**
-     * In an immutable repository, refuse a publish that would overwrite the
-     * version metadata or a tarball already stored.
+     * In an immutable repository, refuse a publish that would overwrite
+     * anything of an already published version. Every write of the publish
+     * targets the single {@link PublishedVersion}: its per-version metadata
+     * file, its registry signature, its attestation bundle and its tarball.
+     * The version file existing means the version is published (that also
+     * covers the signature and the attestation, which are written for that
+     * version only); a stored tarball is refused too.
+     *
+     * <p>The payload must be consistent with that target: its {@code name}
+     * must be the package being published (attachments are stored under
+     * {@code name}, the version metadata under the request's package), and
+     * every tarball attachment must be that version's tarball. Otherwise an
+     * attachment could land on another package or version than the one the
+     * guard checked.</p>
+     *
      * @param prefix Package key
      * @param uploaded The uploaded json
-     * @return Completion, failed when the version is already published
+     * @param version Version the publish writes
+     * @return Completion, failed with {@link InvalidPublishException} for an
+     *  inconsistent payload or {@link com.auto1.pantera.npm.VersionExistsException}
+     *  when the version is already published
      */
-    private CompletableFuture<Void> guard(final Key prefix, final JsonObject uploaded) {
+    private CompletableFuture<Void> guard(
+        final Key prefix, final JsonObject uploaded, final String version
+    ) {
         if (!this.immutable) {
             return CompletableFuture.completedFuture(null);
         }
-        final List<Key> tarballs = new ArrayList<>(0);
-        final JsonObject attachments = uploaded.getJsonObject(CliPublish.ATTACHMENTS);
-        if (attachments != null) {
-            for (final String file : attachments.keySet()) {
-                if (!CliPublish.isAttestationBundle(file, attachments.getJsonObject(file))) {
-                    tarballs.add(new Key.From(uploaded.getString("name"), "-", file));
-                }
-            }
+        final String name = uploaded.getString(CliPublish.NAME, null);
+        if (!prefix.string().equals(name)) {
+            return CompletableFuture.failedFuture(
+                new InvalidPublishException(
+                    String.format(
+                        "publish payload name %s does not match the package %s",
+                        name, prefix.string()
+                    )
+                )
+            );
         }
-        return new ImmutableVersionGuard(this.storage).check(
-            prefix, new MetaUpdate.ByJson(uploaded).version(), tarballs
-        );
+        final String expected = String.format("%s-%s.tgz", name, version);
+        final JsonObject attachments = CliPublish.attachments(uploaded);
+        final List<Key> tarballs = new ArrayList<>(1);
+        for (final String file : attachments.keySet()) {
+            if (CliPublish.isAttestationBundle(file, attachments.getJsonObject(file))) {
+                // stored for `version` only: covered by the version check
+                continue;
+            }
+            if (!expected.equals(file)) {
+                return CompletableFuture.failedFuture(
+                    new InvalidPublishException(
+                        String.format(
+                            "publish payload targets version %s but attaches tarball %s",
+                            version, file
+                        )
+                    )
+                );
+            }
+            tarballs.add(new Key.From(name, "-", file));
+        }
+        return new ImmutableVersionGuard(this.storage).check(prefix, version, tarballs);
     }
 
     /**
@@ -171,14 +217,16 @@ public final class CliPublish implements Publish {
      * attestation sidecar store instead (never mis-stored as a tarball).
      *
      * @param uploaded The uploaded json
+     * @param version Version the publish writes
      * @return Completion or error signal carrying the total tarball size
      *  (attestation bundles do not count toward package size).
      */
-    private CompletableFuture<Long> updateSourceArchives(final JsonObject uploaded) {
+    private CompletableFuture<Long> updateSourceArchives(
+        final JsonObject uploaded, final String version
+    ) {
         final AtomicLong size = new AtomicLong();
-        final JsonObject attachments = uploaded.getJsonObject(CliPublish.ATTACHMENTS);
-        final String pkgName = uploaded.getString("name", null);
-        final String version = CliPublish.packageVersion(uploaded);
+        final JsonObject attachments = CliPublish.attachments(uploaded);
+        final String pkgName = uploaded.getString(CliPublish.NAME, null);
         final List<CompletableFuture<Void>> futures = new ArrayList<>(attachments.size());
         for (final String file : attachments.keySet()) {
             final JsonObject attachment = attachments.getJsonObject(file);
@@ -188,7 +236,7 @@ public final class CliPublish implements Publish {
                 final byte[] bytes = new TgzArchive(attachment.getString("data")).bytes();
                 futures.add(
                     this.storage.save(
-                        new Key.From(uploaded.getString("name"), "-", file), new Content.From(bytes)
+                        new Key.From(pkgName, "-", file), new Content.From(bytes)
                     ).toCompletableFuture()
                 );
                 size.getAndAdd(bytes.length);
@@ -257,20 +305,19 @@ public final class CliPublish implements Publish {
      *
      * @param packageKey Package key
      * @param uploaded Uploaded publish payload
+     * @param version Version the publish wrote
      * @return Completion stage
      */
-    private CompletableFuture<Void> signPublishedVersion(final Key packageKey, final JsonObject uploaded) {
-        final String version = CliPublish.packageVersion(uploaded);
-        if ("ABSENT_VERSION".equals(version)) {
-            return CompletableFuture.completedFuture(null);
-        }
+    private CompletableFuture<Void> signPublishedVersion(
+        final Key packageKey, final JsonObject uploaded, final String version
+    ) {
         final PerVersionLayout layout = new PerVersionLayout(this.storage);
         return layout.readVersion(packageKey, version).thenCompose(versionJson -> {
             if (versionJson.isEmpty() || !versionJson.containsKey("dist")) {
                 return CompletableFuture.<Void>completedFuture(null);
             }
             final String integrity = versionJson.getJsonObject("dist").getString("integrity", null);
-            final String name = versionJson.getString("name", uploaded.getString("name", packageKey.string()));
+            final String name = versionJson.getString("name", uploaded.getString(CliPublish.NAME, packageKey.string()));
             return this.signer.sign(name, version, integrity).thenCompose(signed -> {
                 if (signed.isEmpty()) {
                     return CompletableFuture.<Void>completedFuture(null);
@@ -295,13 +342,17 @@ public final class CliPublish implements Publish {
     }
 
     /**
-     * Read version from uploaded json.
-     * @param json Uploaded json
-     * @return Version
+     * Attachments of the uploaded json.
+     * @param uploaded The uploaded json
+     * @return Attachments, empty when the payload carries none
      */
-    private static String packageVersion(final JsonObject json) {
-        return json.getJsonObject("versions").keySet().stream().findFirst()
-            .orElse("ABSENT_VERSION");
+    private static JsonObject attachments(final JsonObject uploaded) {
+        final JsonObject res;
+        if (uploaded.get(CliPublish.ATTACHMENTS) instanceof JsonObject) {
+            res = uploaded.getJsonObject(CliPublish.ATTACHMENTS);
+        } else {
+            res = JsonValue.EMPTY_JSON_OBJECT;
+        }
+        return res;
     }
-
 }

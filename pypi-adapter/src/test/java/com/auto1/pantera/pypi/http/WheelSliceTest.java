@@ -36,6 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Test for {@link WheelSlice}.
@@ -194,6 +195,82 @@ class WheelSliceTest {
         );
         MatcherAssert.assertThat(
             "Event to queue is empty", this.queue.isEmpty()
+        );
+    }
+
+    @Test
+    void failedPublishLeavesNoTemporaryUpload() throws IOException {
+        this.asto = new Storage.Wrap(new InMemoryStorage()) {
+            @Override
+            public CompletableFuture<Void> move(final Key source, final Key destination) {
+                return CompletableFuture.failedFuture(new IllegalStateException("move failed"));
+            }
+        };
+        final com.auto1.pantera.http.Response response = this.upload(
+            "/", "pantera-sample-0.2.tar",
+            new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes()
+        );
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "the failed publish is answered with an error",
+            response.status().success(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "no temporary upload is left behind",
+            this.asto.list(Key.ROOT).join(),
+            new IsEmptyCollection<>()
+        );
+    }
+
+    @Test
+    void failedDigestComparisonLeavesNoTemporaryUpload() throws IOException {
+        final String filename = "pantera-sample-0.2.tar";
+        final Key stored = new Key.From("pantera-sample", "0.2", filename);
+        final byte[] original = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        final Storage backing = new InMemoryStorage();
+        backing.save(stored, new Content.From(original)).join();
+        this.asto = new Storage.Wrap(backing) {
+            @Override
+            public CompletableFuture<Content> value(final Key key) {
+                final CompletableFuture<Content> res;
+                if (key.equals(stored)) {
+                    res = CompletableFuture.failedFuture(new IllegalStateException("read failed"));
+                } else {
+                    res = super.value(key);
+                }
+                return res;
+            }
+        };
+        final com.auto1.pantera.http.Response response =
+            this.upload("/", filename, WheelSliceTest.tamper(original));
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "the failed comparison is answered with an error",
+            response.status().success(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "only the previously stored file remains",
+            this.asto.list(Key.ROOT).join(),
+            new IsEqual<>(java.util.List.of(stored))
+        );
+    }
+
+    @Test
+    void unreadableArchiveLeavesNoTemporaryUpload() throws IOException {
+        final com.auto1.pantera.http.Response response =
+            this.upload("/", "myproject.whl", "some code".getBytes(StandardCharsets.UTF_8));
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "the unreadable archive is refused",
+            response.status(),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "no temporary upload is left behind",
+            this.asto.list(Key.ROOT).join(),
+            new IsEmptyCollection<>()
         );
     }
 

@@ -24,6 +24,7 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.index.SyncArtifactIndexer;
+import com.auto1.pantera.npm.InvalidPublishException;
 import com.auto1.pantera.npm.PackageNameFromUrl;
 import com.auto1.pantera.npm.Publish;
 import com.auto1.pantera.npm.VersionExistsException;
@@ -144,25 +145,33 @@ public final class UploadSlice implements Slice {
         final RequestLine line, final Headers headers, final Content body
     ) {
         final String pkg = new PackageNameFromUrl(line).value();
-        if (!this.immutable) {
-            return this.publish(pkg, headers, body);
-        }
-        final int dash = pkg.indexOf("/-/");
-        final String name;
-        if (dash > 0) {
-            name = pkg.substring(0, dash);
+        final CompletableFuture<Response> published;
+        if (this.immutable) {
+            final int dash = pkg.indexOf("/-/");
+            final String name;
+            if (dash > 0) {
+                name = pkg.substring(0, dash);
+            } else {
+                name = pkg;
+            }
+            published = UploadSlice.PUBLISHES.run(
+                String.join("/", this.rname, name),
+                () -> this.publish(pkg, headers, body)
+            );
         } else {
-            name = pkg;
+            published = this.publish(pkg, headers, body);
         }
-        return UploadSlice.PUBLISHES.run(
-            String.join("/", this.rname, name),
-            () -> this.publish(pkg, headers, body)
-        ).handle(
+        return published.handle(
             (response, error) -> {
                 final Throwable cause = UploadSlice.unwrap(error);
                 if (cause instanceof VersionExistsException) {
                     return CompletableFuture.completedFuture(
                         this.conflict(pkg, (VersionExistsException) cause)
+                    );
+                }
+                if (cause instanceof InvalidPublishException) {
+                    return CompletableFuture.completedFuture(
+                        this.badRequest(pkg, (InvalidPublishException) cause)
                     );
                 }
                 if (error != null) {
@@ -223,7 +232,9 @@ public final class UploadSlice implements Slice {
             .thenApply(ignored -> ResponseBuilder.ok().build())
             .whenComplete(
                 (ignored, error) -> {
-                    if (UploadSlice.unwrap(error) instanceof VersionExistsException) {
+                    final Throwable cause = UploadSlice.unwrap(error);
+                    if (cause instanceof VersionExistsException
+                        || cause instanceof InvalidPublishException) {
                         this.storage.delete(uploaded);
                     }
                 }
@@ -251,6 +262,30 @@ public final class UploadSlice implements Slice {
             .field("log.source", "application")
             .log();
         return ResponseBuilder.from(RsStatus.CONFLICT)
+            .jsonBody(
+                Json.createObjectBuilder().add("error", refusal.getMessage()).build().toString()
+            )
+            .build();
+    }
+
+    /**
+     * Refusal of an inconsistent publish payload, readable by the npm CLI.
+     * @param pkg Package name (request path)
+     * @param refusal Refusal
+     * @return 400 Bad Request
+     */
+    private Response badRequest(final String pkg, final InvalidPublishException refusal) {
+        EcsLogger.warn("com.auto1.pantera.npm")
+            .message("Rejected inconsistent npm publish payload: " + refusal.getMessage())
+            .eventCategory("web")
+            .eventAction("artifact_upload")
+            .eventOutcome("failure")
+            .field("event.reason", "invalid_publish_payload")
+            .field("repository.name", this.rname)
+            .field("package.name", pkg)
+            .field("log.source", "application")
+            .log();
+        return ResponseBuilder.badRequest()
             .jsonBody(
                 Json.createObjectBuilder().add("error", refusal.getMessage()).build().toString()
             )

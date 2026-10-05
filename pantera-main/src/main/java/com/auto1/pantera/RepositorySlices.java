@@ -74,6 +74,7 @@ import com.auto1.pantera.http.timeout.AutoBlockRegistry;
 import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import com.auto1.pantera.http.slice.DeleteRoutingSlice;
 import com.auto1.pantera.http.slice.PathPrefixStripSlice;
+import com.auto1.pantera.http.slice.NativeDeleteCascadeSlice;
 import com.auto1.pantera.http.slice.ProxyEvictSlice;
 import com.auto1.pantera.http.slice.ProxyPathCaches;
 import com.auto1.pantera.http.slice.RepoDeleteSlice;
@@ -170,6 +171,16 @@ public class RepositorySlices {
      */
     private static final Pattern HELM_CHART_API = Pattern.compile(
         "^/charts/[a-zA-Z\\-\\d.]+/?[a-zA-Z\\-\\d.]*$"
+    );
+
+    /**
+     * The hex release revert API
+     * ({@code DELETE [/api][/repos/<org>]/packages/<name>/releases/<version>},
+     * {@code mix hex.publish --revert}), answered natively by the hexpm
+     * adapter.
+     */
+    private static final Pattern HEX_RELEASE_API = Pattern.compile(
+        "^(?:/api)?(?:/repos/[^/]+)?/packages/[^/]+/releases/[^/]+/?$"
     );
 
     /**
@@ -952,11 +963,15 @@ public class RepositorySlices {
                 );
                 break;
             case "rpm":
+                // Native DELETE (repodata upkeep) + search-index cascade.
                 slice = browsableTrimPathSlice(
-                    new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
-                        tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()),
-                        artifactEvents(),
-                        this.settings.syncArtifactIndexer(), cfg.immutable()),
+                    this.nativeDelete(
+                        cfg,
+                        new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
+                            tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()),
+                            artifactEvents(),
+                            this.settings.syncArtifactIndexer(), cfg.immutable())
+                    ),
                     cfg
                 );
                 break;
@@ -977,9 +992,13 @@ public class RepositorySlices {
                     baseUrl = baseUrl + "/" + normalizedRepo;
                 }
                 
+                // The alias is stripped OUTSIDE the generic delete, so a
+                // DELETE through /direct-dists/<x> removes the key <x> that
+                // a GET of the same URL serves; plain storage-key paths are
+                // left as they are.
                 slice = browsableTrimPathSlice(
-                    this.hostedDelete(cfg, new PathPrefixStripSlice(
-                        new PhpComposer(
+                    new PathPrefixStripSlice(
+                        this.hostedDelete(cfg, new PhpComposer(
                             new AstoRepository(
                                 cfg.storage(),
                                 Optional.of(baseUrl),
@@ -992,9 +1011,9 @@ public class RepositorySlices {
                             artifactEvents(),
                             this.settings.syncArtifactIndexer(),
                             cfg.immutable()
-                        ),
+                        )),
                         "direct-dists"
-                    )),
+                    ),
                     cfg
                 );
                 break;
@@ -1006,10 +1025,12 @@ public class RepositorySlices {
                 // AnonymousAccessSlice gate (which only challenges requests
                 // with NO credentials) into a chain that never validated
                 // them — php-proxy was effectively unauthenticated.
-                slice = trimPathSlice(this.proxyEvict(
-                    cfg,
-                    new CombinedAuthzSliceWrap(
-                        new PathPrefixStripSlice(
+                // The alias is stripped OUTSIDE the eviction, so a DELETE
+                // through /direct-dists/<x> evicts what a GET of it caches.
+                slice = trimPathSlice(new PathPrefixStripSlice(
+                    this.proxyEvict(
+                        cfg,
+                        new CombinedAuthzSliceWrap(
                             new TimeoutSlice(
                                 new ComposerProxy(
                                     clientSlices,
@@ -1019,18 +1040,20 @@ public class RepositorySlices {
                                 ),
                                 settings.httpClientSettings().proxyTimeout()
                             ),
-                            "direct-dists"
-                        ),
-                        authentication(),
-                        tokens.auth(),
-                        new OperationControl(
-                            securityPolicy(),
-                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                            authentication(),
+                            tokens.auth(),
+                            new OperationControl(
+                                securityPolicy(),
+                                new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                            )
                         )
-                    )
+                    ),
+                    "direct-dists"
                 ));
                 break;
             case "nuget":
+                // DELETE /package/<id>/<version> (dotnet nuget delete) stays
+                // native; every other path is the generic delete.
                 slice = browsableTrimPathSlice(
                     this.hostedDelete(
                         cfg,
@@ -1038,7 +1061,8 @@ public class RepositorySlices {
                             cfg.url(), new com.auto1.pantera.nuget.AstoRepository(cfg.storage()),
                             securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
                             this.settings.syncArtifactIndexer(), cfg.immutable()
-                        )
+                        ),
+                        path -> !"/package".equals(path) && !path.startsWith("/package/")
                     ),
                     cfg
                 );
@@ -1587,13 +1611,17 @@ public class RepositorySlices {
                 );
                 break;
             case "deb":
+                // Native DELETE (Packages/Release upkeep) + search-index cascade.
                 slice = trimPathSlice(
-                    new DebianSlice(
-                        cfg.storage(), securityPolicy(), authentication(),
-                        new com.auto1.pantera.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
-                        artifactEvents(),
-                        this.settings.syncArtifactIndexer(),
-                        cfg.immutable()
+                    this.nativeDelete(
+                        cfg,
+                        new DebianSlice(
+                            cfg.storage(), securityPolicy(), authentication(),
+                            new com.auto1.pantera.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
+                            artifactEvents(),
+                            this.settings.syncArtifactIndexer(),
+                            cfg.immutable()
+                        )
                     )
                 );
                 break;
@@ -1643,23 +1671,31 @@ public class RepositorySlices {
                 );
                 break;
             case "hexpm":
+                // The release revert API (mix hex.publish --revert) stays
+                // native; every other path is the generic delete.
                 slice = trimPathSlice(
                     this.hostedDelete(
                         cfg,
                         new HexSlice(cfg.storage(), securityPolicy(), authentication(),
                             artifactEvents(), cfg.name(),
                             this.settings.syncArtifactIndexer(), this.hexRegistrySigner(),
-                            cfg.immutable())
+                            cfg.immutable()),
+                        path -> !RepositorySlices.HEX_RELEASE_API.matcher(path).matches()
                     )
                 );
                 break;
             case "pypi":
+                // Native DELETE (simple-index upkeep) + search-index cascade,
+                // inside the /simple strip: the cascade sees the storage key.
                 slice = trimPathSlice(
                     new PathPrefixStripSlice(
-                        new com.auto1.pantera.pypi.http.PySlice(
-                            cfg.storage(), securityPolicy(), authentication(),
-                            tokens.auth(), cfg.name(), artifactEvents(),
-                            this.settings.syncArtifactIndexer(), cfg.immutable()
+                        this.nativeDelete(
+                            cfg,
+                            new com.auto1.pantera.pypi.http.PySlice(
+                                cfg.storage(), securityPolicy(), authentication(),
+                                tokens.auth(), cfg.name(), artifactEvents(),
+                                this.settings.syncArtifactIndexer(), cfg.immutable()
+                            )
                         ),
                         "simple"
                     )
@@ -2067,6 +2103,19 @@ public class RepositorySlices {
             ),
             generic
         );
+    }
+
+    /**
+     * Keep an adapter's native {@code DELETE} (pypi, debian, rpm) and add the
+     * search-index / tree-view cascade of the shared artifact delete on a
+     * {@code 2xx} (see {@link NativeDeleteCascadeSlice}).
+     *
+     * @param cfg Repository config
+     * @param adapter Adapter slice (repository-relative storage paths)
+     * @return Slice
+     */
+    private Slice nativeDelete(final RepoConfig cfg, final Slice adapter) {
+        return new NativeDeleteCascadeSlice(adapter, cfg.name(), this.deletion);
     }
 
     /**

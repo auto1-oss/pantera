@@ -14,6 +14,8 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.error.BlobInUseError;
+import com.auto1.pantera.docker.error.BlobInUseException;
 import com.auto1.pantera.docker.error.BlobUnknownError;
 import com.auto1.pantera.docker.error.DockerReferenceNotFoundException;
 import com.auto1.pantera.docker.http.DockerActionSlice;
@@ -22,6 +24,7 @@ import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestContextHeaders;
@@ -44,6 +47,14 @@ import java.util.concurrent.CompletionException;
  * proxy/composite {@code Layers} implementations reject delete with
  * {@link UnsupportedOperationException}, mapped by {@code ErrorHandlingSlice}
  * to {@code 405} — deletes target the authoritative store only.
+ *
+ * <p>Blob data is shared by every image of the registry while delete
+ * permission is per image, so the delete is scoped to {@code <name>} (see
+ * {@link com.auto1.pantera.docker.asto.AstoLayers#delete}):
+ * {@code 404 BLOB_UNKNOWN} unless a manifest of {@code <name>} is or
+ * references the digest; {@code 409 DENIED} (nothing removed) when any other
+ * image also references it; otherwise the data is removed and the answer is
+ * {@code 202 Accepted}.</p>
  */
 public final class DeleteBlobSlice extends DockerActionSlice {
 
@@ -119,16 +130,17 @@ public final class DeleteBlobSlice extends DockerActionSlice {
     }
 
     /**
-     * Failure path: 404 BLOB_UNKNOWN for an unknown digest; any other
-     * failure (unsupported on proxy/composite, storage error) propagates to
-     * {@code ErrorHandlingSlice}.
+     * Failure path: 404 BLOB_UNKNOWN for a digest {@code <name>} does not
+     * reference, 409 DENIED for a blob another image still references; any
+     * other failure (unsupported on proxy/composite, storage error)
+     * propagates to {@code ErrorHandlingSlice}.
      *
      * @param request Blob request.
      * @param headers Request headers.
      * @param owner Requesting user.
      * @param ctx Audit context.
      * @param err Failure.
-     * @return 404 response.
+     * @return 404 or 409 response.
      */
     private Response failed(
         final BlobsRequest request, final Headers headers,
@@ -139,13 +151,23 @@ public final class DeleteBlobSlice extends DockerActionSlice {
             throw new CompletionException(cause);
         }
         RequestContextHeaders.bindToMdc(headers);
-        final boolean missing = cause instanceof DockerReferenceNotFoundException;
-        AuditLogger.delete(
-            ctx, REPO_TYPE, this.docker.registryName(), request.name(),
-            request.digest().string(), owner, AuditLogger.OUTCOME_FAILURE,
-            missing ? AuditLogger.REASON_NOT_FOUND : AuditLogger.REASON_STORAGE_UNAVAILABLE
-        );
-        if (!missing) {
+        final Response response;
+        if (cause instanceof DockerReferenceNotFoundException) {
+            this.refused(request, owner, ctx, AuditLogger.REASON_NOT_FOUND, cause);
+            response = ResponseBuilder.notFound()
+                .jsonBody(new BlobUnknownError(request.digest()).json())
+                .build();
+        } else if (cause instanceof BlobInUseException) {
+            this.refused(request, owner, ctx, AuditLogger.REASON_FORBIDDEN, cause);
+            response = ResponseBuilder.from(RsStatus.CONFLICT)
+                .jsonBody(new BlobInUseError(request.digest()).json())
+                .build();
+        } else {
+            AuditLogger.delete(
+                ctx, REPO_TYPE, this.docker.registryName(), request.name(),
+                request.digest().string(), owner, AuditLogger.OUTCOME_FAILURE,
+                AuditLogger.REASON_STORAGE_UNAVAILABLE
+            );
             EcsLogger.error("com.auto1.pantera.docker")
                 .message("Blob delete failed")
                 .eventCategory("web")
@@ -159,19 +181,38 @@ public final class DeleteBlobSlice extends DockerActionSlice {
                 .log();
             throw new CompletionException(cause);
         }
+        return response;
+    }
+
+    /**
+     * Audits and logs a delete refused by the store (unknown to this image,
+     * or still referenced by another image).
+     *
+     * @param request Blob request.
+     * @param owner Requesting user.
+     * @param ctx Audit context.
+     * @param reason Audit failure reason.
+     * @param cause Refusal.
+     */
+    private void refused(
+        final BlobsRequest request, final String owner, final AuditContext ctx,
+        final String reason, final Throwable cause
+    ) {
+        AuditLogger.delete(
+            ctx, REPO_TYPE, this.docker.registryName(), request.name(),
+            request.digest().string(), owner, AuditLogger.OUTCOME_FAILURE, reason
+        );
         EcsLogger.warn("com.auto1.pantera.docker")
-            .message("Blob delete failed: digest not found")
+            .message(String.format("Blob delete refused: %s", cause.getMessage()))
             .eventCategory("web")
             .eventAction("blob_delete")
             .eventOutcome("failure")
             .field("repository.name", this.docker.registryName())
+            .field("user.name", owner)
             .field("container.image.name", request.name())
             .field("package.checksum", request.digest().string())
             .field("log.source", "application")
             .log();
-        return ResponseBuilder.notFound()
-            .jsonBody(new BlobUnknownError(request.digest()).json())
-            .build();
     }
 
     /**

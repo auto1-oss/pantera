@@ -49,6 +49,7 @@ import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 
 /**
  * WheelSlice save and manage whl and tgz entries.
@@ -158,12 +159,41 @@ final class WheelSlice implements Slice {
             )
         ).handle(
             (response, throwable) -> {
-                if(throwable != null){
-                    return ResponseBuilder.badRequest(throwable).build();
+                final CompletionStage<Response> res;
+                if (throwable == null) {
+                    res = CompletableFuture.completedFuture(response);
+                } else {
+                    // Any failure (unreadable archive, digest, publish) must not
+                    // leave the uuid-named upload behind at the storage root.
+                    res = this.discard(key).thenApply(
+                        nothing -> ResponseBuilder.badRequest(throwable).build()
+                    );
                 }
-                return response;
+                return res;
             }
-        ).toCompletableFuture();
+        ).thenCompose(Function.identity()).toCompletableFuture();
+    }
+
+    /**
+     * Delete the temporary upload if it is still present (a successful
+     * store moves it away). Cleanup failures are swallowed so the original
+     * error is what the client sees.
+     *
+     * @param temp Temporary upload key
+     * @return Completion of the cleanup
+     */
+    private CompletionStage<Void> discard(final Key temp) {
+        return this.storage.exists(temp).thenCompose(
+            exists -> {
+                final CompletionStage<Void> res;
+                if (exists) {
+                    res = this.storage.delete(temp);
+                } else {
+                    res = CompletableFuture.completedFuture(null);
+                }
+                return res;
+            }
+        ).handle((nothing, ignored) -> null);
     }
 
     /**

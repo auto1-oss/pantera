@@ -165,6 +165,64 @@ final class PushChartSliceTest {
     }
 
     @Test
+    void immutableRollsBackArchiveWhenIndexUpdateFailsSoRetrySucceeds() {
+        final byte[] chart = new TestResource("ark-1.0.1.tgz").asBytes();
+        final java.util.concurrent.atomic.AtomicBoolean broken =
+            new java.util.concurrent.atomic.AtomicBoolean(true);
+        final Storage flaky = new Storage.Wrap(this.storage) {
+            @Override
+            public java.util.concurrent.CompletableFuture<Void> save(
+                final Key key, final Content content
+            ) {
+                final java.util.concurrent.CompletableFuture<Void> res;
+                if (broken.get() && key.string().endsWith("index.yaml")) {
+                    res = java.util.concurrent.CompletableFuture.failedFuture(
+                        new IllegalStateException("index.yaml write failed")
+                    );
+                } else {
+                    res = super.save(key, content);
+                }
+                return res;
+            }
+        };
+        final PushChartSlice slice = new PushChartSlice(
+            flaky, Optional.of(this.events), "my-helm", SyncArtifactIndexer.NOOP, true
+        );
+        final java.util.concurrent.CompletableFuture<com.auto1.pantera.http.Response> failed =
+            slice.response(
+                new RequestLine(RqMethod.PUT, "/"), Headers.EMPTY, new Content.From(chart)
+            ).exceptionally(err -> null);
+        MatcherAssert.assertThat(
+            "the push whose index update failed is not answered with success",
+            failed.join() == null || !failed.join().status().success(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the archive the failed push created is rolled back",
+            this.storage.exists(new Key.From("ark", "ark-1.0.1.tgz")).join(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the failed push publishes no artifact event",
+            this.events.isEmpty(),
+            new IsEqual<>(true)
+        );
+        broken.set(false);
+        MatcherAssert.assertThat(
+            "a retry once index.yaml is writable is accepted",
+            slice.response(
+                new RequestLine(RqMethod.PUT, "/"), Headers.EMPTY, new Content.From(chart)
+            ).join().status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the retried chart is indexed",
+            new ContentOfIndex(this.storage).index().byChart("ark").size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
     void immutableRefusesIdenticalRepush() {
         final byte[] original = new TestResource("ark-1.0.1.tgz").asBytes();
         final PushChartSlice slice = new PushChartSlice(

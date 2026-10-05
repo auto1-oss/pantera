@@ -71,6 +71,16 @@ public interface Repository {
     CompletionStage<Nuspec> nuspec(PackageIdentity identity);
 
     /**
+     * Delete one package version: its {@code .nupkg}, {@code .nuspec} and
+     * hash, then drop it from the package's version list.
+     *
+     * @param identity Package identity consisting of package id and version.
+     * @return {@code true} when the version existed and was deleted,
+     *  {@code false} when there was no such version
+     */
+    CompletionStage<Boolean> delete(PackageIdentity identity);
+
+    /**
      * Package info.
      * @since 1.6
      */

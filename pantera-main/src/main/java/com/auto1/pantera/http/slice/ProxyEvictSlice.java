@@ -22,6 +22,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.settings.RepoPathRemoval;
 import java.util.ArrayList;
@@ -44,7 +45,12 @@ import java.util.regex.Pattern;
  * the repository's {@code delete} permission. {@code 204} when anything was
  * evicted, {@code 404} when nothing was cached (or the proxy caches
  * nothing), {@code 400} for an unsafe path or the repository root. Every
- * outcome is audited as {@code artifact_delete}.</p>
+ * outcome is audited as {@code artifact_delete}; a refused {@code 400} as a
+ * failure with reason {@code forbidden}.</p>
+ *
+ * <p>The storage continuations run on pooled threads, so the request's
+ * {@code X-Pantera-Ctx-*} headers are bound to the MDC before every
+ * application log of the eviction (here and in {@link ArtifactDeletion}).</p>
  *
  * @since 2.2.10
  */
@@ -131,15 +137,11 @@ public final class ProxyEvictSlice implements Slice {
             ignored -> {
                 final CompletableFuture<Response> res;
                 if (path.isEmpty()) {
-                    res = CompletableFuture.completedFuture(
-                        ResponseBuilder.badRequest()
-                            .textBody("Refusing to evict the repository root")
-                            .build()
+                    res = this.refuse(
+                        audit, owner, "/", "Refusing to evict the repository root"
                     );
-                } else if (this.deletion.unsafe(path) || path.contains("//")) {
-                    res = CompletableFuture.completedFuture(
-                        ResponseBuilder.badRequest().textBody("Invalid path").build()
-                    );
+                } else if (RepoDeleteSlice.invalid(this.deletion, path)) {
+                    res = this.refuse(audit, owner, path, "Invalid path");
                 } else if (this.storage.isEmpty()) {
                     this.audit(audit, owner, path, false);
                     res = CompletableFuture.completedFuture(
@@ -148,7 +150,7 @@ public final class ProxyEvictSlice implements Slice {
                             .build()
                     );
                 } else {
-                    res = this.evict(this.storage.get(), path, audit, owner);
+                    res = this.evict(this.storage.get(), path, audit, owner, headers);
                 }
                 return res;
             }
@@ -161,18 +163,22 @@ public final class ProxyEvictSlice implements Slice {
      * @param path Path
      * @param audit Request context
      * @param owner Authenticated user
+     * @param headers Request headers (request context for the logs)
      * @return Response
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private CompletableFuture<Response> evict(
-        final Storage asto, final String path, final AuditContext audit, final String owner
+        final Storage asto, final String path, final AuditContext audit,
+        final String owner, final Headers headers
     ) {
         return asto.exists(new Key.From(path)).thenCompose(
             file -> this.sidecars(asto, path, file).thenCompose(
                 sidecars -> this.deletion.delete(
                     this.repo, this.type, asto, path,
-                    file ? RepoPathRemoval.Mode.FILE : RepoPathRemoval.Mode.FOLDER
+                    file ? RepoPathRemoval.Mode.FILE : RepoPathRemoval.Mode.FOLDER,
+                    headers
                 ).thenCompose(
-                    deleted -> this.versionRows(asto, path, file).thenCompose(
+                    deleted -> this.versionRows(asto, path, file, headers).thenCompose(
                         rows -> this.caches.evict(path, !file).thenApply(
                             metadata -> deleted || sidecars > 0 || rows > 0 || metadata
                         )
@@ -182,6 +188,7 @@ public final class ProxyEvictSlice implements Slice {
         ).handle(
             (found, err) -> {
                 final Response rsp;
+                RequestContextHeaders.bindToMdc(headers);
                 if (err == null) {
                     this.audit(audit, owner, path, found);
                     if (found) {
@@ -262,10 +269,11 @@ public final class ProxyEvictSlice implements Slice {
      * @param asto Cache storage
      * @param path Evicted path
      * @param file Whether a file was evicted
+     * @param headers Request headers (request context for the logs)
      * @return Number of rows removed
      */
     private CompletableFuture<Integer> versionRows(
-        final Storage asto, final String path, final boolean file
+        final Storage asto, final String path, final boolean file, final Headers headers
     ) {
         final String family = this.type.toLowerCase(Locale.ROOT);
         final CompletableFuture<Integer> res;
@@ -282,7 +290,7 @@ public final class ProxyEvictSlice implements Slice {
                             .noneMatch(key -> key.string().startsWith(inside));
                         final CompletableFuture<Integer> rows;
                         if (empty) {
-                            rows = this.deletion.unindex(this.repo, dir);
+                            rows = this.deletion.unindex(this.repo, dir, headers);
                         } else {
                             rows = CompletableFuture.completedFuture(0);
                         }
@@ -294,7 +302,7 @@ public final class ProxyEvictSlice implements Slice {
             }
         } else {
             res = this.versionRow(family, path)
-                .map(row -> this.deletion.unindex(this.repo, row))
+                .map(row -> this.deletion.unindex(this.repo, row, headers))
                 .orElseGet(() -> CompletableFuture.completedFuture(0));
         }
         return res;
@@ -320,6 +328,26 @@ public final class ProxyEvictSlice implements Slice {
             }
         }
         return rows.stream().findFirst();
+    }
+
+    /**
+     * Refuse an eviction with {@code 400} and audit the refusal.
+     * @param audit Request context captured at entry
+     * @param owner Authenticated user
+     * @param path Audited path ({@code /} for the repository root)
+     * @param reason Response body
+     * @return Response
+     */
+    private CompletableFuture<Response> refuse(
+        final AuditContext audit, final String owner, final String path, final String reason
+    ) {
+        AuditLogger.delete(
+            audit, this.type, this.repo, path, null, owner,
+            AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_FORBIDDEN
+        );
+        return CompletableFuture.completedFuture(
+            ResponseBuilder.badRequest().textBody(reason).build()
+        );
     }
 
     /**

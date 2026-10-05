@@ -11,7 +11,9 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.settings.RepoPathRemoval;
 import java.util.concurrent.CompletableFuture;
@@ -31,7 +33,10 @@ import java.util.concurrent.CompletableFuture;
  * is logged and the delete still counts.</p>
  *
  * <p>Authorization and auditing are the caller's: each entry point knows
- * its principal and request context.</p>
+ * its principal and request context. A caller serving an HTTP request
+ * passes the request's headers: the storage and index continuations run on
+ * pooled threads, and every application log of the delete binds the
+ * request's {@code X-Pantera-Ctx-*} fields to the MDC first.</p>
  *
  * @since 2.2.10
  */
@@ -83,12 +88,52 @@ public final class ArtifactDeletion {
         final String repo, final String type, final Storage storage,
         final String path, final RepoPathRemoval.Mode mode
     ) {
-        return new RepoPathRemoval(storage).remove(repo, path, mode).thenCompose(
+        return this.delete(repo, type, storage, path, mode, Headers.EMPTY);
+    }
+
+    /**
+     * Delete a path of a repository and cascade, logging under the
+     * request's context.
+     * @param repo Repository name
+     * @param type Repository type (format hooks run for hosted types only)
+     * @param storage Repository storage, repository-relative keys
+     * @param path Repository-relative storage path
+     * @param mode File, folder or either
+     * @param context Request headers carrying the {@code X-Pantera-Ctx-*}
+     *  request-context fields
+     * @return True when the path was stored or indexed
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public CompletableFuture<Boolean> delete(
+        final String repo, final String type, final Storage storage,
+        final String path, final RepoPathRemoval.Mode mode, final Headers context
+    ) {
+        return new RepoPathRemoval(storage, context).remove(repo, path, mode).thenCompose(
             outcome -> this.cascade(
                 repo, type, storage, path,
-                mode == RepoPathRemoval.Mode.FOLDER || outcome == RepoPathRemoval.Outcome.TREE
+                mode == RepoPathRemoval.Mode.FOLDER || outcome == RepoPathRemoval.Outcome.TREE,
+                context
             ).thenApply(indexed -> outcome.found() || indexed > 0)
         );
+    }
+
+    /**
+     * The search-index and tree-view half of a delete an adapter performed
+     * natively (pypi, debian and rpm keep their own {@code DELETE}): removes
+     * the index rows of the deleted file's storage path and drops the tree
+     * view's cached metadata of it. Never fails: a failed index step is
+     * logged and counts as no rows.
+     * @param repo Repository name
+     * @param path Repository-relative storage path the adapter deleted
+     * @param context Request headers carrying the {@code X-Pantera-Ctx-*}
+     *  request-context fields
+     * @return Number of search index rows removed
+     */
+    public CompletableFuture<Integer> afterNativeDelete(
+        final String repo, final String path, final Headers context
+    ) {
+        this.invalidateTreeView(repo, path, false);
+        return this.unindex(repo, path, context);
     }
 
     /**
@@ -110,21 +155,23 @@ public final class ArtifactDeletion {
      * @param storage Repository storage
      * @param path Deleted path
      * @param folder Whether a folder was deleted
+     * @param context Request headers carrying the request-context fields
      * @return Number of search index rows removed (0 when that step failed)
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     private CompletableFuture<Integer> cascade(
         final String repo, final String type, final Storage storage,
-        final String path, final boolean folder
+        final String path, final boolean folder, final Headers context
     ) {
         this.invalidateTreeView(repo, path, folder);
-        final CompletableFuture<Integer> rows = this.unindex(repo, path);
+        final CompletableFuture<Integer> rows = this.unindex(repo, path, context);
         // Started inside a stage so a synchronous throw is handled like a
         // failed future.
         final CompletableFuture<Void> format = CompletableFuture.<Void>completedFuture(null)
             .thenCompose(nothing -> this.hooks.afterDelete(type, storage, repo, path))
             .<Void>handle((nothing, err) -> {
                 if (err != null) {
+                    RequestContextHeaders.bindToMdc(context);
                     ArtifactDeletion.cascadeFailed(
                         "Deleted from storage but the " + type
                             + " metadata could not be updated",
@@ -142,13 +189,18 @@ public final class ArtifactDeletion {
      * failure is logged and counts as no rows.
      * @param repo Repository name
      * @param path Repository-relative storage path
+     * @param context Request headers carrying the {@code X-Pantera-Ctx-*}
+     *  request-context fields, bound to the MDC before a failure is logged
      * @return Number of rows removed
      */
-    public CompletableFuture<Integer> unindex(final String repo, final String path) {
+    public CompletableFuture<Integer> unindex(
+        final String repo, final String path, final Headers context
+    ) {
         return CompletableFuture.<Void>completedFuture(null)
             .thenCompose(nothing -> this.index.removeByPath(repo, path))
             .handle((count, err) -> {
                 if (err != null) {
+                    RequestContextHeaders.bindToMdc(context);
                     ArtifactDeletion.cascadeFailed(
                         "Deleted from storage but the search index cascade failed",
                         repo, path, err

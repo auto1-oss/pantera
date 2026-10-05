@@ -232,6 +232,57 @@ class AstoRepositoryTest {
     }
 
     @Test
+    void immutableAddAcceptsVersionThatIsStringPrefixOfExistingOne() throws Exception {
+        this.repository.add(new Content.From(AstoRepositoryTest.nupkg("1.2.30")), true)
+            .toCompletableFuture().join();
+        this.repository.add(new Content.From(AstoRepositoryTest.nupkg("1.2.3")), true)
+            .toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            this.versions(new PackageKeys(new PackageId("Prefix.Pkg")).versionsKey()),
+            new IsEqual<>(List.of("1.2.30", "1.2.3"))
+        );
+    }
+
+    @Test
+    void immutableAddAcceptsReleaseAfterPrerelease() throws Exception {
+        this.repository.add(new Content.From(AstoRepositoryTest.nupkg("1.0.0-beta")), true)
+            .toCompletableFuture().join();
+        this.repository.add(new Content.From(AstoRepositoryTest.nupkg("1.0.0")), true)
+            .toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            this.storage.exists(
+                new PackageIdentity(new PackageId("Prefix.Pkg"), new Version("1.0.0"))
+                    .nupkgKey()
+            ),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void immutableAddStillRefusesGenuineDuplicateNextToPrefixedVersion() throws Exception {
+        this.repository.add(new Content.From(AstoRepositoryTest.nupkg("1.2.30")), true)
+            .toCompletableFuture().join();
+        this.repository.add(new Content.From(AstoRepositoryTest.nupkg("1.2.3")), true)
+            .toCompletableFuture().join();
+        final Throwable cause = Assertions.assertThrows(
+            CompletionException.class,
+            () -> this.repository.add(new Content.From(AstoRepositoryTest.nupkg("1.2.3")), true)
+                .toCompletableFuture().join()
+        ).getCause();
+        MatcherAssert.assertThat(
+            "duplicate 1.2.3 is refused",
+            cause,
+            new IsInstanceOf(PackageVersionAlreadyExistsException.class)
+        );
+        MatcherAssert.assertThat(
+            "the refused upload is not left behind",
+            this.storage.list(Key.ROOT).stream()
+                .noneMatch(key -> !key.string().startsWith("prefix.pkg/")),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
     void shouldReadNuspec() throws Exception {
         final PackageIdentity identity = new PackageIdentity(
             new PackageId("UsefulLib"),
@@ -351,6 +402,33 @@ class AstoRepositoryTest {
                 .map(JsonString::getString)
                 .collect(Collectors.toList());
         }
+    }
+
+    /**
+     * Build a minimal nupkg for package {@code Prefix.Pkg} at a version.
+     *
+     * @param version Package version
+     * @return Nupkg bytes
+     */
+    private static byte[] nupkg(final String version) {
+        final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(out)) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("Prefix.Pkg.nuspec"));
+            zip.write(
+                String.join(
+                    "",
+                    "<?xml version=\"1.0\"?>",
+                    "<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">",
+                    "<metadata><id>Prefix.Pkg</id><version>", version, "</version>",
+                    "<authors>a</authors><description>d</description></metadata>",
+                    "</package>"
+                ).getBytes(StandardCharsets.UTF_8)
+            );
+            zip.closeEntry();
+        } catch (final java.io.IOException ex) {
+            throw new java.io.UncheckedIOException(ex);
+        }
+        return out.toByteArray();
     }
 
     private NewtonJsonResource nupkg() {
