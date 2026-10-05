@@ -414,6 +414,16 @@ The `AND checksum = -1336931361` guard makes the statement a no-op on any databa
 
 ---
 
+### Re-uploads Refused After Upgrading to 2.2.10
+
+**Symptoms:** Publishing a version that already exists now fails: `409 Conflict` (npm `E409`, `already exists and the repository is immutable`), `422` from Hex even with `replace=true`, `409` from RPM even with `override=true`, or a `404` from Conan's `upload_urls` naming a stored file.
+
+**Cause:** The repository is immutable (`immutable` absent or `true`). On a database-backed deployment migration `V146` kept existing `file`, `npm`, `gem`, `conda`, `deb`, `helm`, `rpm`, `hexpm` and `conan` repositories mutable, so this usually means a repository read from YAML, a repository created after the upgrade, or a configuration rewritten through `PUT /api/v1/repositories/:name` without the `immutable` key.
+
+**Resolution:** If the repository should accept overwrites, untick **Immutable artifacts** on its *Publishing* card in the UI, send `"immutable": false` in the repository's `PUT` body, or add `immutable: false` under `repo:` in its YAML file. Otherwise publish a new version, or delete the stored artifact first (`DELETE /<repo>/<path>`, needs `delete`). See [Immutable artifacts](../configuration-reference.md#immutable-artifacts).
+
+---
+
 ### Negative Cache Returning Stale 404s
 
 **Symptoms:** A newly published artifact returns 404 from a proxy repository even though it exists upstream.

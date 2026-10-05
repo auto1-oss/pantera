@@ -521,6 +521,12 @@ If your pipelines use `jfrog rt upload`, `jfrog rt build-publish`, or JFrog-spec
 +     ORG_GRADLE_PROJECT_pantera_password: $PANTERA_TOKEN
 ```
 
+### Cleanup scripts and re-deploys
+
+Scripts that delete with `curl -X DELETE <artifactory-url>/<repo>/<path>` keep working against Pantera with the repository URL changed: `DELETE /<repo>/<path>` deletes a file or a directory on local repositories (except Docker, PyPI, RPM and Debian, which use their own delete) and evicts the cached copy on proxy repositories. The user needs the `delete` permission on the repository. See [Delete an artifact](getting-started.md#delete-an-artifact).
+
+Pipelines that re-deploy an existing release version with different content need a repository whose **Immutable artifacts** setting is off; with the setting on (the default), the re-deploy is refused (`409 Conflict` for Maven/Gradle), while an identical re-deploy is accepted. See [Overwrite rules](getting-started.md#overwrite-rules-immutable).
+
 ### Update CI secrets/variables
 
 | Old Variable | New Variable | Value |

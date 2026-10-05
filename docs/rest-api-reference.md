@@ -526,12 +526,15 @@ Create a new repository or update an existing one. If the repository exists, the
 |----------------|--------|----------|--------------------------------------------------------|
 | `repo.type`    | string | Yes      | Repository type (e.g. `maven`, `npm`, `docker-proxy`)  |
 | `repo.storage` | string | Yes      | Storage alias name (e.g. `default`)                    |
+| `repo.immutable` | boolean | No     | Local repositories except `docker`: when `true` (the default when the key is absent) a stored artifact is never overwritten; `false` lets users with `write` overwrite. See [Immutable artifacts](configuration-reference.md#immutable-artifacts) |
 
 Supported `repo.type` values: `file`, `file-proxy`, `file-group`, `maven`, `maven-proxy`, `maven-group`, `gradle`, `gradle-proxy`, `gradle-group`, `npm`, `npm-proxy`, `npm-group`, `pypi`, `pypi-proxy`, `pypi-group`, `docker`, `docker-proxy`, `docker-group`, `go`, `go-proxy`, `go-group`, `php`, `php-proxy`, `php-group`, `gem`, `gem-group`, `helm`, `rpm`, `nuget`, `deb`, `conda`, `conan`, `hexpm`.
 
 **Response (200):** Empty body on success.
 
-**Response (400):** Invalid body, including a `repo.type` that is not supported (the message lists the supported types).
+**Response (400):** Invalid body, including a `repo.type` that is not supported (the message lists the supported types), or a `repo.immutable` that is not a JSON boolean (`immutable must be a boolean`; the string `"false"` is refused too).
+
+The body replaces the repository's whole configuration: when updating a repository that has `"immutable": false`, send the key again, or the repository becomes immutable.
 
 **curl example:**
 
@@ -1504,6 +1507,12 @@ curl -OJ "http://localhost:8086/api/v1/repositories/maven-local/artifact/downloa
 
 Delete a specific artifact from a repository. The search index, format metadata and audit trail are updated as described under [DELETE /api/v1/repositories/:name/packages](#delete-apiv1repositoriesnamepackages).
 
+The same delete is available on the repository URL itself, for clients and scripts that hold a repository credential instead of an API session: `DELETE /<repo>/<path>` on the repository port (Basic or token authentication, `delete` in `adapter_basic_permissions` on the repository instead of `api_repository_permissions:delete`). It deletes a file, or a directory subtree when the path is a directory, runs the same cascade and answers `204`, `404` when the path is neither stored nor indexed, or `400` for the repository root or an invalid path. It applies to local repositories except `pypi`, `rpm`, `deb` and `docker`, which keep their native deletes (NuGet `/package/<id>/<version>` and the Hex release revert API also stay native); on `file`, `maven`, `gradle`, `npm`, `pypi`, `go` and `php` proxies it evicts the cached copy instead. See [HTTP DELETE on repository paths](configuration-reference.md#http-delete-on-repository-paths).
+
+```bash
+curl -u alice:your-api-token -X DELETE http://localhost:8080/maven-local/com/example/lib/1.0/lib-1.0.jar
+```
+
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:delete`
 
@@ -1549,7 +1558,7 @@ Both delete endpoints keep what is derived from storage consistent, and write an
 - in a local `go` repository, `<module>/@v/list` is rewritten to the versions whose `.zip` is still stored (removed when none is left);
 - in a local `hexpm` repository, releases whose `tarballs/<name>-<version>.tar` was deleted are removed from `packages/<name>` (removed when no release is left).
 
-`deb` and `rpm` indexes (`Packages.gz`/`Release`/`InRelease`, `repodata/`) are not updated by these endpoints. Remove Debian and RPM packages with an HTTP `DELETE` of the package path on the repository itself (`/<repo>/<path>`), which updates those indexes (for RPM in the default `update: on: upload` mode).
+`deb` and `rpm` indexes (`Packages.gz`/`Release`/`InRelease`, `repodata/`) are not updated by these endpoints. Remove Debian and RPM packages with an HTTP `DELETE` of the package path on the repository itself (`/<repo>/<path>`), which updates those indexes (for RPM in the default `update: on: upload` mode; an optional `X-Checksum-<algorithm>` header makes RPM verify the file first). These native deletes also remove the artifact from search.
 
 Index updates for conda, gem, helm, nuget and hexpm are serialized with uploads to the same package or index (on every node sharing the storage); the go list rewrite is serialized with uploads on the same node. A concurrent upload is neither lost nor lists a deleted package again.
 
@@ -3235,7 +3244,7 @@ The import endpoint is served on the **repository port** (default 8080). It prov
 
 ### PUT /.import/:repository/:path
 
-Import an artifact into a repository. Supports idempotent uploads with checksum verification. Imports may target only local/hosted repositories, and published files are immutable (re-importing different bytes for an existing file is refused; identical bytes replay as `200 ALREADY_PRESENT`).
+Import an artifact into a repository. Supports idempotent uploads with checksum verification. Imports may target only local/hosted repositories, and published files are immutable (re-importing different bytes for an existing file is refused, whatever the repository's `immutable` setting; identical bytes replay as `200 ALREADY_PRESENT`).
 
 **Port:** 8080
 **Method:** PUT or POST

@@ -21,6 +21,33 @@ UPDATE flyway_schema_history SET checksum = -1980887255
 
 The statement is a no-op on every other database. See [Troubleshooting](troubleshooting.md#startup-failure-migration-checksum-mismatch-for-migration-version-116).
 
+**Overwrite behaviour: the new `immutable` repository setting.** 2.2.10 adds a per-repository `immutable` flag (see [Immutable artifacts](../configuration-reference.md#immutable-artifacts)). A missing key means `true`: a stored artifact is never overwritten. Hosted `maven`, `gradle`, `php`, `go`, `pypi` and `nuget` repositories already refused overwrites, so the default changes nothing for them. Hosted `file`, `npm`, `gem`, `conda`, `deb`, `helm`, `rpm`, `hexpm` and `conan` repositories overwrote on a re-upload (`rpm` with `?override=true`, `hexpm` with `?replace=true`), so:
+
+- **Database-backed deployments:** migration `V146` runs automatically at startup and adds `"immutable": false` to every stored repository of those types that has no `immutable` key, so they keep overwriting. Repositories created after the upgrade are immutable unless created with `immutable: false`. To make an existing repository immutable, tick **Immutable artifacts** on its *Publishing* card in the UI, or send `"immutable": true` in `PUT /api/v1/repositories/:name`. To list the repositories the migration left mutable:
+
+  ```sql
+  SELECT name, type FROM repositories WHERE config->'repo'->>'immutable' = 'false';
+  ```
+
+- **YAML-only deployments (no database):** there is no migration. Repositories of those types become immutable on upgrade, and a re-upload of an existing artifact is refused (`409 Conflict` for most, `422` for Hex, `404` from Conan's `upload_urls`). Before upgrading, add `immutable: false` under `repo:` in each repository file that must keep accepting overwrites:
+
+  ```yaml
+  repo:
+    type: npm
+    immutable: false
+    storage:
+      type: fs
+      path: /var/pantera/data
+  ```
+
+- A `PUT /api/v1/repositories/:name` replaces the whole configuration. Automation that writes repository configurations must include `"immutable": false` where it is wanted, or the repository becomes immutable on the next write.
+
+**`delete` now covers HTTP `DELETE` on repository URLs.** Users holding `delete` (or `*`) in `adapter_basic_permissions` on a repository can now delete artifacts with `DELETE /<repo>/<path>` on local repositories, and evict cached files with the same request on `file`, `maven`, `gradle`, `npm`, `pypi`, `go` and `php` proxies, which answered `405` before. Review roles that grant `delete` or `*` on repositories, in particular `"*": ["*"]`.
+
+**Docker roles with `*` gain `delete`.** The new `delete` action in `docker_repository_permissions` enables `DELETE /v2/<repo>/<image>/manifests/<reference>` and `.../blobs/<digest>` on local `docker` repositories. `*` includes it, so a role granted `["*"]` can now delete images and tags. Replace `*` with `["pull", "push", "overwrite"]` in roles that must not delete. `docker-proxy` and `docker-group` repositories still answer `405 UNSUPPORTED` to these requests.
+
+**UI:** deploy the 2.2.10 `pantera-ui` together with the backend. Older UI builds do not show the *Publishing* card, and their role editor does not offer the Docker `delete` action.
+
 ---
 
 ## Pre-Upgrade Checklist

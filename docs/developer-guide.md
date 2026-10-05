@@ -249,6 +249,12 @@ Each repository in Pantera is one of three types:
 - **proxy** -- Pantera acts as a caching reverse proxy. Requests are served from cache when possible; cache misses are fetched from the upstream registry and cached.
 - **group** -- Pantera merges multiple local and/or proxy repositories into a single logical endpoint. Requests are resolved by trying member repositories in order.
 
+**Deletes and immutability (2.2.10).** `RepositorySlices` wraps the adapter of every hosted type except `docker`, `pypi`, `rpm` and `deb` in `DeleteRoutingSlice` (`hostedDelete(cfg, adapter[, predicate])`). It sends `DELETE` requests whose repository-relative path the predicate accepts to `RepoDeleteSlice`, behind a `CombinedAuthzSliceWrap` that requires `AdapterBasicPermission(repo, DELETE)`; everything else, including the native deletes the predicate excludes (npm unpublish / `-rev` / dist-tags, the Helm chart API `/charts/...`, conda `.../authentications`, NuGet `/package/<id>/<version>`, the Hex release revert `[/api][/repos/<org>]/packages/<name>/releases/<version>`), reaches the adapter unchanged. `pypi`, `rpm` and `deb` keep their adapters' `DELETE` handling and are wrapped in `NativeDeleteCascadeSlice` (`nativeDelete(cfg, adapter)`), which on a `2xx` answer removes the path's search index rows and tree-view cache entries (`ArtifactDeletion.afterNativeDelete`). `RepoDeleteSlice` validates the path and audits `artifact_delete`; the work is done by `ArtifactDeletion` (`pantera-main/.../api/v1`), the one delete shared with `DELETE /api/v1/repositories/:name/artifacts|packages`: `RepoPathRemoval` deletes a file or a path subtree (filtered, so `lib` never matches `lib-extra`), then the cascade drops the tree-view `StorageMetaCache` entries (the instance is shared with `AsyncApiVerticle` through `RepositorySlices.storageMetaCache()`), removes search index rows (`ArtifactIndex.removeByPath`) and runs `FormatDeleteHooks` for the format's metadata. Cascade steps are best-effort and log `delete_cascade_failed`.
+
+Proxy types (`file`, `maven`/`gradle`, `npm`, `pypi`, `go`, `php`) are wrapped with `proxyEvict(...)`: the same routing sends `DELETE` to `ProxyEvictSlice`, which removes the cached file and its sidecars (or a subtree) through `ArtifactDeletion`, removes version-level index rows, and calls `ProxyPathCaches` to drop the repository's negative-cache key(s), the maven metadata cache (via `ProxyMetadataRevalidators`) and the filtered-metadata envelope. It never contacts the upstream. `docker-proxy` and groups are not wrapped.
+
+`RepoConfig.immutable()` reads the flat `repo.immutable` key (only an explicit `false` disables it) and is passed as the last constructor argument of each hosted adapter slice, which enforces it at its upload path (for example maven `UploadSlice`, composer `ReleaseGuard`, files `ImmutableUploadSlice`, npm `ImmutableVersionGuard`). For most adapters the check and the write are atomic only within one node: two nodes accepting the same upload at the same moment can both pass the check. Docker ignores the flag; tag moves are gated by the `overwrite` action.
+
 ### 4.5 Async/Reactive Model
 
 All I/O in Pantera is non-blocking. The codebase uses `CompletableFuture<T>` as the primary async primitive. Reactive streams (`Publisher<ByteBuffer>`) are used for streaming request and response bodies without buffering entire artifacts on the heap.
@@ -861,6 +867,8 @@ case "myformat":
     slice = new MyFormatSlice(storage);
     break;
 ```
+
+A hosted adapter should take `cfg.immutable()` and refuse to overwrite a stored artifact when it is `true`, and be wrapped in `hostedDelete(cfg, ...)` so `DELETE /<repo>/<path>` works (pass a predicate to keep native delete endpoints with the adapter). Add a `FormatDeleteHooks` entry if the format keeps metadata that must stop listing deleted files. A proxy adapter is wrapped in `proxyEvict(cfg, ...)`.
 
 4. **Add tests** following the patterns in existing adapters (unit tests with `InMemoryStorage`, integration tests with `*IT.java` suffix).
 
