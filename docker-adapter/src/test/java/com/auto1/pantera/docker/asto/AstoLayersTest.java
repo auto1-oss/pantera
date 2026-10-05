@@ -42,8 +42,9 @@ final class AstoLayersTest {
 
     @BeforeEach
     void setUp() {
-        this.blobs = new Blobs(new InMemoryStorage());
-        this.layers = new AstoLayers(this.blobs);
+        final InMemoryStorage storage = new InMemoryStorage();
+        this.blobs = new Blobs(storage);
+        this.layers = new AstoLayers(storage, "test");
     }
 
     @Test

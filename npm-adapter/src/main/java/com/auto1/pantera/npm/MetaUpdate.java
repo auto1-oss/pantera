@@ -66,17 +66,19 @@ public interface MetaUpdate {
 
         @Override
         public CompletableFuture<Void> update(final Key prefix, final Storage storage) {
-            // Extract version from JSON
-            final String version = this.extractVersion();
-            if (version == null) {
-                return CompletableFuture.failedFuture(
-                    new IllegalArgumentException("No version found in package JSON")
-                );
+            // One shared extractor for every write of the publish; an
+            // inconsistent payload (target version absent from `versions`)
+            // is refused instead of being written under the wrong version
+            final String version;
+            try {
+                version = new PublishedVersion(this.json).validated();
+            } catch (final InvalidPublishException ex) {
+                return CompletableFuture.failedFuture(ex);
             }
 
             // Extract version-specific metadata from the "versions" field
             final JsonObject versionData;
-            if (this.json.containsKey("versions")
+            if (this.json.get("versions") instanceof JsonObject
                 && this.json.getJsonObject("versions").containsKey(version)) {
                 versionData = this.json.getJsonObject("versions").getJsonObject(version);
             } else {
@@ -98,7 +100,7 @@ public interface MetaUpdate {
          * @return Version string, or {@code null} when the json carries none
          */
         public String version() {
-            return this.extractVersion();
+            return new PublishedVersion(this.json).value();
         }
 
         /**
@@ -119,38 +121,6 @@ public interface MetaUpdate {
                 return this.json.getJsonObject("dist-tags");
             }
             return Json.createObjectBuilder().add("latest", version).build();
-        }
-
-        /**
-         * Extract version from JSON.
-         * Tries multiple locations where version might be specified.
-         * 
-         * @return Version string or null if not found
-         */
-        private String extractVersion() {
-            // Try direct version field
-            if (this.json.containsKey("version")) {
-                return this.json.getString("version");
-            }
-            
-            // Try dist-tags/latest
-            if (this.json.containsKey("dist-tags")) {
-                final JsonObject distTags = this.json.getJsonObject("dist-tags");
-                if (distTags.containsKey("latest")) {
-                    return distTags.getString("latest");
-                }
-            }
-            
-            // Try first version in versions object
-            if (this.json.containsKey("versions")) {
-                final JsonObject versions = this.json.getJsonObject("versions");
-                if (!versions.isEmpty()) {
-                    final String firstKey = versions.keySet().iterator().next();
-                    return firstKey;
-                }
-            }
-            
-            return null;
         }
     }
 

@@ -155,12 +155,12 @@ class RpmRemoveTest {
     }
 
     @Test
-    void returnsBadRequestIfFileDoesNotExist() {
+    void returnsNotFoundIfFileDoesNotExist() {
         MatcherAssert.assertThat(
-            "Response status is not `BAD_REQUEST`",
+            "Response status is not `NOT_FOUND`",
             new RpmRemove(this.asto, new RepoConfig.Simple(), Optional.empty()),
             new SliceHasResponse(
-                new RsHasStatus(RsStatus.BAD_REQUEST),
+                new RsHasStatus(RsStatus.NOT_FOUND),
                 new RequestLine(RqMethod.DELETE, "/any.rpm"),
                 Headers.from("X-Checksum-sha-256", "abc123"),
                 Content.EMPTY
@@ -174,12 +174,12 @@ class RpmRemoveTest {
     }
 
     @Test
-    void returnsBadRequestIfHeaderIsNotPresent() {
+    void returnsNotFoundForMissingFileWithoutHeader() {
         MatcherAssert.assertThat(
-            "Response status is not `BAD_REQUEST`",
+            "Response status is not `NOT_FOUND`",
             new RpmRemove(this.asto, new RepoConfig.Simple(), Optional.empty()),
             new SliceHasResponse(
-                new RsHasStatus(RsStatus.BAD_REQUEST),
+                new RsHasStatus(RsStatus.NOT_FOUND),
                 new RequestLine(RqMethod.DELETE, "/any_package.rpm")
             )
         );
@@ -187,6 +187,60 @@ class RpmRemoveTest {
             "Storage should be empty",
             this.asto.list(Key.ROOT).join(),
             Matchers.emptyIterable()
+        );
+    }
+
+    @Test
+    void plainDeleteWithoutChecksumRemoves() throws IOException {
+        final String pckg = "abc-1.01-26.git20200127.fc32.ppc64le.rpm";
+        new TestResource(pckg).saveTo(this.asto);
+        new TestResource("RpmRemoveTest/primary.xml.gz")
+            .saveTo(this.asto, new Key.From("repodata", "primary.xml.gz"));
+        final Optional<Queue<ArtifactEvent>> events = Optional.of(new LinkedList<>());
+        MatcherAssert.assertThat(
+            "a plain delete is accepted",
+            new RpmRemove(this.asto, new RepoConfig.Simple(), events),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.ACCEPTED),
+                new RequestLine(RqMethod.DELETE, String.format("/%s", pckg)),
+                Headers.EMPTY,
+                Content.EMPTY
+            )
+        );
+        MatcherAssert.assertThat(
+            "the package is removed",
+            this.asto.exists(new Key.From(pckg)).join(),
+            new org.hamcrest.core.IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the delete is published",
+            events.get().size(),
+            new org.hamcrest.core.IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void matchingChecksumRemoves() throws IOException {
+        final String pckg = "abc-1.01-26.git20200127.fc32.ppc64le.rpm";
+        new TestResource(pckg).saveTo(this.asto);
+        new TestResource("RpmRemoveTest/primary.xml.gz")
+            .saveTo(this.asto, new Key.From("repodata", "primary.xml.gz"));
+        MatcherAssert.assertThat(
+            "a delete with the matching checksum is accepted",
+            new RpmRemove(this.asto, new RepoConfig.Simple(), Optional.empty()),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.ACCEPTED),
+                new RequestLine(RqMethod.DELETE, String.format("/%s", pckg)),
+                Headers.from(
+                    "X-Checksum-sha-256", DigestUtils.sha256Hex(new TestResource(pckg).asBytes())
+                ),
+                Content.EMPTY
+            )
+        );
+        MatcherAssert.assertThat(
+            "the package is removed",
+            this.asto.exists(new Key.From(pckg)).join(),
+            new org.hamcrest.core.IsEqual<>(false)
         );
     }
 

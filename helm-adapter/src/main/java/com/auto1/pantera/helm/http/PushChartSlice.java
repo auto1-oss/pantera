@@ -207,38 +207,7 @@ final class PushChartSlice implements Slice {
                             () -> {
                                 final Completable res;
                                 if (upd.isEmpty() || "true".equals(upd.get())) {
-                                    final ArtifactEvent event = new ArtifactEvent(
-                                        PushChartSlice.REPO_TYPE, this.rname,
-                                        new Login(headers).getValue(),
-                                        chart.name(), chart.version(), tgz.size(),
-                                        System.currentTimeMillis(), null,
-                                        artifactKey.string()
-                                    ).withRequestContext(headers);
-                                    this.events.ifPresent(queue -> queue.add(event));
-                                    com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
-                                        .invalidateAfterUpload("helm", chart.name());
-                                    com.auto1.pantera.cooldown.metadata
-                                        .FilteredMetadataCacheRegistry.instance()
-                                        .invalidateAfterUpload("helm", chart.name());
-                                    // Under the index lock a management-API
-                                    // delete prunes index.yaml under.
-                                    res = CompletableInterop.fromFuture(
-                                        new IndexUpdateLock(this.storage, IndexYaml.INDEX_YAML)
-                                            .run(
-                                                locked -> new IndexYaml(locked).update(tgz)
-                                                    .to(CompletableInterop.await())
-                                            )
-                                    )
-                                        .andThen(Completable.create(emitter ->
-                                            this.syncIndex.recordSync(event)
-                                                .whenComplete((v, err) -> {
-                                                    if (err == null) {
-                                                        emitter.onComplete();
-                                                    } else {
-                                                        emitter.onError(err);
-                                                    }
-                                                })
-                                        ));
+                                    res = this.index(artifactKey, tgz, headers);
                                 } else {
                                     res = Completable.complete();
                                 }
@@ -269,6 +238,58 @@ final class PushChartSlice implements Slice {
                 }
                 throw new java.util.concurrent.CompletionException(error);
             });
+    }
+
+    /**
+     * Add the stored chart to {@code index.yaml}, then publish the artifact
+     * event and record it in the artifact index.
+     *
+     * <p>On an immutable repository the archive was created by this request
+     * (the store refuses an existing one), so a failed {@code index.yaml}
+     * update deletes it again: otherwise the chart would stay unindexed and
+     * every retry would be refused with 409. The event is published only
+     * after the index update, so a rolled-back push publishes nothing.</p>
+     *
+     * @param key Archive key
+     * @param tgz Chart archive
+     * @param headers Request headers
+     * @return Completion of the index update and publication
+     */
+    private Completable index(final Key key, final TgzArchive tgz, final Headers headers) {
+        Completable update = CompletableInterop.fromFuture(
+            // Under the index lock a management-API delete prunes index.yaml under.
+            new IndexUpdateLock(this.storage, IndexYaml.INDEX_YAML).run(
+                locked -> new IndexYaml(locked).update(tgz).to(CompletableInterop.await())
+            )
+        );
+        if (this.immutable) {
+            update = update.onErrorResumeNext(
+                err -> CompletableInterop.fromFuture(
+                    this.storage.delete(key).handle((nothing, ignored) -> null)
+                ).andThen(Completable.error(err))
+            );
+        }
+        return update.andThen(
+            Completable.defer(
+                () -> {
+                    final ChartYaml chart = tgz.chartYaml();
+                    final ArtifactEvent event = new ArtifactEvent(
+                        PushChartSlice.REPO_TYPE, this.rname,
+                        new Login(headers).getValue(),
+                        chart.name(), chart.version(), tgz.size(),
+                        System.currentTimeMillis(), null,
+                        key.string()
+                    ).withRequestContext(headers);
+                    this.events.ifPresent(queue -> queue.add(event));
+                    com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+                        .invalidateAfterUpload("helm", chart.name());
+                    com.auto1.pantera.cooldown.metadata
+                        .FilteredMetadataCacheRegistry.instance()
+                        .invalidateAfterUpload("helm", chart.name());
+                    return CompletableInterop.fromFuture(this.syncIndex.recordSync(event));
+                }
+            )
+        );
     }
 
     /**

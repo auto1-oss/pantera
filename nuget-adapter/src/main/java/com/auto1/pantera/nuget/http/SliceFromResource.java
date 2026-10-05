@@ -46,6 +46,9 @@ final class SliceFromResource implements Slice {
         if (method.equals(RqMethod.PUT)) {
             return this.origin.put(headers, body);
         }
+        if (method.equals(RqMethod.DELETE)) {
+            return body.discard().thenCompose(ignored -> this.origin.delete(headers));
+        }
         return ResponseBuilder.methodNotAllowed().completedFuture();
     }
 }

@@ -151,6 +151,35 @@ public final class RpmUploadTest {
     }
 
     @Test
+    void conflictDrainsRefusedBody() throws Exception {
+        final Key key = new Key.From("drained.rpm");
+        new BlockingStorage(this.storage).save(
+            key, "first package content".getBytes(StandardCharsets.UTF_8)
+        );
+        final java.util.concurrent.atomic.AtomicBoolean drained =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+        final Content body = new Content.From(
+            io.reactivex.Flowable.just(
+                java.nio.ByteBuffer.wrap("second".getBytes(StandardCharsets.UTF_8))
+            ).doOnComplete(() -> drained.set(true))
+        );
+        MatcherAssert.assertThat(
+            "the re-upload is refused with 409",
+            new RpmUpload(
+                this.storage, new RepoConfig.Simple(), Optional.empty(),
+                com.auto1.pantera.index.SyncArtifactIndexer.NOOP, true
+            ).response(new RequestLine("PUT", "/drained.rpm"), Headers.EMPTY, body)
+                .join().status(),
+            new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the refused request body is consumed",
+            drained.get(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
     void immutableRepoRefusesPlainReupload() throws Exception {
         final byte[] content = "first package content".getBytes(StandardCharsets.UTF_8);
         final Key key = new Key.From("immutable.rpm");

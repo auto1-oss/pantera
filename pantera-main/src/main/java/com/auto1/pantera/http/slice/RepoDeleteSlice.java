@@ -21,6 +21,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.settings.RepoPathRemoval;
 import java.util.concurrent.CompletableFuture;
@@ -38,7 +39,13 @@ import java.util.concurrent.CompletableFuture;
  * {@code delete} permission) is the wrapping auth slice's. Answers
  * {@code 204} when something was stored or indexed at the path,
  * {@code 404} otherwise, {@code 400} for an unsafe path or the repository
- * root. Every outcome is audited as {@code artifact_delete}.</p>
+ * root. Every outcome is audited as {@code artifact_delete}; a refused
+ * {@code 400} as a failure with reason {@code forbidden} (the delete was
+ * not permitted for that path).</p>
+ *
+ * <p>The storage continuations run on pooled threads, so the request's
+ * {@code X-Pantera-Ctx-*} headers are bound to the MDC before every
+ * application log of the delete (here and in {@link ArtifactDeletion}).</p>
  *
  * @since 2.2.10
  */
@@ -100,17 +107,13 @@ public final class RepoDeleteSlice implements Slice {
             ignored -> {
                 final CompletableFuture<Response> res;
                 if (path.isEmpty()) {
-                    res = CompletableFuture.completedFuture(
-                        ResponseBuilder.badRequest()
-                            .textBody("Refusing to delete the repository root")
-                            .build()
+                    res = this.refuse(
+                        audit, owner, "/", "Refusing to delete the repository root"
                     );
-                } else if (this.deletion.unsafe(path) || path.contains("//")) {
-                    res = CompletableFuture.completedFuture(
-                        ResponseBuilder.badRequest().textBody("Invalid path").build()
-                    );
+                } else if (RepoDeleteSlice.invalid(this.deletion, path)) {
+                    res = this.refuse(audit, owner, path, "Invalid path");
                 } else {
-                    res = this.delete(path, audit, owner);
+                    res = this.delete(path, audit, owner, headers);
                 }
                 return res;
             }
@@ -122,13 +125,15 @@ public final class RepoDeleteSlice implements Slice {
      * @param path Repository-relative path
      * @param audit Request context captured at entry
      * @param owner Authenticated user
+     * @param headers Request headers (request context for the logs)
      * @return Response
      */
     private CompletableFuture<Response> delete(
-        final String path, final AuditContext audit, final String owner
+        final String path, final AuditContext audit, final String owner,
+        final Headers headers
     ) {
         return this.deletion.delete(
-            this.repo, this.type, this.storage, path, RepoPathRemoval.Mode.AUTO
+            this.repo, this.type, this.storage, path, RepoPathRemoval.Mode.AUTO, headers
         ).handle(
             (found, err) -> {
                 final Response rsp;
@@ -150,6 +155,7 @@ public final class RepoDeleteSlice implements Slice {
                         audit, this.type, this.repo, path, null, owner,
                         AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_STORAGE_UNAVAILABLE
                     );
+                    RequestContextHeaders.bindToMdc(headers);
                     EcsLogger.error(RepoDeleteSlice.LOGGER)
                         .message("Repository path delete failed")
                         .eventCategory("file")
@@ -165,6 +171,37 @@ public final class RepoDeleteSlice implements Slice {
                 return rsp;
             }
         );
+    }
+
+    /**
+     * Refuse a delete with {@code 400} and audit the refusal.
+     * @param audit Request context captured at entry
+     * @param owner Authenticated user
+     * @param path Audited path ({@code /} for the repository root)
+     * @param reason Response body
+     * @return Response
+     */
+    private CompletableFuture<Response> refuse(
+        final AuditContext audit, final String owner, final String path, final String reason
+    ) {
+        AuditLogger.delete(
+            audit, this.type, this.repo, path, null, owner,
+            AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_FORBIDDEN
+        );
+        return CompletableFuture.completedFuture(
+            ResponseBuilder.badRequest().textBody(reason).build()
+        );
+    }
+
+    /**
+     * Whether a repository-relative path must be refused: it escapes the
+     * repository namespace or holds an empty segment.
+     * @param deletion Shared artifact delete
+     * @param path Clean, non-empty path
+     * @return True when the path is refused
+     */
+    static boolean invalid(final ArtifactDeletion deletion, final String path) {
+        return deletion.unsafe(path) || path.contains("//");
     }
 
     /**

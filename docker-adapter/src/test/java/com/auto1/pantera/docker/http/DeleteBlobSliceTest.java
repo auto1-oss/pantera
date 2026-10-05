@@ -16,6 +16,7 @@ import com.auto1.pantera.docker.Catalog;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.ManifestReference;
 import com.auto1.pantera.docker.Manifests;
 import com.auto1.pantera.docker.Repo;
 import com.auto1.pantera.docker.asto.AstoDocker;
@@ -34,8 +35,10 @@ import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
  * Tests for {@link DockerSlice}. Blob DELETE endpoint
@@ -54,18 +57,102 @@ final class DeleteBlobSliceTest {
     }
 
     @Test
-    void shouldDeleteExistingBlobAndReturnAccepted() {
-        final Digest digest = this.docker.repo("my-alpine").layers()
-            .put(new TrustedBlobSource("layer-bytes".getBytes()))
-            .toCompletableFuture().join();
+    void shouldDeleteLayerOnlyThisImageUses() {
+        final Digest layer = this.blob("my-alpine", "layer-bytes");
+        this.image("my-alpine", "1", layer);
         final Response response = this.delete(
-            String.format("/v2/my-alpine/blobs/%s", digest.string())
+            String.format("/v2/my-alpine/blobs/%s", layer.string())
         );
         ResponseAssert.check(response, RsStatus.ACCEPTED);
         MatcherAssert.assertThat(
             "Blob is gone after delete",
-            this.docker.repo("my-alpine").layers().get(digest).join().isPresent(),
+            this.exists(layer),
             new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void shouldKeepLayerSharedWithAnotherImage() {
+        final Digest shared = this.blob("team/a", "shared-base-layer");
+        this.image("team/a", "1", shared);
+        this.image("team/b", "1", shared);
+        MatcherAssert.assertThat(
+            "Delete through the other image is refused",
+            this.delete(String.format("/v2/team/a/blobs/%s", shared.string())),
+            new IsErrorsResponse(RsStatus.CONFLICT, "DENIED")
+        );
+        MatcherAssert.assertThat(
+            "Shared layer survives the delete",
+            this.exists(shared),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void shouldNotDeleteLayerOfAnotherImage() {
+        final Digest own = this.blob("team/a", "a-only-layer");
+        final Digest foreign = this.blob("team/b", "b-only-layer");
+        this.image("team/a", "1", own);
+        this.image("team/b", "1", foreign);
+        MatcherAssert.assertThat(
+            "A layer the image does not reference is unknown to it",
+            this.delete(String.format("/v2/team/a/blobs/%s", foreign.string())),
+            new IsErrorsResponse(RsStatus.NOT_FOUND, "BLOB_UNKNOWN")
+        );
+        MatcherAssert.assertThat(
+            "The other image's layer survives",
+            this.exists(foreign),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void shouldNotDeleteUnreferencedUpload() {
+        final Digest orphan = this.blob("my-alpine", "uploaded-not-pushed");
+        MatcherAssert.assertThat(
+            "A blob no manifest references cannot be attributed to the image",
+            this.delete(String.format("/v2/my-alpine/blobs/%s", orphan.string())),
+            new IsErrorsResponse(RsStatus.NOT_FOUND, "BLOB_UNKNOWN")
+        );
+        MatcherAssert.assertThat(
+            "Unreferenced blob survives",
+            this.exists(orphan),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void shouldKeepLayerReferencedByAnotherImagesUntaggedReferrer() {
+        final Digest shared = this.blob("team/a", "signature-payload");
+        this.image("team/a", "1", shared);
+        final Digest subject = this.image("team/b", "1");
+        this.referrer("team/b", "sig", subject, shared);
+        // The tag delete leaves the referrer pullable by digest (and listed
+        // by the referrers API), so it still references the layer.
+        this.docker.repo("team/b").manifests()
+            .delete(ManifestReference.fromTag("sig")).join();
+        MatcherAssert.assertThat(
+            "A layer an OCI 1.1 referrer of another image uses is shared",
+            this.delete(String.format("/v2/team/a/blobs/%s", shared.string())),
+            new IsErrorsResponse(RsStatus.CONFLICT, "DENIED")
+        );
+        MatcherAssert.assertThat(
+            "The referrer's layer survives",
+            this.exists(shared),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void shouldDeleteLayerOnceOtherImageDropsIt() {
+        final Digest shared = this.blob("team/a", "formerly-shared-layer");
+        this.image("team/a", "1", shared);
+        final Digest other = this.image("team/b", "1", shared);
+        this.docker.repo("team/b").manifests()
+            .delete(ManifestReference.from(other)).join();
+        ResponseAssert.check(
+            this.delete(String.format("/v2/team/a/blobs/%s", shared.string())),
+            RsStatus.ACCEPTED
         );
     }
 
@@ -122,6 +209,93 @@ final class DeleteBlobSliceTest {
             Content.EMPTY
         ).join();
         ResponseAssert.check(response, RsStatus.METHOD_NOT_ALLOWED);
+    }
+
+    /**
+     * Uploads a blob through the given image.
+     *
+     * @param name Image name.
+     * @param data Blob content.
+     * @return Blob digest.
+     */
+    private Digest blob(final String name, final String data) {
+        return this.docker.repo(name).layers()
+            .put(new TrustedBlobSource(data.getBytes(StandardCharsets.UTF_8)))
+            .toCompletableFuture().join();
+    }
+
+    /**
+     * Pushes an OCI manifest (own config + the given layers) to an image.
+     *
+     * @param name Image name.
+     * @param tag Tag.
+     * @param layers Layer digests.
+     * @return Manifest digest.
+     */
+    private Digest image(final String name, final String tag, final Digest... layers) {
+        final Digest config = this.blob(name, String.format("{\"image\":\"%s\"}", name));
+        final String body = String.format(
+            "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\","
+                + "\"config\":{\"mediaType\":\"application/vnd.oci.image.config.v1+json\","
+                + "\"digest\":\"%s\",\"size\":1},\"layers\":[%s]}",
+            config.string(),
+            List.of(layers).stream()
+                .map(
+                    layer -> String.format(
+                        "{\"mediaType\":\"application/vnd.oci.image.layer.v1.tar+gzip\","
+                            + "\"digest\":\"%s\",\"size\":1}",
+                        layer.string()
+                    )
+                )
+                .collect(Collectors.joining(","))
+        );
+        return this.docker.repo(name).manifests()
+            .put(
+                ManifestReference.fromTag(tag),
+                new Content.From(body.getBytes(StandardCharsets.UTF_8))
+            ).join().digest();
+    }
+
+    /**
+     * Pushes an OCI 1.1 referrer (artifact manifest with a {@code subject})
+     * whose single layer is {@code layer}.
+     *
+     * @param name Image name.
+     * @param tag Tag.
+     * @param subject Subject manifest digest.
+     * @param layer Layer digest.
+     * @return Referrer manifest digest.
+     */
+    private Digest referrer(
+        final String name, final String tag, final Digest subject, final Digest layer
+    ) {
+        final Digest config = this.blob(name, String.format("{\"referrer\":\"%s\"}", tag));
+        final String body = String.format(
+            "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\","
+                + "\"artifactType\":\"application/vnd.example.sig.v1+json\","
+                + "\"config\":{\"mediaType\":\"application/vnd.oci.empty.v1+json\","
+                + "\"digest\":\"%s\",\"size\":1},"
+                + "\"layers\":[{\"mediaType\":\"application/octet-stream\","
+                + "\"digest\":\"%s\",\"size\":1}],"
+                + "\"subject\":{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\","
+                + "\"digest\":\"%s\",\"size\":1}}",
+            config.string(), layer.string(), subject.string()
+        );
+        return this.docker.repo(name).manifests()
+            .put(
+                ManifestReference.fromTag(tag),
+                new Content.From(body.getBytes(StandardCharsets.UTF_8))
+            ).join().digest();
+    }
+
+    /**
+     * Whether a blob is still in the registry-wide store.
+     *
+     * @param digest Blob digest.
+     * @return True if present.
+     */
+    private boolean exists(final Digest digest) {
+        return this.docker.repo("any").layers().get(digest).join().isPresent();
     }
 
     private Response delete(final String path) {

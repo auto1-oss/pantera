@@ -25,6 +25,7 @@ import com.auto1.pantera.nuget.Repository;
 import com.auto1.pantera.nuget.http.content.PackageContent;
 import com.auto1.pantera.nuget.http.index.ServiceIndex;
 import com.auto1.pantera.nuget.http.metadata.PackageMetadata;
+import com.auto1.pantera.nuget.http.publish.PackageDelete;
 import com.auto1.pantera.nuget.http.publish.PackagePublish;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.perms.Action;
@@ -235,6 +236,19 @@ public final class NuGet implements Slice {
         }
         if (method.equals(RqMethod.PUT)) {
             return resource.put(headers, body);
+        }
+        if (method.equals(RqMethod.DELETE)) {
+            // dotnet nuget delete: DELETE {PackagePublish}/{id}/{version},
+            // behind the repository's delete permission.
+            return body.discard().thenCompose(
+                ignored -> new RoutingResource(
+                    path,
+                    this.auth(
+                        new PackageDelete(this.repository, this.events, this.name),
+                        Action.Standard.DELETE
+                    )
+                ).delete(headers)
+            );
         }
         return ResponseBuilder.methodNotAllowed().completedFuture();
     }

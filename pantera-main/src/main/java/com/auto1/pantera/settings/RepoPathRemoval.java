@@ -12,7 +12,9 @@ package com.auto1.pantera.settings;
 
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -25,6 +27,12 @@ import java.util.concurrent.CompletableFuture;
  * <p>Storage listings are raw prefix scans on S3 and in memory, so the
  * subtree is filtered: deleting the folder {@code com/acme/lib} never
  * removes {@code com/acme/lib-extra/...}.</p>
+ *
+ * <p>The storage continuations that log run on whatever thread completes
+ * the storage future -- a pooled worker whose MDC may belong to another
+ * request. The request's {@code X-Pantera-Ctx-*} headers, when given, are
+ * bound to the MDC right before each log, so the record carries the
+ * deleting request's {@code trace.id} / {@code client.ip}.</p>
  *
  * @since 2.2.10
  */
@@ -41,11 +49,28 @@ public final class RepoPathRemoval {
     private final Storage storage;
 
     /**
-     * Ctor.
+     * Request headers carrying the request-context fields; empty when the
+     * delete runs outside an HTTP request.
+     */
+    private final Headers context;
+
+    /**
+     * Ctor without a request context.
      * @param storage Storage the keys are deleted from
      */
     public RepoPathRemoval(final Storage storage) {
+        this(storage, Headers.EMPTY);
+    }
+
+    /**
+     * Ctor.
+     * @param storage Storage the keys are deleted from
+     * @param context Request headers carrying the {@code X-Pantera-Ctx-*}
+     *  request-context fields, bound to the MDC before each log
+     */
+    public RepoPathRemoval(final Storage storage, final Headers context) {
         this.storage = storage;
+        this.context = context;
     }
 
     /**
@@ -127,6 +152,7 @@ public final class RepoPathRemoval {
     private CompletableFuture<Outcome> file(final String repo, final String path, final Key key) {
         return this.storage.delete(key).thenApply(
             nothing -> {
+                RequestContextHeaders.bindToMdc(this.context);
                 EcsLogger.info(RepoPathRemoval.LOGGER)
                     .message("Deleted artifact file from repository")
                     .eventCategory("file")
@@ -159,6 +185,7 @@ public final class RepoPathRemoval {
                 if (removed == 0) {
                     out = Outcome.NONE;
                 } else {
+                    RequestContextHeaders.bindToMdc(this.context);
                     EcsLogger.info(RepoPathRemoval.LOGGER)
                         .message("Deleted directory from repository, " + removed + " files removed")
                         .eventCategory("file")

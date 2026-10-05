@@ -27,11 +27,13 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.npm.PerVersionLayout;
+import com.auto1.pantera.npm.http.attestation.AttestationStore;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.policy.Policy;
 import java.io.StringReader;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -147,6 +149,7 @@ final class ImmutablePublishTest {
     void immutableRepositoryAcceptsANewVersionNextToPublishedOnes() {
         final Slice slice = this.cli(true);
         this.put(slice, ImmutablePublishTest.payload());
+        final JsonObject published = this.version("1.0.1");
         final JsonObject first = ImmutablePublishTest.payload();
         final JsonObject manifest = first.getJsonObject("versions").getJsonObject("1.0.1");
         final JsonObject next = Json.createObjectBuilder(first)
@@ -173,10 +176,241 @@ final class ImmutablePublishTest {
         );
         MatcherAssert.assertThat(
             "the new version is published",
-            new PerVersionLayout(this.storage)
-                .hasVersion(new Key.From(ImmutablePublishTest.PKG), "1.0.2")
-                .toCompletableFuture().join(),
+            this.published("1.0.2"), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the listed, already published version is not rewritten",
+            this.version("1.0.1"), new IsEqual<>(published)
+        );
+    }
+
+    @Test
+    void immutableRepositoryRefusesAProvenanceOverwriteSmuggledUnderANewTarget() {
+        final Slice slice = this.cli(true);
+        MatcherAssert.assertThat(
+            "the provenance publish of 1.0.1 is accepted",
+            this.put(slice, ImmutablePublishTest.withProvenance(ImmutablePublishTest.release("1.0.1"), "1.0.1", "original")).status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        final JsonObject before = this.version("1.0.1");
+        final byte[] provenance = this.attestation("1.0.1");
+        this.events.clear();
+        final JsonObject manifest = ImmutablePublishTest.payload()
+            .getJsonObject("versions").getJsonObject("1.0.1");
+        final JsonObject exploit = Json.createObjectBuilder(ImmutablePublishTest.payload())
+            .add("dist-tags", Json.createObjectBuilder().add("latest", "1.0.2"))
+            .add(
+                "versions",
+                Json.createObjectBuilder().add(
+                    "1.0.1", Json.createObjectBuilder(manifest).add("description", "forged")
+                )
+            )
+            .add(
+                "_attachments",
+                Json.createObjectBuilder().add(
+                    String.format("%s-1.0.1.sigstore", ImmutablePublishTest.PKG),
+                    ImmutablePublishTest.bundle("forged")
+                )
+            )
+            .build();
+        final Response refused = this.put(slice, exploit);
+        MatcherAssert.assertThat(
+            "the inconsistent payload is refused as a bad request",
+            refused.status(), new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "the refusal names the inconsistency",
+            Json.createReader(new StringReader(refused.body().asString())).readObject()
+                .getString("error"),
+            new IsEqual<>("publish payload targets version 1.0.2 but carries metadata of [1.0.1]")
+        );
+        MatcherAssert.assertThat(
+            "the published version metadata is untouched",
+            this.version("1.0.1"), new IsEqual<>(before)
+        );
+        MatcherAssert.assertThat(
+            "the published provenance is untouched",
+            this.attestation("1.0.1"), new IsEqual<>(provenance)
+        );
+        MatcherAssert.assertThat(
+            "the declared target is not published",
+            this.published("1.0.2"), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "a refused publish is not an event",
+            this.events.size(), new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "the uploaded temp file is removed",
+            this.storage.list(Key.ROOT).join().stream()
+                .anyMatch(key -> key.string().endsWith("-uploaded")),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void immutableRepositoryRefusesAProvenanceRepublishOfThePublishedVersion() {
+        final Slice slice = this.cli(true);
+        this.put(slice, ImmutablePublishTest.withProvenance(ImmutablePublishTest.release("1.0.1"), "1.0.1", "original"));
+        final JsonObject before = this.version("1.0.1");
+        final byte[] provenance = this.attestation("1.0.1");
+        final JsonObject attestationOnly = Json.createObjectBuilder(ImmutablePublishTest.release("1.0.1"))
+            .add(
+                "_attachments",
+                Json.createObjectBuilder().add(
+                    String.format("%s-1.0.1.sigstore", ImmutablePublishTest.PKG),
+                    ImmutablePublishTest.bundle("forged")
+                )
+            )
+            .build();
+        MatcherAssert.assertThat(
+            "an attestation-only re-publish is refused",
+            this.put(slice, attestationOnly).status(), new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the published version metadata is untouched",
+            this.version("1.0.1"), new IsEqual<>(before)
+        );
+        MatcherAssert.assertThat(
+            "the published provenance is untouched",
+            this.attestation("1.0.1"), new IsEqual<>(provenance)
+        );
+    }
+
+    @Test
+    void immutableRepositoryRefusesAPayloadNamingAnotherPackage() {
+        final Slice slice = this.cli(true);
+        this.put(slice, ImmutablePublishTest.withProvenance(ImmutablePublishTest.release("1.0.1"), "1.0.1", "original"));
+        final byte[] provenance = this.attestation("1.0.1");
+        final JsonObject foreign = Json.createObjectBuilder(ImmutablePublishTest.release("1.0.1"))
+            .add(
+                "_attachments",
+                Json.createObjectBuilder().add(
+                    String.format("%s-1.0.1.sigstore", ImmutablePublishTest.PKG),
+                    ImmutablePublishTest.bundle("forged")
+                )
+            )
+            .build();
+        MatcherAssert.assertThat(
+            "a payload for another package than the request's is refused",
+            ImmutablePublishTest.send(
+                slice, "/other-package",
+                foreign.toString().getBytes(StandardCharsets.UTF_8), Headers.EMPTY
+            ).status(),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "the other package's provenance is untouched",
+            this.attestation("1.0.1"), new IsEqual<>(provenance)
+        );
+    }
+
+    @Test
+    void immutableRepositoryRefusesATarballOfAnotherVersion() {
+        final Slice slice = this.cli(true);
+        final JsonObject payload = ImmutablePublishTest.release("1.0.2");
+        final JsonObject mismatched = Json.createObjectBuilder(payload)
+            .add(
+                "_attachments",
+                Json.createObjectBuilder().add(
+                    String.format("%s-1.0.3.tgz", ImmutablePublishTest.PKG),
+                    ImmutablePublishTest.tarball()
+                )
+            )
+            .build();
+        MatcherAssert.assertThat(
+            "a tarball attachment of another version is refused",
+            this.put(slice, mismatched).status(), new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "nothing is written",
+            this.storage.list(new Key.From(ImmutablePublishTest.PKG)).join().isEmpty(),
             new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void immutableRepositoryAcceptsAProvenancePublishOfANewVersion() {
+        final Slice slice = this.cli(true);
+        this.put(slice, ImmutablePublishTest.withProvenance(ImmutablePublishTest.release("1.0.1"), "1.0.1", "first"));
+        final JsonObject first = this.version("1.0.1");
+        final byte[] provenance = this.attestation("1.0.1");
+        this.events.clear();
+        MatcherAssert.assertThat(
+            "the provenance publish of a new version is accepted",
+            this.put(slice, ImmutablePublishTest.withProvenance(ImmutablePublishTest.release("1.0.2"), "1.0.2", "second")).status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the new version's provenance is stored under the new version",
+            new String(this.attestation("1.0.2"), StandardCharsets.UTF_8),
+            new IsEqual<>(ImmutablePublishTest.bundleJson("second"))
+        );
+        MatcherAssert.assertThat(
+            "the new version is signed",
+            this.version("1.0.2").getJsonObject("dist").containsKey("signatures"),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the earlier version's provenance is untouched",
+            this.attestation("1.0.1"), new IsEqual<>(provenance)
+        );
+        MatcherAssert.assertThat(
+            "the earlier version's metadata is untouched",
+            this.version("1.0.1"), new IsEqual<>(first)
+        );
+        MatcherAssert.assertThat(
+            "the event reports the new version",
+            this.events.peek().artifactVersion(), new IsEqual<>("1.0.2")
+        );
+    }
+
+    @Test
+    void immutableRepositoryAcceptsAPublishUnderACustomDistTag() {
+        final Slice slice = this.cli(true);
+        this.put(slice, ImmutablePublishTest.release("1.0.1"));
+        final JsonObject beta = Json.createObjectBuilder(ImmutablePublishTest.release("2.0.0-beta.1"))
+            .add("dist-tags", Json.createObjectBuilder().add("beta", "2.0.0-beta.1"))
+            .build();
+        MatcherAssert.assertThat(
+            "npm publish --tag beta is accepted",
+            this.put(slice, beta).status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the beta version is published",
+            this.published("2.0.0-beta.1"), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void mutableRepositoryRefusesAnInconsistentPayload() {
+        final Slice slice = this.cli(false);
+        final JsonObject inconsistent = Json.createObjectBuilder(ImmutablePublishTest.payload())
+            .add("dist-tags", Json.createObjectBuilder().add("latest", "1.0.2"))
+            .build();
+        MatcherAssert.assertThat(
+            "a payload whose target is absent from versions is refused",
+            this.put(slice, inconsistent).status(), new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "nothing is published under the declared target",
+            this.published("1.0.2"), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void mutableRepositoryOverwritesAPublishedProvenance() {
+        final Slice slice = this.cli(false);
+        this.put(slice, ImmutablePublishTest.withProvenance(ImmutablePublishTest.release("1.0.1"), "1.0.1", "first"));
+        MatcherAssert.assertThat(
+            "the provenance re-publish is accepted",
+            this.put(slice, ImmutablePublishTest.withProvenance(ImmutablePublishTest.release("1.0.1"), "1.0.1", "second")).status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the provenance is replaced",
+            new String(this.attestation("1.0.1"), StandardCharsets.UTF_8),
+            new IsEqual<>(ImmutablePublishTest.bundleJson("second"))
         );
     }
 
@@ -329,6 +563,83 @@ final class ImmutablePublishTest {
         return new PerVersionLayout(this.storage)
             .readVersion(new Key.From(ImmutablePublishTest.PKG), version)
             .toCompletableFuture().join();
+    }
+
+    private boolean published(final String version) {
+        return new PerVersionLayout(this.storage)
+            .hasVersion(new Key.From(ImmutablePublishTest.PKG), version)
+            .toCompletableFuture().join();
+    }
+
+    private byte[] attestation(final String version) {
+        return new AttestationStore(this.storage).read(ImmutablePublishTest.PKG, version)
+            .join().orElseThrow();
+    }
+
+    /**
+     * A regular npm publish payload of one version: {@code versions} holds
+     * that version only, {@code dist-tags.latest} points at it and the
+     * tarball attachment is named after it.
+     * @param version Version
+     * @return Payload
+     */
+    private static JsonObject release(final String version) {
+        final JsonObject base = ImmutablePublishTest.payload();
+        final JsonObject manifest = base.getJsonObject("versions").getJsonObject("1.0.1");
+        return Json.createObjectBuilder(base)
+            .add(
+                "versions",
+                Json.createObjectBuilder().add(
+                    version, Json.createObjectBuilder(manifest).add("version", version)
+                )
+            )
+            .add("dist-tags", Json.createObjectBuilder().add("latest", version))
+            .add(
+                "_attachments",
+                Json.createObjectBuilder().add(
+                    String.format("%s-%s.tgz", ImmutablePublishTest.PKG, version),
+                    ImmutablePublishTest.tarball()
+                )
+            )
+            .build();
+    }
+
+    private static JsonObject withProvenance(
+        final JsonObject payload, final String version, final String marker
+    ) {
+        return Json.createObjectBuilder(payload)
+            .add(
+                "_attachments",
+                Json.createObjectBuilder(payload.getJsonObject("_attachments")).add(
+                    String.format("%s-%s.sigstore", ImmutablePublishTest.PKG, version),
+                    ImmutablePublishTest.bundle(marker)
+                )
+            )
+            .build();
+    }
+
+    private static JsonObject tarball() {
+        return ImmutablePublishTest.payload().getJsonObject("_attachments").getJsonObject(
+            String.format("%s-1.0.1.tgz", ImmutablePublishTest.PKG)
+        );
+    }
+
+    private static JsonObject bundle(final String marker) {
+        final String data = Base64.getEncoder().encodeToString(
+            ImmutablePublishTest.bundleJson(marker).getBytes(StandardCharsets.UTF_8)
+        );
+        return Json.createObjectBuilder()
+            .add("content_type", "application/vnd.dev.sigstore.bundle.v0.3+json")
+            .add("data", data)
+            .add("length", data.length())
+            .build();
+    }
+
+    private static String bundleJson(final String marker) {
+        return String.format(
+            "{\"predicateType\":\"https://slsa.dev/provenance/v1\",\"marker\":\"%s\"}",
+            marker
+        );
     }
 
     private static JsonObject payload() {

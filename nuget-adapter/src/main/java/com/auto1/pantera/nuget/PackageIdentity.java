@@ -83,6 +83,33 @@ public final class PackageIdentity {
         return new Key.From(new PackageKeys(this.id).rootKey(), this.version.normalized());
     }
 
+    /**
+     * Get root key of the package (all versions).
+     *
+     * @return Package root key.
+     */
+    public Key packageRootKey() {
+        return new PackageKeys(this.id).rootKey();
+    }
+
+    /**
+     * Normalized package id.
+     *
+     * @return Package id.
+     */
+    public String packageId() {
+        return this.id.normalized();
+    }
+
+    /**
+     * Normalized package version.
+     *
+     * @return Package version.
+     */
+    public String packageVersion() {
+        return this.version.normalized();
+    }
+
     @Override
     public String toString() {
         return String.format("Package: '%s' Version: '%s'", this.id, this.version);

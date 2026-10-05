@@ -151,6 +151,104 @@ final class RepositoryDeleteRoutingTest {
     }
 
     @Test
+    void phpDirectDistsAliasDeletesTheKeyItServes(@TempDir final Path tmp) throws Exception {
+        final RepositorySlices slices = RepositoryDeleteRoutingTest.slices(tmp);
+        final Storage storage = RepositoryDeleteRoutingTest.storage(slices, "php-local");
+        RepositoryDeleteRoutingTest.save(storage, "vendor/pkg/pkg-1.0.0.zip");
+        RepositoryDeleteRoutingTest.save(storage, "vendor/pkg/pkg-2.0.0.zip");
+        RepositoryDeleteRoutingTest.save(storage, "direct-dists/vendor/pkg/pkg-1.0.0.zip");
+        MatcherAssert.assertThat(
+            "a GET through the alias serves the un-prefixed key",
+            RepositoryDeleteRoutingTest.send(
+                slices, RqMethod.GET, "php-local", "/direct-dists/vendor/pkg/pkg-1.0.0.zip"
+            ).status().code(),
+            new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "a DELETE through the alias answers 204",
+            RepositoryDeleteRoutingTest.delete(
+                slices, "php-local", "/direct-dists/vendor/pkg/pkg-1.0.0.zip"
+            ).status().code(),
+            new IsEqual<>(204)
+        );
+        MatcherAssert.assertThat(
+            "the DELETE removed the key the GET served, not an alias-prefixed key",
+            List.of(
+                storage.exists(new Key.From("vendor/pkg/pkg-1.0.0.zip")).join(),
+                storage.exists(new Key.From("direct-dists/vendor/pkg/pkg-1.0.0.zip")).join()
+            ),
+            new IsEqual<>(List.of(false, true))
+        );
+        MatcherAssert.assertThat(
+            "a DELETE of the plain storage-key path still works",
+            RepositoryDeleteRoutingTest.delete(slices, "php-local", "/vendor/pkg/pkg-2.0.0.zip")
+                .status().code(),
+            new IsEqual<>(204)
+        );
+        MatcherAssert.assertThat(
+            "the plain-path file is gone",
+            storage.exists(new Key.From("vendor/pkg/pkg-2.0.0.zip")).join(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void nugetPackageDeleteStaysNative(@TempDir final Path tmp) throws Exception {
+        final RepositorySlices slices = RepositoryDeleteRoutingTest.slices(tmp);
+        final Storage storage = RepositoryDeleteRoutingTest.storage(slices, "nuget-local");
+        // A key the generic delete would remove if it got the request.
+        RepositoryDeleteRoutingTest.save(storage, "package/qa.pkg/1.0.0");
+        final Response rsp = RepositoryDeleteRoutingTest.delete(
+            slices, "nuget-local", "/package/qa.pkg/1.0.0"
+        );
+        MatcherAssert.assertThat(
+            "dotnet nuget delete never reaches the generic delete",
+            List.of(
+                rsp.body().asString().contains(RepositoryDeleteRoutingTest.GENERIC_404),
+                storage.exists(new Key.From("package/qa.pkg/1.0.0")).join()
+            ),
+            new IsEqual<>(List.of(false, true))
+        );
+        RepositoryDeleteRoutingTest.save(storage, "qa.pkg/1.0.0/qa.pkg.1.0.0.nupkg");
+        MatcherAssert.assertThat(
+            "a storage path is deleted by the generic delete",
+            RepositoryDeleteRoutingTest.delete(
+                slices, "nuget-local", "/qa.pkg/1.0.0/qa.pkg.1.0.0.nupkg"
+            ).status().code(),
+            new IsEqual<>(204)
+        );
+    }
+
+    @Test
+    void hexReleaseRevertStaysNative(@TempDir final Path tmp) throws Exception {
+        final RepositorySlices slices = RepositoryDeleteRoutingTest.slices(tmp);
+        final Storage storage = RepositoryDeleteRoutingTest.storage(slices, "hex-local");
+        for (final String api : List.of(
+            "/api/packages/qa/releases/1.0.0", "/packages/qa/releases/1.0.0",
+            "/api/repos/acme/packages/qa/releases/1.0.0"
+        )) {
+            // A key the generic delete would remove if it got the request.
+            RepositoryDeleteRoutingTest.save(storage, api.substring(1));
+            final Response rsp = RepositoryDeleteRoutingTest.delete(slices, "hex-local", api);
+            MatcherAssert.assertThat(
+                String.format("the revert %s never reaches the generic delete", api),
+                List.of(
+                    rsp.body().asString().contains(RepositoryDeleteRoutingTest.GENERIC_404),
+                    storage.exists(new Key.From(api.substring(1))).join()
+                ),
+                new IsEqual<>(List.of(false, true))
+            );
+        }
+        RepositoryDeleteRoutingTest.save(storage, "tarballs/qa-1.0.0.tar");
+        MatcherAssert.assertThat(
+            "a storage path is deleted by the generic delete",
+            RepositoryDeleteRoutingTest.delete(slices, "hex-local", "/tarballs/qa-1.0.0.tar")
+                .status().code(),
+            new IsEqual<>(204)
+        );
+    }
+
+    @Test
     void fileProxyDeleteEvictsTheCachedCopy(@TempDir final Path tmp) throws Exception {
         final RepositorySlices slices = RepositoryDeleteRoutingTest.slices(tmp);
         final Storage cache = RepositoryDeleteRoutingTest.storage(slices, "files-remote");
@@ -178,8 +276,24 @@ final class RepositoryDeleteRoutingTest {
     private static Response delete(
         final RepositorySlices slices, final String repo, final String path
     ) throws Exception {
+        return RepositoryDeleteRoutingTest.send(slices, RqMethod.DELETE, repo, path);
+    }
+
+    /**
+     * Authenticated request.
+     * @param slices Slices
+     * @param method Method
+     * @param repo Repository
+     * @param path Path inside the repository
+     * @return Response
+     * @throws Exception On error
+     */
+    private static Response send(
+        final RepositorySlices slices, final RqMethod method, final String repo,
+        final String path
+    ) throws Exception {
         return slices.slice(new Key.From(repo), 8080).response(
-            new RequestLine(RqMethod.DELETE, String.format("/%s%s", repo, path)),
+            new RequestLine(method, String.format("/%s%s", repo, path)),
             Headers.from(new Authorization.Bearer(RepositoryDeleteRoutingTest.TOKEN)),
             Content.EMPTY
         ).get(30, TimeUnit.SECONDS);
@@ -207,7 +321,7 @@ final class RepositoryDeleteRoutingTest {
     }
 
     /**
-     * Slices over a file, npm, helm and file-proxy repository.
+     * Slices over a file, npm, helm, php, nuget, hexpm and file-proxy repository.
      * @param tmp Temp dir
      * @return Repository slices
      */
@@ -226,6 +340,19 @@ final class RepositoryDeleteRoutingTest {
                         "helm-local",
                         RepositoryDeleteRoutingTest.base("helm", tmp)
                             .add("url", "http://localhost:8080/helm-local")
+                    ),
+                    RepositoryDeleteRoutingTest.repo(
+                        "php-local",
+                        RepositoryDeleteRoutingTest.base("php", tmp)
+                            .add("url", "http://localhost:8080/php-local")
+                    ),
+                    RepositoryDeleteRoutingTest.repo(
+                        "nuget-local",
+                        RepositoryDeleteRoutingTest.base("nuget", tmp)
+                            .add("url", "http://localhost:8080/nuget-local")
+                    ),
+                    RepositoryDeleteRoutingTest.repo(
+                        "hex-local", RepositoryDeleteRoutingTest.base("hexpm", tmp)
                     ),
                     RepositoryDeleteRoutingTest.repo(
                         "files-remote",

@@ -17,7 +17,6 @@ import com.auto1.pantera.docker.Blob;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Layers;
 import com.auto1.pantera.docker.asto.AstoLayers;
-import com.auto1.pantera.docker.asto.Blobs;
 import com.auto1.pantera.docker.asto.BlobSource;
 import com.auto1.pantera.docker.error.InvalidDigestException;
 import io.reactivex.Flowable;
@@ -234,7 +233,7 @@ final class CachingBlobTest {
         };
         final InMemoryStorage storage = new InMemoryStorage();
         final InvocationCountingCacheLayers cacheLayers =
-            new InvocationCountingCacheLayers(new AstoLayers(new Blobs(storage)));
+            new InvocationCountingCacheLayers(new AstoLayers(storage, "docker-proxy-test"));
         final CachingBlob blob = new CachingBlob(origin, cacheLayers, "docker-proxy-test");
         final byte[] received = blob.content()
             .thenCompose(Content::asBytesFuture)
@@ -273,7 +272,7 @@ final class CachingBlobTest {
         final Blob origin = fakeBlob(data);
         final InMemoryStorage storage = new InMemoryStorage();
         final InvocationCountingCacheLayers cacheLayers =
-            new InvocationCountingCacheLayers(new AstoLayers(new Blobs(storage)));
+            new InvocationCountingCacheLayers(new AstoLayers(storage, "docker-proxy-test"));
         final CachingBlob blob = new CachingBlob(origin, cacheLayers, "docker-proxy-test");
         final byte[] received = blob.content()
             .thenCompose(Content::asBytesFuture)

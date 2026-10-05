@@ -133,7 +133,8 @@ public final class RpmUpload implements Slice {
                 conflicts -> {
                     final CompletionStage<RsStatus> status;
                     if (conflicts) {
-                        status = CompletableFuture.completedFuture(RsStatus.CONFLICT);
+                        // Drain the refused upload so its buffers are released.
+                        status = body.discard().handle((ignored, err) -> RsStatus.CONFLICT);
                     } else {
                         status = this.asto.save(
                             new Key.From(RpmUpload.TO_ADD, key), new Content.From(body)

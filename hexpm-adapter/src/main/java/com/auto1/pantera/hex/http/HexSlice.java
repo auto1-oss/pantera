@@ -193,6 +193,19 @@ public final class HexSlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     new RtRule.All(
+                        MethodRule.DELETE,
+                        new RtRule.ByPath(ReleaseDeleteSlice.PATH)
+                    ),
+                    new BasicAuthzSlice(
+                        new ReleaseDeleteSlice(storage, events, name),
+                        users,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    new RtRule.All(
                         MethodRule.POST,
                         new RtRule.ByPath(DocsSlice.DOCS_PTRN)
                     ),
