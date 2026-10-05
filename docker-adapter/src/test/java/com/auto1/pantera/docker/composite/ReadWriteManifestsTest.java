@@ -22,6 +22,7 @@ import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -112,6 +113,11 @@ final class ReadWriteManifestsTest {
             throw new UnsupportedOperationException();
         }
 
+        @Override
+        public CompletableFuture<Collection<String>> delete(ManifestReference ref) {
+            throw new UnsupportedOperationException();
+        }
+
         public ManifestReference ref() {
             return this.refcheck;
         }
@@ -148,6 +154,11 @@ final class ReadWriteManifestsTest {
 
         @Override
         public CompletableFuture<Tags> tags(Pagination pagination) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CompletableFuture<Collection<String>> delete(ManifestReference ref) {
             throw new UnsupportedOperationException();
         }
 

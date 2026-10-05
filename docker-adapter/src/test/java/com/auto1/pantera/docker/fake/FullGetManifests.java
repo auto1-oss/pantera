@@ -18,6 +18,7 @@ import com.auto1.pantera.docker.Tags;
 import com.auto1.pantera.docker.manifest.Manifest;
 import com.auto1.pantera.docker.misc.Pagination;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -75,6 +76,11 @@ public final class FullGetManifests implements Manifests {
 
     @Override
     public CompletableFuture<Tags> tags(Pagination pagination) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
         throw new UnsupportedOperationException();
     }
 }

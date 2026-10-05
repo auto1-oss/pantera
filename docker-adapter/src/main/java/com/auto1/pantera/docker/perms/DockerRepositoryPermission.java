@@ -109,6 +109,9 @@ public final class DockerRepositoryPermission extends Permission  {
             if ((this.mask & DockerActions.OVERWRITE.mask()) == DockerActions.OVERWRITE.mask()) {
                 joiner.add(DockerActions.OVERWRITE.name().toLowerCase(Locale.ROOT));
             }
+            if ((this.mask & DockerActions.DELETE.mask()) == DockerActions.DELETE.mask()) {
+                joiner.add(DockerActions.DELETE.name().toLowerCase(Locale.ROOT));
+            }
             this.actions = joiner.toString();
         }
         return this.actions;

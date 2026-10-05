@@ -256,6 +256,11 @@ class UploadTest {
             throw new UnsupportedOperationException();
         }
 
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
+        }
+
         public byte[] content() {
             return this.content;
         }

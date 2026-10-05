@@ -30,6 +30,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import javax.json.Json;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -49,11 +51,16 @@ final class AstoManifestsTest {
      */
     private AstoManifests manifests;
 
+    /**
+     * Backing storage.
+     */
+    private Storage storage;
+
     @BeforeEach
     void setUp() {
-        final Storage storage = new ExampleStorage();
-        this.blobs = new Blobs(storage);
-        this.manifests = new AstoManifests(storage, this.blobs, "my-alpine");
+        this.storage = new ExampleStorage();
+        this.blobs = new Blobs(this.storage);
+        this.manifests = new AstoManifests(this.storage, this.blobs, "my-alpine");
     }
 
     @Test
@@ -149,6 +156,170 @@ final class AstoManifestsTest {
             tags.json().asString(),
             Matchers.is("{\"name\":\"my-alpine\",\"tags\":[\"1\",\"latest\"]}")
         );
+    }
+
+    @Test
+    @Timeout(5)
+    void shouldFailDeletingUnknownReference() {
+        final CompletionStage<Collection<String>> future =
+            this.manifests.delete(ManifestReference.fromTag("nope"));
+        final CompletionException exception = Assertions.assertThrows(
+            CompletionException.class,
+            () -> future.toCompletableFuture().join()
+        );
+        MatcherAssert.assertThat(
+            "Deleting a reference that was never pushed fails rather than silently no-op-ing",
+            exception.getCause(),
+            new IsInstanceOf(
+                com.auto1.pantera.docker.error.DockerReferenceNotFoundException.class
+            )
+        );
+    }
+
+    @Test
+    @Timeout(5)
+    void shouldKeepDigestLinkWhenDeletingByTag() {
+        final Digest config = this.blobs.put(new TrustedBlobSource("del-config".getBytes())).join();
+        final Digest layer = this.blobs.put(new TrustedBlobSource("del-layer".getBytes())).join();
+        final ManifestReference tagRef = ManifestReference.fromTag("del-tag");
+        final Manifest pushed = this.manifests.put(
+            tagRef, new Content.From(this.getJsonBytes(config, layer, "my-type"))
+        ).join();
+        final ManifestReference digestRef = ManifestReference.from(pushed.digest());
+        this.manifests.delete(tagRef).join();
+        MatcherAssert.assertThat(
+            "The deleted tag no longer resolves",
+            this.manifests.get(tagRef).join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "The manifest stays pullable by digest",
+            this.manifests.get(digestRef).join().isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    @Timeout(5)
+    void shouldUntagEveryTagPointingAtDigestWhenDeletingByDigest() {
+        final Manifest first = this.pushTags("first", "a1", "a2");
+        this.pushTags("second", "b1");
+        final Collection<String> removed =
+            this.manifests.delete(ManifestReference.from(first.digest())).join();
+        MatcherAssert.assertThat(
+            "Every tag pointing at the digest is reported as removed",
+            removed,
+            new IsEqual<>(List.of("a1", "a2"))
+        );
+        MatcherAssert.assertThat(
+            "First pointing tag no longer resolves",
+            this.manifests.get(ManifestReference.fromTag("a1")).join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "Second pointing tag no longer resolves",
+            this.manifests.get(ManifestReference.fromTag("a2")).join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "The by-digest link is removed",
+            this.manifests.get(ManifestReference.from(first.digest())).join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "A tag pointing at another digest still resolves",
+            this.manifests.get(ManifestReference.fromTag("b1")).join().isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "tags/list drops the untagged tags only",
+            this.manifests.tags(Pagination.empty()).join().json().asString(),
+            new IsEqual<>("{\"name\":\"my-alpine\",\"tags\":[\"1\",\"b1\",\"latest\"]}")
+        );
+    }
+
+    @Test
+    @Timeout(5)
+    void shouldRemoveOnlyThatTagWhenDeletingByTag() {
+        final Manifest pushed = this.pushTags("shared", "t1", "t2");
+        MatcherAssert.assertThat(
+            "Only the requested tag is reported as removed",
+            this.manifests.delete(ManifestReference.fromTag("t1")).join(),
+            new IsEqual<>(List.of("t1"))
+        );
+        MatcherAssert.assertThat(
+            "Another tag pointing at the same digest still resolves",
+            this.manifests.get(ManifestReference.fromTag("t2")).join().isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "A tag delete keeps the by-digest link",
+            this.manifests.get(ManifestReference.from(pushed.digest())).join().isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    @Timeout(5)
+    void shouldUntagRemainingTagsWhenDigestLinkIsAlreadyGone() {
+        final Manifest pushed = this.pushTags("leftover", "t1", "t2");
+        // A by-digest link can be missing (e.g. data written by an older
+        // release whose tag delete also removed it).
+        this.storage.delete(
+            Layout.manifest("my-alpine", ManifestReference.from(pushed.digest()))
+        ).join();
+        MatcherAssert.assertThat(
+            "Digest delete still finds the tags that point at it",
+            this.manifests.delete(ManifestReference.from(pushed.digest())).join(),
+            new IsEqual<>(List.of("t1", "t2"))
+        );
+        MatcherAssert.assertThat(
+            "The tags no longer resolve",
+            this.manifests.get(ManifestReference.fromTag("t2")).join().isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    @Timeout(5)
+    void shouldFailDeletingUnknownDigest() {
+        final CompletionStage<Collection<String>> future = this.manifests.delete(
+            ManifestReference.from(new Digest.FromString("sha256:" + "5".repeat(64)))
+        );
+        final CompletionException exception = Assertions.assertThrows(
+            CompletionException.class,
+            () -> future.toCompletableFuture().join()
+        );
+        MatcherAssert.assertThat(
+            exception.getCause(),
+            new IsInstanceOf(
+                com.auto1.pantera.docker.error.DockerReferenceNotFoundException.class
+            )
+        );
+    }
+
+    /**
+     * Pushes one manifest under every given tag.
+     *
+     * @param seed Distinguishes the manifest content (and so its digest).
+     * @param tags Tags to push it under.
+     * @return The pushed manifest.
+     */
+    private Manifest pushTags(final String seed, final String... tags) {
+        final Digest config = this.blobs.put(
+            new TrustedBlobSource((seed + "-config").getBytes())
+        ).join();
+        final Digest layer = this.blobs.put(
+            new TrustedBlobSource((seed + "-layer").getBytes())
+        ).join();
+        final byte[] data = this.getJsonBytes(config, layer, "my-type");
+        Manifest pushed = null;
+        for (final String tag : tags) {
+            pushed = this.manifests.put(
+                ManifestReference.fromTag(tag), new Content.From(data)
+            ).join();
+        }
+        return pushed;
     }
 
     private byte[] manifest(final ManifestReference ref) {

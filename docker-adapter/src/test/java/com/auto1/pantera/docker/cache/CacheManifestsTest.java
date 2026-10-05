@@ -44,6 +44,7 @@ import org.slf4j.MDC;
 
 import javax.json.Json;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
@@ -607,6 +608,11 @@ final class CacheManifestsTest {
         public CompletableFuture<com.auto1.pantera.docker.Tags> tags(final Pagination pagination) {
             throw new UnsupportedOperationException();
         }
+
+        @Override
+        public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     @Test
@@ -722,6 +728,11 @@ final class CacheManifestsTest {
         public CompletableFuture<Optional<Blob>> get(final Digest digest) {
             return CompletableFuture.completedFuture(Optional.ofNullable(this.blobs.get(digest.string())));
         }
+
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class FixedManifests implements Manifests {
@@ -744,6 +755,11 @@ final class CacheManifestsTest {
 
         @Override
         public CompletableFuture<com.auto1.pantera.docker.Tags> tags(final Pagination pagination) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
             throw new UnsupportedOperationException();
         }
     }
@@ -779,6 +795,11 @@ final class CacheManifestsTest {
         public CompletableFuture<com.auto1.pantera.docker.Tags> tags(final Pagination pagination) {
             throw new UnsupportedOperationException();
         }
+
+        @Override
+        public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class RecordingLayers implements Layers {
@@ -797,6 +818,11 @@ final class CacheManifestsTest {
         public CompletableFuture<Optional<Blob>> get(final Digest digest) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
+
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class RecordingManifests implements Manifests {
@@ -814,6 +840,11 @@ final class CacheManifestsTest {
 
         @Override
         public CompletableFuture<com.auto1.pantera.docker.Tags> tags(final Pagination pagination) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
             throw new UnsupportedOperationException();
         }
     }

@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.docker.Blob;
 import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.error.DockerReferenceNotFoundException;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -59,5 +60,31 @@ public final class Blobs {
         final Key key = Layout.blob(digest);
         return source.saveTo(storage, key)
             .thenApply(nothing -> digest);
+    }
+
+    /**
+     * Delete blob by digest. Content-addressed blobs may be shared by
+     * multiple manifests; callers are responsible for confirming a blob
+     * is no longer referenced before calling this (registry GC semantics —
+     * deleting a manifest reference does not cascade here). Fails (does not
+     * silently no-op) when {@code digest} does not resolve to an existing
+     * blob, so the HTTP slice can answer {@code 404 BLOB_UNKNOWN} rather
+     * than a false {@code 202 Accepted}.
+     *
+     * @param digest Blob digest.
+     * @return Completion signal; fails if the blob does not exist.
+     */
+    public CompletableFuture<Void> delete(Digest digest) {
+        final Key key = Layout.blob(digest);
+        return storage.exists(key).thenCompose(exists -> {
+            if (!exists) {
+                return CompletableFuture.failedFuture(
+                    new DockerReferenceNotFoundException(
+                        String.format("blob not found: %s", digest.string())
+                    )
+                );
+            }
+            return storage.delete(key);
+        });
     }
 }

@@ -37,4 +37,9 @@ public final class FaultyGetLayers implements Layers {
     public CompletableFuture<Optional<Blob>> get(final Digest digest) {
         return CompletableFuture.failedFuture(new IllegalStateException());
     }
+
+    @Override
+    public CompletableFuture<Void> delete(final Digest digest) {
+        throw new UnsupportedOperationException();
+    }
 }

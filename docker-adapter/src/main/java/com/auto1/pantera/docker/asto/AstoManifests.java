@@ -18,14 +18,19 @@ import com.auto1.pantera.docker.ManifestReference;
 import com.auto1.pantera.docker.Manifests;
 import com.auto1.pantera.docker.Tags;
 import com.auto1.pantera.docker.error.InvalidManifestException;
+import com.auto1.pantera.docker.error.DockerReferenceNotFoundException;
 import com.auto1.pantera.docker.manifest.Manifest;
 import com.auto1.pantera.docker.manifest.ManifestLayer;
+import com.auto1.pantera.docker.misc.ImageTag;
 import com.auto1.pantera.docker.misc.Pagination;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.google.common.base.Strings;
 
 import javax.json.JsonException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -161,6 +166,160 @@ public final class AstoManifests implements Manifests {
         return this.storage.list(root).thenApply(
             keys -> new AstoTags(this.name, root, keys, pagination)
         );
+    }
+
+    @Override
+    public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
+        final Digest.FromString digest = new Digest.FromString(ref.digest());
+        final CompletableFuture<Collection<String>> res;
+        if (digest.valid()) {
+            res = this.deleteDigest(digest);
+        } else {
+            res = this.deleteTag(ref);
+        }
+        return res;
+    }
+
+    /**
+     * Deletes a tag (OCI distribution semantics): removes only that tag's
+     * link. The manifest stays pullable by digest, and other tags that
+     * reference the same digest are untouched.
+     *
+     * @param ref Tag reference.
+     * @return The deleted tag; fails when the tag does not exist.
+     */
+    private CompletableFuture<Collection<String>> deleteTag(final ManifestReference ref) {
+        return this.readLink(ref).thenCompose(
+            digestOpt -> digestOpt.map(
+                digest -> this.storage.delete(Layout.manifest(this.name, ref))
+                    .<Collection<String>>thenApply(
+                        nothing -> {
+                            this.logManifestDelete(ref, digest, 1);
+                            return List.of(ref.digest());
+                        }
+                    )
+            ).orElseGet(() -> this.notFound(ref))
+        );
+    }
+
+    /**
+     * Deletes a manifest by digest: removes the by-digest link and untags
+     * every tag of this image whose link points at {@code digest}, so the
+     * manifest is no longer reachable by any reference. The digest counts as
+     * present when either its by-digest link or at least one tag link exists.
+     *
+     * @param digest Manifest digest.
+     * @return Tags removed (possibly empty); fails when nothing references
+     *         the digest.
+     */
+    private CompletableFuture<Collection<String>> deleteDigest(final Digest digest) {
+        final ManifestReference byDigest = ManifestReference.from(digest);
+        final Key digestKey = Layout.manifest(this.name, byDigest);
+        return this.tagsPointingAt(digest).thenCompose(
+            tags -> this.storage.exists(digestKey).thenCompose(
+                exists -> {
+                    if (!exists && tags.isEmpty()) {
+                        return this.notFound(byDigest);
+                    }
+                    final List<CompletableFuture<Void>> removals = new ArrayList<>(tags.size() + 1);
+                    if (exists) {
+                        removals.add(this.storage.delete(digestKey));
+                    }
+                    for (final String tag : tags) {
+                        removals.add(
+                            this.storage.delete(
+                                Layout.manifest(this.name, ManifestReference.fromTag(tag))
+                            )
+                        );
+                    }
+                    return CompletableFuture.allOf(removals.toArray(new CompletableFuture<?>[0]))
+                        .thenApply(
+                            nothing -> {
+                                this.logManifestDelete(byDigest, digest, tags.size());
+                                return tags;
+                            }
+                        );
+                }
+            )
+        );
+    }
+
+    /**
+     * Tags of this image whose link points at {@code digest}.
+     *
+     * @param digest Manifest digest.
+     * @return Matching tag names, sorted.
+     */
+    private CompletableFuture<Collection<String>> tagsPointingAt(final Digest digest) {
+        final Key root = Layout.tags(this.name);
+        return this.storage.list(root).thenCompose(
+            keys -> {
+                final List<CompletableFuture<Optional<String>>> checks =
+                    new Children(root, keys).names().stream()
+                        .filter(ImageTag::valid)
+                        .map(
+                            tag -> this.readLink(ManifestReference.fromTag(tag)).thenApply(
+                                link -> link
+                                    .filter(found -> found.string().equals(digest.string()))
+                                    .map(found -> tag)
+                            )
+                        )
+                        .toList();
+                return CompletableFuture.allOf(checks.toArray(new CompletableFuture<?>[0]))
+                    .<Collection<String>>thenApply(
+                        // Every check is complete here: join() does not block.
+                        nothing -> checks.stream()
+                            .map(CompletableFuture::join)
+                            .flatMap(Optional::stream)
+                            .toList()
+                    );
+            }
+        );
+    }
+
+    /**
+     * Failed future for a reference that resolves to nothing.
+     *
+     * @param ref Reference requested for deletion.
+     * @return Future failed with {@link DockerReferenceNotFoundException}.
+     */
+    private CompletableFuture<Collection<String>> notFound(final ManifestReference ref) {
+        EcsLogger.debug("com.auto1.pantera.docker")
+            .message("Manifest delete requested for a reference that does not exist")
+            .eventCategory("web")
+            .eventAction("manifest_delete")
+            .eventOutcome("failure")
+            .field("repository.name", this.name)
+            .field("container.image.hash.all", ref.digest())
+            .field("log.source", "application")
+            .log();
+        return CompletableFuture.failedFuture(
+            new DockerReferenceNotFoundException(
+                String.format("manifest not found: %s", ref.digest())
+            )
+        );
+    }
+
+    /**
+     * Logs the manifest-delete state transition.
+     *
+     * @param ref Reference that was deleted.
+     * @param digest Digest the reference resolved to.
+     * @param untagged Number of tags removed.
+     */
+    private void logManifestDelete(
+        final ManifestReference ref, final Digest digest, final int untagged
+    ) {
+        EcsLogger.info("com.auto1.pantera.docker")
+            .message(String.format("Manifest reference deleted (%d tag(s) removed)", untagged))
+            .eventCategory("web")
+            .eventAction("manifest_delete")
+            .eventOutcome("success")
+            .field("repository.name", this.name)
+            .field("container.image.hash.all", ref.digest())
+            .field("package.checksum", digest.string())
+            .field("log.source", "application")
+            .log();
     }
 
     /**
