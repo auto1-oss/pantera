@@ -33,7 +33,12 @@ vi.mock('@/components/admin/RepoConfigForm.vue', () => ({
     name: 'RepoConfigFormStub',
     props: ['config', 'initialConfig', 'readOnlyType'],
     emits: ['update:config', 'valid-change'],
-    mounted() { this.$emit('valid-change', true) },
+    // Like the real form: it emits the (normalised) initial config as soon
+    // as it mounts, which the page must not count as an edit.
+    mounted() {
+      this.$emit('update:config', { repo: { type: 'maven-proxy', anonymous_read: false, anonymous_write: false } })
+      this.$emit('valid-change', true)
+    },
     template: '<button data-testid="mutate" @click="$emit(\'update:config\', { repo: { type: \'maven-proxy\', url: \'https://x\' } })" />',
   },
 }))

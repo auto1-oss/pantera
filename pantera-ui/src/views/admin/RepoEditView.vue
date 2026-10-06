@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { getRepo, putRepo, moveRepo, deleteRepo } from '@/api/repos'
 import { getCooldown, putCooldown } from '@/api/settings'
@@ -40,8 +40,32 @@ const loading = ref(true)
 const saving = ref(false)
 const loadError = ref('')
 const saveError = ref('')
-// Baseline of the last loaded/saved state, as JSON, for dirty tracking.
+// Baseline of the last loaded/saved state for dirty tracking. RepoConfigForm
+// re-emits a normalised envelope as soon as it mounts (owned keys reordered,
+// storage reshaped, anonymous_*/immutable defaulted), so the baseline is the
+// form's FIRST emission after a load or reset, never the raw GET body, and
+// comparison is key-order insensitive.
 const savedConfig = ref('')
+// Reactive on purpose: the dirty computed must re-track once the baseline lands.
+const awaitingBaseline = ref(false)
+
+function stable(value: unknown): string {
+  return JSON.stringify(value, (_k, v) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.keys(v as Record<string, unknown>).sort()
+        .reduce<Record<string, unknown>>((acc, k) => { acc[k] = (v as Record<string, unknown>)[k]; return acc }, {})
+      : v,
+  )
+}
+
+watch(config, (next) => {
+  // Our own `config = envelope` assignment on load/reset is the very object
+  // held in initialConfig; the form's emission is always a fresh object.
+  if (awaitingBaseline.value && next && next !== initialConfig.value) {
+    savedConfig.value = stable(next)
+    awaitingBaseline.value = false
+  }
+})
 
 const storageLabel = computed(() => {
   const st = config.value?.repo?.storage
@@ -60,7 +84,7 @@ const repoCooldownEnabled = ref(true)
 const repoCooldownAge = ref('')
 const repoSnapshotEnabled = ref<boolean | null>(null)
 const repoSnapshotAge = ref('')
-const savedOverride = ref('')
+const savedOverride = ref('null')
 
 const globalAgePlaceholder = computed(() => cooldownConfig.value?.minimum_allowed_age ?? '7d')
 const globalSnapshotAgePlaceholder = computed(() => {
@@ -106,7 +130,10 @@ function overrideJson(): string {
 // ---------------------------------------------------------------------------
 // Dirty tracking, save, reset
 // ---------------------------------------------------------------------------
-const configDirty = computed(() => JSON.stringify(config.value) !== savedConfig.value)
+const configDirty = computed(() => {
+  const changed = stable(config.value) !== savedConfig.value
+  return !awaitingBaseline.value && changed
+})
 const cooldownDirty = computed(() => overrideJson() !== savedOverride.value)
 const dirty = computed(() => configDirty.value || cooldownDirty.value)
 
@@ -116,7 +143,7 @@ async function save() {
   saveError.value = ''
   try {
     await putRepo(props.name, config.value as Record<string, unknown>)
-    savedConfig.value = JSON.stringify(config.value)
+    savedConfig.value = stable(config.value)
   } catch (err: unknown) {
     const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
     saveError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
@@ -158,6 +185,8 @@ async function saveCooldown() {
 function reset() {
   if (savedConfig.value) {
     const restored = JSON.parse(savedConfig.value) as RepoConfigEnvelope
+    // Re-seeding the form makes it re-emit; that emission is the new baseline.
+    awaitingBaseline.value = true
     initialConfig.value = restored
     config.value = restored
   }
@@ -212,7 +241,7 @@ async function handleDelete() {
     if (result === 'deleting') notify.info('Repository is being deleted', props.name)
     else notify.success('Repository deleted', props.name)
     // The repository is gone; nothing left to keep.
-    savedConfig.value = JSON.stringify(config.value)
+    savedConfig.value = stable(config.value)
     savedOverride.value = overrideJson()
     router.push('/admin/repositories')
   } catch {
@@ -229,9 +258,10 @@ onMounted(async () => {
     const raw = await getRepo(props.name)
     const envelope = raw as RepoConfigEnvelope
     repoType.value = (envelope.repo?.type as string) ?? ''
+    awaitingBaseline.value = true
     initialConfig.value = envelope
     config.value = envelope
-    savedConfig.value = JSON.stringify(envelope)
+    savedConfig.value = stable(envelope)
   } catch (err: unknown) {
     const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
     loadError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
