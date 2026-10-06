@@ -18,6 +18,14 @@
 - **Redesigned Manage Repositories page.** Search as you type, filter by format and mode, sort by name, format or last update, and see each repository's mode, storage, anonymous-access flags and last editor at a glance. Rows get a menu (Browse, Edit, Set Me Up, Rename, Delete) and a selection bar offers **Anonymous access…** and **Delete…** for several repositories at once. Creating a repository starts from a format picker with live name validation; editing keeps you on the page with one Save, a Reset and an unsaved-changes prompt. `GET /api/v1/repositories` returns the new `mode`, `storage`, `anonymous_read`, `anonymous_write`, `immutable`, `updated_at` and `updated_by` fields and accepts `mode`, `sort` and `order`. ([@aydasraf](https://github.com/aydasraf))
 - **Docker registry API deletes on hosted repositories.** `DELETE /v2/<name>/manifests/<tag>` removes that tag (the image stays pullable by digest), `DELETE /v2/<name>/manifests/<digest>` removes the manifest and every tag pointing at it (so `skopeo delete` works), and `DELETE /v2/<name>/blobs/<digest>` removes a blob that only `<name>` references (`404 BLOB_UNKNOWN` when no manifest of `<name>` references it, `409 DENIED` when another image does); successful deletes answer `202`. They need the new `delete` action in `docker_repository_permissions`, which `pull`, `push` and `overwrite` do not imply; the role editor offers it. `docker-proxy` and `docker-group` repositories answer `405 UNSUPPORTED`. ([@aydasraf](https://github.com/aydasraf))
 
+- **`url:` is optional for hosted Composer (`php`) repositories; served links follow the host the client used** — `packages.json` and every `p2/<vendor>/<package>.json` are served with `dist.url`, `metadata-url` and `available-packages-url` rooted at the base resolved per request (the same three tiers as hosted npm), so one repository serves several hostnames and a group serves its hosted members' archives under the group. A `dist.url` stored under an older host or imported from another registry is re-rooted on the way out; dists hosted elsewhere are left alone. A configured `url:` (or the older `settings.url`) still pins every client to that host.
+  ([@dmitry-auto1](https://github.com/dmitry-auto1))
+
+### ⚡ Performance
+
+- **Link rewriting in served JSON metadata is stream-through** — hosted npm packuments and Composer metadata have their `dist` links substituted as the bytes flow, without buffering or parsing the document; the second full parse of every served npm packument is gone.
+  ([@dmitry-auto1](https://github.com/dmitry-auto1))
+
 ### 🔧 Bug fixes
 
 - **Selecting one repository on the Manage Repositories page no longer selects every row.** ([@aydasraf](https://github.com/aydasraf))

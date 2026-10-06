@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.Name;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Slice;
@@ -164,7 +165,8 @@ final class MutableReleaseTest {
     private Slice php(final boolean immutable) {
         return new PhpComposer(
             this.repository, Policy.FREE, new Authentication.Single("user", "secret"), null,
-            "php", Optional.of(this.events), SyncArtifactIndexer.NOOP, immutable
+            "php", Optional.of(this.events), SyncArtifactIndexer.NOOP, immutable,
+            new ComposerBaseUrl(Optional.empty(), "php")
         );
     }
 

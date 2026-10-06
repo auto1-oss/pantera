@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.composer.http;
 
+import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.Authentication;
@@ -76,7 +77,8 @@ public final class PhpComposer extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer, for a repository without a
+     * configured {@code url:}.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public PhpComposer(
@@ -88,11 +90,13 @@ public final class PhpComposer extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
-        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, true);
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, true,
+            new ComposerBaseUrl(Optional.empty(), name));
     }
 
     /**
-     * Ctor with the repository's {@code immutable} setting.
+     * Primary ctor, with the repository's {@code immutable} setting and the
+     * client-facing base its served links are rooted at.
      * @param repository Repository
      * @param policy Access permissions
      * @param basicAuth Basic authentication
@@ -103,6 +107,7 @@ public final class PhpComposer extends Slice.Wrap {
      * @param immutable When true a published release cannot be overwritten
      *  (identical re-upload: 201, different content: 409); when false release
      *  uploads overwrite. Dev versions are always mutable.
+     * @param base Client-facing base URL the served metadata links are rooted at
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public PhpComposer(
@@ -113,7 +118,8 @@ public final class PhpComposer extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
-        final boolean immutable
+        final boolean immutable,
+        final ComposerBaseUrl base
     ) {
         super(
             new SliceRoute(
@@ -126,7 +132,7 @@ public final class PhpComposer extends Slice.Wrap {
                         MethodRule.GET
                     ),
                     PhpComposer.createAuthSlice(
-                        new PackageMetadataSlice(repository),
+                        new PackageMetadataSlice(repository, base),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

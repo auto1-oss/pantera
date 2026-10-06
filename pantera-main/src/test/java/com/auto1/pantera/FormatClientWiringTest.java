@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsNot;
 import org.junit.jupiter.api.BeforeEach;
@@ -188,6 +189,34 @@ final class FormatClientWiringTest {
                     Headers.from(new Authorization.Bearer(this.jwt)), Content.EMPTY
                 ).get(30, TimeUnit.SECONDS).status(),
             new IsEqual<>(RsStatus.ACCEPTED)
+        );
+    }
+
+    @Test
+    void phpWithoutUrlServesDistUrlsUnderTheRequestHost() throws Exception {
+        // Before 2.2.10 a hosted php repository could not be built without
+        // url:; now its stored dist links are re-rooted per request.
+        new FileStorage(this.tmp).save(
+            new Key.From("my-php", "p2", "acme", "api.json"),
+            new Content.From(
+                ("{\"packages\":{\"acme/api\":{\"1.0\":{\"version\":\"1.0\","
+                    + "\"dist\":{\"type\":\"zip\",\"url\":\"artifacts/acme/api/1.0/acme-api-1.0.zip\"}}}}}")
+                    .getBytes(StandardCharsets.UTF_8)
+            )
+        ).join();
+        final Response rsp = this.slices("my-php", this.repo("php"))
+            .slice(new Key.From("my-php"), 8080)
+            .response(
+                new RequestLine(RqMethod.GET, "/my-php/p2/acme/api.json"),
+                Headers.from(new Authorization.Bearer(this.jwt))
+                    .copy().add("Host", "packages.example.com"),
+                Content.EMPTY
+            ).get(30, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            rsp.body().asString(),
+            Matchers.containsString(
+                "\"url\":\"http://packages.example.com/my-php/artifacts/acme/api/1.0/acme-api-1.0.zip\""
+            )
         );
     }
 

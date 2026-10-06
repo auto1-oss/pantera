@@ -463,9 +463,11 @@ at the old host indefinitely.
    scripts/audit-repo-base-urls.sh --stale-host old-registry.example.com
    ```
 
-2. Clear the ones that can be cleared (the script refuses `helm`, `php`,
-   `nuget` and `conda`, whose adapters still require a `url:`, and writes a
-   revert script before touching anything):
+2. Clear the ones that can be cleared (the script refuses `helm`, `nuget` and
+   `conda`, whose adapters still require a `url:`, and writes a revert script
+   before touching anything). For a hosted `php` repository, clear the `url:`
+   of the group clients address as well: through a group the links are rooted
+   at the group's base.
 
    ```bash
    scripts/audit-repo-base-urls.sh --stale-host old-registry.example.com --apply

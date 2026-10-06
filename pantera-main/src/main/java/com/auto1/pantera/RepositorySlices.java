@@ -26,6 +26,7 @@ import com.auto1.pantera.auth.LoggingAuth;
 import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.http.PhpComposer;
 import com.auto1.pantera.conan.ItemTokenizer;
 import com.auto1.pantera.conan.http.ConanSlice;
@@ -976,22 +977,12 @@ public class RepositorySlices {
                 );
                 break;
             case "php":
-                // Extract base URL from config, handling trailing slashes consistently
-                // The URL should be the full path to the repository for provider URLs to work
-                String baseUrl = cfg.settings()
+                // url: is optional: served dist/metadata links are re-rooted per
+                // request (ComposerBaseUrl); a configured url: only fixes the base
+                // stored for new uploads and still wins for every client.
+                final Optional<String> phpUrl = cfg.settings()
                     .flatMap(yaml -> Optional.ofNullable(yaml.string("url")))
-                    .orElseGet(() -> cfg.url().toString());
-                
-                // Normalize: remove all trailing slashes
-                baseUrl = baseUrl.replaceAll("/+$", "");
-                
-                // Ensure URL ends with the repository name for correct routing
-                // Provider URLs will be: {baseUrl}/p2/%package%.json
-                String normalizedRepo = cfg.name().replaceAll("^/+", "").replaceAll("/+$", "");
-                if (!baseUrl.endsWith("/" + normalizedRepo)) {
-                    baseUrl = baseUrl + "/" + normalizedRepo;
-                }
-                
+                    .or(() -> RepositorySlices.optionalUrl(cfg).map(java.net.URL::toString));
                 // The alias is stripped OUTSIDE the generic delete, so a
                 // DELETE through /direct-dists/<x> removes the key <x> that
                 // a GET of the same URL serves; plain storage-key paths are
@@ -1001,7 +992,7 @@ public class RepositorySlices {
                         this.hostedDelete(cfg, new PhpComposer(
                             new AstoRepository(
                                 cfg.storage(),
-                                Optional.of(baseUrl),
+                                phpUrl,
                                 Optional.of(cfg.name())
                             ),
                             securityPolicy(),
@@ -1010,7 +1001,8 @@ public class RepositorySlices {
                             cfg.name(),
                             artifactEvents(),
                             this.settings.syncArtifactIndexer(),
-                            cfg.immutable()
+                            cfg.immutable(),
+                            new ComposerBaseUrl(phpUrl, cfg.name())
                         )),
                         "direct-dists"
                     ),

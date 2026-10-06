@@ -194,8 +194,11 @@ repo:
   storage:
     type: fs
     path: /var/pantera/data
-  url: http://pantera-host:8080/php-local
 ```
+
+`url:` is optional for a local repository: the `dist.url` and `metadata-url`
+links it serves are resolved per request, under the host (or the group) the
+client addressed. Set `url:` only to pin every client to one host.
 
 **Proxy repository:**
 

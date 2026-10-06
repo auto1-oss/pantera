@@ -10,25 +10,27 @@
  */
 package com.auto1.pantera.npm;
 
-import com.auto1.pantera.asto.Concatenation;
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.asto.Remaining;
-import io.reactivex.Flowable;
-import java.io.StringReader;
+import com.auto1.pantera.http.body.JsonStringRewrite;
 import java.net.URL;
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.util.Set;
-import javax.json.Json;
-import javax.json.JsonObject;
-import javax.json.JsonPatchBuilder;
+import java.util.Map;
 
 /**
- * Prepends all tarball references in the package metadata json with the prefix to build
- * absolute URL: /@scope/package-name -&gt; http://host:port/base-path/@scope/package-name.
+ * Roots every tarball reference of a packument at an absolute prefix:
+ * {@code /@scope/package-name -> http://host:port/base-path/@scope/package-name}.
+ *
+ * <p>The packument streams through a {@link JsonStringRewrite}: only the
+ * {@code versions/*}{@code /dist/tarball} strings are touched, nothing is
+ * buffered or parsed into a document model.</p>
+ *
  * @since 0.6
  */
 public final class Tarballs {
+
+    /**
+     * Rule path of every version's tarball.
+     */
+    private static final String TARBALL = "versions/*/dist/tarball";
 
     /**
      * Original content.
@@ -36,28 +38,25 @@ public final class Tarballs {
     private final Content original;
 
     /**
-     * Absolute URL prefix the rewritten tarball links are rooted at. Held as
-     * a string because that is all {@link #updateJson(JsonObject, String)}
-     * ever needs, and because callers now resolve it per request (it may come
-     * from a stamped header rather than a configured {@code url:}) -- see
-     * {@link com.auto1.pantera.npm.RepoBaseUrl}.
+     * Absolute URL prefix the rewritten tarball links are rooted at.
      */
     private final String prefix;
 
     /**
      * Ctor.
+     *
      * @param original Original content
-     * @param prefix URL prefix
+     * @param prefix Prefix URL
      */
     public Tarballs(final Content original, final URL prefix) {
         this(original, prefix.toString());
     }
 
     /**
-     * Ctor taking an already-resolved prefix; the single field-initializing
-     * constructor.
+     * Ctor.
+     *
      * @param original Original content
-     * @param prefix Absolute URL prefix
+     * @param prefix Absolute URL prefix, with or without a trailing slash
      */
     public Tarballs(final Content original, final String prefix) {
         this.original = original;
@@ -65,49 +64,15 @@ public final class Tarballs {
     }
 
     /**
-     * Return modified content with prepended URLs.
-     * @return Modified content with prepended URLs
+     * The packument with every tarball rooted at the prefix.
+     *
+     * @return Rewritten content, streamed
      */
     public Content value() {
-        // OPTIMIZATION: Use size hint for efficient pre-allocation
-        final long knownSize = this.original.size().orElse(-1L);
-        return new Content.From(
-            Concatenation.withSize(this.original, knownSize)
-                .single()
-                .map(buf -> new Remaining(buf).bytes())
-                .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
-                .map(json -> Json.createReader(new StringReader(json)).readObject())
-                .map(json -> Tarballs.updateJson(json, this.prefix))
-                .flatMapPublisher(
-                    json -> new Content.From(
-                        Flowable.fromArray(
-                            ByteBuffer.wrap(
-                                json.toString().getBytes(StandardCharsets.UTF_8)
-                            )
-                        )
-                    )
-                )
+        return new JsonStringRewrite(
+            this.original,
+            Map.of(Tarballs.TARBALL, tarball -> Tarballs.rewriteTarball(tarball, this.prefix))
         );
-    }
-
-    /**
-     * Replaces tarball links with absolute paths based on prefix.
-     * @param original Original JSON object
-     * @param prefix Links prefix
-     * @return Transformed JSON object
-     */
-    private static JsonObject updateJson(final JsonObject original, final String prefix) {
-        final JsonPatchBuilder builder = Json.createPatchBuilder();
-        final Set<String> versions = original.getJsonObject("versions").keySet();
-        for (final String version : versions) {
-            final String tarballPath = original.getJsonObject("versions").getJsonObject(version)
-                .getJsonObject("dist").getString("tarball");
-            builder.add(
-                String.format("/versions/%s/dist/tarball", version),
-                Tarballs.rewriteTarball(tarballPath, prefix)
-            );
-        }
-        return builder.build().apply(original);
     }
 
     /**
