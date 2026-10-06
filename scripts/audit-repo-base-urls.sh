@@ -16,7 +16,7 @@
 # Types whose adapter builds absolute URLs without the per-request derivation
 # still hard-require `url:` — this script never touches those, it lists them
 # for manual review instead. As of 2.2.6 hosted `npm` and as of 2.2.10 hosted
-# `php` are NOT among them, and `conan` never was — it builds its
+# `php` and `php-proxy` are NOT among them, and `conan` never was — it builds its
 # download_urls from the request Host.
 #
 # Usage:

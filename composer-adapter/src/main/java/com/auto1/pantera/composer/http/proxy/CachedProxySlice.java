@@ -21,6 +21,7 @@ import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.JsonPackages;
 import com.auto1.pantera.composer.Packages;
 import com.auto1.pantera.composer.Repository;
@@ -109,7 +110,7 @@ final class CachedProxySlice implements Slice {
     /**
      * Base URL for metadata rewriting.
      */
-    private final String baseUrl;
+    private final ComposerBaseUrl base;
 
     /**
      * Upstream URL for metrics.
@@ -195,12 +196,39 @@ final class CachedProxySlice implements Slice {
         final String baseUrl,
         final String upstreamUrl
     ) {
+        this(
+            remote, repo, cache, events, rname,
+            new ComposerBaseUrl(Optional.of(baseUrl), rname), upstreamUrl
+        );
+    }
+
+    /**
+     * Primary ctor.
+     *
+     * @param remote Remote slice
+     * @param repo Repository
+     * @param cache Cache
+     * @param events Proxy artifact events
+     * @param rname Repository name
+     * @param base Client-facing base the served links are rooted at, per request
+     * @param upstreamUrl Upstream URL
+     * @checkstyle ParameterNumberCheck (10 lines)
+     */
+    CachedProxySlice(
+        final Slice remote,
+        final Repository repo,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final ComposerBaseUrl base,
+        final String upstreamUrl
+    ) {
         this.remote = remote;
         this.cache = cache;
         this.repo = repo;
         this.events = events;
         this.rname = rname;
-        this.baseUrl = baseUrl;
+        this.base = base;
         this.upstreamUrl = upstreamUrl;
         this.refreshing = ConcurrentHashMap.newKeySet();
         this.lastModifiedStore = new ConcurrentHashMap<>();
@@ -304,7 +332,7 @@ final class CachedProxySlice implements Slice {
                         if (!fresh) {
                             this.backgroundRefresh(line, headers, name);
                         }
-                        return this.serveCachedMetadata(bytes);
+                        return this.serveCachedMetadata(bytes, headers);
                     });
                 });
             }
@@ -322,11 +350,14 @@ final class CachedProxySlice implements Slice {
      * @param bytes Cached metadata bytes
      * @return Response future
      */
-    private CompletableFuture<Response> serveCachedMetadata(final byte[] bytes) {
-        final byte[] rewritten = this.rewriteMetadata(bytes);
+    private CompletableFuture<Response> serveCachedMetadata(
+        final byte[] bytes, final Headers headers
+    ) {
+        final byte[] rewritten = this.rewriteMetadata(bytes, headers);
         return CompletableFuture.completedFuture(
             ResponseBuilder.ok()
                 .header("Content-Type", "application/json")
+                .varyHeader(this.base.vary(headers))
                 .body(new Content.From(rewritten))
                 .build()
         );
@@ -506,7 +537,7 @@ final class CachedProxySlice implements Slice {
                         // Write-time URL rewriting: rewrite before caching
                         if (contentOpt.isPresent()) {
                             return contentOpt.get().asBytesFuture().thenApply(bytes -> {
-                                final byte[] rewritten = this.rewriteMetadata(bytes);
+                                final byte[] rewritten = this.rewriteMetadata(bytes, headers);
                                 EcsLogger.debug("com.auto1.pantera.composer")
                                     .message("Pre-rewrote metadata URLs at write time")
                                     .eventCategory("web")
@@ -556,6 +587,7 @@ final class CachedProxySlice implements Slice {
                             .log();
                         return ResponseBuilder.ok()
                             .header("Content-Type", "application/json")
+                            .varyHeader(this.base.vary(headers))
                             .body(new Content.From(bytes))
                             .build();
                     });
@@ -771,13 +803,14 @@ final class CachedProxySlice implements Slice {
      * Rewrite metadata content to proxy downloads through Pantera.
      * Returns byte[] directly to avoid unnecessary Content wrapping/unwrapping.
      *
+     * @param headers Request headers the base is resolved from
      * @param original Original metadata bytes
      * @return Rewritten metadata bytes
      */
-    private byte[] rewriteMetadata(final byte[] original) {
+    private byte[] rewriteMetadata(final byte[] original, final Headers headers) {
         try {
             final String json = new String(original, StandardCharsets.UTF_8);
-            final MetadataUrlRewriter rewriter = new MetadataUrlRewriter(this.baseUrl);
+            final MetadataUrlRewriter rewriter = new MetadataUrlRewriter(this.base.resolve(headers));
             return rewriter.rewrite(json);
         } catch (Exception ex) {
             EcsLogger.error("com.auto1.pantera.composer")

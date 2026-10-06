@@ -465,7 +465,7 @@ at the old host indefinitely.
 
 2. Clear the ones that can be cleared (the script refuses `helm`, `nuget` and
    `conda`, whose adapters still require a `url:`, and writes a revert script
-   before touching anything). For a hosted `php` repository, clear the `url:`
+   before touching anything). For a hosted `php` or `php-proxy` repository, clear the `url:`
    of the group clients address as well: through a group the links are rooted
    at the group's base.
 

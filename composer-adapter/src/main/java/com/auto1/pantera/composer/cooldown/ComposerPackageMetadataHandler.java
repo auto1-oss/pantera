@@ -18,6 +18,7 @@ import com.auto1.pantera.composer.MinifiedMetadata;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
+import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -177,21 +178,37 @@ public final class ComposerPackageMetadataHandler {
     }
 
     /**
+     * Handle a request, forwarding only the audit context to the upstream.
+     *
+     * @param line Request line
+     * @param user User name
+     * @param auditCtx Audit context
+     * @return Response
+     */
+    public CompletableFuture<Response> handle(
+        final RequestLine line, final String user, final AuditContext auditCtx
+    ) {
+        return this.handle(line, auditCtx.requestHeaders(), user, auditCtx);
+    }
+
+    /**
      * Handle a per-package metadata request with cooldown filtering.
      *
-     * @param line Request line (must be a per-package metadata path)
+     * @param line Request line
+     * @param headers Request headers, forwarded to the upstream so it can
+     *  resolve the client-facing base the links are rooted at (must be a per-package metadata path)
      * @param user Authenticated user (for cooldown bookkeeping)
      * @param auditCtx Request correlation context for the audit trail
      * @return Future response
      */
     public CompletableFuture<Response> handle(
-        final RequestLine line, final String user, final AuditContext auditCtx
+        final RequestLine line, final Headers headers, final String user, final AuditContext auditCtx
     ) {
         final String path = line.uri().getPath();
         final String pkg = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a Composer metadata path: " + path)
         );
-        return this.upstream.response(line, auditCtx.requestHeaders(), Content.EMPTY)
+        return this.upstream.response(line, headers, Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->

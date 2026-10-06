@@ -864,7 +864,12 @@ more than one hostname should leave `url:` unset, and each client gets
 client to that one host, whatever hostname they asked for. `npm-proxy` and
 `npm-group` behaved this way already.
 
-Since 2.2.10 hosted **`php`** is no longer one of them either. Its served
+Since 2.2.10 hosted **`php`** and **`php-proxy`** are no longer among them either. A
+proxy's `packages.json` (`metadata-url`) and every proxied
+`p2/<vendor>/<package>.json` (`dist.url`, with the upstream URL kept under
+`original_url`) point back at the proxy under the base resolved per request,
+whatever base its cached metadata was rewritten under, so a proxy reached
+through a group sends Composer back to the group. A hosted repository's served
 metadata -- `packages.json` (`metadata-url`, `available-packages-url`) and
 every `p2/<vendor>/<package>.json` -- is re-rooted per request with the same
 three tiers, the last one being the request origin plus the repository name.

@@ -26,6 +26,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.TrimPathSlice;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.http.PhpComposer;
 import com.auto1.pantera.composer.http.proxy.ComposerProxySlice;
 import com.auto1.pantera.http.auth.Authentication;
@@ -361,6 +362,46 @@ public final class ComposerGroupSliceTest {
     }
 
     @Test
+    void proxyMemberEmitsDistUrlsUnderTheGroup() throws Exception {
+        // The proxy member's cached metadata was rewritten under its own
+        // base; through the group it must re-root every dist at the base
+        // SliceByPath stamped for the group, url: or not.
+        final InMemoryStorage storage = new InMemoryStorage();
+        storage.save(
+            new Key.From("acme", "lib.json"),
+            new Content.From(
+                ("{\"packages\":{\"acme/lib\":{\"1.0.0\":{\"version\":\"1.0.0\",\"dist\":{"
+                    + "\"type\":\"zip\","
+                    + "\"url\":\"http://localhost:8080/proxy/dist/acme/lib/1.0.0.zip\","
+                    + "\"original_url\":\"https://up.example/lib-1.0.0.zip\"}}}}}")
+                    .getBytes(StandardCharsets.UTF_8)
+            )
+        ).join();
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("local", status(RsStatus.NOT_FOUND));
+        members.put(
+            "proxy",
+            new TrimPathSlice(ComposerGroupSliceTest.cachedProxy(storage, Optional.empty()), "proxy")
+        );
+        final Response resp = ComposerGroupSliceTest.group(members, "local", "proxy").response(
+            new RequestLine("GET", "/p2/acme/lib.json"),
+            Headers.from(ClientBaseUrl.HEADER, "https://packages.example.com/php-group"),
+            Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "the proxy member answers through the group",
+            resp.status(), Matchers.equalTo(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "its dist is under the group",
+            new String(resp.body().asBytes(), StandardCharsets.UTF_8),
+            Matchers.containsString(
+                "\"url\":\"https://packages.example.com/php-group/dist/acme/lib/1.0.0.zip\""
+            )
+        );
+    }
+
+    @Test
     void packageUnknownLocallyIsResolvedThroughTheProxy() throws Exception {
         final Map<String, Slice> members = new HashMap<>();
         members.put("local", status(RsStatus.NOT_FOUND));
@@ -513,6 +554,61 @@ public final class ComposerGroupSliceTest {
      * A real php-proxy whose upstream breaker is open: every upstream call
      * is fast-failed with the marked 502 the http-client synthesises.
      */
+    /**
+     * A proxy member whose metadata cache is the given storage; its remote
+     * answers 404, so only cached metadata can be served.
+     *
+     * @param storage Storage holding cached metadata
+     * @param url Configured url, or empty
+     * @return Proxy slice
+     */
+    private static Slice cachedProxy(final InMemoryStorage storage, final Optional<String> url) {
+        final Slice remote = status(RsStatus.NOT_FOUND);
+        final ClientSlices clients = new ClientSlices() {
+            @Override
+            public Slice http(final String host) {
+                return remote;
+            }
+
+            @Override
+            public Slice http(final String host, final int port) {
+                return remote;
+            }
+
+            @Override
+            public Slice https(final String host) {
+                return remote;
+            }
+
+            @Override
+            public Slice https(final String host, final int port) {
+                return remote;
+            }
+        };
+        final CooldownInspector nodates = new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(
+                final String artifact, final String version
+            ) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(
+                final String artifact, final String version
+            ) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        final AstoRepository repo = new AstoRepository(storage);
+        return new ComposerProxySlice(
+            clients, URI.create("https://repo.packagist.example"), repo,
+            Authenticator.ANONYMOUS, new ComposerStorageCache(repo), Optional.empty(),
+            "proxy", "php-proxy", NoopCooldownService.INSTANCE, nodates,
+            new ComposerBaseUrl(url, "proxy"), "https://repo.packagist.example"
+        );
+    }
+
     private static Slice circuitOpenProxy() {
         final Slice remote = (line, headers, body) -> CompletableFuture.completedFuture(
             ResponseBuilder.badGateway()

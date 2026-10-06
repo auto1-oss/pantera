@@ -59,7 +59,11 @@ public final class ComposerProxy implements Slice {
         com.auto1.pantera.cooldown.api.CooldownService cooldown
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
-        final String baseUrl = cfg.url().toString();
+        // url: is optional: served links are rooted at the base resolved per
+        // request (the group's when reached through one), a configured url:
+        // pins them.
+        final com.auto1.pantera.composer.ComposerBaseUrl baseUrl =
+            new com.auto1.pantera.composer.ComposerBaseUrl(cfg.urlOpt(), cfg.name());
         
         // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own ComposerProxySlice, evaluated in priority order

@@ -206,13 +206,16 @@ client addressed. Set `url:` only to pin every client to one host.
 # php-proxy.yaml
 repo:
   type: php-proxy
-  url: http://pantera-host:8080/php-proxy
   storage:
     type: fs
     path: /var/pantera/data
   remotes:
     - url: https://repo.packagist.org
 ```
+
+`url:` is optional for a proxy as well: the `metadata-url` and the `dist.url`
+of every proxied package point back at the proxy under the host (or the
+group) the client addressed.
 
 **Group repository:**
 
