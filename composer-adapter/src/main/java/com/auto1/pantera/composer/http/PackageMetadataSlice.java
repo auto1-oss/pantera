@@ -20,7 +20,6 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 
 import java.util.Optional;
@@ -29,7 +28,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import javax.json.JsonException;
 
 /**
  * Slice that serves package metadata, with its links re-rooted at the base URL
@@ -84,13 +82,12 @@ public final class PackageMetadataSlice implements Slice {
                 .thenApply(
                     opt -> opt.map(
                         packages -> packages.content()
-                            .thenCompose(Content::asBytesFuture)
                             .thenApply(
                                 stored -> ResponseBuilder.ok()
                                     .varyHeader(this.base.vary(headers))
                                     .body(this.relinked(path, stored, headers))
                                     .build()
-                            )
+                            ).toCompletableFuture()
                     ).orElse(
                         CompletableFuture.completedFuture(
                             ResponseBuilder.notFound().build()
@@ -101,41 +98,21 @@ public final class PackageMetadataSlice implements Slice {
     }
 
     /**
-     * Re-root the links of a stored document at the base resolved for the
-     * request; a document that is not valid JSON is served as stored.
+     * The stored document with its links re-rooted at the base resolved for
+     * this request, streamed through without buffering.
      *
      * @param path Request path
      * @param stored Stored document
      * @param headers Request headers
-     * @return Response body
+     * @return Document to serve
      */
-    private byte[] relinked(final String path, final byte[] stored, final Headers headers) {
+    private Content relinked(final String path, final Content stored, final Headers headers) {
         final String resolved = this.base.resolve(headers);
-        try {
-            return ALL_PACKAGES.matcher(path).matches()
-                ? this.links.root(stored, resolved)
-                : this.links.packages(stored, resolved);
-        } catch (final JsonException ex) {
-            EcsLogger.warn("com.auto1.pantera.composer")
-                .message("Stored Composer metadata is not valid JSON, serving it without re-rooting its links")
-                .eventCategory("web")
-                .eventAction("composer_metadata_relink")
-                .eventOutcome("failure")
-                .field("repository.name", this.base.repository())
-                .field("url.path", path)
-                .error(ex)
-                .field("log.source", "application")
-                .log();
-            return stored;
-        }
+        return ALL_PACKAGES.matcher(path).matches()
+            ? this.links.root(stored, resolved)
+            : this.links.packages(stored, resolved);
     }
 
-    /**
-     * Builds key to storage value from path.
-     *
-     * @param path Resource path.
-     * @return Key to storage value.
-     */
     private CompletionStage<Optional<Packages>> packages(final String path) {
         final Matcher matcher = PACKAGE.matcher(path);
         if (matcher.find()) {

@@ -8,34 +8,38 @@
  *
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
+
 package com.auto1.pantera.composer;
 
-import java.io.StringReader;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.body.JsonStringRewrite;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import javax.json.Json;
-import javax.json.JsonArrayBuilder;
-import javax.json.JsonObject;
-import javax.json.JsonObjectBuilder;
-import javax.json.JsonString;
-import javax.json.JsonValue;
 
 /**
- * Re-roots the links stored in a hosted Composer repository's metadata at the
- * base URL resolved for the current request.
+ * Links of served Composer metadata, re-rooted at the base resolved for the
+ * request ({@link ComposerBaseUrl}) as the stored bytes stream through.
  *
- * <p>Stored metadata carries whatever {@code dist.url} the writer froze in:
- * an absolute URL under the repository's {@code url:} at upload time (possibly
- * a host the repository is no longer reached by, e.g. after an import from
- * another registry), or a repository-relative path when no {@code url:} was
- * configured. A {@code dist.url} that points into this repository is rebuilt
- * as {@code <base>/<path inside the repository>}; any other URL (a dist hosted
- * elsewhere) is left untouched. Stored bytes are never modified.</p>
+ * <p>Nothing is buffered or parsed into a document: a
+ * {@link JsonStringRewrite} rewrites the {@code dist.url} of every version,
+ * or the {@code metadata-url} and {@code available-packages-url} of the root
+ * {@code packages.json}, and passes every other byte through as stored.</p>
+ *
+ * <p>A stored {@code dist.url} is "ours" when it is repository-relative (how
+ * uploads are stored without a configured {@code url:}) or an absolute URL
+ * whose path reaches an archive ({@code .zip}, {@code .tar.gz}, {@code .tgz})
+ * through a segment named like this repository, whatever host and path
+ * prefix it was frozen under: an older {@code url:}, a JFrog-style
+ * {@code /api/composer/} route, a global prefix of any depth. Anything else
+ * (a GitHub zipball, another repository on the same host) is left as is.
+ * The one shape that cannot be told apart is an archive URL on a foreign
+ * host whose path segment named like this repository is followed by an
+ * archive path (a GitHub organisation called like the repository serving
+ * {@code .zip} downloads); it is re-rooted like a legacy host would be.</p>
  *
  * @since 2.2.10
  */
@@ -47,9 +51,14 @@ public final class MetadataLinks {
     private static final String DIRECT_DISTS = "direct-dists/";
 
     /**
-     * Path of an absolute URL served by this repository: an optional global
-     * prefix segment, an optional {@code /api[/composer|/php]} route, the
-     * repository segment, then the path inside the repository.
+     * Rule path of every version's dist URL, versions keyed by name (v1) or
+     * listed in an array (v2).
+     */
+    private static final String DIST_URL = "packages/*/*/dist/url";
+
+    /**
+     * Path of an absolute archive URL served by this repository: any prefix,
+     * the repository segment, then the archive path inside the repository.
      */
     private final Pattern own;
 
@@ -60,45 +69,38 @@ public final class MetadataLinks {
      */
     public MetadataLinks(final String repo) {
         this.own = Pattern.compile(
-            "^(?:/[^/]+)?(?:/api(?:/composer|/php)?)?/" + Pattern.quote(repo) + "/(.+)$"
+            "^(?:/.*?)?/" + Pattern.quote(repo) + "/(.+\\.(?:zip|tar\\.gz|tgz))$"
         );
     }
 
     /**
-     * Rewrite every {@code dist.url} of a per-package metadata document.
+     * Re-root every {@code dist.url} of a per-package metadata document.
      *
      * @param stored Stored document
      * @param base Resolved base URL ending with a repository segment
-     * @return Document with re-rooted dist URLs
+     * @return Document with re-rooted dist URLs, streamed
      */
-    public byte[] packages(final byte[] stored, final String base) {
-        final JsonObject root = MetadataLinks.parse(stored);
-        final JsonValue packages = root.get("packages");
-        if (packages == null || packages.getValueType() != JsonValue.ValueType.OBJECT) {
-            return stored;
-        }
-        final JsonObjectBuilder rewritten = Json.createObjectBuilder();
-        for (final Map.Entry<String, JsonValue> pkg : packages.asJsonObject().entrySet()) {
-            rewritten.add(pkg.getKey(), this.versions(pkg.getValue(), base));
-        }
-        return MetadataLinks.bytes(Json.createObjectBuilder(root).add("packages", rewritten).build());
+    public Content packages(final Content stored, final String base) {
+        return new JsonStringRewrite(
+            stored, Map.of(MetadataLinks.DIST_URL, url -> this.dist(url, base))
+        );
     }
 
     /**
-     * Rewrite the links of the root {@code packages.json}.
+     * Re-root the links of the root {@code packages.json}.
      *
      * @param stored Stored document
      * @param base Resolved base URL ending with a repository segment
-     * @return Document whose metadata links point under {@code base}
+     * @return Document whose metadata links point under {@code base}, streamed
      */
-    public byte[] root(final byte[] stored, final String base) {
-        final JsonObject root = MetadataLinks.parse(stored);
-        final JsonObjectBuilder rewritten = Json.createObjectBuilder(root);
-        rewritten.add("metadata-url", base + "/p2/%package%.json");
-        if (root.containsKey("available-packages-url")) {
-            rewritten.add("available-packages-url", base + "/p2/available-packages.json");
-        }
-        return MetadataLinks.bytes(rewritten.build());
+    public Content root(final Content stored, final String base) {
+        return new JsonStringRewrite(
+            stored,
+            Map.of(
+                "metadata-url", ignored -> base + "/p2/%package%.json",
+                "available-packages-url", ignored -> base + "/p2/available-packages.json"
+            )
+        );
     }
 
     /**
@@ -142,78 +144,5 @@ public final class MetadataLinks {
         }
         final String query = uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery();
         return Optional.of(matcher.group(1) + query);
-    }
-
-    /**
-     * Rewrite the versions of one package: an object keyed by version (v1) or
-     * an array of versions (v2, possibly minified).
-     *
-     * @param versions Versions value
-     * @param base Resolved base URL
-     * @return Rewritten versions value
-     */
-    private JsonValue versions(final JsonValue versions, final String base) {
-        final JsonValue result;
-        if (versions.getValueType() == JsonValue.ValueType.ARRAY) {
-            final JsonArrayBuilder array = Json.createArrayBuilder();
-            for (final JsonValue version : versions.asJsonArray()) {
-                array.add(this.version(version, base));
-            }
-            result = array.build();
-        } else if (versions.getValueType() == JsonValue.ValueType.OBJECT) {
-            final JsonObjectBuilder object = Json.createObjectBuilder();
-            for (final Map.Entry<String, JsonValue> version : versions.asJsonObject().entrySet()) {
-                object.add(version.getKey(), this.version(version.getValue(), base));
-            }
-            result = object.build();
-        } else {
-            result = versions;
-        }
-        return result;
-    }
-
-    /**
-     * Rewrite the {@code dist.url} of one version, if it has one.
-     *
-     * @param version Version value
-     * @param base Resolved base URL
-     * @return Rewritten version value
-     */
-    private JsonValue version(final JsonValue version, final String base) {
-        if (version.getValueType() != JsonValue.ValueType.OBJECT) {
-            return version;
-        }
-        final JsonObject entry = version.asJsonObject();
-        final JsonValue dist = entry.get("dist");
-        if (dist == null || dist.getValueType() != JsonValue.ValueType.OBJECT
-            || !(dist.asJsonObject().get("url") instanceof JsonString)) {
-            return version;
-        }
-        final String url = dist.asJsonObject().getString("url");
-        return Json.createObjectBuilder(entry)
-            .add("dist", Json.createObjectBuilder(dist.asJsonObject()).add("url", this.dist(url, base)))
-            .build();
-    }
-
-    /**
-     * Parse a JSON object.
-     *
-     * @param bytes Bytes
-     * @return JSON object
-     */
-    private static JsonObject parse(final byte[] bytes) {
-        try (var reader = Json.createReader(new StringReader(new String(bytes, StandardCharsets.UTF_8)))) {
-            return reader.readObject();
-        }
-    }
-
-    /**
-     * Serialise a JSON object.
-     *
-     * @param json JSON object
-     * @return UTF-8 bytes
-     */
-    private static byte[] bytes(final JsonObject json) {
-        return json.toString().getBytes(StandardCharsets.UTF_8);
     }
 }

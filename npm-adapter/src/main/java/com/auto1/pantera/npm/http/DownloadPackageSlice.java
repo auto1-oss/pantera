@@ -208,12 +208,13 @@ public final class DownloadPackageSlice implements Slice {
             // back to this repository's own base when nothing was stamped —
             // the same precedence SingleVersionSlice#serve uses.
             final String prefix = this.base.resolve(headers);
-            // Apply tarball URL rewriting and STREAM response (no buffering!)
+            // The packument is already materialised (enhanced, abbreviated,
+            // ETag'd); the tarball rewrite streams over those bytes without
+            // parsing them a second time.
             final Content content = new Content.From(
                 responseStr.getBytes(StandardCharsets.UTF_8)
             );
             final Content rewritten = new Tarballs(content, prefix).value();
-            // Return streaming response - memory usage: ~4KB instead of 200MB+
             result = ResponseBuilder.ok()
                 .header("Content-Type", abbreviated
                     ? "application/vnd.npm.install-v1+json; charset=utf-8"
@@ -222,7 +223,7 @@ public final class DownloadPackageSlice implements Slice {
                 .header("Cache-Control", "public, max-age=300")
                 .header("CDN-Cache-Control", "public, max-age=600")
                 .varyHeader(vary)
-                .body(rewritten)  // STREAM IT - no asBytesFuture()!
+                .body(rewritten)
                 .build();
         }
         return result;

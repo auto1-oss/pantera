@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.composer;
 
+import com.auto1.pantera.asto.Content;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import javax.json.Json;
@@ -62,7 +63,19 @@ final class MetadataLinksTest {
         "https://api.github.com/repos/acme/php-api/zipball/0123abc,"
             + "https://api.github.com/repos/acme/php-api/zipball/0123abc",
         // another repository on the same host stays where it is
-        "https://packages.example.com/php-other/artifacts/a.zip,https://packages.example.com/php-other/artifacts/a.zip"
+        "https://packages.example.com/php-other/artifacts/a.zip,https://packages.example.com/php-other/artifacts/a.zip",
+        // a global prefix of any depth, and the other archive types
+        "https://h.example.com/registry/v1/php-api/artifacts/a.tar.gz,"
+            + "https://packages.example.com/php-api/artifacts/a.tar.gz",
+        "https://h.example.com/a/b/c/api/composer/php-api/artifacts/a.tgz,"
+            + "https://packages.example.com/php-api/artifacts/a.tgz",
+        // a query string survives
+        "https://legacy.example.com/php-api/artifacts/a.zip?token=t,"
+            + "https://packages.example.com/php-api/artifacts/a.zip?token=t",
+        // a GitHub org or user named like the repository is not this repository
+        "https://github.com/php-api/foo/zipball/0123abc,https://github.com/php-api/foo/zipball/0123abc",
+        "https://api.github.com/repos/php-api/foo/zipball/0123abc,"
+            + "https://api.github.com/repos/php-api/foo/zipball/0123abc"
     })
     void reRootsDistUrlsThatPointIntoTheRepository(final String stored, final String expected) {
         MatcherAssert.assertThat(this.links.dist(stored, MetadataLinksTest.BASE), new IsEqual<>(expected));
@@ -179,15 +192,45 @@ final class MetadataLinksTest {
      * @param json JSON text
      * @return UTF-8 bytes
      */
-    private static byte[] bytes(final String json) {
-        return json.getBytes(StandardCharsets.UTF_8);
+    @Test
+    void servesBytesOutsideTheLinksExactlyAsStored() {
+        final String stored = "{ \"packages\" : {\"acme/api\": {\n  \"1.0\": {\"dist\": {"
+            + "\"url\": \"artifacts/a.zip\", \"type\": \"zip\"}, \"x\": [1, 2]}}}, \"z\": \"\\u00e9\"}";
+        MatcherAssert.assertThat(
+            new String(
+                this.links.packages(MetadataLinksTest.bytes(stored), MetadataLinksTest.BASE)
+                    .asBytesFuture().join(),
+                StandardCharsets.UTF_8
+            ),
+            new IsEqual<>(
+                stored.replace("\"artifacts/a.zip\"", "\"https://packages.example.com/php-api/artifacts/a.zip\"")
+            )
+        );
+    }
+
+    @Test
+    void invalidDocumentIsServedAsStored() {
+        MatcherAssert.assertThat(
+            new String(
+                this.links.packages(MetadataLinksTest.bytes("not json"), MetadataLinksTest.BASE)
+                    .asBytesFuture().join(),
+                StandardCharsets.UTF_8
+            ),
+            new IsEqual<>("not json")
+        );
+    }
+
+    private static Content bytes(final String json) {
+        return new Content.From(json.getBytes(StandardCharsets.UTF_8));
     }
 
     /**
      * @param bytes UTF-8 JSON
      * @return Parsed object
      */
-    private static JsonObject json(final byte[] bytes) {
-        return Json.createReader(new StringReader(new String(bytes, StandardCharsets.UTF_8))).readObject();
+    private static JsonObject json(final Content served) {
+        return Json.createReader(
+            new StringReader(new String(served.asBytesFuture().join(), StandardCharsets.UTF_8))
+        ).readObject();
     }
 }
