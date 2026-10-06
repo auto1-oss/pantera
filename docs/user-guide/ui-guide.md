@@ -159,6 +159,7 @@ A paginated, searchable table of all currently blocked artifacts:
 
 - Use the search bar to filter by package name, version, or repository.
 - Click the unlock button on a row to unblock that specific artifact (requires write permissions).
+- Tick one or more rows and use **Unblock selected** in the bar that appears above the table to release them in one request. The result says how many were released and lists any that failed (for example a repository you cannot write to). Changing a filter, the search, the sort, the page or the Active/History switch clears the selection, so nothing you cannot see is acted on.
 
 ### Inspect Package (administrators)
 
@@ -236,13 +237,26 @@ Admin panels appear in the sidebar under **Administration** only if you have the
 
 If you do not see the Administration section, you have read-only access. Contact your administrator for elevated permissions.
 
+### Managing Repositories (/admin/repositories)
+
+The **Manage Repositories** page lists every repository you may read, with the controls an operator needs day to day:
+
+- **Toolbar**: search as you type (the list updates without pressing Enter), a **Format** filter and a **Mode** filter (Hosted, Proxy, Group). The filters, sort and page are kept in the URL, so a reload or the browser's back button returns to the same view.
+- **Columns**: Name (links to the repository browser), Format, Mode, Storage (`fs`, `s3` or the storage alias), Anonymous (`read` / `write` chips when anonymous access is allowed) and Updated (when and by whom). Name, Format and Updated are sortable.
+- **Row menu** (the `⋮` button): Browse, Edit, Set Me Up, Rename…, Delete…. Entries you lack permission for are hidden.
+- **Selection bar**: tick rows and a bar appears with **Anonymous access…** (set anonymous download and upload for all selected repositories at once) and **Delete…** (type `delete` to confirm; the result reports how many were deleted, how many are being removed in the background, and which failed).
+
 ### Creating Repositories
 
-The **Create Repository** page (`/admin/repositories/create`) allows administrators to create new repositories. The **Type** dropdown lists all supported repository formats:
+The **Create Repository** page (`/admin/repositories/create`) starts with a **Format** picker: three tabs, **Hosted**, **Proxy** and **Group**, each showing a card per supported format with a one-line description:
 
 - **Maven**, **Gradle**, **Docker**, **npm**, **PyPI**, **Go**, **Helm**, **NuGet**, **Debian**, **RPM**, **Conda**, **RubyGems**, **Conan**, **Hex**, **PHP**, **File**
 
-Each format supports Local, Proxy, and/or Group variants where applicable. For example, Go supports Local, Proxy, and Group; Gradle supports all three variants.
+Each format supports Hosted, Proxy, and/or Group variants where applicable. For example, Go supports Hosted, Proxy, and Group; Gradle supports all three variants. Picking a card reveals the name field and the configuration form. The name is checked as you type, against the same rules the server applies and against existing repositories, so **Create** stays disabled until the name is valid and free. **Edit as JSON** switches the configuration to a raw JSON editor. After creation you return to the list with the new repository highlighted.
+
+### Editing Repositories
+
+**Edit** opens the repository's configuration form and its per-repository cooldown override on one page. One **Save** writes both (the cooldown override only when it changed) and keeps you on the page; **Reset** returns the form to the last saved state, and leaving the page with unsaved changes asks for confirmation. **Rename…** and **Delete repository…** live in the **Danger zone** card at the bottom.
 
 For local repositories of every format except Docker, the form has a **Publishing** card with an **Immutable artifacts** checkbox (the repository's `immutable` setting). It is checked for a new repository: a stored artifact can then never be overwritten, and a re-upload is refused (usually with `409 Conflict`). Uncheck it to let users with `write` permission overwrite. Users with `delete` permission can delete artifacts either way. Editing a repository shows its current value, and saving writes the choice explicitly. Proxy, group and Docker repositories do not show the card (Docker tag moves are controlled by the `overwrite` permission). See [Overwrite rules](getting-started.md#overwrite-rules-immutable).
 
