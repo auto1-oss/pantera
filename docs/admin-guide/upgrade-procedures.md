@@ -286,10 +286,10 @@ New versions may introduce new configuration keys with sensible defaults. Existi
 > `url:`: served `dist.url`, `metadata-url` and `available-packages-url` are
 > re-rooted at the base resolved per request, including `dist.url` values
 > stored earlier under another host, so no metadata has to be rewritten.
-> Repositories with a `url:` keep serving that host. To move Composer clients
-> off a stale host, clear (or update) `url:` on the hosted `php` repository
-> and on the `php-group` clients address; the next `composer update` writes
-> the new links into `composer.lock`.
+> Repositories with a `url:` (or the older `settings.url`) keep serving that
+> host. To move Composer clients off a stale host, clear (or update) it on the
+> hosted `php` repository and on the `php-group` clients address; the next
+> `composer update` writes the new links into `composer.lock`.
 
 ---
 

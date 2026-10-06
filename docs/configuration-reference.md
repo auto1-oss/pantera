@@ -871,10 +871,17 @@ The `dist.url` frozen into stored metadata is not served as-is: a `dist.url`
 that points into this repository is served as `<resolved base>/<path inside
 the repository>`, whatever host it was stored with (an older `url:`, or a URL
 imported from another registry; a `direct-dists/` alias segment is dropped),
-and a dist hosted elsewhere is left untouched. Through a group the links are
-therefore under the group. Without `url:` new uploads store a
+and a dist hosted elsewhere is left untouched. A stored `dist.url` counts as
+"this repository's" when it is repository-relative or an absolute archive URL
+(`.zip`, `.tar.gz`, `.tgz`) whose path reaches the archive through a segment
+named like the repository, under any host and any path prefix. Through a group
+the links are therefore under the group. Without `url:` new uploads store a
 repository-relative `dist.url`; with it they keep storing an absolute one, and
-`url:` still pins every client to that host.
+`url:` still pins every client to that host. A `php` repository configured the
+pre-2.2.10 way, with the URL under `settings.url` instead of `url:`, is pinned
+the same way. The re-rooting is stream-through: the stored document is neither
+buffered nor parsed, only the link strings are substituted as the bytes flow,
+and the response carries the same `Vary` as every other per-request base.
 
 ```yaml
 # File: maven.yaml
@@ -1058,7 +1065,7 @@ repo:
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `url` | string | No | -- | Client-facing base URL. Unset: served links are resolved per request ([2.2](#22-local-repository)). Set: pins every client to this host |
+| `url` | string | No | -- | Client-facing base URL. Unset: served links are resolved per request ([2.2](#22-local-repository)). Set: pins every client to this host. The pre-2.2.10 `settings.url` is still honoured the same way |
 
 ```yaml
 repo:
