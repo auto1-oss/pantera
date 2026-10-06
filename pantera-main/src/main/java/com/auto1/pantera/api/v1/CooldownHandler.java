@@ -1061,7 +1061,7 @@ public final class CooldownHandler {
                 actor, "COOLDOWN_UNBLOCK", repo, details, ok, ip
             ),
             HandlerExecutor.get()
-        ).run(items, actor).whenComplete((out, err) -> {
+        ).run(items).whenComplete((out, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", String.valueOf(err.getMessage()));
                 return;

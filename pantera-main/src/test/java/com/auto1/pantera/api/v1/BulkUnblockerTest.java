@@ -35,7 +35,7 @@ final class BulkUnblockerTest {
         final RecordingAudit audit = new RecordingAudit();
         final BulkUnblocker.Outcome out = new BulkUnblocker(
             repo -> "npm-proxy", repo -> false, release, audit, DIRECT
-        ).run(List.of(new BulkUnblockRequest.Item("npm-proxy", "lodash", "1.0.0")), "ayd").join();
+        ).run(List.of(new BulkUnblockRequest.Item("npm-proxy", "lodash", "1.0.0"))).join();
         MatcherAssert.assertThat("nothing unblocked", out.unblocked().size(), new IsEqual<>(0));
         MatcherAssert.assertThat(
             "reason", out.failed().getJsonObject(0).getString("reason"), new IsEqual<>("forbidden")
@@ -62,7 +62,7 @@ final class BulkUnblockerTest {
             List.of(
                 new BulkUnblockRequest.Item("broken", "a", "1"),
                 new BulkUnblockRequest.Item("npm-proxy", "b", "2")
-            ), "ayd"
+            )
         ).join();
         MatcherAssert.assertThat("second item released", release.calls.size(), new IsEqual<>(1));
         MatcherAssert.assertThat("one failure", out.failed().size(), new IsEqual<>(1));
@@ -90,7 +90,7 @@ final class BulkUnblockerTest {
             List.of(
                 new BulkUnblockRequest.Item("gone", "a", "1"),
                 new BulkUnblockRequest.Item("npm-proxy", "b", "2")
-            ), "ayd"
+            )
         ).join();
         MatcherAssert.assertThat("both failed", out.failed().size(), new IsEqual<>(2));
         MatcherAssert.assertThat(
@@ -114,7 +114,7 @@ final class BulkUnblockerTest {
             List.of(
                 new BulkUnblockRequest.Item("maven-central", "com.example:lib", "1.0.0"),
                 new BulkUnblockRequest.Item("maven-central", "com.example.lib", "1.0.0")
-            ), "ayd"
+            )
         ).join();
         MatcherAssert.assertThat("released once", release.calls.size(), new IsEqual<>(1));
         MatcherAssert.assertThat(
@@ -149,7 +149,7 @@ final class BulkUnblockerTest {
             List.of(
                 new BulkUnblockRequest.Item("npm-proxy", "a", "1"),
                 new BulkUnblockRequest.Item("npm-proxy", "b", "2")
-            ), "ayd"
+            )
         ).join();
         MatcherAssert.assertThat("first ran", out.unblocked().size(), new IsEqual<>(1));
         MatcherAssert.assertThat("second reported", out.failed().size(), new IsEqual<>(1));

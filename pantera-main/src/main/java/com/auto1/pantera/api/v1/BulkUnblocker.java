@@ -80,25 +80,24 @@ final class BulkUnblocker {
     /**
      * Process the items in order.
      * @param items De-duplicated request items
-     * @param actor Authenticated principal
      * @return Outcome, never exceptional
      */
-    CompletableFuture<Outcome> run(final List<BulkUnblockRequest.Item> items, final String actor) {
+    CompletableFuture<Outcome> run(final List<BulkUnblockRequest.Item> items) {
         final Outcome out = new Outcome(new JsonArray(), new JsonArray());
         final Set<String> done = new HashSet<>();
         CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
         for (final BulkUnblockRequest.Item item : items) {
-            chain = chain.thenCompose(ignored -> this.step(item, actor, out, done));
+            chain = chain.thenCompose(ignored -> this.step(item, out, done));
         }
         return chain.thenApply(ignored -> out);
     }
 
-    private CompletableFuture<Void> step(final BulkUnblockRequest.Item item, final String actor,
+    private CompletableFuture<Void> step(final BulkUnblockRequest.Item item,
         final Outcome out, final Set<String> done) {
         CompletableFuture<Void> res;
         try {
             res = CompletableFuture
-                .supplyAsync(() -> this.process(item, actor, done), this.executor)
+                .supplyAsync(() -> this.process(item, done), this.executor)
                 .thenCompose(Function.identity());
         } catch (final RuntimeException ex) {
             // The executor refused the task (bounded queue, AbortPolicy):
@@ -123,7 +122,7 @@ final class BulkUnblocker {
      *  skipped as a duplicate, failed with the reason otherwise
      */
     private CompletableFuture<Void> process(final BulkUnblockRequest.Item item,
-        final String actor, final Set<String> done) {
+        final Set<String> done) {
         final String name = item.repo();
         final Map<String, Object> details = new HashMap<>();
         details.put("package.name", item.artifact());
