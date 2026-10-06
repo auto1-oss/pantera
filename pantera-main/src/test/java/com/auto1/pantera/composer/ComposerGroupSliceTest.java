@@ -122,6 +122,32 @@ public final class ComposerGroupSliceTest {
     }
 
     @Test
+    void packagesJsonRebuiltByTheGroupVariesLikeItsMembersDo() throws Exception {
+        // The member's links were re-rooted at the base resolved for this
+        // request (hostname-dependent); the rebuilt document must say so, or
+        // a caching proxy serves one host's packages.json to another.
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", jsonOk(
+            "{\"packages\":{},\"metadata-url\":\"/p2/%package%.json\","
+                + "\"available-packages-url\":\"https://a.example.com/php-group/p2/available-packages.json\"}"
+        ));
+        members.put("repo2", status(RsStatus.NOT_FOUND));
+        final Response resp = ComposerGroupSliceTest.group(members, "repo1", "repo2").response(
+            new RequestLine("GET", "/packages.json"),
+            new Headers().add("Host", "a.example.com"),
+            Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "rebuilt packages.json is served",
+            resp.status(), Matchers.equalTo(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "rebuilt packages.json varies by Host",
+            resp.headers().single("Vary").getValue(), Matchers.equalTo("Host")
+        );
+    }
+
+    @Test
     void packagesJsonFallsThroughOn404() throws Exception {
         final AtomicInteger m1Calls = new AtomicInteger(0);
         final AtomicInteger m2Calls = new AtomicInteger(0);

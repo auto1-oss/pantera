@@ -12,6 +12,9 @@ package com.auto1.pantera.composer;
 
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.headers.ClientBaseUrl;
+import com.auto1.pantera.http.headers.ClientBaseUrlSettings;
+import com.auto1.pantera.http.headers.ClientBaseUrlSettingsRegistry;
+import java.util.List;
 import java.util.Optional;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -46,6 +49,43 @@ final class ComposerBaseUrlTest {
                 .resolve(Headers.from(ClientBaseUrl.HEADER, "https://packages.example.com/php_group/")),
             new IsEqual<>("https://packages.example.com/php_group")
         );
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "http://h/artifactory,http://h/artifactory,http://h/artifactory/php-api",
+        "http://h/artifactory,http://h/artifactory/,http://h/artifactory/php-api",
+        "http://h/artifactory/,http://h/artifactory,http://h/artifactory/php-api",
+        "http://h/artifactory/php-api,http://h/artifactory/php-api,http://h/artifactory/php-api"
+    })
+    void stampOfTheOwnConfiguredUrlGetsTheRepositorySegment(
+        final String configured, final String stamped, final String expected
+    ) {
+        // SliceByPath stamps the raw url: of the addressed repository; when
+        // that is this repository, the stamp must get the same normalisation
+        // the configured value gets, or a url: without the repository
+        // segment yields links that 404 (it worked before 2.2.10).
+        MatcherAssert.assertThat(
+            new ComposerBaseUrl(Optional.of(configured), "php-api")
+                .resolve(Headers.from(ClientBaseUrl.HEADER, stamped)),
+            new IsEqual<>(expected)
+        );
+    }
+
+    @Test
+    void requestOriginHonoursTheCanonicalBaseUrl() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "https://pkgs.example.com/artifactory")
+        );
+        try {
+            MatcherAssert.assertThat(
+                new ComposerBaseUrl(Optional.empty(), "php-api")
+                    .resolve(new Headers().add("Host", "internal:8080")),
+                new IsEqual<>("https://pkgs.example.com/artifactory/php-api")
+            );
+        } finally {
+            ClientBaseUrlSettingsRegistry.uninstall();
+        }
     }
 
     @Test

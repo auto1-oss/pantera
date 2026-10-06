@@ -8,11 +8,11 @@
  *
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
+
 package com.auto1.pantera.composer;
 
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.headers.ClientBaseUrl;
-
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -29,16 +29,25 @@ import java.util.Optional;
  * <ol>
  *   <li>the base {@code SliceByPath} stamped for the repository the client
  *   actually addressed. Through a group this is the <em>group's</em> base, so
- *   a hosted member emits links under the group;</li>
+ *   a hosted member emits links under the group. When the stamp is this
+ *   repository's own configured {@code url:}, it is normalised to end with
+ *   the repository segment just like tier 2;</li>
  *   <li>this repository's own configured {@code url:}, for callers wired
  *   without {@code SliceByPath} in front of them;</li>
  *   <li>the request's own origin plus the repository name, so a repository
- *   with no {@code url:} still emits usable absolute links.</li>
+ *   with no {@code url:} still emits usable absolute links. The canonical
+ *   base URL setting and the forwarded prefix apply here like everywhere
+ *   else ({@link ClientBaseUrl#absolute(String)}).</li>
  * </ol>
  *
  * @since 2.2.10
  */
 public final class ComposerBaseUrl {
+
+    /**
+     * Configured {@code url:} exactly as given, without trailing slashes.
+     */
+    private final Optional<String> raw;
 
     /**
      * Configured {@code url:}, normalised to end with the repository name.
@@ -58,7 +67,8 @@ public final class ComposerBaseUrl {
      */
     public ComposerBaseUrl(final Optional<String> configured, final String repo) {
         this.repo = ComposerBaseUrl.trimSlashes(repo);
-        this.configured = configured.map(
+        this.raw = configured.map(ComposerBaseUrl::withoutTrailingSlashes);
+        this.configured = this.raw.map(
             url -> ComposerBaseUrl.withRepository(url, Optional.of(this.repo))
         );
     }
@@ -80,10 +90,11 @@ public final class ComposerBaseUrl {
      */
     public String resolve(final Headers headers) {
         final ClientBaseUrl client = new ClientBaseUrl(headers);
-        final String base = client.stamped()
+        return client.stamped()
+            .map(ComposerBaseUrl::withoutTrailingSlashes)
+            .map(this::ownStampNormalised)
             .or(() -> this.configured)
-            .orElseGet(() -> ComposerBaseUrl.withRepository(client.origin(), Optional.of(this.repo)));
-        return base.replaceAll("/+$", "");
+            .orElseGet(() -> client.absolute("/" + this.repo));
     }
 
     /**
@@ -104,7 +115,7 @@ public final class ComposerBaseUrl {
      * @return Base URL ending with the repository segment, or {@code base}
      *  unchanged when it is not a valid URI or no name is given
      */
-    public static String withRepository(final String base, final Optional<String> repo) {
+    static String withRepository(final String base, final Optional<String> repo) {
         final String name = repo.map(ComposerBaseUrl::trimSlashes).orElse("");
         if (name.isEmpty()) {
             return base;
@@ -138,6 +149,18 @@ public final class ComposerBaseUrl {
     }
 
     /**
+     * A stamp that is this repository's own configured {@code url:} gets the
+     * same repository-segment normalisation the configured value gets; a
+     * stamp for another repository (a group) is taken as-is.
+     *
+     * @param stamp Stamped base without trailing slashes
+     * @return Base to use
+     */
+    private String ownStampNormalised(final String stamp) {
+        return this.raw.filter(stamp::equals).flatMap(own -> this.configured).orElse(stamp);
+    }
+
+    /**
      * Remove leading and trailing slashes and whitespace.
      *
      * @param value Value
@@ -145,5 +168,15 @@ public final class ComposerBaseUrl {
      */
     private static String trimSlashes(final String value) {
         return value.trim().replaceAll("^/+", "").replaceAll("/+$", "");
+    }
+
+    /**
+     * Remove trailing slashes and whitespace.
+     *
+     * @param value Value
+     * @return Trimmed value
+     */
+    private static String withoutTrailingSlashes(final String value) {
+        return value.trim().replaceAll("/+$", "");
     }
 }
