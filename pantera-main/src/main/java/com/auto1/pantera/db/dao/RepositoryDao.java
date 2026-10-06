@@ -22,6 +22,8 @@ import javax.json.JsonStructure;
 import javax.sql.DataSource;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
+import com.auto1.pantera.settings.repo.RepoSummaries;
+import com.auto1.pantera.settings.repo.RepoSummary;
 
 /**
  * PostgreSQL-backed repository configuration storage.
@@ -48,6 +50,33 @@ public final class RepositoryDao implements CrudRepoSettings {
             }
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to list repositories", ex);
+        }
+        return result;
+    }
+
+    @Override
+    public Collection<RepoSummary> summaries() {
+        final List<RepoSummary> result = new ArrayList<>();
+        final RepoSummaries factory = new RepoSummaries();
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT name, type, config, updated_at, updated_by, created_by "
+                     + "FROM repositories ORDER BY name"
+             );
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                final java.sql.Timestamp upd = rs.getTimestamp("updated_at");
+                result.add(
+                    factory.from(
+                        rs.getString("name"), rs.getString("type"),
+                        Json.createReader(new StringReader(rs.getString("config"))).read(),
+                        upd == null ? null : upd.toInstant(),
+                        rs.getString("updated_by"), rs.getString("created_by")
+                    )
+                );
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to list repository summaries", ex);
         }
         return result;
     }
