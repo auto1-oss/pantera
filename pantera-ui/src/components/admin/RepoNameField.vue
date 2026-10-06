@@ -34,10 +34,19 @@ watch(() => props.modelValue, (name) => {
   setValid(false)
   timer = setTimeout(async () => {
     timer = null
-    const taken = await repoExists(name).catch(() => false)
+    // PUT is an upsert, so an unverified name must never read as free.
+    let taken: boolean | null
+    try {
+      taken = await repoExists(name)
+    } catch {
+      taken = null
+    }
     if (mine !== generation) return
     checking.value = false
-    if (taken) {
+    if (taken === null) {
+      error.value = 'Could not check whether the name is free; try again'
+      setValid(false)
+    } else if (taken) {
       error.value = 'A repository with this name already exists'
       setValid(false)
     } else {

@@ -391,7 +391,7 @@ curl -X DELETE http://localhost:8086/api/v1/auth/tokens/550e8400-e29b-41d4-a716-
 
 ### GET /api/v1/repositories
 
-List all repositories with pagination, filtering, name search and sorting. Results are filtered by the caller's `read` permission on each repository. The list is built from one query over the repository table; it never reads a repository's full configuration, so credentials cannot appear in it.
+List all repositories with pagination, filtering, name search and sorting. Results are filtered by the caller's `read` permission on each repository. The list is built from one query over the repository table and projects only the fields below out of each configuration, so credentials cannot appear in it.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:read`
@@ -2248,7 +2248,7 @@ Unblock several artifact versions, across repositories, in one request. Each
 item goes through exactly the single-unblock path above (release held until
 the version's original `blocked_until`, archived as `MANUAL_UNBLOCK`, filtered
 metadata invalidated), and every item is audited as `COOLDOWN_UNBLOCK` with
-`bulk=true`. Items are processed in order; duplicates collapse to one.
+`bulk=true`. Items are processed in order; duplicates collapse to one (after the artifact name is normalised, so a Maven `g:a` and `g.a` of the same version count once). Each entry in the response echoes the item as it was sent.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_cooldown_permissions:write`, plus the repository's `write`
@@ -2276,7 +2276,7 @@ unblocked.
     { "repo": "npm-proxy", "artifact": "lodash", "version": "4.17.21" }
   ],
   "failed": [
-    { "repo": "maven-central", "artifact": "com.example.lib", "version": "1.0.0", "reason": "Repository 'maven-central' not found" }
+    { "repo": "maven-central", "artifact": "com.example:lib", "version": "1.0.0", "reason": "Repository 'maven-central' not found" }
   ]
 }
 ```

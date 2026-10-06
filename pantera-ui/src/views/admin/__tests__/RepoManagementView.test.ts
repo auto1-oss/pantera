@@ -135,6 +135,19 @@ describe('RepoManagementView', () => {
     expect(wrapper.findAll('tbody input[type="checkbox"]').length).toBe(3)
   })
 
+  it('clears the selection when a reload fails so hidden rows cannot be acted on', async () => {
+    const { wrapper } = await mountView()
+    const vm = wrapper.vm as unknown as Vm
+    vm.selected = [ITEMS[0]]
+    await flushPromises()
+    listReposMock.mockRejectedValueOnce(new Error('boom'))
+    vm.modeFilter = 'proxy'
+    await flushPromises()
+    expect(wrapper.find('[data-testid="list-error"]').exists()).toBe(true)
+    expect(vm.selected.length).toBe(0)
+    expect(wrapper.find('[data-testid="selection-bar"]').exists()).toBe(false)
+  })
+
   it('shows empty state with a clear-filters action when filters hide everything', async () => {
     const { wrapper } = await mountView()
     listReposMock.mockResolvedValueOnce({ items: [], page: 0, size: 20, total: 0, hasMore: false })

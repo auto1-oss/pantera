@@ -37,6 +37,21 @@ describe('RepoNameField', () => {
     expect(w.emitted('valid-change')?.at(-1)).toEqual([true])
   })
 
+  it('does not fail open when the existence check errors', async () => {
+    vi.useFakeTimers()
+    repoExistsMock.mockRejectedValue(new Error('network'))
+    const w = mount(RepoNameField, {
+      props: { modelValue: '' },
+      global: { plugins: [[PrimeVue, { theme: { preset: Aura } }]] },
+    })
+    await w.setProps({ modelValue: 'maybe-taken' })
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    expect(w.find('[data-testid="name-ok"]').exists()).toBe(false)
+    expect(w.find('[data-testid="name-error"]').text()).toMatch(/could not check/i)
+    expect(w.emitted('valid-change')?.at(-1)).toEqual([false])
+  })
+
   it('is not valid while the existence check is still pending', async () => {
     vi.useFakeTimers()
     repoExistsMock.mockResolvedValue(false)
