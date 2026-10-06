@@ -4,7 +4,7 @@
 
 ### 🌟 New features
 
-- **`url:` is optional for hosted Composer (`php`) repositories; served links follow the host the client used** — `packages.json` and every `p2/<vendor>/<package>.json` are served with `dist.url`, `metadata-url` and `available-packages-url` rooted at the base resolved per request (the same three tiers as hosted npm), so one repository serves several hostnames and a group serves its hosted members' archives under the group. A `dist.url` stored under an older host or imported from another registry is re-rooted on the way out; dists hosted elsewhere are left alone. A configured `url:` (or the older `settings.url`) still pins every client to that host.
+- **`url:` is optional for Composer `php` and `php-proxy` repositories; served links follow the host the client used** — `packages.json` and every `p2/<vendor>/<package>.json` are served with `dist.url`, `metadata-url` and `available-packages-url` rooted at the base resolved per request (the same three tiers as npm), so one repository serves several hostnames and a group serves its members' archives under the group, proxied ones included. A `dist.url` stored under an older host or imported from another registry is re-rooted on the way out; dists hosted elsewhere are left alone. A configured `url:` (or the older `settings.url` of a hosted repository) still pins every client to that host.
   ([@dmitry-auto1](https://github.com/dmitry-auto1))
 
 ### ⚡ Performance

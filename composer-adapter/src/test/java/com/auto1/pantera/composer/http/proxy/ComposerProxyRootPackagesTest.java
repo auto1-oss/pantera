@@ -17,6 +17,7 @@ import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -63,11 +64,34 @@ final class ComposerProxyRootPackagesTest {
         MatcherAssert.assertThat(
             "metadata-url points at the proxy's own p2 endpoint",
             root.getString("metadata-url"),
-            new IsEqual<>("/test_prefix/api/php_proxy/p2/%package%.json")
+            new IsEqual<>("http://pantera.example:8080/test_prefix/api/php_proxy/p2/%package%.json")
         );
         MatcherAssert.assertThat(
             "no upstream call is needed for the root",
             upstream.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void rootMetadataUrlFollowsTheStampedBase() {
+        // Through a group, SliceByPath stamps the group's base: the proxy's
+        // root must send Composer back to the group, not to its own url:.
+        final Response resp = ComposerProxyRootPackagesTest.proxy(new AtomicInteger()).response(
+            new RequestLine(RqMethod.GET, "/packages.json"),
+            Headers.from(ClientBaseUrl.HEADER, "https://packages.example.com/php_group"),
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "metadata-url is under the stamped base",
+            Json.createReader(
+                new java.io.StringReader(new String(resp.body().asBytes(), StandardCharsets.UTF_8))
+            ).readObject().getString("metadata-url"),
+            new IsEqual<>("https://packages.example.com/php_group/p2/%package%.json")
+        );
+        MatcherAssert.assertThat(
+            "the root varies by what the base was derived from",
+            resp.headers().single("Vary").getValue(),
+            new IsEqual<>("Host")
         );
     }
 

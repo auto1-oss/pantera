@@ -16,12 +16,14 @@ import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.composer.cooldown.ComposerPackageMetadataHandler;
 import com.auto1.pantera.composer.cooldown.ComposerRootPackagesHandler;
+import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.http.PackageMetadataSlice;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
@@ -35,7 +37,6 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
-import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.publishdate.PublishDateRegistries;
 import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
@@ -90,6 +91,11 @@ public class ComposerProxySlice implements Slice {
      * Cooldown handler for per-package metadata filtering.
      */
     private final ComposerPackageMetadataHandler packageHandler;
+
+    /**
+     * Client-facing base the served links are rooted at, per request.
+     */
+    private final ComposerBaseUrl base;
 
     /**
      * New Composer proxy without cache.
@@ -188,6 +194,45 @@ public class ComposerProxySlice implements Slice {
         final String baseUrl,
         final String upstreamUrl
     ) {
+        this(
+            clients, remote, repository, auth, cache, events, rname, rtype, cooldown, inspector,
+            new ComposerBaseUrl(Optional.of(baseUrl), rname), upstreamUrl
+        );
+    }
+
+    /**
+     * Primary ctor: the client-facing base of the served links is resolved
+     * per request ({@link ComposerBaseUrl}), so {@code url:} is optional and
+     * a proxy reached through a group emits links under the group.
+     *
+     * @param clients Client slices
+     * @param remote Remote URI
+     * @param repository Repository
+     * @param auth Authenticator
+     * @param cache Cache
+     * @param events Proxy artifact events
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
+     * @param base Client-facing base URL resolver
+     * @param upstreamUrl Upstream URL
+     * @checkstyle ParameterNumberCheck (15 lines)
+     */
+    public ComposerProxySlice(
+        final ClientSlices clients,
+        final URI remote,
+        final Repository repository,
+        final Authenticator auth,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final CooldownService cooldown,
+        final CooldownInspector inspector,
+        final ComposerBaseUrl base,
+        final String upstreamUrl
+    ) {
         // Build the cache+rewrite slice once and share it between the
         // fallback SliceRoute (cooldown-off path) and the cooldown
         // handlers (cooldown-on path). The previous wiring built a
@@ -204,20 +249,22 @@ public class ComposerProxySlice implements Slice {
             cache,
             events,
             rname,
-            baseUrl,
+            base,
             upstreamUrl
         );
         // The proxy's own repository root. Composer fetches /packages.json
         // before anything else; the root only has to send the per-package
         // lookups (metadata-url) back to this proxy, whose p2 path is served
-        // through the cache below. It is never fetched through the metadata
-        // cache: /packages.json is not a vendor/package name.
-        final Slice root = new SliceSimple(
-            () -> ResponseBuilder.ok()
+        // through the cache below, at the base resolved for the request. It
+        // is never fetched through the metadata cache: /packages.json is not
+        // a vendor/package name.
+        final Slice root = (rline, rheaders, rbody) -> rbody.asBytesFuture().thenApply(
+            ignored -> ResponseBuilder.ok()
+                .varyHeader(base.vary(rheaders))
                 .jsonBody(
                     String.format(
                         "{\"packages\":{},\"metadata-url\":\"%s/p2/%%package%%.json\"}",
-                        ComposerProxySlice.basePath(baseUrl, rname)
+                        base.resolve(rheaders)
                     )
                 )
                 .build()
@@ -280,6 +327,7 @@ public class ComposerProxySlice implements Slice {
         this.packageHandler = new ComposerPackageMetadataHandler(
             cachedProxy, cooldown, rtype, rname
         );
+        this.base = base;
     }
 
     @Override
@@ -308,7 +356,8 @@ public class ComposerProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return body.asBytesFuture()
-                .thenCompose(ignored -> this.rootHandler.handle(line, user, auditCtx));
+                .thenCompose(ignored -> this.rootHandler.handle(line, headers, user, auditCtx))
+                .thenApply(resp -> ComposerProxySlice.varying(resp, this.base.vary(headers)));
         }
         if (this.packageHandler != null && this.packageHandler.matches(path)) {
             EcsLogger.debug("com.auto1.pantera.composer")
@@ -319,32 +368,33 @@ public class ComposerProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return body.asBytesFuture()
-                .thenCompose(ignored -> this.packageHandler.handle(line, user, auditCtx));
+                .thenCompose(ignored -> this.packageHandler.handle(line, headers, user, auditCtx))
+                .thenApply(resp -> ComposerProxySlice.varying(resp, this.base.vary(headers)));
         }
         return this.fallback.response(line, headers, body);
     }
 
     /**
-     * Host-relative path of this repository, used as the {@code metadata-url}
-     * prefix of the root. Host-relative so Composer resolves it against the
-     * host it was configured with (and sends its credentials there); the
-     * path comes from the repository URL so a reverse-proxy sub-path is kept.
+     * The handlers rebuild the metadata they filter, so the Vary the cache
+     * slice put on the upstream answer does not survive them: the served
+     * body embeds the per-request base, the response must say so.
      *
-     * @param baseUrl Repository URL
-     * @param rname Repository name (fallback when the URL has no path)
-     * @return Path without a trailing slash, e.g. {@code /php_proxy}
+     * @param resp Handler response
+     * @param vary Vary value for this request, empty when nothing varies
+     * @return Response carrying the Vary header when it matters
      */
-    private static String basePath(final String baseUrl, final String rname) {
-        String path = null;
-        try {
-            path = URI.create(baseUrl).getRawPath();
-        } catch (final IllegalArgumentException ignored) {
-            // Not a URI: fall back to the repository name below.
+    private static Response varying(final Response resp, final String vary) {
+        final Response result;
+        if (vary.isEmpty() || resp.status() != RsStatus.OK || !resp.headers().find("Vary").isEmpty()) {
+            result = resp;
+        } else {
+            result = ResponseBuilder.from(resp.status())
+                .headers(resp.headers())
+                .varyHeader(vary)
+                .body(resp.body())
+                .build();
         }
-        if (path == null || path.isBlank() || "/".equals(path)) {
-            path = "/" + rname;
-        }
-        return path.replaceAll("/+$", "");
+        return result;
     }
 
     /**

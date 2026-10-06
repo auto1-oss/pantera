@@ -282,8 +282,8 @@ New versions may introduce new configuration keys with sensible defaults. Existi
 > Hosted `npm` repositories no longer require `url:` -- existing ones keep
 > working unchanged, since a configured `url:` still wins.
 
-> **v2.2.10 needs no migration.** Hosted `php` repositories no longer require
-> `url:`: served `dist.url`, `metadata-url` and `available-packages-url` are
+> **v2.2.10 needs no migration.** Hosted `php` and `php-proxy` repositories no
+> longer require `url:`: served `dist.url`, `metadata-url` and `available-packages-url` are
 > re-rooted at the base resolved per request, including `dist.url` values
 > stored earlier under another host, so no metadata has to be rewritten.
 > Repositories with a `url:` (or the older `settings.url`) keep serving that
