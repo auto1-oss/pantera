@@ -137,3 +137,28 @@ export const INSPECT_REPO_TYPES = [
   { label: 'RubyGems', value: 'gem' },
   { label: 'File', value: 'file' },
 ] as const
+
+// ---------------------------------------------------------------------------
+// Bulk unblock — POST /api/v1/cooldown/unblock
+// ---------------------------------------------------------------------------
+
+export interface BulkUnblockItem {
+  repo: string
+  artifact: string
+  version: string
+}
+
+export interface BulkUnblockResult {
+  unblocked: BulkUnblockItem[]
+  failed: Array<BulkUnblockItem & { reason: string }>
+}
+
+/**
+ * Unblock up to 500 artifact versions across repositories in one request.
+ * The server answers 200 with per-item outcomes; it never fails the whole
+ * request because of one unknown repository or missing write grant.
+ */
+export async function unblockBulk(items: BulkUnblockItem[]): Promise<BulkUnblockResult> {
+  const { data } = await getApiClient().post<BulkUnblockResult>('/cooldown/unblock', { items })
+  return data
+}
