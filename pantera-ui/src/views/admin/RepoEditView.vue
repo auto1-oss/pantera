@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { getRepo, putRepo } from '@/api/repos'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeRouteLeave, useRouter } from 'vue-router'
+import { getRepo, putRepo, moveRepo, deleteRepo } from '@/api/repos'
 import { getCooldown, putCooldown } from '@/api/settings'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationStore } from '@/stores/notifications'
+import { useConfirmDelete } from '@/composables/useConfirmDelete'
+import { repoModeLabel } from '@/utils/repoTypes'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import RepoConfigForm from '@/components/admin/RepoConfigForm.vue'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
+import Dialog from 'primevue/dialog'
 import InputSwitch from 'primevue/inputswitch'
 import InputText from 'primevue/inputtext'
 import type { RepoConfigEnvelope } from '@/types/repo'
@@ -22,6 +25,13 @@ const router = useRouter()
 const notify = useNotificationStore()
 const auth = useAuthStore()
 
+const canUpdate = computed(() => auth.hasAction('api_repository_permissions', 'update'))
+const canMove = computed(() => auth.hasAction('api_repository_permissions', 'move'))
+const canDelete = computed(() => auth.hasAction('api_repository_permissions', 'delete'))
+
+// ---------------------------------------------------------------------------
+// Repository config
+// ---------------------------------------------------------------------------
 const initialConfig = ref<RepoConfigEnvelope | null>(null)
 const config = ref<RepoConfigEnvelope | null>(null)
 const repoType = ref('')
@@ -30,37 +40,29 @@ const loading = ref(true)
 const saving = ref(false)
 const loadError = ref('')
 const saveError = ref('')
+// Baseline of the last loaded/saved state, as JSON, for dirty tracking.
+const savedConfig = ref('')
 
-// --- Cooldown override state ---
-// canEditCooldown gates the entire card from inputs (read-only otherwise).
-// Mirrors SettingsView's cooldown section gating.
-const canEditCooldown = computed(() =>
-  auth.hasAction('api_cooldown_permissions', 'write'),
-)
+const storageLabel = computed(() => {
+  const st = config.value?.repo?.storage
+  if (!st) return ''
+  return typeof st === 'string' ? st : st.type
+})
 
-// The full cooldown config (loaded once). We PUT the WHOLE config back
-// with repo_names[name] replaced — same convention SettingsView uses for
-// repo_types. Null until the GET completes.
+// ---------------------------------------------------------------------------
+// Cooldown override (saved by the same Save button, only when it changed)
+// ---------------------------------------------------------------------------
+const canEditCooldown = computed(() => auth.hasAction('api_cooldown_permissions', 'write'))
 const cooldownConfig = ref<CooldownConfig | null>(null)
 const cooldownLoadError = ref('')
-const cooldownSaving = ref(false)
-
-// "Use repository-specific cooldown" toggle. When OFF, the saved payload
-// omits repo_names[name]; when ON, we expose the four fields below.
 const overrideEnabled = ref(false)
-
-// Bound to the four override fields. Defaults populated on mount from
-// the loaded config (if any), otherwise from the global cooldown.
 const repoCooldownEnabled = ref(true)
 const repoCooldownAge = ref('')
 const repoSnapshotEnabled = ref<boolean | null>(null)
 const repoSnapshotAge = ref('')
+const savedOverride = ref('')
 
-// Placeholders shown when the override fields are empty — surface the
-// effective global value so admins know what they're overriding.
-const globalAgePlaceholder = computed(
-  () => cooldownConfig.value?.minimum_allowed_age ?? '7d',
-)
+const globalAgePlaceholder = computed(() => cooldownConfig.value?.minimum_allowed_age ?? '7d')
 const globalSnapshotAgePlaceholder = computed(() => {
   const snap = cooldownConfig.value?.snapshots?.minimum_allowed_age
   if (snap && snap.length > 0) return snap
@@ -77,70 +79,16 @@ function applyOverride(override: CooldownRepoOverride | undefined) {
     return
   }
   overrideEnabled.value = true
-  repoCooldownEnabled.value
-    = override.enabled ?? cooldownConfig.value?.enabled ?? true
+  repoCooldownEnabled.value = override.enabled ?? cooldownConfig.value?.enabled ?? true
   repoCooldownAge.value = override.minimum_allowed_age ?? ''
   const snap: CooldownSnapshotPolicy | undefined = override.snapshots
-  repoSnapshotEnabled.value
-    = snap && typeof snap.enabled === 'boolean' ? snap.enabled : null
+  repoSnapshotEnabled.value = snap && typeof snap.enabled === 'boolean' ? snap.enabled : null
   repoSnapshotAge.value = snap?.minimum_allowed_age ?? ''
 }
 
-onMounted(async () => {
-  try {
-    const raw = await getRepo(props.name)
-    const envelope = raw as RepoConfigEnvelope
-    repoType.value = (envelope.repo?.type as string) ?? ''
-    initialConfig.value = envelope
-    config.value = envelope
-  } catch (err: unknown) {
-    const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
-    loadError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
-    notify.error('Failed to load repository')
-  } finally {
-    loading.value = false
-  }
-  // Cooldown card loads independently — a failure here just disables the
-  // card's controls and surfaces an inline error, it must NOT block the
-  // main repo form.
-  try {
-    const cd = await getCooldown()
-    cooldownConfig.value = cd
-    applyOverride(cd.repo_names?.[props.name])
-  } catch (err: unknown) {
-    const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
-    cooldownLoadError.value
-      = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Failed to load cooldown config'
-  }
-})
-
-async function save() {
-  if (!config.value) return
-  saving.value = true
-  saveError.value = ''
-  try {
-    await putRepo(props.name, config.value as Record<string, unknown>)
-    notify.success('Repository updated', props.name)
-    router.push('/admin/repositories')
-  } catch (err: unknown) {
-    const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
-    saveError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
-    notify.error(`Failed to update: ${saveError.value}`)
-  } finally {
-    saving.value = false
-  }
-}
-
-/**
- * Build the per-repo override payload from the current form state.
- * Returns undefined when the toggle is OFF so saveCooldown() can drop
- * repo_names[name] from the persisted config.
- */
 function buildRepoOverride(): CooldownRepoOverride | undefined {
   if (!overrideEnabled.value) return undefined
-  const out: CooldownRepoOverride = {
-    enabled: repoCooldownEnabled.value,
-  }
+  const out: CooldownRepoOverride = { enabled: repoCooldownEnabled.value }
   const age = repoCooldownAge.value.trim()
   if (age.length > 0) out.minimum_allowed_age = age
   const snap: CooldownSnapshotPolicy = {}
@@ -151,53 +99,180 @@ function buildRepoOverride(): CooldownRepoOverride | undefined {
   return out
 }
 
-async function saveCooldown() {
-  if (!cooldownConfig.value) return
-  cooldownSaving.value = true
+function overrideJson(): string {
+  return JSON.stringify(buildRepoOverride() ?? null)
+}
+
+// ---------------------------------------------------------------------------
+// Dirty tracking, save, reset
+// ---------------------------------------------------------------------------
+const configDirty = computed(() => JSON.stringify(config.value) !== savedConfig.value)
+const cooldownDirty = computed(() => overrideJson() !== savedOverride.value)
+const dirty = computed(() => configDirty.value || cooldownDirty.value)
+
+async function save() {
+  if (!config.value) return
+  saving.value = true
+  saveError.value = ''
   try {
-    // Clone the existing cooldown config so we don't mutate the loaded
-    // value until the PUT round-trips. PUT replaces the WHOLE config on
-    // the server (same convention SettingsView uses for repo_types).
-    const cfg = cooldownConfig.value
-    const nextRepoNames: Record<string, CooldownRepoOverride> = {
-      ...(cfg.repo_names ?? {}),
-    }
-    const override = buildRepoOverride()
-    if (override === undefined) {
-      delete nextRepoNames[props.name]
-    } else {
-      nextRepoNames[props.name] = override
-    }
-    const payload: CooldownConfig = {
-      ...cfg,
-      repo_names: nextRepoNames,
-    }
-    await putCooldown(payload)
-    cooldownConfig.value = payload
-    notify.success('Repository cooldown saved', props.name)
+    await putRepo(props.name, config.value as Record<string, unknown>)
+    savedConfig.value = JSON.stringify(config.value)
   } catch (err: unknown) {
     const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
-    notify.error(
-      'Failed to save cooldown',
-      axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error',
-    )
-  } finally {
-    cooldownSaving.value = false
+    saveError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
+    notify.error(`Failed to update: ${saveError.value}`)
+    saving.value = false
+    return
+  }
+  if (cooldownDirty.value && cooldownConfig.value) {
+    try {
+      await saveCooldown()
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
+      const msg = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
+      saveError.value = `Repository saved; cooldown override failed: ${msg}`
+      notify.warn('Repository saved', `Cooldown override failed: ${msg}`)
+      saving.value = false
+      return
+    }
+  }
+  saving.value = false
+  notify.success('Repository updated', props.name)
+}
+
+async function saveCooldown() {
+  const cfg = cooldownConfig.value
+  if (!cfg) return
+  // PUT replaces the WHOLE cooldown config on the server (same convention as
+  // SettingsView), so clone it and swap only this repository's entry.
+  const nextRepoNames: Record<string, CooldownRepoOverride> = { ...(cfg.repo_names ?? {}) }
+  const override = buildRepoOverride()
+  if (override === undefined) delete nextRepoNames[props.name]
+  else nextRepoNames[props.name] = override
+  const payload: CooldownConfig = { ...cfg, repo_names: nextRepoNames }
+  await putCooldown(payload)
+  cooldownConfig.value = payload
+  savedOverride.value = overrideJson()
+}
+
+function reset() {
+  if (savedConfig.value) {
+    const restored = JSON.parse(savedConfig.value) as RepoConfigEnvelope
+    initialConfig.value = restored
+    config.value = restored
+  }
+  applyOverride(cooldownConfig.value?.repo_names?.[props.name])
+  saveError.value = ''
+}
+
+// ---------------------------------------------------------------------------
+// Unsaved-changes guard
+// ---------------------------------------------------------------------------
+const leaveVisible = ref(false)
+let leaveResolve: ((go: boolean) => void) | null = null
+
+onBeforeRouteLeave((to, from, next) => {
+  if (!dirty.value) {
+    next()
+    return
+  }
+  leaveVisible.value = true
+  leaveResolve = (go) => { leaveVisible.value = false; next(go) }
+})
+
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (dirty.value) {
+    e.preventDefault()
+    e.returnValue = ''
   }
 }
+
+// ---------------------------------------------------------------------------
+// Danger zone: rename, delete
+// ---------------------------------------------------------------------------
+const moveVisible = ref(false)
+const moveTarget = ref('')
+async function handleMove() {
+  try {
+    await moveRepo(props.name, moveTarget.value)
+    notify.success('Repository renamed', `${props.name} → ${moveTarget.value}`)
+    moveVisible.value = false
+    router.replace(`/admin/repositories/${encodeURIComponent(moveTarget.value)}/edit`)
+  } catch {
+    notify.error('Failed to rename repository')
+  }
+}
+
+const { visible: deleteVisible, targetName, confirm: confirmDel, accept: acceptDel, reject: rejectDel } = useConfirmDelete()
+async function handleDelete() {
+  const confirmed = await confirmDel(props.name)
+  if (!confirmed) return
+  try {
+    const result = await deleteRepo(props.name)
+    if (result === 'deleting') notify.info('Repository is being deleted', props.name)
+    else notify.success('Repository deleted', props.name)
+    // The repository is gone; nothing left to keep.
+    savedConfig.value = JSON.stringify(config.value)
+    savedOverride.value = overrideJson()
+    router.push('/admin/repositories')
+  } catch {
+    notify.error('Failed to delete repository')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Load
+// ---------------------------------------------------------------------------
+onMounted(async () => {
+  window.addEventListener('beforeunload', onBeforeUnload)
+  try {
+    const raw = await getRepo(props.name)
+    const envelope = raw as RepoConfigEnvelope
+    repoType.value = (envelope.repo?.type as string) ?? ''
+    initialConfig.value = envelope
+    config.value = envelope
+    savedConfig.value = JSON.stringify(envelope)
+  } catch (err: unknown) {
+    const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
+    loadError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
+    notify.error('Failed to load repository')
+  } finally {
+    loading.value = false
+  }
+  // The cooldown card loads independently; a failure disables its controls
+  // and shows an inline error, it never blocks saving the repository.
+  try {
+    const cd = await getCooldown()
+    cooldownConfig.value = cd
+    applyOverride(cd.repo_names?.[props.name])
+  } catch (err: unknown) {
+    const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
+    cooldownLoadError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Failed to load cooldown config'
+  }
+  savedOverride.value = overrideJson()
+})
+onBeforeUnmount(() => { window.removeEventListener('beforeunload', onBeforeUnload) })
+
+defineExpose({ dirty, save, reset, overrideEnabled })
 </script>
 
 <template>
   <AppLayout>
     <div class="max-w-2xl space-y-5">
-      <div class="flex items-center gap-3">
+      <div class="flex flex-wrap items-center gap-3">
         <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Edit: {{ name }}</h1>
         <RepoTypeBadge v-if="repoType" :type="repoType" size="md" />
+        <span v-if="repoType" class="text-sm text-gray-500">
+          {{ repoModeLabel(undefined, repoType) }}<template v-if="storageLabel"> · {{ storageLabel }}</template>
+        </span>
+        <RouterLink :to="`/repositories/${encodeURIComponent(name)}`" class="ml-auto text-sm text-blue-600 hover:underline dark:text-blue-400">
+          <i class="pi pi-folder-open mr-1" />Browse
+        </RouterLink>
       </div>
 
       <div v-if="loading" class="text-sm text-gray-500">Loading…</div>
 
-      <div v-else-if="loadError" class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 text-sm text-red-700 dark:text-red-300">
+      <div v-else-if="loadError" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
         Failed to load repository: {{ loadError }}
       </div>
 
@@ -209,127 +284,113 @@ async function saveCooldown() {
           @valid-change="isValid = $event"
         />
 
-        <div
-          v-if="saveError"
-          class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 text-sm text-red-700 dark:text-red-300"
-        >
-          Failed to update: {{ saveError }}
-        </div>
-
-        <div class="flex gap-3 pt-2">
-          <Button
-            label="Save"
-            icon="pi pi-check"
-            :loading="saving"
-            :disabled="!isValid || saving"
-            @click="save"
-          />
-          <Button label="Cancel" severity="secondary" text @click="router.back()" />
-        </div>
-
         <!-- Per-repository cooldown override -->
         <Card class="shadow-sm" data-testid="repo-cooldown-card">
           <template #title>Cooldown</template>
           <template #subtitle>
             Override the global cooldown for this repository. Repository-specific
             cooldown overrides type-level settings. SNAPSHOT policy further
-            overrides for SNAPSHOT artifacts (Maven/Gradle).
+            overrides for SNAPSHOT artifacts (Maven/Gradle). Saved together with the repository.
           </template>
           <template #content>
-            <div
-              v-if="cooldownLoadError"
-              class="text-sm text-red-700 dark:text-red-300 mb-3"
-              data-testid="repo-cooldown-load-error"
-            >
+            <div v-if="cooldownLoadError" class="mb-3 text-sm text-red-700 dark:text-red-300" data-testid="repo-cooldown-load-error">
               {{ cooldownLoadError }}
             </div>
-
             <div class="space-y-5">
-              <!-- Master toggle -->
-              <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <div class="flex items-center justify-between rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
                 <div>
-                  <div class="font-medium text-sm">Use repository-specific cooldown</div>
-                  <div class="text-xs text-gray-500">
-                    Off: inherit from per-type / global settings.
-                  </div>
+                  <div class="text-sm font-medium">Use repository-specific cooldown</div>
+                  <div class="text-xs text-gray-500">Off: inherit from per-type / global settings.</div>
                 </div>
-                <InputSwitch
-                  v-model="overrideEnabled"
-                  :disabled="!canEditCooldown || !cooldownConfig"
-                  data-testid="repo-cooldown-toggle"
-                />
+                <InputSwitch v-model="overrideEnabled" :disabled="!canEditCooldown || !cooldownConfig" data-testid="repo-cooldown-toggle" />
               </div>
-
-              <!-- Override fields — only when toggle is ON -->
-              <div
-                v-if="overrideEnabled"
-                class="border-l-4 border-blue-200 dark:border-blue-800 pl-3 space-y-3"
-                data-testid="repo-cooldown-fields"
-              >
+              <div v-if="overrideEnabled" class="space-y-3 border-l-4 border-blue-200 pl-3 dark:border-blue-800" data-testid="repo-cooldown-fields">
                 <div class="flex items-center gap-3">
-                  <label class="text-sm text-gray-500 w-44">Enabled</label>
-                  <InputSwitch
-                    v-model="repoCooldownEnabled"
-                    :disabled="!canEditCooldown"
-                    data-testid="repo-cooldown-enabled"
-                  />
-                  <span class="text-xs text-gray-400">
-                    {{ repoCooldownEnabled ? 'Cooldown enforced for this repo' : 'Cooldown disabled for this repo' }}
-                  </span>
+                  <label class="w-44 text-sm text-gray-500">Enabled</label>
+                  <InputSwitch v-model="repoCooldownEnabled" :disabled="!canEditCooldown" data-testid="repo-cooldown-enabled" />
+                  <span class="text-xs text-gray-400">{{ repoCooldownEnabled ? 'Cooldown enforced for this repo' : 'Cooldown disabled for this repo' }}</span>
                 </div>
                 <div class="flex items-center gap-3">
-                  <label class="text-sm text-gray-500 w-44">Minimum allowed age</label>
-                  <InputText
-                    v-model="repoCooldownAge"
-                    class="w-32"
-                    :placeholder="globalAgePlaceholder"
-                    :disabled="!canEditCooldown"
-                    data-testid="repo-cooldown-age"
-                  />
+                  <label class="w-44 text-sm text-gray-500">Minimum allowed age</label>
+                  <InputText v-model="repoCooldownAge" class="w-32" :placeholder="globalAgePlaceholder" :disabled="!canEditCooldown" data-testid="repo-cooldown-age" />
                   <span class="text-xs text-gray-400">e.g. 7d, 24h, 30m</span>
                 </div>
                 <div class="flex items-center gap-3">
-                  <label class="text-sm text-gray-500 w-44">SNAPSHOT enabled (override)</label>
-                  <select
-                    v-model="repoSnapshotEnabled"
-                    class="px-2 py-1 border rounded text-sm dark:bg-gray-800"
-                    :disabled="!canEditCooldown"
-                    data-testid="repo-snapshot-enabled"
-                  >
+                  <label class="w-44 text-sm text-gray-500">SNAPSHOT enabled (override)</label>
+                  <select v-model="repoSnapshotEnabled" class="rounded border px-2 py-1 text-sm dark:bg-gray-800" :disabled="!canEditCooldown" data-testid="repo-snapshot-enabled">
                     <option :value="null">inherit</option>
                     <option :value="true">true</option>
                     <option :value="false">false</option>
                   </select>
                 </div>
                 <div class="flex items-center gap-3">
-                  <label class="text-sm text-gray-500 w-44">SNAPSHOT minimum age</label>
-                  <InputText
-                    v-model="repoSnapshotAge"
-                    class="w-32"
-                    :placeholder="globalSnapshotAgePlaceholder"
-                    :disabled="!canEditCooldown"
-                    data-testid="repo-snapshot-age"
-                  />
+                  <label class="w-44 text-sm text-gray-500">SNAPSHOT minimum age</label>
+                  <InputText v-model="repoSnapshotAge" class="w-32" :placeholder="globalSnapshotAgePlaceholder" :disabled="!canEditCooldown" data-testid="repo-snapshot-age" />
                   <span class="text-xs text-gray-400">e.g. 14d, 30d</span>
                 </div>
               </div>
-
-              <Button
-                v-if="canEditCooldown"
-                label="Save cooldown"
-                icon="pi pi-save"
-                :loading="cooldownSaving"
-                :disabled="!cooldownConfig || cooldownSaving"
-                data-testid="repo-cooldown-save"
-                @click="saveCooldown"
-              />
-              <div v-else class="text-xs text-gray-500" data-testid="repo-cooldown-readonly-note">
+              <div v-if="!canEditCooldown" class="text-xs text-gray-500" data-testid="repo-cooldown-readonly-note">
                 Read-only — you do not have permission to edit cooldown settings.
               </div>
             </div>
           </template>
         </Card>
+
+        <div v-if="saveError" data-testid="save-error" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+          {{ saveError }}
+        </div>
+
+        <div class="flex items-center gap-3 pt-2">
+          <Button
+            v-if="canUpdate"
+            label="Save"
+            icon="pi pi-check"
+            :loading="saving"
+            :disabled="!isValid || saving || !dirty"
+            data-testid="save-btn"
+            @click="save"
+          />
+          <Button label="Reset" severity="secondary" text :disabled="!dirty || saving" data-testid="reset-btn" @click="reset" />
+          <span v-if="dirty" class="text-xs text-amber-600 dark:text-amber-400" data-testid="dirty-note">Unsaved changes</span>
+          <Button label="Back" severity="secondary" text class="ml-auto" @click="router.back()" />
+        </div>
+
+        <!-- Danger zone -->
+        <Card v-if="canMove || canDelete" class="border border-red-200 shadow-sm dark:border-red-900/50" data-testid="danger-zone">
+          <template #title>Danger zone</template>
+          <template #content>
+            <div class="flex flex-wrap gap-3">
+              <Button v-if="canMove" label="Rename…" icon="pi pi-arrows-h" severity="secondary" outlined size="small" @click="moveTarget = ''; moveVisible = true" />
+              <Button v-if="canDelete" label="Delete repository…" icon="pi pi-trash" severity="danger" outlined size="small" @click="handleDelete" />
+            </div>
+          </template>
+        </Card>
       </template>
+
+      <Dialog v-model:visible="moveVisible" header="Rename Repository" modal class="w-96">
+        <p class="mb-3">Rename <strong>{{ name }}</strong> to:</p>
+        <InputText v-model="moveTarget" placeholder="New name" class="w-full" />
+        <template #footer>
+          <Button label="Cancel" severity="secondary" text @click="moveVisible = false" />
+          <Button label="Rename" :disabled="!moveTarget" @click="handleMove" />
+        </template>
+      </Dialog>
+
+      <Dialog v-model:visible="deleteVisible" header="Confirm Delete" modal class="w-96">
+        <p>Delete repository <strong>{{ targetName }}</strong>? This cannot be undone.</p>
+        <template #footer>
+          <Button label="Cancel" severity="secondary" text @click="rejectDel" />
+          <Button label="Delete" severity="danger" @click="acceptDel" />
+        </template>
+      </Dialog>
+
+      <Dialog v-model:visible="leaveVisible" header="Unsaved changes" modal class="w-96" data-testid="leave-dialog" :closable="false">
+        <p>You have unsaved changes. Leave this page and discard them?</p>
+        <template #footer>
+          <Button label="Stay" severity="secondary" text @click="leaveResolve?.(false)" />
+          <Button label="Leave" severity="danger" @click="leaveResolve?.(true)" />
+        </template>
+      </Dialog>
     </div>
   </AppLayout>
 </template>
