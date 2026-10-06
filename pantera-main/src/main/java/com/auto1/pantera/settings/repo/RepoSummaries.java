@@ -26,7 +26,7 @@ public final class RepoSummaries {
     /**
      * Build one summary.
      * @param name Repository name
-     * @param column Type column value, may be null or blank
+     * @param column Type column value, may be null, blank or {@code unknown}
      * @param config Stored config, with or without the {@code repo} wrapper, may be null
      * @param updated Updated-at, may be null
      * @param updater Updated-by, may be null
@@ -38,8 +38,10 @@ public final class RepoSummaries {
         final JsonStructure config, final Instant updated,
         final String updater, final String creator) {
         final JsonObject repo = this.repoSection(config);
+        // RepositoryDao.save stores "unknown" (never blank) when the config
+        // carried no repo.type at save time, so both mean "ask the config".
         final String type;
-        if (column != null && !column.isBlank()) {
+        if (column != null && !column.isBlank() && !"unknown".equals(column)) {
             type = column;
         } else {
             type = repo.getString("type", "unknown");

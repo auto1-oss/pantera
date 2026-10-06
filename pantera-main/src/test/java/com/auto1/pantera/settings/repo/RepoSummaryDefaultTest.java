@@ -73,6 +73,18 @@ final class RepoSummaryDefaultTest {
     }
 
     @Test
+    void unknownTypeColumnFallsBackToConfigType() {
+        // RepositoryDao.save writes "unknown" (not blank) when the stored
+        // config has no repo.type at save time; a later config still names it.
+        final RepoSummary row = new RepoSummaries().from(
+            "legacy", "unknown",
+            javax.json.Json.createObjectBuilder().add("type", "rpm").build(),
+            null, null, null
+        );
+        MatcherAssert.assertThat(row.type(), new IsEqual<>("rpm"));
+    }
+
+    @Test
     void summaryFactoryPrefersTypeColumnAndUnwrapsRepo() {
         final RepoSummary row = new RepoSummaries().from(
             "x", "maven-proxy",

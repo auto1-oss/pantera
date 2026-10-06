@@ -118,6 +118,21 @@ final class RepoListingTest {
     }
 
     @Test
+    void defaultNameOrderIgnoresCase() {
+        final List<RepoSummary> rows = List.of(
+            row("b-repo", "npm", "{\"type\":\"npm\"}", null),
+            row("C-repo", "npm", "{\"type\":\"npm\"}", null),
+            row("a-repo", "npm", "{\"type\":\"npm\"}", null)
+        );
+        final List<String> asc = names(new RepoListing(rows, name -> true)
+            .items(new RepoListing.Params(null, null, null, null, null)));
+        MatcherAssert.assertThat("asc", asc, new IsEqual<>(List.of("a-repo", "b-repo", "C-repo")));
+        final List<String> desc = names(new RepoListing(rows, name -> true)
+            .items(new RepoListing.Params(null, null, null, "name", "desc")));
+        MatcherAssert.assertThat("desc", desc, new IsEqual<>(List.of("C-repo", "b-repo", "a-repo")));
+    }
+
+    @Test
     void legacyRowWithoutRepoWrapperIsListed() {
         final RepoSummary legacy = new RepoSummary(
             "old", "", Json.createObjectBuilder().add("type", "rpm").build(), null, null, null

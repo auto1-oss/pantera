@@ -198,7 +198,11 @@ final class RepoListing {
          */
         Comparator<RepoSummary> comparator() {
             final boolean desc = "desc".equals(this.order);
-            final Comparator<RepoSummary> byname = Comparator.comparing(RepoSummary::name);
+            // Case-insensitive like the database's ORDER BY name, with the
+            // exact name as a deterministic tie-breaker.
+            final Comparator<RepoSummary> byname = Comparator
+                .comparing(RepoSummary::name, String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(RepoSummary::name);
             final Comparator<RepoSummary> res;
             if ("type".equals(this.sort)) {
                 final Comparator<RepoSummary> bytype = Comparator.comparing(RepoListing::type);
