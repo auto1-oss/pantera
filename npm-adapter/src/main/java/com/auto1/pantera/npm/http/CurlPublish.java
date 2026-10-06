@@ -23,6 +23,8 @@ import hu.akarnokd.rxjava2.interop.SingleInterop;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import javax.json.JsonObject;
 
@@ -125,19 +127,20 @@ final class CurlPublish implements Publish {
         final TgzArchive uploaded, final String name, final String vers, final byte[] bytes
     ) {
         final Key tarball = new Key.From(name, "-", String.format("%s-%s.tgz", name, vers));
-        final CompletableFuture<Void> guard;
-        if (this.immutable) {
-            guard = new ImmutableVersionGuard(this.storage)
-                .check(new Key.From(name), vers, List.of(tarball));
-        } else {
-            guard = CompletableFuture.completedFuture(null);
-        }
-        return guard.thenCompose(
-            ignored -> CompletableFuture.allOf(
-                this.storage.save(tarball, new Content.From(bytes)),
-                new MetaUpdate.ByTgz(uploaded).update(new Key.From(name), this.storage)
-            )
+        final Supplier<CompletionStage<Void>> write = () -> CompletableFuture.allOf(
+            this.storage.save(tarball, new Content.From(bytes)),
+            new MetaUpdate.ByTgz(uploaded).update(new Key.From(name), this.storage)
         );
+        final CompletableFuture<Void> result;
+        if (this.immutable) {
+            // Check and write under one lock: a concurrent publish of the
+            // same version must see this one's files, not race past the check.
+            result = new ImmutableVersionGuard(this.storage)
+                .guarded(new Key.From(name), vers, List.of(tarball), write);
+        } else {
+            result = write.get().toCompletableFuture();
+        }
+        return result;
     }
 
     /**

@@ -12,11 +12,14 @@ package com.auto1.pantera.npm.http;
 
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.npm.PerVersionLayout;
 import com.auto1.pantera.npm.VersionExistsException;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 
 /**
  * Publish guard of an immutable npm repository: refuses a publish that
@@ -36,6 +39,11 @@ final class ImmutableVersionGuard {
     /**
      * Storage holding the packages.
      */
+    /**
+     * Lock key below the package: publishes of one package are serialised.
+     */
+    private static final String LOCK = ".publish.lock";
+
     private final Storage storage;
 
     /**
@@ -55,6 +63,36 @@ final class ImmutableVersionGuard {
      * @return Completion, failed with {@link VersionExistsException} when the
      *  version is already published
      */
+    /**
+     * Run a publish under this guard: the check and the write happen inside
+     * one storage-backed lock on the package, so two publishes of the same
+     * version racing each other are serialised and the second one sees the
+     * first one's files and is refused. The lock lives in storage
+     * ({@link IndexUpdateLock}), so it also serialises publishers on other
+     * instances sharing the storage.
+     *
+     * @param pkg Package key
+     * @param version Version being published, null when unknown
+     * @param tarballs Tarball keys the publish writes
+     * @param write The write, run only when the version is not published
+     * @param <T> Result type
+     * @return Result of the write, failed with
+     *  {@link com.auto1.pantera.npm.VersionExistsException} when the version
+     *  is already published
+     */
+    <T> CompletableFuture<T> guarded(
+        final Key pkg, final String version, final Collection<Key> tarballs,
+        final Supplier<CompletionStage<T>> write
+    ) {
+        if (version == null) {
+            return write.get().toCompletableFuture();
+        }
+        return new IndexUpdateLock(this.storage, new Key.From(pkg, ImmutableVersionGuard.LOCK))
+            .run(
+                ignored -> this.check(pkg, version, tarballs).thenCompose(checked -> write.get())
+            );
+    }
+
     CompletableFuture<Void> check(
         final Key pkg, final String version, final Collection<Key> tarballs
     ) {

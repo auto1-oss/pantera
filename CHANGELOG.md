@@ -28,6 +28,7 @@
 
 ### 🔧 Bug fixes
 
+- **Two concurrent `npm publish` of the same version can no longer both succeed on an immutable repository.** The version check and the write now run under one per-package lock kept in the repository storage, so the second publish sees the files of the first and is refused with `409`, on one instance and across instances sharing the storage. ([@aydasraf](https://github.com/aydasraf))
 - **Selecting one repository on the Manage Repositories page no longer selects every row.** ([@aydasraf](https://github.com/aydasraf))
 - **The repository list no longer reads every repository's configuration on each request.** Listing and searching are a single database query, so the admin page stays fast on installations with many repositories. ([@aydasraf](https://github.com/aydasraf))
 - **Upgrading from 2.2.8 or earlier no longer fails Flyway validation** — 2.2.9 shipped a comment edit inside the already-applied `V116` migration, so it could not start against an existing database (`Migration checksum mismatch for migration version 116`); the file is restored byte-for-byte. Upgrade from 2.2.8 directly to 2.2.10; a database that first ran `V116` under 2.2.9 needs the one-line checksum fix in the upgrade notes. ([@aydasraf](https://github.com/aydasraf))
