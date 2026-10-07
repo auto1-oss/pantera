@@ -33,6 +33,7 @@ import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -100,6 +101,11 @@ final class HeadBlobsSliceTest {
                                 Optional.of(new TestBlob(digest, size))
                             );
                         }
+
+                        @Override
+                        public CompletableFuture<Void> delete(Digest digestRequest) {
+                            throw new UnsupportedOperationException();
+                        }
                     };
                 }
 
@@ -118,6 +124,11 @@ final class HeadBlobsSliceTest {
 
                         @Override
                         public CompletableFuture<Tags> tags(Pagination pagination) {
+                            throw new UnsupportedOperationException();
+                        }
+
+                        @Override
+                        public CompletableFuture<Collection<String>> delete(ManifestReference ref) {
                             throw new UnsupportedOperationException();
                         }
                     };

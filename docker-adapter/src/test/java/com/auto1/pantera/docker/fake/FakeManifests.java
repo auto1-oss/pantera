@@ -17,6 +17,7 @@ import com.auto1.pantera.docker.Tags;
 import com.auto1.pantera.docker.manifest.Manifest;
 import com.auto1.pantera.docker.misc.Pagination;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -48,6 +49,11 @@ public final class FakeManifests implements Manifests {
     @Override
     public CompletableFuture<Tags> tags(Pagination pagination) {
         return this.mnfs.tags(pagination);
+    }
+
+    @Override
+    public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
+        return this.mnfs.delete(ref);
     }
 
     /**

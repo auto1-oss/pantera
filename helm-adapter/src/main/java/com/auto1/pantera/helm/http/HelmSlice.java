@@ -85,7 +85,8 @@ public final class HelmSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer. Overwriting a pushed chart
+     * version is allowed (the behaviour before the {@code immutable} setting).
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public HelmSlice(
@@ -98,6 +99,36 @@ public final class HelmSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(storage, base, policy, basicAuth, tokenAuth, name, events, syncIndex, false);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer and the immutability switch.
+     *
+     * @param storage The storage.
+     * @param base The base path the slice is expected to be accessed from
+     * @param policy Access policy.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When {@code true} a push of an already stored chart
+     *  name+version answers 409 Conflict; when {@code false} it overwrites the
+     *  archive and its {@code index.yaml} entry
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public HelmSlice(
+        final Storage storage,
+        final String base,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -105,7 +136,7 @@ public final class HelmSlice extends Slice.Wrap {
                         MethodRule.PUT, MethodRule.POST
                     ),
                     HelmSlice.createAuthSlice(
-                        new PushChartSlice(storage, events, name, syncIndex),
+                        new PushChartSlice(storage, events, name, syncIndex, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

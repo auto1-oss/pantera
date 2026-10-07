@@ -39,12 +39,9 @@ import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import java.io.StringReader;
 import java.security.PermissionCollection;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -222,49 +219,32 @@ public final class RepositoryHandler {
         final int size = ApiResponse.clampSize(
             ApiResponse.intParam(ctx.queryParam("size").stream().findFirst().orElse(null), 20)
         );
-        final String type = ctx.queryParam("type").stream().findFirst().orElse(null);
-        final String query = ctx.queryParam("q").stream().findFirst().orElse(null);
+        final RepoListing.Params params = new RepoListing.Params(
+            RepositoryHandler.param(ctx, "q"), RepositoryHandler.param(ctx, "type"),
+            RepositoryHandler.param(ctx, "mode"), RepositoryHandler.param(ctx, "sort"),
+            RepositoryHandler.param(ctx, "order")
+        );
+        final Optional<String> invalid = params.validate();
+        if (invalid.isPresent()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", invalid.get());
+            return;
+        }
         final PermissionCollection perms = this.policy.getPermissions(
             new AuthUser(
                 ctx.user().principal().getString(AuthTokenRest.SUB),
                 ctx.user().principal().getString(AuthTokenRest.CONTEXT)
             )
         );
-        CompletableFuture.supplyAsync((java.util.function.Supplier<List<JsonObject>>) () -> {
-            final Collection<String> all = this.crs.listAll();
-            final List<JsonObject> filtered = new ArrayList<>(all.size());
-            for (final String name : all) {
-                if (query != null
-                    && !name.toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT))) {
-                    continue;
-                }
-                if (!perms.implies(new AdapterBasicPermission(name, "read"))) {
-                    continue;
-                }
-                String repoType = "unknown";
-                try {
-                    final javax.json.JsonStructure config =
-                        this.crs.value(new RepositoryName.Simple(name));
-                    if (config instanceof javax.json.JsonObject) {
-                        final javax.json.JsonObject jobj = (javax.json.JsonObject) config;
-                        final javax.json.JsonObject repo =
-                            jobj.containsKey(RepositoryHandler.REPO)
-                                ? jobj.getJsonObject(RepositoryHandler.REPO) : jobj;
-                        repoType = repo.getString("type", "unknown");
-                    }
-                } catch (final Exception ignored) {
-                    // Use "unknown" type
-                }
-                if (type != null && !repoType.toLowerCase(Locale.ROOT).contains(
-                    type.toLowerCase(Locale.ROOT))) {
-                    continue;
-                }
-                filtered.add(new JsonObject()
-                    .put("name", name)
-                    .put("type", repoType));
-            }
-            return filtered;
-        }, HandlerExecutor.get()).whenComplete((filtered, err) -> {
+        // One summaries() query replaces the former listAll() + value() per
+        // repository; the projection never copies anything but the listed
+        // fields out of the config, so no credential can leak into the list.
+        CompletableFuture.supplyAsync(
+            () -> new RepoListing(
+                this.crs.summaries(),
+                name -> perms.implies(new AdapterBasicPermission(name, "read"))
+            ).items(params),
+            HandlerExecutor.get()
+        ).whenComplete((filtered, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
@@ -287,6 +267,17 @@ public final class RepositoryHandler {
                         .encode());
             }
         });
+    }
+
+    /**
+     * First value of a query parameter, null when absent or blank.
+     * @param ctx Routing context
+     * @param name Parameter name
+     * @return Value or null
+     */
+    private static String param(final RoutingContext ctx, final String name) {
+        final String val = ctx.queryParam(name).stream().findFirst().orElse(null);
+        return val == null || val.isBlank() ? null : val;
     }
 
     /**
@@ -418,6 +409,15 @@ public final class RepositoryHandler {
                 && vt != javax.json.JsonValue.ValueType.FALSE) {
                 ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
                     "anonymous_write must be a boolean");
+                return;
+            }
+        }
+        if (repo.containsKey("immutable")) {
+            final javax.json.JsonValue.ValueType vt = repo.get("immutable").getValueType();
+            if (vt != javax.json.JsonValue.ValueType.TRUE
+                && vt != javax.json.JsonValue.ValueType.FALSE) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "immutable must be a boolean");
                 return;
             }
         }

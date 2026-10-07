@@ -36,4 +36,15 @@ public interface Resource {
      * @return Response to request.
      */
     CompletableFuture<Response> put(Headers headers, Content body);
+
+    /**
+     * Serve DELETE method. Resources that cannot be deleted answer
+     * 405 Method Not Allowed.
+     *
+     * @param headers Request headers.
+     * @return Response to request.
+     */
+    default CompletableFuture<Response> delete(final Headers headers) {
+        return com.auto1.pantera.http.ResponseBuilder.methodNotAllowed().completedFuture();
+    }
 }

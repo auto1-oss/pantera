@@ -153,6 +153,43 @@ export const REPO_TYPE_FILTERS = [
   { label: 'File',     value: 'file' },
 ] as const
 
+/** Mode filter options for the management page. */
+export const REPO_MODE_FILTERS = [
+  { label: 'All modes', value: null },
+  { label: 'Hosted', value: 'hosted' },
+  { label: 'Proxy',  value: 'proxy' },
+  { label: 'Group',  value: 'group' },
+] as const
+
+/** Mode label from the API field, falling back to the type suffix. */
+export function repoModeLabel(mode: 'hosted' | 'proxy' | 'group' | undefined, raw: string): string {
+  if (mode === 'proxy') return 'Proxy'
+  if (mode === 'group') return 'Group'
+  if (mode === 'hosted') return 'Hosted'
+  const sub = subtypeLabel(raw)
+  return sub === 'Local' ? 'Hosted' : sub
+}
+
+/** One-line description per base technology, shown on the create page's format cards. */
+export const REPO_TYPE_DESCRIPTIONS: Record<string, string> = {
+  maven:  'Java and Kotlin artifacts for Maven builds',
+  gradle: 'Gradle module metadata and plugins',
+  docker: 'OCI container images',
+  npm:    'JavaScript packages for npm, yarn and pnpm',
+  pypi:   'Python wheels and source distributions',
+  go:     'Go modules served through GOPROXY',
+  helm:   'Helm chart archives and index.yaml',
+  nuget:  '.NET packages for dotnet and NuGet',
+  deb:    'Debian and Ubuntu apt packages',
+  rpm:    'RPM packages for yum and dnf',
+  conda:  'Conda packages and channels',
+  gem:    'Ruby gems',
+  conan:  'C and C++ packages for Conan',
+  hexpm:  'Elixir and Erlang packages for Hex',
+  php:    'Composer packages for PHP',
+  file:   'Any file, served by path',
+}
+
 /** Create form options. */
 export const REPO_TYPE_CREATE_OPTIONS = [
   { label: 'Maven (Local)',    value: 'maven' },

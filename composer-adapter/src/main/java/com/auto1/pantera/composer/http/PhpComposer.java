@@ -90,12 +90,13 @@ public final class PhpComposer extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
-        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex,
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, true,
             new ComposerBaseUrl(Optional.empty(), name));
     }
 
     /**
-     * Primary ctor.
+     * Primary ctor, with the repository's {@code immutable} setting and the
+     * client-facing base its served links are rooted at.
      * @param repository Repository
      * @param policy Access permissions
      * @param basicAuth Basic authentication
@@ -103,6 +104,9 @@ public final class PhpComposer extends Slice.Wrap {
      * @param name Repository name
      * @param events Artifact repository events
      * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When true a published release cannot be overwritten
+     *  (identical re-upload: 201, different content: 409); when false release
+     *  uploads overwrite. Dev versions are always mutable.
      * @param base Client-facing base URL the served metadata links are rooted at
      * @checkstyle ParameterNumberCheck (5 lines)
      */
@@ -114,6 +118,7 @@ public final class PhpComposer extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable,
         final ComposerBaseUrl base
     ) {
         super(
@@ -169,7 +174,7 @@ public final class PhpComposer extends Slice.Wrap {
                         MethodRule.PUT
                     ),
                     PhpComposer.createAuthSlice(
-                        new AddSlice(repository),
+                        new AddSlice(repository, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
@@ -183,7 +188,7 @@ public final class PhpComposer extends Slice.Wrap {
                         MethodRule.PUT
                     ),
                     PhpComposer.createAuthSlice(
-                        new AddArchiveSlice(repository, events, name, syncIndex),
+                        new AddArchiveSlice(repository, events, name, syncIndex, immutable),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

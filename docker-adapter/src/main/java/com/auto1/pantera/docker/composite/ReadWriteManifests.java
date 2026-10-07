@@ -17,6 +17,7 @@ import com.auto1.pantera.docker.Tags;
 import com.auto1.pantera.docker.manifest.Manifest;
 import com.auto1.pantera.docker.misc.Pagination;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -57,5 +58,18 @@ public final class ReadWriteManifests implements Manifests {
     @Override
     public CompletableFuture<Tags> tags(Pagination pagination) {
         return this.read.tags(pagination);
+    }
+
+    /**
+     * Unlike {@link #put}, deliberately NOT delegated to {@link #write} — a
+     * {@code docker-proxy}'s local tier is a read-through cache, not a
+     * user-authoritative store, so it is out of scope for user-initiated
+     * delete (WS4-docker.5 §3: "deletes target the authoritative (local)
+     * store only" means a standalone {@code docker} repository, not a
+     * proxy's cache fill). Maps to 405 via {@code ErrorHandlingSlice}.
+     */
+    @Override
+    public CompletableFuture<Collection<String>> delete(final ManifestReference ref) {
+        throw new UnsupportedOperationException();
     }
 }

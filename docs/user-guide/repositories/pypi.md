@@ -109,7 +109,8 @@ file is stored at `<package>/<version>/<file>` in the repository.
 
 ### Published files are immutable
 
-As on PyPI, a published file cannot be replaced. Uploading a file whose name
+In a repository with the **Immutable artifacts** setting on (the default), a
+published file cannot be replaced, as on PyPI. Uploading a file whose name
 already exists with **different** content is rejected with the HTTP status
 `400 File already exists`; twine prints it as
 `HTTPError: 400 Bad Request from <upload-url>` with `File already exists` on
@@ -117,10 +118,38 @@ the next line. Publish a new version instead. Re-uploading the **identical**
 file succeeds and changes nothing, so re-running a partly failed
 `twine upload dist/*` is safe as it is.
 
+When the administrator has turned the setting off, uploading different
+content under an existing file name replaces the stored file (`201`) for any
+user with `write` permission. See
+[Overwrite rules](../getting-started.md#overwrite-rules-immutable).
+
 Do not add `--skip-existing`: twine supports that flag only for PyPI and TestPyPI and
 refuses it for any other repository URL before uploading anything
 (`UnsupportedConfiguration: The configured repository ... does not have support
 for the following features: --skip-existing`).
+
+### Delete a File
+
+Delete one distribution file with an HTTP `DELETE` of its storage path,
+`<package>/<version>/<file>` (needs the `delete` permission):
+
+```bash
+curl -u your-username:your-api-token -X DELETE \
+  http://pantera-host:8080/pypi-local/my-package/1.2.0/my_package-1.2.0-py3-none-any.whl
+```
+
+The answer is `200`, or `404` when no file is stored at that path. A local
+PyPI repository deletes single files only; to remove a whole version or
+project, delete its directory in the UI or with the REST API
+([`DELETE /api/v1/repositories/:name/packages`](../../rest-api-reference.md#delete-apiv1repositoriesnamepackages)).
+The simple index is regenerated without the deleted files, and search stops
+returning them. To hide a release
+without deleting it, yank it (below).
+
+On a `pypi-proxy`, a `DELETE` of a cached path (a distribution file, or a
+project's index, `/simple/<project>/`) evicts it, and the next request fetches
+it from the upstream again. See
+[Delete an artifact](../getting-started.md#delete-an-artifact).
 
 ---
 
@@ -199,7 +228,7 @@ poetry publish --build -r pantera-publish
 | `Could not find a version that satisfies the requirement` | Package not cached in proxy, or wrong index URL | Verify the index-url includes `/simple` at the end |
 | Upload fails with `403 Forbidden` | User lacks write permission on local repo | Contact admin for publish access |
 | Upload fails with `404 Not Found` (proxy) or `405 Method Not Allowed` (group) | Uploading to a proxy or group repository | Upload only to a **local** PyPI repository |
-| Upload fails with `400 File already exists` | A file with that name was already published with different content | Bump the version and upload again; published files are immutable |
+| Upload fails with `400 File already exists` | A file with that name was already published with different content | The repository is immutable: bump the version and upload again, or delete the published file first |
 | Upload fails with `400 Bad Request: Filename ... does not match the package metadata` | The archive's file name does not match the name/version inside it | Rebuild the distribution (`python -m build`) instead of renaming files |
 | `403 Forbidden` when installing through a group | Read on the group alone is not enough; each member is authorized separately | Grant read on the group **and** on its member repositories |
 | Package installs old version | pip caching locally | Run with `--no-cache-dir` flag |

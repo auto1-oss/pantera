@@ -29,7 +29,6 @@ import com.auto1.pantera.misc.Json2Yaml;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -188,7 +187,7 @@ public final class RepoData {
                 // Then the directories the files left behind: filesystem
                 // storages keep (hidden) working directories that hold no
                 // keys, e.g. an adapter's upload staging directory.
-                return RepoData.deleteTree(asto.get(), root).thenCompose(
+                return new RepoPathRemoval(asto.get()).deleteTree(root).thenCompose(
                     removed -> asto.get().deleteEmptyDirectories(root)
                         .thenApply(nothing -> removed)
                 ).thenAccept(
@@ -234,47 +233,7 @@ public final class RepoData {
         final RepositoryName rname, final String artifactPath,
         final CrudRepoSettings crs
     ) {
-        final String repo = rname.toString();
-        final Key artifactKey = new Key.From(repo, artifactPath);
-        return this.repoStorage(rname, crs)
-            .thenCompose(asto -> asto.exists(artifactKey)
-                .thenCompose(exists -> {
-                    if (!exists) {
-                        // A directory: delete its subtree (never siblings
-                        // that merely share the name as a string prefix).
-                        return RepoData.deleteTree(asto, artifactKey)
-                            .thenApply(removed -> {
-                                if (removed == 0) {
-                                    return false;
-                                }
-                                EcsLogger.info(RepoData.LOGGER)
-                                    .message("Deleted artifact directory from repository, " + removed + " files removed")
-                                    .eventCategory("file")
-                                    .eventAction("artifact_delete")
-                                    .eventOutcome("success")
-                                    .field("repository.name", repo)
-                                    .field("file.path", artifactPath)
-                                    .field("log.source", "application")
-                                    .log();
-                                return true;
-                            });
-                    }
-                    // Single file - delete it
-                    return asto.delete(artifactKey)
-                        .thenApply(nothing -> {
-                            EcsLogger.info(RepoData.LOGGER)
-                                .message("Deleted artifact file from repository")
-                                .eventCategory("file")
-                                .eventAction("artifact_delete")
-                                .eventOutcome("success")
-                                .field("repository.name", repo)
-                                .field("file.path", artifactPath)
-                                .field("log.source", "application")
-                                .log();
-                            return true;
-                        });
-                })
-            );
+        return this.deletePath(rname, artifactPath, crs, RepoPathRemoval.Mode.AUTO);
     }
 
     /**
@@ -300,34 +259,44 @@ public final class RepoData {
         final RepositoryName rname, final String packagePath,
         final CrudRepoSettings crs
     ) {
-        final String repo = rname.toString();
-        final Key folder = new Key.From(repo, packagePath);
-        return this.repoStorage(rname, crs)
-            .thenCompose(
-                asto -> RepoData.deleteTree(asto, folder).thenCompose(
-                    removed -> asto.deleteEmptyDirectories(folder)
-                        .thenApply(nothing -> removed)
-                )
-            )
-            .thenApply(removed -> {
-                if (removed == 0) {
-                    return false;
-                }
-                this.logPackageDelete(repo, packagePath);
-                return true;
-            });
+        return this.deletePath(rname, packagePath, crs, RepoPathRemoval.Mode.FOLDER);
     }
 
-    private void logPackageDelete(final String repo, final String packagePath) {
-        EcsLogger.info(RepoData.LOGGER)
-            .message("Deleted package folder from repository")
-            .eventCategory("file")
-            .eventAction("package_delete")
-            .eventOutcome("success")
-            .field("repository.name", repo)
-            .field("package.path", packagePath)
-            .field("log.source", "application")
-            .log();
+    /**
+     * The repository's own storage: its storage scoped to the
+     * {@code <repo>/} prefix, so keys are repository-relative (the shape
+     * the adapters serve from). Resolved with the DB fallback.
+     * @param rname Repository name
+     * @param crs Repository settings CRUD for the DB fallback, nullable
+     * @return Repository-scoped storage
+     */
+    public CompletionStage<Storage> scopedStorage(
+        final RepositoryName rname, final CrudRepoSettings crs
+    ) {
+        final Key root;
+        try {
+            root = RepoData.repoRoot(rname.toString());
+        } catch (final IllegalArgumentException bad) {
+            return CompletableFuture.failedFuture(bad);
+        }
+        return this.repoStorage(rname, crs).thenApply(asto -> new SubStorage(root, asto));
+    }
+
+    /**
+     * Delete a path of a repository's storage.
+     * @param rname Repository name
+     * @param path Repository-relative path
+     * @param crs Repository settings CRUD for the DB fallback, nullable
+     * @param mode File, folder or either
+     * @return True when something was deleted
+     */
+    private CompletionStage<Boolean> deletePath(
+        final RepositoryName rname, final String path, final CrudRepoSettings crs,
+        final RepoPathRemoval.Mode mode
+    ) {
+        return this.scopedStorage(rname, crs).thenCompose(
+            asto -> new RepoPathRemoval(asto).remove(rname.toString(), path, mode)
+        ).thenApply(RepoPathRemoval.Outcome::found);
     }
 
     /**
@@ -357,7 +326,7 @@ public final class RepoData {
         return this.repoStorage(rname, crs)
             .thenCompose(
                 asto ->
-                    RepoData.subtree(asto, repo)
+                    new RepoPathRemoval(asto).subtree(repo)
                         .thenCompose(
                             list -> {
                                 final List<Key> relative = new ArrayList<>(list.size());
@@ -368,7 +337,7 @@ public final class RepoData {
                                 return new Copy(new SubStorage(repo, asto), relative)
                                     .copy(new SubStorage(nrepo, asto));
                             }
-                        ).thenCompose(nothing -> RepoData.deleteTree(asto, repo))
+                        ).thenCompose(nothing -> new RepoPathRemoval(asto).deleteTree(repo))
                         .thenAccept(
                             nothing ->
                                 EcsLogger.info(RepoData.LOGGER)
@@ -508,47 +477,6 @@ public final class RepoData {
             throw new IllegalArgumentException("Invalid repository name: " + repo);
         }
         return new Key.From(repo);
-    }
-
-    /**
-     * Keys of a path subtree: {@code root} itself and the keys under
-     * {@code root/}. A listing is a raw prefix scan on some storages, so
-     * keys that only share the string prefix are filtered out.
-     * @param asto Storage
-     * @param root Subtree root
-     * @return Keys in the subtree
-     */
-    private static CompletableFuture<Collection<Key>> subtree(
-        final Storage asto, final Key root
-    ) {
-        final String prefix = root.string();
-        final String dir = prefix + "/";
-        return asto.list(root).thenApply(keys -> {
-            final List<Key> inside = new ArrayList<>(keys.size());
-            for (final Key key : keys) {
-                final String str = key.string();
-                if (str.equals(prefix) || str.startsWith(dir)) {
-                    inside.add(key);
-                }
-            }
-            return inside;
-        });
-    }
-
-    /**
-     * Delete a path subtree.
-     * @param asto Storage
-     * @param root Subtree root
-     * @return Number of keys deleted
-     */
-    private static CompletableFuture<Integer> deleteTree(final Storage asto, final Key root) {
-        return RepoData.subtree(asto, root).thenCompose(keys -> {
-            CompletableFuture<Void> res = CompletableFuture.completedFuture(null);
-            for (final Key key : keys) {
-                res = res.thenCompose(nothing -> asto.delete(key));
-            }
-            return res.thenApply(nothing -> keys.size());
-        });
     }
 
     /**

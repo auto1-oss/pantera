@@ -87,12 +87,31 @@ public final class Gem {
     private final SharedRuntime shared;
 
     /**
-     * New Gem SDK with default indexer.
+     * Whether a stored gem file may never be replaced by an upload.
+     */
+    private final boolean immutable;
+
+    /**
+     * New Gem SDK with default indexer; an upload of an already stored gem
+     * file overwrites it.
      * @param storage Repository storage.
      */
     public Gem(final Storage storage) {
+        this(storage, false);
+    }
+
+    /**
+     * New Gem SDK with default indexer.
+     * @param storage Repository storage.
+     * @param immutable When {@code true} an upload whose {@code <name>-<version>.gem}
+     *  is already stored fails with {@link GemExistsException} (RubyGems
+     *  semantics: repushing a gem version is not allowed); when {@code false}
+     *  it overwrites the stored gem and the index is rebuilt
+     */
+    public Gem(final Storage storage, final boolean immutable) {
         this.storage = storage;
         this.shared = new SharedRuntime();
+        this.immutable = immutable;
     }
 
     /**
@@ -177,31 +196,64 @@ public final class Gem {
                             final Key stored = gem.parent()
                                 .<Key>map(key -> new Key.From(key, name))
                                 .orElseGet(() -> new Key.From(name));
-                            return CompletableFuture.supplyAsync(
-                                new UncheckedSupplier<>(
-                                    () -> Files.move(
-                                        tmp.resolve(gem.string()),
-                                        contained(dir, name),
-                                        StandardCopyOption.REPLACE_EXISTING
+                            final Path dest = contained(dir, name);
+                            return this.replaceable(stored).thenCompose(
+                                allowed -> CompletableFuture.supplyAsync(
+                                    new UncheckedSupplier<>(
+                                        () -> Files.move(
+                                            tmp.resolve(gem.string()),
+                                            dest,
+                                            StandardCopyOption.REPLACE_EXISTING
+                                        )
                                     )
                                 )
                             ).thenCompose(
                                 path -> this.shared.apply(RubyGemIndex::new)
                                     .thenAccept(index -> index.update(path))
-                                ).thenCompose(
-                                    // Only the new gem and the index go back:
-                                    // the other gems are unchanged, and
-                                    // writing the snapshot back would
-                                    // resurrect a gem deleted meanwhile.
-                                    ignored -> new Copy(
-                                        new FileStorage(tmp),
-                                        key -> !Gem.isGem(key) || key.equals(stored)
-                                    ).copy(this.storage)
-                                ).thenApply(ignored -> new ImmutablePair<>(fmt.name, fmt.version));
+                            ).thenCompose(
+                                // Only the new gem and the index go back:
+                                // the other gems are unchanged, and
+                                // writing the snapshot back would
+                                // resurrect a gem deleted meanwhile.
+                                ignored -> new Copy(
+                                    new FileStorage(tmp),
+                                    key -> !Gem.isGem(key) || key.equals(stored)
+                                ).copy(this.storage)
+                            ).thenApply(ignored -> new ImmutablePair<>(fmt.name, fmt.version));
                         }
                     )
             ).handle(removeTempDir(tmp))
         );
+    }
+
+    /**
+     * Refuse to replace a stored gem on an immutable repository. Runs under
+     * the index lock every upload takes, so two concurrent uploads of the
+     * same gem version cannot both pass it.
+     * @param stored Key the uploaded gem would be stored under
+     * @return Completion, failed with {@link GemExistsException} when the gem
+     *  is stored and the repository is immutable
+     */
+    private CompletionStage<Void> replaceable(final Key stored) {
+        final CompletionStage<Void> res;
+        if (this.immutable) {
+            res = this.storage.exists(stored).thenCompose(
+                present -> {
+                    final CompletionStage<Void> verdict;
+                    if (present) {
+                        verdict = CompletableFuture.failedFuture(
+                            new GemExistsException(stored.string())
+                        );
+                    } else {
+                        verdict = CompletableFuture.completedFuture(null);
+                    }
+                    return verdict;
+                }
+            );
+        } else {
+            res = CompletableFuture.completedFuture(null);
+        }
+        return res;
     }
 
     /**

@@ -135,6 +135,19 @@ public final class PerVersionLayout {
     }
 
     /**
+     * Whether a version's per-version file is stored. The check is on the
+     * exact file {@link #addVersion} would write, so a {@code true} answer
+     * means adding the version would overwrite stored metadata.
+     *
+     * @param packageKey Package key
+     * @param version Version string
+     * @return Completion stage with true when the version file exists
+     */
+    public CompletionStage<Boolean> hasVersion(final Key packageKey, final String version) {
+        return this.storage.exists(this.versionFileKey(packageKey, version));
+    }
+
+    /**
      * Overwrite a single version's per-version file (used to patch fields such
      * as {@code deprecated} without touching any other version).
      *

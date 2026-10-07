@@ -70,6 +70,56 @@ maven-group
 
 ---
 
+## Overwriting and Deleting Artifacts
+
+### Overwrite rules (`immutable`)
+
+Every local repository except Docker has an **Immutable artifacts** setting (`immutable`), chosen by the administrator. It is on unless the administrator turned it off; ask them which applies to the repository you publish to.
+
+- **On:** an artifact that is already stored is never overwritten. Uploading it again is refused with the status in the table below, and the stored artifact is kept. Some formats accept an identical re-upload, so a retried CI job still succeeds.
+- **Off:** any user with `write` on the repository overwrites an artifact by uploading it again. RPM and Hex still require their replace flag (`?override=true`, `?replace=true`). The format's metadata and search follow the new content.
+
+| Format | Refusal when the setting is on | Identical re-upload |
+|--------|--------------------------------|---------------------|
+| Maven, Gradle | `409 Conflict` (release versions only) | Accepted |
+| Composer | `409 Conflict` (releases only) | Accepted |
+| Go | `409 Conflict` | Accepted |
+| PyPI | `400 File already exists` | Accepted |
+| Generic files | `409 Conflict` | Accepted |
+| npm | `409 Conflict` | Refused |
+| RubyGems, Helm, NuGet, Conda, Debian | `409 Conflict` | Refused |
+| RPM | `409 Conflict`, also with `?override=true` | Refused |
+| Hex | `422`, also with `?replace=true` | Refused |
+| Conan | `upload_urls` answers `404` naming the existing file; an upload to an existing file answers `409` | Refused |
+
+Files that are meant to change stay writable whatever the setting: Maven `-SNAPSHOT` versions and `maven-metadata.xml` (with its checksums), Composer dev branches (`dev-*`, `*-dev`), a Go version's `.info` until its `.zip` is stored, and the index files Pantera maintains itself. Docker has no `immutable` setting: moving an existing tag needs the `overwrite` permission (see [Docker](repositories/docker.md)). The import endpoint (`PUT /.import/...`) always refuses to replace a file with different content, whatever the setting.
+
+### Delete an artifact
+
+A user with the `delete` permission on a local repository deletes a file, or a whole directory, with an HTTP `DELETE` of its path on the repository URL:
+
+```bash
+curl -u your-username:your-api-token -X DELETE \
+  http://pantera-host:8080/maven-local/com/example/my-lib/1.0.0
+```
+
+| Response | Meaning |
+|----------|---------|
+| `204 No Content` | Deleted |
+| `404 Not Found` | Nothing is stored or indexed at the path |
+| `400 Bad Request` | The path is the repository root, or is not a valid path (for example it contains `..`) |
+| `401` / `403` | No credentials, or no `delete` permission on the repository |
+
+Deleting a directory removes everything under it and nothing beside it (deleting `my-lib` does not touch `my-lib-extra`). Search stops returning the deleted files, and the format's own metadata stops listing them: Maven `maven-metadata.xml`, the npm packument (deleting a tarball unpublishes that version), Composer `p2` files, Go `@v/list`, the NuGet version list, Hex `packages/<name>`, RubyGems specs, Conda `repodata.json` and Helm `index.yaml`. A delete is allowed whether or not the repository is immutable. Each format page shows the storage path to use.
+
+PyPI, RPM and Debian repositories keep their own delete instead (see their pages; those deletes also remove the artifact from search), and Docker deletes through the registry API (see [Docker](repositories/docker.md#delete-images)). npm `unpublish` and `dist-tag rm`, `dotnet nuget delete`, `mix hex.publish --revert` and the Helm chart API (`DELETE /<repo>/charts/<name>/<version>`) keep working alongside the path delete. The UI's **Delete** action and the REST API ([`DELETE /api/v1/repositories/:name/artifacts`](../rest-api-reference.md#delete-apiv1repositoriesnameartifacts)) do the same as the path delete.
+
+### Evict a cached file from a proxy
+
+On a `file`, `maven`, `gradle`, `npm`, `pypi`, `go` or `php` proxy repository, the same `DELETE` evicts the cached copy instead: the file (or directory) is removed from the proxy's cache together with its checksum files, its search entries, and the repository's cached "not found" answer and metadata for it. The upstream is never contacted; the next request fetches the artifact again. It needs `delete` on the proxy repository and answers `204`, or `404` when nothing is cached at the path. A download that is already in progress when you evict can store the file again. Docker proxies and group repositories answer `405`.
+
+---
+
 ## Obtaining Access
 
 ### First login after a fresh install

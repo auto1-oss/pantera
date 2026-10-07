@@ -1,23 +1,53 @@
 import { ref, watch } from 'vue'
 
+/**
+ * Debounced, abortable search runner shared by list pages.
+ *
+ * `query` is bound to the search input; typing schedules one fetch after
+ * `delayMs`. `run()` fetches immediately (Enter, a filter or sort change)
+ * and cancels both the pending timer and the in-flight request, so a slow
+ * earlier response can never overwrite a newer one.
+ */
 export function useDebouncedSearch(
-  searchFn: (query: string) => Promise<void>,
-  delay = 300,
+  fetch: (signal: AbortSignal) => Promise<void>,
+  options: { delayMs?: number } = {},
 ) {
+  const delay = options.delayMs ?? 300
   const query = ref('')
-  let timeout: ReturnType<typeof setTimeout> | null = null
+  const loading = ref(false)
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let ctrl: AbortController | null = null
 
-  watch(query, (val) => {
-    if (timeout) clearTimeout(timeout)
-    timeout = setTimeout(() => {
-      searchFn(val)
+  async function run(): Promise<void> {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+    if (ctrl) ctrl.abort()
+    ctrl = new AbortController()
+    const mine = ctrl
+    loading.value = true
+    try {
+      await fetch(mine.signal)
+    } catch (err) {
+      if (!mine.signal.aborted) throw err
+    } finally {
+      if (!mine.signal.aborted) loading.value = false
+    }
+  }
+
+  watch(query, () => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
+      void run()
     }, delay)
   })
 
-  function clear() {
-    query.value = ''
-    if (timeout) clearTimeout(timeout)
+  function dispose() {
+    if (timer) clearTimeout(timer)
+    if (ctrl) ctrl.abort()
   }
 
-  return { query, clear }
+  return { query, run, loading, dispose }
 }

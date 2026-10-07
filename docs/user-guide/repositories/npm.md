@@ -142,6 +142,23 @@ Or specify the registry on the command line:
 npm publish --registry http://pantera-host:8080/npm-local
 ```
 
+### Re-publishing a Version
+
+In a repository with the **Immutable artifacts** setting on (the default), a version can be published once, as on npmjs.org: publishing a version that already exists is refused with `409 Conflict` and the body `{"error": "cannot publish over the previously published version <version>"}` (npm prints `E409`), even when the tarball is identical. Bump the version, or unpublish the old one first. When the administrator has turned the setting off, `npm publish` of an existing version by a user with `write` replaces it. See [Overwrite rules](../getting-started.md#overwrite-rules-immutable).
+
+A publish payload must be consistent; the npm CLI always sends one, so this matters only for hand-written publish scripts. A payload that declares no version, or whose `versions` object has no entry for the version it publishes, answers `400 Bad Request` on every repository. On an immutable repository a payload whose `name` differs from the package in the URL, or whose tarball attachment is not named `<name>-<version>.tgz`, answers `400` too. The body names the problem, for example `{"error": "publish payload targets version 1.0.1 but carries metadata of [1.0.0]"}`.
+
+### Delete a Version by Path
+
+Besides `npm unpublish` (below), a version can be deleted with an HTTP `DELETE` of its tarball's storage path, `<pkg>/-/<pkg>-<version>.tgz`; for a scoped package the scope appears in both parts (`@scope/pkg/-/@scope/pkg-<version>.tgz`). It needs the `delete` permission, answers `204` (or `404` when nothing is stored there) and unpublishes the version: it leaves the packument, and dist-tags pointing at it are dropped (`latest` falls back to the highest remaining version).
+
+```bash
+curl -u your-username:your-api-token -X DELETE \
+  http://pantera-host:8080/npm-local/@myorg/my-package/-/@myorg/my-package-1.0.0.tgz
+```
+
+On an `npm-proxy`, a `DELETE` of a package path (its tarball or the package itself) evicts the cached copy, and the next request fetches it from the upstream again. See [Delete an artifact](../getting-started.md#delete-an-artifact).
+
 ---
 
 ## Dist-Tags & Custom Channels
@@ -168,9 +185,9 @@ npm install @myorg/my-package@beta
 
 Dist-tags are persisted durably per package on local repositories, so `dist-tag ls`/`add`/`rm`, `--tag` publishes, and installing by tag all reflect the same state. `npm deprecate` and `npm unpublish <pkg>@<version>` (single-version) are also effective against local repositories: a deprecated version is marked in the packument, and an unpublished version genuinely stops being served. Removing a version or a dist-tag (`npm unpublish <pkg>@<version>`, `npm dist-tag rm`) requires the `delete` permission; publishing and adding a dist-tag only require `write`.
 
-Whole-package removal (`npm unpublish <pkg> --force`) additionally requires a current packument revision (`_rev`) with the request. The same check applies to both steps of `npm unpublish <pkg>@<version>`: the update that drops the version from the packument (`PUT <pkg>/-rev/<revision>`), and the final delete of the removed version's tarball (`DELETE <pkg>/-/<file>.tgz/-rev/<revision>`) with the revision the packument reports once the version is gone. The revision changes whenever a version or a dist-tag is added or removed (its leading number is the version count), so a client holding a stale packument cannot remove versions published after it read it. The npm CLI does all of this automatically -- it reads the packument before each change -- so this is transparent to normal CLI use. A hand-rolled script that calls the registry API directly must read `_rev` from the package's own packument first and send it with the request; a mismatched revision is rejected with `409 Conflict`, a missing revision (no `/-rev/<rev>` segment, an empty one, or the literal `undefined` -- the usual sign a script never read the packument) with `428 Precondition Required`, and an unknown package with `404 Not Found`. The `409` and `428` responses carry a JSON body such as `{"error": "revision required: ..."}` and an `X-Pantera-Reason` header (`revision_mismatch` or `revision_required`).
+Whole-package removal (`npm unpublish <pkg> --force`) additionally requires a current packument revision (`_rev`) with the request. The same check applies to both steps of `npm unpublish <pkg>@<version>`: the update that drops the version from the packument (`PUT <pkg>/-rev/<revision>`), and the final delete of the removed version's tarball (`DELETE <pkg>/-/<file>.tgz/-rev/<revision>`) with the revision the packument reports once the version is gone. The revision changes whenever a version or a dist-tag is added or removed (its leading number is the version count), so a client holding a stale packument cannot remove versions published after it read it. The npm CLI does all of this automatically -- it reads the packument before each change -- so this is transparent to normal CLI use. A hand-rolled script that calls the registry API directly must read `_rev` from the package's own packument first and send it with the request; a mismatched revision is rejected with `409 Conflict`, a missing revision (no `/-rev/<rev>` segment, an empty one, or the literal `undefined` -- the usual sign a script never read the packument) with `428 Precondition Required`, and an unknown package with `404 Not Found`. The `409` and `428` responses carry a JSON body such as `{"error": "revision required: ..."}` and an `X-Pantera-Reason` header (`revision_mismatch` or `revision_required`). A `DELETE` of a tarball path with no `/-rev/` segment at all is the [delete by path](#delete-a-version-by-path) above, which needs no revision.
 
-On proxy repositories, `npm dist-tag ls` and `npm search` are forwarded upstream (read-through, not persisted locally). Proxy and group repositories are read-only: `npm publish`, `npm unpublish` and `npm dist-tag add`/`rm` against them answer `405 Method Not Allowed`; publish to a local repository.
+On proxy repositories, `npm dist-tag ls` and `npm search` are forwarded upstream (read-through, not persisted locally). Proxy and group repositories do not accept publishes: `npm publish`, `npm unpublish` and `npm dist-tag add`/`rm` against them answer `405 Method Not Allowed`; publish to a local repository.
 
 ---
 
@@ -270,6 +287,8 @@ Point your `.npmrc` registry at the group, and Pantera handles resolution order 
 | `npm ERR! 404 Not Found` | Package not cached in proxy yet, or wrong registry URL | Verify the registry URL in `.npmrc`; check if the proxy has upstream configured |
 | `npm ERR! code E403` | User lacks write permission | Contact admin for publish access to the local repository |
 | `npm ERR! code E405` on publish | `publishConfig.registry` or `--registry` points at a proxy or group repository | Publish to the local repository |
+| `npm ERR! code E409` on publish | That version is already published and the repository is immutable | Bump the version, or unpublish the existing version first |
+| `400 Bad Request` with `publish payload ...` in the body | A hand-built publish payload is inconsistent (version, `versions` entry, `name` or tarball file name disagree) | Build the payload as `npm publish` does, or publish with the npm CLI |
 | `npm login` fails with `E401` | Wrong password, or an SSO-only account with no Pantera password | Check the password, or generate an API token in the UI and put it in `.npmrc` |
 | Publish goes to npmjs.org instead of Pantera | Missing `publishConfig` in `package.json` | Add `publishConfig.registry` or use `--registry` flag |
 | `ETARGET` no matching version | Package exists upstream but is in cooldown | Check with admin; see [Cooldown](../cooldown.md) |

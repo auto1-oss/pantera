@@ -124,9 +124,36 @@ public final class MavenSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex, true);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting.
+     * @param storage The storage.
+     * @param policy Access policy.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Artifact events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When true a published release file can never be
+     *  overwritten (identical re-upload is an idempotent 201, different bytes
+     *  are a 409); when false a differing release file overwrites
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public MavenSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
         super(
             MavenSlice.createSliceRoute(
-                storage, policy, basicAuth, tokenAuth, name, events, syncIndex
+                storage, policy, basicAuth, tokenAuth, name, events, syncIndex, immutable
             )
         );
     }
@@ -142,7 +169,8 @@ public final class MavenSlice extends Slice.Wrap {
         final TokenAuthentication tokenAuth,
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
-        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
     ) {
         return new SliceRoute(
             new RtRulePath(
@@ -164,7 +192,7 @@ public final class MavenSlice extends Slice.Wrap {
                     new RtRule.ByPath(".*SNAPSHOT.*")
                 ),
                 MavenSlice.createAuthSlice(
-                    new UploadSlice(storage, events, name, syncIndex),
+                    new UploadSlice(storage, events, name, syncIndex, immutable),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(
@@ -175,7 +203,7 @@ public final class MavenSlice extends Slice.Wrap {
             new RtRulePath(
                 MethodRule.PUT,
                 MavenSlice.createAuthSlice(
-                    new UploadSlice(storage, events, name, syncIndex),
+                    new UploadSlice(storage, events, name, syncIndex, immutable),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

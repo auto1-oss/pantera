@@ -57,6 +57,59 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void listReturnsModeStorageAndAuditFields(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        client.put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/list-fields")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(VALID_BODY).toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        final HttpResponse<Buffer> res = client
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories?q=list-fields")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, res.statusCode(), "list answers 200");
+        final JsonObject item = res.bodyAsJsonObject().getJsonArray("items").getJsonObject(0);
+        Assertions.assertEquals("proxy", item.getString("mode"), "mode");
+        Assertions.assertEquals("fs", item.getString("storage"), "storage");
+        Assertions.assertFalse(item.getBoolean("anonymous_read"), "anonymous_read");
+        Assertions.assertTrue(item.containsKey("updated_at"), "updated_at present");
+        Assertions.assertFalse(item.containsKey("remotes"), "config internals stay out");
+        ctx.completeNow();
+    }
+
+    @Test
+    void listFiltersByMode(final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        client.put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/mode-proxy")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(VALID_BODY).toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        final HttpResponse<Buffer> groups = client
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories?mode=group&q=mode-proxy")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(0, groups.bodyAsJsonObject().getInteger("total"), "no groups");
+        final HttpResponse<Buffer> proxies = client
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories?mode=proxy&q=mode-proxy")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(1, proxies.bodyAsJsonObject().getInteger("total"), "one proxy");
+        ctx.completeNow();
+    }
+
+    @Test
+    void listRejectsUnknownSort(final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        this.request(
+            vertx, ctx, HttpMethod.GET, "/api/v1/repositories?sort=size",
+            res -> Assertions.assertEquals(400, res.statusCode())
+        );
+    }
+
+    @Test
     void createRepoAndGet(final Vertx vertx, final VertxTestContext ctx) throws Exception {
         final WebClient client = WebClient.create(vertx);
         // Step 1: PUT the repo
@@ -585,6 +638,35 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
                 Assertions.assertTrue(
                     resp.getString("message").contains("anonymous_write"),
                     "Error message should mention 'anonymous_write'"
+                );
+            }
+        );
+    }
+
+    @Test
+    void putWithNonBooleanImmutableReturns400(
+        final Vertx vertx, final VertxTestContext ctx
+    ) throws Exception {
+        // immutable = "false" (a string) — must be a real JSON boolean.
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "file")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                    .put("immutable", "false")
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/immutable-bad",
+            body,
+            res -> {
+                Assertions.assertEquals(400, res.statusCode());
+                final JsonObject resp = res.bodyAsJsonObject();
+                Assertions.assertEquals("BAD_REQUEST", resp.getString("error"));
+                Assertions.assertTrue(
+                    resp.getString("message").contains("immutable"),
+                    "Error message should mention 'immutable'"
                 );
             }
         );

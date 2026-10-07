@@ -27,7 +27,6 @@ import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.json.JSONException;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -189,19 +188,99 @@ class UpdateSliceTest {
     }
 
     @Test
-    @Disabled("Upload synchronization behaviour should be discussed further")
-    void returnsBadRequestIfPackageAlreadyExists() {
-        final String key = "linux-64/test.conda";
-        this.asto.save(new Key.From(key), Content.EMPTY).join();
-        MatcherAssert.assertThat(
-            new UpdateSlice(this.asto, Optional.of(this.events), UpdateSliceTest.RNAME),
-            new SliceHasResponse(
-                new RsHasStatus(RsStatus.BAD_REQUEST),
-                new RequestLine(RqMethod.PUT, String.format("/%s", key))
+    void immutableRefusesPackageThatAlreadyExists() throws IOException {
+        final Key key = new Key.From("linux-64", "7zip-19.00-h59b6b97_2.conda");
+        final byte[] stored = "stored package".getBytes(StandardCharsets.UTF_8);
+        this.asto.save(key, new Content.From(stored)).join();
+        final com.auto1.pantera.http.Response rsp = new UpdateSlice(
+            this.asto, Optional.of(this.events), UpdateSliceTest.RNAME,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, true
+        ).response(
+            new RequestLine(RqMethod.POST, String.format("/%s", key.string())),
+            UpdateSliceTest.HEADERS,
+            new Content.From(
+                this.body(new TestResource("7zip-19.00-h59b6b97_2.conda").asBytes())
             )
+        ).join();
+        MatcherAssert.assertThat(
+            "an existing package is refused with 409",
+            rsp.status(), new IsEqual<>(RsStatus.CONFLICT)
         );
         MatcherAssert.assertThat(
-            "Package info was not added to events queue", this.events.isEmpty()
+            "the stored package is untouched",
+            this.asto.value(key).join().asBytes(), new IsEqual<>(stored)
+        );
+        MatcherAssert.assertThat(
+            "nothing else is written: no repodata, no temporary upload",
+            this.asto.list(Key.ROOT).join(), new IsEqual<>(java.util.List.of(key))
+        );
+        MatcherAssert.assertThat(
+            "no publish event", this.events.isEmpty(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void immutableRefusesIdenticalReupload() throws IOException {
+        final String name = "7zip-19.00-h59b6b97_2.conda";
+        final UpdateSlice slice = new UpdateSlice(
+            this.asto, Optional.of(this.events), UpdateSliceTest.RNAME,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, true
+        );
+        final RequestLine line = new RequestLine(RqMethod.POST, String.format("/linux-64/%s", name));
+        final byte[] body = this.body(new TestResource(name).asBytes());
+        MatcherAssert.assertThat(
+            "first upload is accepted",
+            slice.response(line, UpdateSliceTest.HEADERS, new Content.From(body)).join().status(),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+        final String repodata = this.asto.value(new Key.From("linux-64", "repodata.json"))
+            .join().asString();
+        MatcherAssert.assertThat(
+            "re-upload of the same file is refused",
+            slice.response(line, UpdateSliceTest.HEADERS, new Content.From(body)).join().status(),
+            new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "repodata is untouched",
+            this.asto.value(new Key.From("linux-64", "repodata.json")).join().asString(),
+            new IsEqual<>(repodata)
+        );
+        MatcherAssert.assertThat(
+            "only the first upload produced an event", this.events.size(), new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void mutableOverwritesPackageThatAlreadyExists() throws IOException, JSONException {
+        final String name = "7zip-19.00-h59b6b97_2.conda";
+        final Key key = new Key.From("linux-64", name);
+        this.asto.save(key, new Content.From("stale".getBytes(StandardCharsets.UTF_8))).join();
+        final UpdateSlice slice = new UpdateSlice(
+            this.asto, Optional.of(this.events), UpdateSliceTest.RNAME,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, false
+        );
+        final RequestLine line = new RequestLine(RqMethod.POST, String.format("/%s", key.string()));
+        final byte[] pkg = new TestResource(name).asBytes();
+        MatcherAssert.assertThat(
+            "upload over an existing file is accepted",
+            slice.response(line, UpdateSliceTest.HEADERS, new Content.From(this.body(pkg)))
+                .join().status(),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "re-upload is accepted too",
+            slice.response(line, UpdateSliceTest.HEADERS, new Content.From(this.body(pkg)))
+                .join().status(),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the stored file holds the uploaded package",
+            this.asto.value(key).join().asBytes(), new IsEqual<>(pkg)
+        );
+        JSONAssert.assertEquals(
+            this.asto.value(new Key.From("linux-64", "repodata.json")).join().asString(),
+            new TestResource("UpdateSliceTest/addsPackageToEmptyRepo-2.json").asString(),
+            true
         );
     }
 

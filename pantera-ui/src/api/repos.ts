@@ -1,11 +1,14 @@
 import { getApiClient } from './client'
 import type {
-  PaginatedResponse, CursorResponse, RepoMember, RepoListItem,
+  PaginatedResponse, CursorResponse, RepoMember, RepoListItem, RepoMode,
   TreeEntry, ArtifactDetail, PullInstructions, StorageAlias,
 } from '@/types'
 
+export type RepoSortField = 'name' | 'type' | 'updated_at'
+
 export async function listRepos(params: {
   page?: number; size?: number; type?: string; q?: string
+  mode?: RepoMode; sort?: RepoSortField; order?: 'asc' | 'desc'
 } = {}, signal?: AbortSignal): Promise<PaginatedResponse<RepoListItem>> {
   const { data } = await getApiClient().get('/repositories', { params, signal })
   return data

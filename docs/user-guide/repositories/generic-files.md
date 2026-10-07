@@ -55,6 +55,26 @@ wget -nv -O /dev/null --method=PUT --body-file=myfile.tar.gz \
   http://pantera-host:8080/bin/path/to/myfile.tar.gz
 ```
 
+### Uploading to an Existing Path
+
+In a repository with the **Immutable artifacts** setting on (the default for new repositories), a stored file is never replaced: uploading different content to its path answers `409 Conflict` with `File /<path> already exists with different content`, and uploading identical content answers `201` without changing anything. When the setting is off, an upload by a user with `write` replaces the file. File repositories that existed before Pantera 2.2.10 in a database-backed installation keep overwriting until the administrator turns the setting on. See [Overwrite rules](../getting-started.md#overwrite-rules-immutable).
+
+---
+
+## Delete via curl
+
+With the `delete` permission, delete a file or a whole directory:
+
+```bash
+# One file
+curl -f --netrc -X DELETE http://pantera-host:8080/bin/path/to/myfile.tar.gz
+
+# A directory and everything under it
+curl -f --netrc -X DELETE http://pantera-host:8080/bin/releases/v1.0.0
+```
+
+The answer is `204`, `404` when nothing is stored or indexed at the path, and `400` for the repository root. Search stops returning the deleted files. On a `file-proxy`, the same request evicts the cached copy, and the next request fetches it from the upstream again. See [Delete an artifact](../getting-started.md#delete-an-artifact).
+
 ---
 
 ## Download via curl
@@ -113,6 +133,7 @@ You can also browse file repositories through the Management UI by navigating to
 | `401 Unauthorized` | Token missing or expired | Regenerate your JWT token |
 | `404 Not Found` on download | File does not exist at the specified path | Verify the exact file path (paths are case-sensitive) |
 | `405 Method Not Allowed` | Using POST instead of PUT for upload | Use `PUT` method for uploads |
+| `409 Conflict` on upload | A file with different content is already stored at that path and the repository is immutable | Upload to a new path, or delete the existing file first |
 | Upload succeeds but file cannot be downloaded | Different repository name for upload and download | Ensure both operations target the same repository |
 | Large file upload times out | Proxy or server timeout | Ask admin to increase `proxy_timeout` and Nginx `client_max_body_size` |
 

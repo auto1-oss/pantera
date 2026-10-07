@@ -43,7 +43,7 @@ public final class AstoRepo implements Repo {
 
     @Override
     public Layers layers() {
-        return new AstoLayers(this.blobs());
+        return new AstoLayers(this.asto, this.name);
     }
 
     @Override

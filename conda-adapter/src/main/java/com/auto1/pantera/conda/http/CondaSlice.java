@@ -123,6 +123,31 @@ public final class CondaSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final UploadTickets tickets) {
+        this(storage, policy, users, tokens, url, repo, events, syncIndex, tickets, false);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer, upload tickets and the
+     * immutability switch.
+     * @param storage Storage
+     * @param policy Permissions
+     * @param users Users
+     * @param tokens Tokens
+     * @param url Application url
+     * @param repo Repository name
+     * @param events Events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @param tickets Upload tickets for the anaconda-client form upload
+     * @param immutable When {@code true} an upload of an already stored
+     *  package file answers 409 Conflict; when {@code false} it overwrites
+     *  the file and its repodata entry
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public CondaSlice(final Storage storage, final Policy<?> policy, final Authentication users,
+        final Tokens tokens, final String url, final String repo,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final UploadTickets tickets, final boolean immutable) {
         super(
             new SliceRoute(
                 // anaconda-client's check_server HEADs the repository base URL
@@ -141,7 +166,7 @@ public final class CondaSlice extends Slice.Wrap {
                             new Setup(storage, policy, users, tokens, repo),
                             new PostStageCommitSlice(url, tickets, repo),
                             new UploadSlices(
-                                new UpdateSlice(storage, events, repo, syncIndex), tickets
+                                new UpdateSlice(storage, events, repo, syncIndex, immutable), tickets
                             )
                         )
                     )

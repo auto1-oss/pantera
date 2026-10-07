@@ -160,7 +160,9 @@ const allActionsMap: Record<string, string[]> = {
   api_cooldown_permissions: ['read', 'write'],
   api_cooldown_history_permissions: ['read'],
   adapter_basic_permissions: ['read', 'write', 'delete'],
-  docker_repository_permissions: ['pull', 'push', 'overwrite'],
+  // Must list EVERY docker action: collapseWildcard() turns a full selection
+  // into '*', and the server's '*' includes delete.
+  docker_repository_permissions: ['pull', 'push', 'overwrite', 'delete'],
   docker_registry_permissions: ['base', 'catalog'],
 }
 
@@ -473,7 +475,7 @@ onMounted(load)
                   <div class="flex items-center justify-between">
                     <div>
                       <span class="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase">Image Access</span>
-                      <span class="text-xs text-gray-400 ml-1">— pull, push, overwrite specific images</span>
+                      <span class="text-xs text-gray-400 ml-1">— pull, push, overwrite, delete specific images</span>
                     </div>
                     <Button label="Add" icon="pi pi-plus" text size="small" @click="addDockerRepoEntry" />
                   </div>
@@ -491,7 +493,7 @@ onMounted(load)
                         </div>
                       </div>
                       <div class="flex gap-x-4">
-                        <div v-for="a in ['pull', 'push', 'overwrite']" :key="'dr_' + i + a" class="flex items-center gap-1">
+                        <div v-for="a in allActionsMap.docker_repository_permissions" :key="'dr_' + i + a" class="flex items-center gap-1">
                           <Checkbox v-model="entry.actions" :value="a" :input-id="'dr_' + i + a" />
                           <label :for="'dr_' + i + a" class="text-xs cursor-pointer">{{ a }}</label>
                         </div>

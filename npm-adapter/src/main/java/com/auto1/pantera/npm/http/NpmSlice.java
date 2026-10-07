@@ -119,7 +119,7 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events
     ) {
         this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, false,
-            null, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
+            null, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP, false);
     }
 
     /**
@@ -144,7 +144,7 @@ public final class NpmSlice implements Slice {
         final boolean jwtOnly
     ) {
         this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
-            null, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
+            null, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP, false);
     }
 
     /**
@@ -172,7 +172,7 @@ public final class NpmSlice implements Slice {
         final boolean jwtOnly
     ) {
         this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
-            tokens, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
+            tokens, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP, false);
     }
 
     /**
@@ -193,7 +193,7 @@ public final class NpmSlice implements Slice {
         final ArtifactIndex artifactIndex
     ) {
         this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
-            tokens, syncIndex, artifactIndex);
+            tokens, syncIndex, artifactIndex, false);
     }
 
     /**
@@ -216,8 +216,43 @@ public final class NpmSlice implements Slice {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final ArtifactIndex artifactIndex
     ) {
+        this(base, storage, policy, basicAuth, tokenAuth, tokens, name, events, jwtOnly,
+            syncIndex, artifactIndex, false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting.
+     * @param base Configured {@code url:}, or empty when the repository has none.
+     * @param storage Storage.
+     * @param policy Policy.
+     * @param basicAuth Basic auth.
+     * @param tokenAuth Token auth.
+     * @param tokens Token service (optional).
+     * @param name Repository name.
+     * @param events Events queue.
+     * @param jwtOnly Use JWT-only mode.
+     * @param syncIndex Synchronous artifact-index writer.
+     * @param artifactIndex Shared search index backing {@code /-/v1/search}.
+     * @param immutable When true a publish of an already published version
+     *  (even byte-identical) is refused with 409; when false it overwrites
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NpmSlice(
+        final Optional<URL> base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Tokens tokens,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final boolean immutable
+    ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            syncIndex, artifactIndex);
+            syncIndex, artifactIndex, immutable);
     }
 
     /**
@@ -234,6 +269,7 @@ public final class NpmSlice implements Slice {
      * @param tokens Token service (optional).
      * @param syncIndex Synchronous artifact-index writer.
      * @param artifactIndex Shared search index backing {@code /-/v1/search}.
+     * @param immutable Whether published versions are immutable.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     private NpmSlice(
@@ -247,7 +283,8 @@ public final class NpmSlice implements Slice {
         final boolean jwtOnly,
         final Tokens tokens,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
-        final ArtifactIndex artifactIndex
+        final ArtifactIndex artifactIndex,
+        final boolean immutable
     ) {
         this.tokens = tokens;
         final TokenAuthentication npmTokenAuth = jwtOnly
@@ -372,7 +409,10 @@ public final class NpmSlice implements Slice {
                     )
                 ),
                 NpmSlice.createAuthSlice(
-                    new UploadSlice(new CliPublish(storage), storage, events, name, syncIndex),
+                    new UploadSlice(
+                        new CliPublish(storage, immutable), storage, events, name, syncIndex,
+                        immutable
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -420,7 +460,10 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(CurlPublish.PTRN)
                 ),
                 NpmSlice.createAuthSlice(
-                    new UploadSlice(new CurlPublish(storage), storage, events, name, syncIndex),
+                    new UploadSlice(
+                        new CurlPublish(storage, immutable), storage, events, name, syncIndex,
+                        immutable
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -436,7 +479,10 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath("^/(@[^/]+/)?[^/]+$")  // Matches package names, not paths with /
                 ),
                 NpmSlice.createAuthSlice(
-                    new UploadSlice(new CliPublish(storage), storage, events, name, syncIndex),
+                    new UploadSlice(
+                        new CliPublish(storage, immutable), storage, events, name, syncIndex,
+                        immutable
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(

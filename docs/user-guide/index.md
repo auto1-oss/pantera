@@ -10,7 +10,7 @@ Welcome to the Pantera Artifact Registry User Guide. This guide covers everythin
 
 ### Getting Started
 
-- [Getting Started](getting-started.md) -- What Pantera is, supported formats, repository modes, obtaining access, generating API tokens.
+- [Getting Started](getting-started.md) -- What Pantera is, supported formats, repository modes, overwrite rules and deleting artifacts, obtaining access, generating API tokens.
 
 ### Repository Guides
 

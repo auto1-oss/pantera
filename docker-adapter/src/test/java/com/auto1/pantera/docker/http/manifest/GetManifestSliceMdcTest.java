@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -159,6 +160,11 @@ final class GetManifestSliceMdcTest {
                         public CompletableFuture<com.auto1.pantera.docker.Tags> tags(
                             final Pagination pagination
                         ) {
+                            throw new UnsupportedOperationException();
+                        }
+
+                        @Override
+                        public CompletableFuture<Collection<String>> delete(final ManifestReference mref) {
                             throw new UnsupportedOperationException();
                         }
                     };

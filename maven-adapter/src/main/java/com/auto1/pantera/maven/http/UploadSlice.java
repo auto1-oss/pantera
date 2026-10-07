@@ -13,6 +13,7 @@ package com.auto1.pantera.maven.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.http.Headers;
@@ -40,6 +41,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -86,6 +88,14 @@ public final class UploadSlice implements Slice {
     private final SyncArtifactIndexer syncIndex;
 
     /**
+     * Whether published release files are immutable. When true an existing
+     * release file is never overwritten (identical bytes: idempotent 201,
+     * different bytes: 409). When false a re-upload overwrites it through the
+     * normal save path (checksums regenerated, publish event emitted).
+     */
+    private final boolean immutable;
+
+    /**
      * Ctor without events.
      * @param storage Abstract storage
      */
@@ -121,10 +131,30 @@ public final class UploadSlice implements Slice {
         final String rname,
         final SyncArtifactIndexer syncIndex
     ) {
+        this(storage, events, rname, syncIndex, true);
+    }
+
+    /**
+     * Ctor with synchronous index writer and the repository's
+     * {@code immutable} setting.
+     * @param storage Storage
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether published release files are immutable
+     */
+    public UploadSlice(
+        final Storage storage,
+        final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
         this.storage = storage;
         this.events = events;
         this.rname = rname;
         this.syncIndex = syncIndex;
+        this.immutable = immutable;
     }
 
     @Override
@@ -243,16 +273,37 @@ public final class UploadSlice implements Slice {
             return this.uploadChecksum(key, body, headers, owner, size);
         }
 
-        // Published release files are immutable: an identical re-upload
-        // (CI retry) is idempotent, different bytes are a 409 Conflict.
-        // SNAPSHOT directories stay writable.
-        if (isReleaseFile(keyPath)) {
-            return this.storage.exists(key).thenCompose(
-                exists -> {
-                    if (exists) {
-                        return this.redeploy(key, body, headers);
-                    }
-                    return this.save(key, body, headers, owner, size);
+        // In an immutable repository published release files can never be
+        // overwritten: an identical re-upload (CI retry) is idempotent,
+        // different bytes are a 409 Conflict. SNAPSHOT directories stay
+        // writable. A mutable repository overwrites through the normal save
+        // path, which regenerates the checksum sidecars from the new bytes
+        // (so the client's own checksum upload that follows verifies) and
+        // emits the publish event that upserts the search index.
+        if (this.immutable && isReleaseFile(keyPath)) {
+            // Check and write under one lock on the file, kept in storage:
+            // two first-time uploads of the same release file, here or on
+            // another instance sharing the storage, cannot both see it absent.
+            final AtomicBoolean started = new AtomicBoolean();
+            return new IndexUpdateLock(this.storage, key).run(
+                locked -> {
+                    started.set(true);
+                    return locked.exists(key).thenCompose(
+                        exists -> {
+                            if (exists) {
+                                return this.redeploy(key, body, headers);
+                            }
+                            return this.save(key, body, headers, owner, size);
+                        }
+                    );
+                }
+            ).exceptionallyCompose(
+                err -> {
+                    // The lock was never acquired: nothing read the body yet.
+                    final CompletableFuture<Void> drained = started.get()
+                        ? CompletableFuture.completedFuture(null)
+                        : body.discard().toCompletableFuture();
+                    return drained.thenCompose(ignored -> CompletableFuture.failedFuture(err));
                 }
             );
         }

@@ -174,6 +174,21 @@ curl -X POST http://pantera-host:8086/api/v1/repositories/npm-proxy/cooldown/unb
   -H "Authorization: Bearer $TOKEN"
 ```
 
+### Unblock Several Artifacts at Once
+
+Up to 500 items, across repositories, in one request. The response lists what
+was released and what failed (an unknown repository, or one you lack `write`
+on), so a partial result is visible rather than silent. The Cooldown page does
+the same when you tick rows and click **Unblock selected**.
+
+```bash
+curl -X POST http://pantera-host:8086/api/v1/cooldown/unblock \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"repo":"npm-proxy","artifact":"lodash","version":"4.17.22"},
+               {"repo":"pypi-proxy","artifact":"requests","version":"2.33.0"}]}'
+```
+
 An unblock holds until the version's cooldown window would have ended on its
 own: the released entry leaves the blocked list immediately, is recorded in
 cooldown history as `MANUAL_UNBLOCK`, and the version is not blocked again by

@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.ParkedStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.headers.ContentType;
@@ -36,6 +37,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Test for {@link WheelSlice}.
@@ -198,6 +201,82 @@ class WheelSliceTest {
     }
 
     @Test
+    void failedPublishLeavesNoTemporaryUpload() throws IOException {
+        this.asto = new Storage.Wrap(new InMemoryStorage()) {
+            @Override
+            public CompletableFuture<Void> move(final Key source, final Key destination) {
+                return CompletableFuture.failedFuture(new IllegalStateException("move failed"));
+            }
+        };
+        final com.auto1.pantera.http.Response response = this.upload(
+            "/", "pantera-sample-0.2.tar",
+            new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes()
+        );
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "the failed publish is answered with an error",
+            response.status().success(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "no temporary upload is left behind",
+            this.asto.list(Key.ROOT).join(),
+            new IsEmptyCollection<>()
+        );
+    }
+
+    @Test
+    void failedDigestComparisonLeavesNoTemporaryUpload() throws IOException {
+        final String filename = "pantera-sample-0.2.tar";
+        final Key stored = new Key.From("pantera-sample", "0.2", filename);
+        final byte[] original = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        final Storage backing = new InMemoryStorage();
+        backing.save(stored, new Content.From(original)).join();
+        this.asto = new Storage.Wrap(backing) {
+            @Override
+            public CompletableFuture<Content> value(final Key key) {
+                final CompletableFuture<Content> res;
+                if (key.equals(stored)) {
+                    res = CompletableFuture.failedFuture(new IllegalStateException("read failed"));
+                } else {
+                    res = super.value(key);
+                }
+                return res;
+            }
+        };
+        final com.auto1.pantera.http.Response response =
+            this.upload("/", filename, WheelSliceTest.tamper(original));
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "the failed comparison is answered with an error",
+            response.status().success(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "only the previously stored file remains",
+            this.asto.list(Key.ROOT).join(),
+            new IsEqual<>(java.util.List.of(stored))
+        );
+    }
+
+    @Test
+    void unreadableArchiveLeavesNoTemporaryUpload() throws IOException {
+        final com.auto1.pantera.http.Response response =
+            this.upload("/", "myproject.whl", "some code".getBytes(StandardCharsets.UTF_8));
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "the unreadable archive is refused",
+            response.status(),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "no temporary upload is left behind",
+            this.asto.list(Key.ROOT).join(),
+            new IsEmptyCollection<>()
+        );
+    }
+
+    @Test
     void uploadToLegacyPathKeepsEarlierReleasesInTheIndex() throws IOException {
         // B39: twine's conventional /legacy/ upload URL used to store the
         // file under legacy/ and rebuild the package index from that prefix
@@ -290,6 +369,139 @@ class WheelSliceTest {
     }
 
     @Test
+    void immutableRepoRefusesDifferingReupload() throws IOException {
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] original = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        this.upload("/", filename, original, true);
+        final byte[] tampered = WheelSliceTest.tamper(original);
+        final com.auto1.pantera.http.Response response =
+            this.upload("/", filename, tampered, true);
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "immutable: re-upload with different bytes is refused",
+            response.status(),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "immutable: the stored file is untouched",
+            this.asto.value(new Key.From("pantera-sample", "0.2", filename)).join().asBytes(),
+            new IsEqual<>(original)
+        );
+    }
+
+    @Test
+    void concurrentUploadsOfAFileAcrossInstancesAreSerialised() throws Exception {
+        // Two upload fronts over one storage stand in for two instances
+        // sharing it. The first upload is parked while moving its upload
+        // into place, after its existence check passed; the second, with
+        // different bytes, must wait for it in storage and then be refused.
+        // Without the storage lock both see the file absent and both move,
+        // last one wins.
+        final String filename = "pantera-sample-0.2.tar";
+        final ParkedStorage parked = new ParkedStorage(
+            new InMemoryStorage(), key -> key.equals(new Key.From("pantera-sample", "0.2", filename))
+        );
+        final byte[] original = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        final byte[] tampered = WheelSliceTest.tamper(original);
+        final CompletableFuture<RsStatus> first = CompletableFuture.supplyAsync(
+            () -> WheelSliceTest.uploadQuietly(parked, filename, original)
+        );
+        parked.arrived().get(10, TimeUnit.SECONDS);
+        final CompletableFuture<RsStatus> second = CompletableFuture.supplyAsync(
+            () -> WheelSliceTest.uploadQuietly(parked, filename, tampered)
+        );
+        parked.contender().get(10, TimeUnit.SECONDS);
+        parked.release();
+        MatcherAssert.assertThat(
+            "the first upload is created",
+            first.get(30, TimeUnit.SECONDS), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the second upload is refused",
+            second.get(30, TimeUnit.SECONDS), new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "the first bytes are kept",
+            parked.value(new Key.From("pantera-sample", "0.2", filename)).join().asBytes(),
+            new IsEqual<>(original)
+        );
+    }
+
+    @Test
+    void mutableRepoOverwritesDifferingReuploadAndRegeneratesIndex() throws IOException {
+        final String filename = "pantera-sample-0.2.tar";
+        final Key key = new Key.From("pantera-sample", "0.2", filename);
+        final byte[] original = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        this.upload("/", filename, original, false);
+        final byte[] tampered = WheelSliceTest.tamper(original);
+        final com.auto1.pantera.http.Response response =
+            this.upload("/", filename, tampered, false);
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "mutable: re-upload with different bytes is accepted",
+            response.status(),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the stored file is replaced",
+            this.asto.value(key).join().asBytes(),
+            new IsEqual<>(tampered)
+        );
+        final String index = new String(
+            this.asto.value(new Key.From(".pypi", "pantera-sample", "pantera-sample.html"))
+                .join().asBytes(),
+            StandardCharsets.UTF_8
+        );
+        MatcherAssert.assertThat(
+            "mutable: the simple index serves the new hash",
+            index.contains(String.format("#sha256=%s", WheelSliceTest.sha256(tampered))),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the simple index no longer serves the old hash",
+            index.contains(String.format("#sha256=%s", WheelSliceTest.sha256(original))),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the sidecar is present after the overwrite",
+            this.asto.exists(com.auto1.pantera.pypi.meta.PypiSidecar.sidecarKey(key)).join(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "mutable: the overwrite is published",
+            this.queue.size(),
+            new IsEqual<>(2)
+        );
+        MatcherAssert.assertThat(
+            "mutable: no temporary upload is left behind",
+            this.asto.list(Key.ROOT).join().stream()
+                .filter(item -> !item.string().startsWith(".pypi")
+                    && !item.string().startsWith("pantera-sample/"))
+                .count(),
+            new IsEqual<>(0L)
+        );
+    }
+
+    @Test
+    void mutableRepoIdenticalReuploadIsIdempotent() throws IOException {
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] body = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        this.upload("/", filename, body, false);
+        final com.auto1.pantera.http.Response response = this.upload("/", filename, body, false);
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "mutable: identical re-upload answers 200",
+            response.status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "mutable: identical re-upload is not a second publish",
+            this.queue.size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
     void badRequestExplainsFilenameMetadataMismatch() throws IOException {
         // B91: the 400 for a filename/metadata mismatch had an empty body,
         // so twine printed only "Bad Request".
@@ -313,8 +525,17 @@ class WheelSliceTest {
     private com.auto1.pantera.http.Response upload(
         final String path, final String filename, final byte[] body
     ) throws IOException {
+        return this.upload(path, filename, body, true);
+    }
+
+    private com.auto1.pantera.http.Response upload(
+        final String path, final String filename, final byte[] body, final boolean immutable
+    ) throws IOException {
         final String boundary = "b0undary";
-        return new WheelSlice(this.asto, Optional.of(this.queue), "test").response(
+        return new WheelSlice(
+            this.asto, Optional.of(this.queue), "test",
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, immutable
+        ).response(
             new RequestLine(RqMethod.POST, path),
             Headers.from(
                 ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
@@ -323,7 +544,45 @@ class WheelSliceTest {
         ).join();
     }
 
-    private byte[] multipartBody(final byte[] input, final String boundary, final String filename)
+    private static RsStatus uploadQuietly(
+        final Storage storage, final String filename, final byte[] body
+    ) {
+        final String boundary = "b0undary";
+        try {
+            final com.auto1.pantera.http.Response response = new WheelSlice(
+                storage, Optional.empty(), "test",
+                com.auto1.pantera.index.SyncArtifactIndexer.NOOP, true
+            ).response(
+                new RequestLine(RqMethod.POST, "/"),
+                Headers.from(
+                    ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
+                ),
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
+            ).join();
+            response.body().asBytes();
+            return response.status();
+        } catch (final IOException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private static byte[] tamper(final byte[] original) {
+        final byte[] tampered = original.clone();
+        tampered[tampered.length - 1] = (byte) (tampered[tampered.length - 1] ^ 0x1);
+        return tampered;
+    }
+
+    private static String sha256(final byte[] bytes) {
+        try {
+            return java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            );
+        } catch (final java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private static byte[] multipartBody(final byte[] input, final String boundary, final String filename)
         throws IOException {
         final ByteArrayOutputStream body = new ByteArrayOutputStream();
         body.write(

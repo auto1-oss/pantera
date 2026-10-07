@@ -5,8 +5,10 @@
 package com.auto1.pantera.docker.http;
 
 import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.http.blobs.DeleteBlobSlice;
 import com.auto1.pantera.docker.http.blobs.GetBlobsSlice;
 import com.auto1.pantera.docker.http.blobs.HeadBlobsSlice;
+import com.auto1.pantera.docker.http.manifest.DeleteManifestSlice;
 import com.auto1.pantera.docker.http.manifest.GetManifestSlice;
 import com.auto1.pantera.docker.http.manifest.HeadManifestSlice;
 import com.auto1.pantera.docker.http.manifest.PushManifestSlice;
@@ -81,7 +83,8 @@ public final class DockerSlice extends Slice.Wrap {
      * Ctor.
      *
      * <p>A read-only slice (a proxy) answers every write route (blob
-     * upload POST/PATCH/PUT/GET/DELETE and manifest PUT) with
+     * upload POST/PATCH/PUT/GET/DELETE, manifest PUT and manifest/blob
+     * DELETE) with
      * 405 {@code UNSUPPORTED} before reading the repository or authorizing
      * the request, so a refused push never triggers an upstream lookup and
      * its body is always drained.</p>
@@ -136,6 +139,12 @@ public final class DockerSlice extends Slice.Wrap {
             // body is drained by UnsupportedSlice.
             routes.add(RtRulePath.route(MethodRule.PUT, PathPatterns.MANIFESTS,
                 new UnsupportedSlice()));
+            // Deletes target the authoritative (hosted) store only; a
+            // proxy's local tier is a read-through cache.
+            routes.add(RtRulePath.route(MethodRule.DELETE, PathPatterns.MANIFESTS,
+                new UnsupportedSlice()));
+            routes.add(RtRulePath.route(MethodRule.DELETE, PathPatterns.BLOBS,
+                new UnsupportedSlice()));
             for (final RtRule method : List.of(
                 MethodRule.POST, MethodRule.PATCH, MethodRule.PUT,
                 MethodRule.GET, MethodRule.DELETE
@@ -189,14 +198,11 @@ public final class DockerSlice extends Slice.Wrap {
                 RtRulePath.route(MethodRule.GET, PathPatterns.REFERRERS,
                     auth(new ReferrersSlice(docker), policy, auth)
                 ),
-                // Deletion through the registry API is not supported;
-                // the spec requires 405 (tags are removed via the UI
-                // or the REST API).
                 RtRulePath.route(MethodRule.DELETE, PathPatterns.MANIFESTS,
-                    new UnsupportedSlice()
+                    auth(new DeleteManifestSlice(docker, events.orElse(null)), policy, auth)
                 ),
                 RtRulePath.route(MethodRule.DELETE, PathPatterns.BLOBS,
-                    new UnsupportedSlice()
+                    auth(new DeleteBlobSlice(docker), policy, auth)
                 )
             )
         );

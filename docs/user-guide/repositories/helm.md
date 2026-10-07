@@ -100,6 +100,8 @@ curl -fsS -u 'your-username:your-api-token' \
   http://pantera-host:8080/helm-repo/my-chart-1.0.0.tgz
 ```
 
+The chart is stored as `<chart-name>/<chart-name>-<version>.tgz`, whatever file name the upload URL uses.
+
 ### Step 3: Update the Repository Index
 
 After pushing, update your local Helm repository cache:
@@ -107,6 +109,26 @@ After pushing, update your local Helm repository cache:
 ```bash
 helm repo update
 ```
+
+### Re-pushing a Version
+
+In a repository with the **Immutable artifacts** setting on (the default for new repositories), pushing a chart version that is already stored answers `409 Conflict` (`Chart <name> version <version> already exists and the repository is immutable`), even when the archive is identical. When the setting is off, a push by a user with `write` replaces the archive and its `index.yaml` entry (digest, creation time, URLs). Helm repositories that existed before Pantera 2.2.10 in a database-backed installation keep accepting re-pushes until the administrator turns the setting on. See [Overwrite rules](../getting-started.md#overwrite-rules-immutable).
+
+### Delete a Chart
+
+With the `delete` permission, delete one version, or every version of a chart, through the chart API:
+
+```bash
+# One version
+curl -u 'your-username:your-api-token' -X DELETE \
+  http://pantera-host:8080/helm-repo/charts/my-chart/1.0.0
+
+# Every version of the chart
+curl -u 'your-username:your-api-token' -X DELETE \
+  http://pantera-host:8080/helm-repo/charts/my-chart
+```
+
+An HTTP `DELETE` of the archive's storage path (`/helm-repo/my-chart/my-chart-1.0.0.tgz`) or of the chart's directory (`/helm-repo/my-chart`) works too; it answers `204`, or `404` when nothing is stored there. Either way the deleted versions are removed from `index.yaml`. See [Delete an artifact](../getting-started.md#delete-an-artifact).
 
 ---
 
@@ -119,6 +141,7 @@ helm repo update
 | Chart not found after push | Local index not updated | Run `helm repo update` after pushing a new chart |
 | `Error: chart requires kubeVersion` | Kubernetes version mismatch | Not a Pantera issue; check chart requirements |
 | Push returns `405 Method Not Allowed` | Pushing to a non-Helm repository | Verify you are pushing to a repository with `type: helm` |
+| Push returns `409 Conflict` | That chart version is already stored and the repository is immutable | Bump the chart `version`, or delete the stored version first |
 
 ---
 

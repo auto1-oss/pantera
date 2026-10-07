@@ -37,14 +37,21 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 /**
- * Rpm endpoint to remove packages accepts file checksum of the package to remove
- * in the X-Checksum-ALG header, where ALG is checksum algorithm. Header may be skipped with the
- * help of `force=true` request parameter.
- * The slice validates request data, saves file name to temp location and, if update
- * mode is {@link RepoConfig.UpdateMode#UPLOAD} and `skip_update` parameter is false (or absent),
- * initiates removing files process.
- * If request is not valid (see {@link RpmRemove#validate(Key, Pair)}),
- * `BAD_REQUEST` status is returned.
+ * Rpm endpoint to remove a package: {@code DELETE /<file>.rpm}.
+ *
+ * <ul>
+ *   <li>No such file: 404 Not Found (nothing is queued).</li>
+ *   <li>An {@code X-Checksum-<ALG>} header is optional verification: when
+ *   present and it does not match the stored file (or names an unknown
+ *   algorithm), 400 Bad Request and nothing is removed. Without the header
+ *   the file is removed; {@code ?force=true} is still accepted but no longer
+ *   needed.</li>
+ *   <li>Otherwise the file name is queued under {@link #TO_RM} and 202 Accepted
+ *   is answered. In {@link RepoConfig.UpdateMode#UPLOAD} mode without
+ *   {@code ?skip_update=true} the file is removed and the repodata rewritten
+ *   before the response; otherwise the queued removal is applied by the next
+ *   metadata update.</li>
+ * </ul>
  */
 public final class RpmRemove implements Slice {
 
@@ -82,50 +89,81 @@ public final class RpmRemove implements Slice {
     }
 
     @Override
-    public CompletableFuture<Response> response(RequestLine line, Headers headers,
-                                                Content body) {
+    public CompletableFuture<Response> response(final RequestLine line, final Headers headers,
+        final Content body) {
         final RpmUpload.Request request = new RpmUpload.Request(line);
-        final Key temp = new Key.From(RpmRemove.TO_RM, request.file());
-        return this.asto.save(temp, Content.EMPTY).thenApply(nothing -> RpmRemove.checksum(headers))
+        final Key file = request.file();
+        final Optional<Pair<String, String>> checksum = RpmRemove.checksum(headers);
+        return body.discard().handle((ignored, err) -> null)
+            .thenCompose(ignored -> this.asto.exists(file))
             .thenCompose(
-                checksum -> checksum.map(sum -> this.validate(request.file(), sum))
-                    .orElse(CompletableFuture.completedFuture(request.force())).thenCompose(
-                        valid -> {
-                            CompletionStage<RsStatus> res = CompletableFuture
-                                .completedFuture(RsStatus.ACCEPTED);
-                            if (valid && this.cnfg.mode() == RepoConfig.UpdateMode.UPLOAD
-                                && !request.skipUpdate()) {
-                                res = this.events.map(
-                                    queue -> {
-                                        final Collection<PackageInfo> infos =
-                                            new ArrayList<>(1);
-                                        return new RepodataQueue(this.asto).run(
-                                            new AstoRepoRemove(this.asto, this.cnfg, infos)::perform
-                                        ).thenAccept(
-                                                nothing -> infos.forEach(
-                                                    item -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
-                                                        new ArtifactEvent(
-                                                            RpmUpload.REPO_TYPE,
-                                                            this.cnfg.name(), item.name(),
-                                                            item.version()
-                                                        )
-                                                    )
-                                                )
-                                            );
+                exists -> {
+                    final CompletionStage<RsStatus> res;
+                    if (exists) {
+                        res = checksum.map(sum -> this.validate(file, sum))
+                            .orElse(CompletableFuture.completedFuture(true))
+                            .thenCompose(
+                                valid -> {
+                                    final CompletionStage<RsStatus> status;
+                                    if (valid) {
+                                        status = this.remove(request);
+                                    } else {
+                                        status = CompletableFuture.completedFuture(
+                                            RsStatus.BAD_REQUEST
+                                        );
                                     }
-                                ).orElseGet(
-                                    () -> new RepodataQueue(this.asto).run(
-                                        new AstoRepoRemove(this.asto, this.cnfg)::perform
+                                    return status;
+                                }
+                            );
+                    } else {
+                        res = CompletableFuture.completedFuture(RsStatus.NOT_FOUND);
+                    }
+                    return res;
+                }
+            ).thenApply(status -> ResponseBuilder.from(status).build());
+    }
+
+    /**
+     * Queue the package for removal and, in upload mode, remove it and update
+     * the repodata now.
+     * @param request Request
+     * @return 202 Accepted
+     */
+    private CompletionStage<RsStatus> remove(final RpmUpload.Request request) {
+        return this.asto.save(new Key.From(RpmRemove.TO_RM, request.file()), Content.EMPTY)
+            .thenCompose(
+                nothing -> {
+                    final CompletionStage<Void> res;
+                    if (this.cnfg.mode() == RepoConfig.UpdateMode.UPLOAD
+                        && !request.skipUpdate()) {
+                        res = this.events.map(
+                            queue -> {
+                                final Collection<PackageInfo> infos = new ArrayList<>(1);
+                                return new RepodataQueue(this.asto).run(
+                                    new AstoRepoRemove(this.asto, this.cnfg, infos)::perform
+                                ).thenAccept(
+                                    ignored -> infos.forEach(
+                                        item -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
+                                            new ArtifactEvent(
+                                                RpmUpload.REPO_TYPE,
+                                                this.cnfg.name(), item.name(),
+                                                item.version()
+                                            )
+                                        )
                                     )
-                                ).thenApply(ignored -> RsStatus.ACCEPTED);
-                            } else if (!valid) {
-                                res = this.asto.delete(temp)
-                                    .thenApply(nothing -> RsStatus.BAD_REQUEST);
+                                );
                             }
-                            return res.thenApply(s -> ResponseBuilder.from(s).build());
-                        }
-                    )
-            );
+                        ).orElseGet(
+                            () -> new RepodataQueue(this.asto).run(
+                                new AstoRepoRemove(this.asto, this.cnfg)::perform
+                            )
+                        );
+                    } else {
+                        res = CompletableFuture.completedFuture(null);
+                    }
+                    return res;
+                }
+            ).thenApply(ignored -> RsStatus.ACCEPTED);
     }
 
     /**
@@ -144,7 +182,10 @@ public final class RpmRemove implements Slice {
                     res = this.asto.value(file).thenCompose(
                         val -> new ContentDigest(
                             val, () -> new Digests.FromString(checksum.getKey()).get().get()
-                        ).hex().thenApply(pkg -> pkg.equals(checksum.getValue()))
+                        ).hex().thenApply(pkg -> pkg.equalsIgnoreCase(checksum.getValue()))
+                    ).handle(
+                        // An unknown algorithm cannot verify the file: refuse.
+                        (same, err) -> err == null && same
                     );
                 }
                 return res;

@@ -3,11 +3,14 @@ import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getCooldownOverview, getCooldownBlocked, getCooldownHistory } from '@/api/settings'
 import { unblockArtifact, unblockAll } from '@/api/repos'
+import { unblockBulk, type BulkUnblockItem, type BulkUnblockResult } from '@/api/cooldown'
 import { useNotificationStore } from '@/stores/notifications'
 import { useAuthStore } from '@/stores/auth'
 import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
 import { useConfirmDelete } from '@/composables/useConfirmDelete'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
+import SelectionBar from '@/components/common/SelectionBar.vue'
+import BulkUnblockDialog from '@/components/admin/BulkUnblockDialog.vue'
 import CooldownInspector, { type InspectQuery } from '@/components/admin/CooldownInspector.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import DataTable from 'primevue/datatable'
@@ -216,6 +219,55 @@ watch([repoFilter, typeFilter], () => {
   loadBlocked()
 })
 
+// ---------------------------------------------------------------------------
+// Bulk unblock — rows ticked in the Active table. The selection is cleared
+// whenever the visible set can change (filter, search, sort, page, mode, a
+// reload), so nothing hidden is ever acted on.
+// ---------------------------------------------------------------------------
+const selectedBlocked = ref<BlockedArtifact[]>([])
+const bulkVisible = ref(false)
+const bulkRunning = ref(false)
+function blockedKey(row: BlockedArtifact | HistoryArtifact): string {
+  return `${row.repo}|${row.package_name}|${row.version}`
+}
+const bulkItems = computed<BulkUnblockItem[]>(() =>
+  selectedBlocked.value.map(a => ({ repo: a.repo, artifact: a.package_name, version: a.version })),
+)
+watch([repoFilter, typeFilter, search, mode, blockedPage, sortField, sortOrder], () => {
+  selectedBlocked.value = []
+})
+
+function reportBulk(result: BulkUnblockResult) {
+  const u = result.unblocked.length
+  const f = result.failed.length
+  if (f === 0) {
+    notify.success('Artifacts unblocked', `${u} unblocked`)
+  } else {
+    const first = result.failed[0]
+    notify.warn(
+      'Bulk unblock finished with failures',
+      `${u} unblocked, ${f} failed — ${first.repo} ${first.artifact}@${first.version}: ${first.reason}`,
+    )
+  }
+  selectedBlocked.value = []
+  loadBlocked()
+  loadOverview()
+}
+
+// The dialog's confirm path, also callable directly (tests, keyboard).
+async function runBulkUnblock() {
+  if (bulkItems.value.length === 0 || bulkRunning.value) return
+  bulkRunning.value = true
+  try {
+    reportBulk(await unblockBulk(bulkItems.value))
+  } catch {
+    notify.error('Failed to unblock the selected artifacts')
+  } finally {
+    bulkRunning.value = false
+    bulkVisible.value = false
+  }
+}
+
 // Mode toggle: reset pagination and reload from the appropriate endpoint.
 watch(mode, () => {
   blockedPage.value = 0
@@ -356,6 +408,8 @@ async function confirmUnblockAll(repo: CooldownRepo) {
     await handleUnblockAll(repo.name)
   }
 }
+
+defineExpose({ selectedBlocked, repoFilter, typeFilter, mode, blockedPage, runBulkUnblock })
 
 onMounted(() => {
   loadOverview()
@@ -581,15 +635,38 @@ onMounted(() => {
             </div>
           </template>
           <template #content>
+            <SelectionBar
+              v-if="mode === 'active' && canWrite"
+              :count="selectedBlocked.length"
+              class="mb-3"
+              @clear="selectedBlocked = []"
+            >
+              <Button
+                label="Unblock selected"
+                icon="pi pi-unlock"
+                size="small"
+                severity="danger"
+                outlined
+                data-testid="bulk-unblock-btn"
+                @click="bulkVisible = true"
+              />
+            </SelectionBar>
             <DataTable
+              v-model:selection="selectedBlocked"
               :value="blocked"
               :loading="loading"
               striped-rows
               :lazy="true"
+              :data-key="blockedKey"
               :sort-field="sortField ?? undefined"
               :sort-order="sortOrder"
               @sort="onSort"
             >
+              <Column
+                v-if="mode === 'active' && canWrite"
+                selection-mode="multiple"
+                header-style="width: 3rem"
+              />
               <Column field="package_name" header="Package" sortable>
                 <template #body="{ data }">
                   <span class="break-all whitespace-normal">{{ data.package_name }}</span>
@@ -692,6 +769,12 @@ onMounted(() => {
                   loadBlocked()
                 }
               "
+            />
+            <BulkUnblockDialog
+              v-model:visible="bulkVisible"
+              :items="bulkItems"
+              :running="bulkRunning"
+              @confirm="runBulkUnblock"
             />
           </template>
         </Card>

@@ -117,14 +117,15 @@ public final class UploadSliceTest {
             ),
             "my-repo"
         );
-        Assertions.assertThrows(
-            Exception.class,
-            () -> slice.response(
+        Assertions.assertEquals(
+            RsStatus.BAD_REQUEST,
+            slice.response(
                 RequestLine.from("PUT /my-repo/my-package HTTP/1.1"),
                 Headers.EMPTY,
                 new Content.From("{}".getBytes())
-            ).join()
+            ).join().status(),
+            "a payload declaring no version is refused as a bad request"
         );
-        Assertions.assertTrue(this.events.isEmpty());
+        Assertions.assertTrue(this.events.isEmpty(), "a refused publish is not an event");
     }
 }

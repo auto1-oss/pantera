@@ -42,4 +42,17 @@ public interface Layers {
      * @return Flow with manifest data, or empty if absent
      */
     CompletableFuture<Optional<Blob>> get(Digest digest);
+
+    /**
+     * Delete layer (blob) by digest.
+     *
+     * <p>GC semantics: blobs are content-addressed and may be referenced by
+     * more than one manifest, so this is a separate operation from deleting
+     * a manifest reference ({@link Manifests#delete}) — deleting a manifest
+     * link never cascades into deleting the blobs it references.
+     *
+     * @param digest Layer digest.
+     * @return Completion signal.
+     */
+    CompletableFuture<Void> delete(Digest digest);
 }

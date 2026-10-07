@@ -17,7 +17,16 @@ public enum DockerActions implements Action {
     PULL(0x4, "pull"),
     PUSH(0x2, "push"),
     OVERWRITE(0x10, "overwrite"),
-    ALL(0x4 | 0x2 | 0x10, "*");
+
+    /**
+     * Manifest/blob deletion (GC, {@code skopeo delete}). Deliberately its own
+     * bit rather than folded into {@link #PUSH} — a role granted ordinary
+     * push/pull must not silently gain delete; it has to be requested
+     * explicitly (per-resource or via the {@code *} wildcard, which resolves
+     * to {@link #ALL}).
+     */
+    DELETE(0x20, "delete"),
+    ALL(0x4 | 0x2 | 0x10 | 0x20, "*");
 
     /**
      * Action mask.

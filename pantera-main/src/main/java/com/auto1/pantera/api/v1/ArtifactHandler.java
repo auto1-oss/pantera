@@ -20,7 +20,6 @@ import com.auto1.pantera.api.v1.download.DownloadTokenSupport;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.asto.SubStorage;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.headers.ContentFileName;
@@ -31,6 +30,7 @@ import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
+import com.auto1.pantera.settings.RepoPathRemoval;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -51,7 +51,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import javax.json.Json;
 import javax.json.JsonStructure;
 import javax.sql.DataSource;
@@ -112,6 +111,11 @@ public final class ArtifactHandler {
     private final StorageMetaCache metaCache;
 
     /**
+     * The artifact delete shared with the repository-path {@code DELETE}.
+     */
+    private final ArtifactDeletion deletion;
+
+    /**
      * Ctor.
      * @param crs Repository settings CRUD
      * @param repoData Repository data management
@@ -166,6 +170,7 @@ public final class ArtifactHandler {
         this.dataSource = dataSource;
         this.artifactIndex = artifactIndex == null ? ArtifactIndex.NOP : artifactIndex;
         this.metaCache = metaCache == null ? new StorageMetaCache() : metaCache;
+        this.deletion = new ArtifactDeletion(this.artifactIndex, this.metaCache);
         this.tokens = tokens;
     }
 
@@ -259,7 +264,7 @@ public final class ArtifactHandler {
         final String repoName = ctx.pathParam("name");
         final String path = ctx.queryParam("path").stream()
             .findFirst().orElse("/");
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -664,7 +669,7 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -783,7 +788,7 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -862,7 +867,7 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -956,7 +961,7 @@ public final class ArtifactHandler {
     private void streamArtifact(
         final RoutingContext ctx, final String repoName, final String path
     ) {
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -1031,7 +1036,7 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -1124,7 +1129,7 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Field 'path' is required");
             return;
         }
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -1134,31 +1139,23 @@ public final class ArtifactHandler {
         final AuditContext audit = new ApiAuditContext(ctx).value();
         final String actor = ctx.user() == null ? null
             : ctx.user().principal().getString(com.auto1.pantera.api.AuthTokenRest.SUB);
+        final RepoPathRemoval.Mode mode = folder
+            ? RepoPathRemoval.Mode.FOLDER : RepoPathRemoval.Mode.AUTO;
         CompletableFuture.supplyAsync(() -> this.repoTypeOf(rname), HandlerExecutor.get())
             .thenCompose(
-                repoType -> {
-                    final CompletionStage<Boolean> deletion = folder
-                        ? this.repoData.deletePackageFolder(rname, path, this.crs)
-                        : this.repoData.deleteArtifact(rname, path, this.crs);
-                    // The cascade runs whether or not storage still held
-                    // the path: index rows and format metadata can outlive
-                    // their files (the index went stale through an earlier
-                    // bug), and a delete is how an operator clears them.
-                    return deletion.thenCompose(
-                        deleted -> this.cascade(rname, repoType, path, folder).thenApply(
-                            indexed -> {
-                                final boolean found = deleted || indexed > 0;
-                                AuditLogger.delete(
-                                    audit, repoType, repoName, path, null, actor,
-                                    found ? AuditLogger.OUTCOME_SUCCESS
-                                        : AuditLogger.OUTCOME_FAILURE,
-                                    found ? null : AuditLogger.REASON_NOT_FOUND
-                                );
-                                return found;
-                            }
-                        )
-                    );
-                }
+                repoType -> this.repoData.scopedStorage(rname, this.crs).thenCompose(
+                    asto -> this.deletion.delete(repoName, repoType, asto, path, mode)
+                ).thenApply(
+                    found -> {
+                        AuditLogger.delete(
+                            audit, repoType, repoName, path, null, actor,
+                            found ? AuditLogger.OUTCOME_SUCCESS
+                                : AuditLogger.OUTCOME_FAILURE,
+                            found ? null : AuditLogger.REASON_NOT_FOUND
+                        );
+                        return found;
+                    }
+                )
             )
             .thenAccept(
                 found -> {
@@ -1178,78 +1175,6 @@ public final class ArtifactHandler {
                     return null;
                 }
             );
-    }
-
-    /**
-     * Keep everything derived from storage consistent with a delete.
-     * Never fails: each step logs its own failure.
-     * @param rname Repository name
-     * @param repoType Repository type
-     * @param path Deleted path
-     * @param folder Whether a folder was deleted
-     * @return Number of search index rows removed (0 when that step failed)
-     */
-    private CompletableFuture<Integer> cascade(
-        final RepositoryName rname, final String repoType, final String path,
-        final boolean folder
-    ) {
-        final String repoName = rname.toString();
-        if (folder) {
-            this.metaCache.invalidatePrefix(repoName, path);
-        } else {
-            this.metaCache.invalidate(repoName, path);
-        }
-        final CompletableFuture<Integer> index = this.artifactIndex.removeByPath(repoName, path)
-            .handle((count, err) -> {
-                if (err != null) {
-                    ArtifactHandler.cascadeFailed(
-                        "Deleted from storage but the search index cascade failed",
-                        repoName, path, err
-                    );
-                    return 0;
-                }
-                return count == null ? 0 : count;
-            });
-        final CompletableFuture<Void> format = this.repoData.repoStorage(rname, this.crs)
-            .thenCompose(
-                asto -> new FormatDeleteHooks().afterDelete(
-                    repoType, new SubStorage(new Key.From(repoName), asto), repoName, path
-                )
-            )
-            .<Void>handle((nothing, err) -> {
-                if (err != null) {
-                    ArtifactHandler.cascadeFailed(
-                        "Deleted from storage but the " + repoType
-                            + " metadata could not be updated",
-                        repoName, path, err
-                    );
-                }
-                return null;
-            })
-            .toCompletableFuture();
-        return index.thenCombine(format, (count, nothing) -> count);
-    }
-
-    /**
-     * Log a failed cascade step.
-     * @param message Message
-     * @param repoName Repository name
-     * @param path Deleted path
-     * @param err Failure
-     */
-    private static void cascadeFailed(
-        final String message, final String repoName, final String path, final Throwable err
-    ) {
-        EcsLogger.warn("com.auto1.pantera.api.v1")
-            .message(message)
-            .eventCategory("database")
-            .eventAction("delete_cascade_failed")
-            .eventOutcome("failure")
-            .field("repository.name", repoName)
-            .field("file.path", path)
-            .error(err)
-            .field("log.source", "application")
-            .log();
     }
 
     /**
@@ -1350,6 +1275,25 @@ public final class ArtifactHandler {
     }
 
     /**
+     * Whether a path addresses the storage lock namespace
+     * ({@code .pantera-locks/}), which no API may read, list or delete:
+     * deleting a lock entry releases a lock another upload is holding.
+     *
+     * @param path Request path
+     * @return True when the path is reserved
+     */
+    static boolean reservedPath(final String path) {
+        boolean found = false;
+        for (final String segment : path.split("/")) {
+            if (com.auto1.pantera.http.slice.ReservedPathSlice.LOCKS.equals(segment)) {
+                found = true;
+                break;
+            }
+        }
+        return found;
+    }
+
+    /**
      * Whether a client-supplied artifact path escapes its repository namespace.
      *
      * <p>SECURITY (2.2.9): the REST artifact routes build
@@ -1364,7 +1308,7 @@ public final class ArtifactHandler {
      * @param path Client-supplied path
      * @return {@code true} when the path is unsafe and must be refused
      */
-    private static boolean traversedPath(final String path) {
+    static boolean traversedPath(final String path) {
         boolean bad = path.indexOf('\0') >= 0 || path.indexOf('\\') >= 0;
         if (!bad) {
             for (final String seg : path.split("/")) {

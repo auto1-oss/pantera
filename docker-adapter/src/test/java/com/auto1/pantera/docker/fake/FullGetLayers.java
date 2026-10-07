@@ -43,4 +43,9 @@ public final class FullGetLayers implements Layers {
             Optional.of(new AstoBlob(new InMemoryStorage(), new Key.From("test"), digest))
         );
     }
+
+    @Override
+    public CompletableFuture<Void> delete(final Digest digest) {
+        throw new UnsupportedOperationException();
+    }
 }

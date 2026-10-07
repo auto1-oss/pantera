@@ -39,9 +39,11 @@ adapter_basic_permissions:
 | Value | Description |
 |-------|-------------|
 | `read` | Download artifacts, browse repository contents |
-| `write` | Upload artifacts, deploy packages |
-| `delete` | Delete artifacts |
+| `write` | Upload artifacts, deploy packages. On a repository whose `immutable` setting is `false`, also overwrite stored artifacts |
+| `delete` | Delete artifacts: `DELETE /<repo>/<path>` on a local repository (and the format's native deletes, such as npm unpublish), and cache eviction with the same request on a `file`, `maven`, `gradle`, `npm`, `pypi`, `go` or `php` proxy |
 | `*` | All of the above |
+
+Deleting does not depend on the repository's `immutable` setting; overwriting does. See [Immutable artifacts](../configuration-reference.md#immutable-artifacts). Since 2.2.10, `delete` (and `*`) on a repository also covers HTTP `DELETE` on the repository URL; grant it only to users who may remove artifacts or evict proxy caches.
 
 ### docker_repository_permissions
 
@@ -60,7 +62,10 @@ docker_repository_permissions:
 | `pull` | Pull Docker images |
 | `push` | Push Docker images: upload blobs, push new tags and new digests, and re-push a tag with the manifest it already points at |
 | `overwrite` | Move an existing tag to a different manifest. A push that would change the digest of an existing tag without `overwrite` fails with `403 DENIED`. Grant it (together with `push`) to CI users that re-push mutable tags such as `latest` |
-| `*` | All Docker operations, including `overwrite` |
+| `delete` | Delete through the registry API on local (`docker`) repositories: `DELETE /v2/<repo>/<image>/manifests/<tag>` (that tag only), `.../manifests/<digest>` (the manifest and every tag pointing at it, as `skopeo delete` sends) and `.../blobs/<digest>`. Not implied by `pull`, `push` or `overwrite` |
+| `*` | All Docker operations, including `overwrite` and `delete` |
+
+Since 2.2.10 `*` includes `delete`: a role granted `["*"]` can delete images. To grant everything except deletion, list `pull`, `push` and `overwrite` explicitly. The role editor in the UI offers all four actions.
 
 ### docker_registry_permissions
 
@@ -331,6 +336,8 @@ In HA deployments with Valkey, cache invalidation is propagated across nodes aut
 | `deployer` | CI/CD pipeline | `adapter_basic_permissions: {"maven": ["read","write"], "npm": ["read","write"]}` |
 | `docker-user` | Docker pull/push of new tags | `docker_repository_permissions: {"*": {"*": ["pull","push"]}}` |
 | `docker-ci` | Docker pull/push, may move existing tags (`latest`) | `docker_repository_permissions: {"*": {"*": ["pull","push","overwrite"]}}` |
+| `docker-cleanup` | Delete old images and tags (`skopeo delete`, registry GC) | `docker_repository_permissions: {"*": {"*": ["pull","delete"]}}` |
+| `maven-cleanup` | Delete artifacts and evict proxy caches by path | `adapter_basic_permissions: {"maven": ["read","delete"], "maven-proxy": ["read","delete"]}` |
 | `security-admin` | Cooldown management only | API permissions for cooldown read/write |
 
 ---

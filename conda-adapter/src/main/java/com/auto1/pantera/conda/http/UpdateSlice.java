@@ -22,6 +22,7 @@ import com.auto1.pantera.conda.meta.InfoIndex;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.ContentDisposition;
 import com.auto1.pantera.http.headers.Login;
@@ -89,6 +90,14 @@ public final class UpdateSlice implements Slice {
      */
     private final String repoName;
 
+    /** Synchronous artifact-index writer. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
+    /**
+     * Whether a stored package file may never be replaced by an upload.
+     */
+    private final boolean immutable;
+
     /**
      * @param asto Abstract storage
      * @param events Artifact events
@@ -98,93 +107,140 @@ public final class UpdateSlice implements Slice {
         this(asto, events, repoName, com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
-    /** Synchronous artifact-index writer. */
-    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
-
     /**
-     * Ctor with synchronous index writer.
+     * Ctor with synchronous index writer; an upload of a stored package
+     * overwrites it.
+     * @param asto Abstract storage
+     * @param events Artifact events
+     * @param repoName Repository name
+     * @param syncIndex Synchronous artifact-index writer
      */
     public UpdateSlice(Storage asto, Optional<Queue<ArtifactEvent>> events, String repoName,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+        this(asto, events, repoName, syncIndex, false);
+    }
+
+    /**
+     * Ctor with synchronous index writer and the immutability switch.
+     * @param asto Abstract storage
+     * @param events Artifact events
+     * @param repoName Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When {@code true} an upload of an already stored
+     *  package file answers 409 Conflict and writes nothing; when
+     *  {@code false} it overwrites the file and its repodata entry
+     */
+    public UpdateSlice(Storage asto, Optional<Queue<ArtifactEvent>> events, String repoName,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex, final boolean immutable) {
         this.asto = asto;
         this.events = events;
         this.repoName = repoName;
         this.syncIndex = syncIndex;
+        this.immutable = immutable;
     }
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         final Matcher matcher = UpdateSlice.PKG.matcher(line.uri().getPath());
         if (matcher.matches()) {
-            final Key temp = new Key.From(UpdateSlice.TMP, matcher.group(1));
             final Key main = new Key.From(matcher.group(1));
             return this.asto.exclusively(
                 main,
-                target -> target.exists(main)
-                    .thenCompose(repo -> this.asto.exists(temp).thenApply(upl -> repo || upl))
-                    .thenCompose(
-                        exists -> this.asto.save(temp, new Content.From(UpdateSlice.filePart(headers, body)))
-                        .thenCompose(empty -> this.infoJson(matcher.group(1), temp))
-                        .thenCompose(json -> this.addChecksum(temp, Digests.MD5, json))
-                        .thenCompose(json -> this.addChecksum(temp, Digests.SHA256, json))
-                        .thenApply(JsonObjectBuilder::build)
-                        .thenCompose(
-                            json -> {
-                                // Merge and move under the repodata lock the
-                                // management-API delete prunes under: the
-                                // package is listed only once its file is
-                                // in place, and neither side loses the
-                                // other's change.
-                                final Key repodata =
-                                    new Key.From(matcher.group(2), "repodata.json");
-                                CompletionStage<Void> action = new IndexUpdateLock(
-                                    this.asto, repodata
-                                ).run(
-                                    locked -> new AstoMergedJson(locked, repodata).merge(
-                                        Collections.singletonMap(matcher.group(3), json)
-                                    ).thenCompose(
-                                        ignored -> locked.move(temp, main)
-                                    )
-                                );
-                                action = action.thenCompose(nothing -> {
-                                    final String pkgName = json.getString("name", "<no name>");
-                                    // Real storage key: matcher.group(1) is
-                                    // the exact "<arch>/<filename>" key this
-                                    // request just moved the package to
-                                    // (`main`, above) — the indexed name is
-                                    // a synthetic "name_arch" composite
-                                    // unrelated to it, so pathPrefix is the
-                                    // only way browse-to-directory can find
-                                    // the real per-arch directory.
-                                    final ArtifactEvent event = new ArtifactEvent(
-                                        UpdateSlice.CONDA, this.repoName,
-                                        new Login(headers).getValue(),
-                                        String.join("_", pkgName, json.getString("arch", "<no arch>")),
-                                        json.getString("version"),
-                                        json.getJsonNumber(UpdateSlice.SIZE).longValue(),
-                                        System.currentTimeMillis(), null,
-                                        matcher.group(1)
-                                    ).withRequestContext(headers);
-                                    this.events.ifPresent(queue -> queue.add(event));
-                                    com.auto1.pantera.http.cache.NegativeCacheRegistry
-                                        .instance()
-                                        .invalidateAfterUpload("conda", pkgName);
-                                    com.auto1.pantera.cooldown.metadata
-                                        .FilteredMetadataCacheRegistry.instance()
-                                        .invalidateAfterUpload("conda", pkgName);
-                                    return this.syncIndex.recordSync(event);
-                                });
-                                return action;
-                            }
-                        ).thenApply(
-                            ignored -> ResponseBuilder.created().build()
-                        ).handle(
-                            (rsp, err) -> this.completed(temp, rsp, err)
-                        ).thenCompose(Function.identity())
+                target -> target.exists(main).thenCompose(
+                    present -> {
+                        final CompletionStage<Response> res;
+                        if (this.immutable && present) {
+                            res = body.discard().thenApply(
+                                ignored -> ResponseBuilder.from(RsStatus.CONFLICT)
+                                    .textBody(
+                                        String.format(
+                                            "Package %s already exists and the repository is immutable",
+                                            main.string()
+                                        )
+                                    ).build()
+                            );
+                        } else {
+                            res = this.store(matcher, headers, body);
+                        }
+                        return res;
+                    }
                 )
             ).toCompletableFuture();
         }
         return ResponseBuilder.badRequest().completedFuture();
+    }
+
+    /**
+     * Store an uploaded package, merge its repodata entry and move it in place
+     * (overwriting a stored file of the same name). Runs under the package
+     * key's exclusive lock.
+     * @param matcher Matched request path
+     * @param headers Request headers
+     * @param body Request body
+     * @return Response
+     */
+    private CompletionStage<Response> store(final Matcher matcher, final Headers headers,
+        final Content body) {
+        final Key temp = new Key.From(UpdateSlice.TMP, matcher.group(1));
+        final Key main = new Key.From(matcher.group(1));
+        return this.asto.save(temp, new Content.From(UpdateSlice.filePart(headers, body)))
+                .thenCompose(empty -> this.infoJson(matcher.group(1), temp))
+                .thenCompose(json -> this.addChecksum(temp, Digests.MD5, json))
+                .thenCompose(json -> this.addChecksum(temp, Digests.SHA256, json))
+                .thenApply(JsonObjectBuilder::build)
+                .thenCompose(
+                    json -> {
+                        // Merge and move under the repodata lock the
+                        // management-API delete prunes under: the
+                        // package is listed only once its file is
+                        // in place, and neither side loses the
+                        // other's change.
+                        final Key repodata =
+                            new Key.From(matcher.group(2), "repodata.json");
+                        CompletionStage<Void> action = new IndexUpdateLock(
+                            this.asto, repodata
+                        ).run(
+                            locked -> new AstoMergedJson(locked, repodata).merge(
+                                Collections.singletonMap(matcher.group(3), json)
+                            ).thenCompose(
+                                ignored -> locked.move(temp, main)
+                            )
+                        );
+                        action = action.thenCompose(nothing -> {
+                            final String pkgName = json.getString("name", "<no name>");
+                            // Real storage key: matcher.group(1) is
+                            // the exact "<arch>/<filename>" key this
+                            // request just moved the package to
+                            // (`main`, above) — the indexed name is
+                            // a synthetic "name_arch" composite
+                            // unrelated to it, so pathPrefix is the
+                            // only way browse-to-directory can find
+                            // the real per-arch directory.
+                            final ArtifactEvent event = new ArtifactEvent(
+                                UpdateSlice.CONDA, this.repoName,
+                                new Login(headers).getValue(),
+                                String.join("_", pkgName, json.getString("arch", "<no arch>")),
+                                json.getString("version"),
+                                json.getJsonNumber(UpdateSlice.SIZE).longValue(),
+                                System.currentTimeMillis(), null,
+                                matcher.group(1)
+                            ).withRequestContext(headers);
+                            this.events.ifPresent(queue -> queue.add(event));
+                            com.auto1.pantera.http.cache.NegativeCacheRegistry
+                                .instance()
+                                .invalidateAfterUpload("conda", pkgName);
+                            com.auto1.pantera.cooldown.metadata
+                                .FilteredMetadataCacheRegistry.instance()
+                                .invalidateAfterUpload("conda", pkgName);
+                            return this.syncIndex.recordSync(event);
+                        });
+                        return action;
+                    }
+                ).thenApply(
+                    ignored -> ResponseBuilder.created().build()
+                ).handle(
+                    (rsp, err) -> this.completed(temp, rsp, err)
+                ).thenCompose(Function.identity());
     }
 
     /**

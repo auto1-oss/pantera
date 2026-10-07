@@ -38,4 +38,9 @@ public final class EmptyGetLayers implements Layers {
     public CompletableFuture<Optional<Blob>> get(final Digest digest) {
         return CompletableFuture.completedFuture(Optional.empty());
     }
+
+    @Override
+    public CompletableFuture<Void> delete(final Digest digest) {
+        throw new UnsupportedOperationException();
+    }
 }

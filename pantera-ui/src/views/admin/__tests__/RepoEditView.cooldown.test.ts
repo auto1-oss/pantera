@@ -37,7 +37,8 @@ vi.mock('@/components/admin/RepoConfigForm.vue', () => ({
 
 // Stub the router used by the Save handler.
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn() }),
+  onBeforeRouteLeave: vi.fn(),
 }))
 
 function seedAuth(permissions: Record<string, string[]>) {
@@ -74,25 +75,26 @@ describe('RepoEditView — Cooldown card', () => {
     })
   })
 
-  it('toggle is OFF when no override exists; saving omits repo_names entry', async () => {
+  it('turning an existing override OFF and saving omits the repo_names entry', async () => {
     seedAuth({ api_cooldown_permissions: ['read', 'write'] })
     getCooldownMock.mockResolvedValue({
       enabled: true,
       minimum_allowed_age: '7d',
       repo_types: {},
-      repo_names: {},
+      repo_names: { 'my-internal-mvn': { enabled: true, minimum_allowed_age: '3d' } },
     })
 
     const wrapper = mountView('my-internal-mvn')
     await flushPromises()
 
-    // Toggle starts off; the four override fields are hidden.
+    const vm = wrapper.vm as unknown as { overrideEnabled: boolean; save: () => Promise<void> }
+    expect(vm.overrideEnabled).toBe(true)
+    vm.overrideEnabled = false
+    await flushPromises()
     expect(wrapper.find('[data-testid="repo-cooldown-fields"]').exists()).toBe(false)
 
-    // Click Save without flipping the toggle on.
-    const saveBtn = wrapper.find('[data-testid="repo-cooldown-save"]')
-    expect(saveBtn.exists()).toBe(true)
-    await saveBtn.trigger('click')
+    // One page-level Save covers the repository and the cooldown override.
+    await vm.save()
     await flushPromises()
 
     expect(putCooldownMock).toHaveBeenCalledTimes(1)
@@ -163,7 +165,7 @@ describe('RepoEditView — Cooldown card', () => {
     vm.repoSnapshotAge = '30d'
     await flushPromises()
 
-    await wrapper.find('[data-testid="repo-cooldown-save"]').trigger('click')
+    await (wrapper.vm as unknown as { save: () => Promise<void> }).save()
     await flushPromises()
 
     expect(putCooldownMock).toHaveBeenCalledTimes(1)
@@ -213,7 +215,7 @@ describe('RepoEditView — Cooldown card', () => {
     expect(vm.repoSnapshotAge).toBe('60d')
   })
 
-  it('without api_cooldown_permissions:write the toggle is disabled and Save is hidden', async () => {
+  it('without api_cooldown_permissions:write the toggle is disabled and the note shows', async () => {
     seedAuth({ api_cooldown_permissions: ['read'] })
     getCooldownMock.mockResolvedValue({
       enabled: true,
@@ -230,8 +232,7 @@ describe('RepoEditView — Cooldown card', () => {
     expect(toggle.exists()).toBe(true)
     expect(toggle.attributes('data-p-disabled')).toBeTruthy()
 
-    // Save button is hidden for read-only users; the read-only note shows.
-    expect(wrapper.find('[data-testid="repo-cooldown-save"]').exists()).toBe(false)
+    // The read-only note shows for users without cooldown write permission.
     expect(wrapper.find('[data-testid="repo-cooldown-readonly-note"]').exists()).toBe(true)
   })
 })

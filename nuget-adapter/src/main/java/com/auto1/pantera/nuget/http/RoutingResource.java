@@ -54,6 +54,11 @@ public final class RoutingResource implements Resource {
         return this.resource().put(headers, body);
     }
 
+    @Override
+    public CompletableFuture<Response> delete(final Headers headers) {
+        return this.resource().delete(headers);
+    }
+
     /**
      * Find resource by path.
      *

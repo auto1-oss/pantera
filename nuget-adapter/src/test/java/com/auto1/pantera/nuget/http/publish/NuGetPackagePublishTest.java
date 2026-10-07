@@ -21,6 +21,7 @@ import com.auto1.pantera.http.hm.RsHasStatus;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.nuget.AstoRepository;
+import com.auto1.pantera.nuget.NewtonJsonResource;
 import com.auto1.pantera.nuget.http.NuGet;
 import com.auto1.pantera.nuget.http.TestAuthentication;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -30,6 +31,7 @@ import org.apache.hc.client5.http.entity.mime.MultipartEntityBuilder;
 import org.apache.hc.core5.http.HttpEntity;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -103,6 +105,54 @@ class NuGetPackagePublishTest {
             Matchers.is(RsStatus.CONFLICT)
         );
         MatcherAssert.assertThat("Events queue is contains one item", this.events.size() == 1);
+    }
+
+    @Test
+    void immutableRepoRefusesPushOfExistingVersion() throws Exception {
+        this.nuget = this.nuget(true);
+        this.putPackage(nupkg());
+        MatcherAssert.assertThat(
+            "immutable: pushing an existing version is a conflict",
+            this.putPackage(new NewtonJsonResource("newtonsoft.json.12.0.3.nupkg").repacked())
+                .status(),
+            new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "immutable: only the first push is published",
+            this.events.size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void mutableRepoOverwritesPushOfExistingVersion() throws Exception {
+        this.nuget = this.nuget(false);
+        this.putPackage(nupkg());
+        MatcherAssert.assertThat(
+            "mutable: pushing an existing version overwrites it",
+            this.putPackage(new NewtonJsonResource("newtonsoft.json.12.0.3.nupkg").repacked())
+                .status(),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "mutable: both pushes are published",
+            this.events.size(),
+            new IsEqual<>(2)
+        );
+    }
+
+    private NuGet nuget(final boolean immutable) throws Exception {
+        return new NuGet(
+            URI.create("http://localhost").toURL(),
+            new AstoRepository(new InMemoryStorage()),
+            new PolicyByUsername(TestAuthentication.USERNAME),
+            new TestAuthentication(),
+            null,
+            "test",
+            Optional.of(this.events),
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
+            immutable
+        );
     }
 
     @Test

@@ -211,6 +211,14 @@ public final class CooldownHandler {
             .handler(new AuthzHandler(this.policy, ApiCooldownPermission.WRITE))
             .handler(repoWrite)
             .handler(this::unblockAll);
+        // POST /api/v1/cooldown/unblock — bulk unblock across repositories.
+        // Not repository-scoped, so the per-repository WRITE grant that
+        // RepoAuthzHandler enforces on the single route is checked per item
+        // inside the handler; an item the caller may not write is reported
+        // as failed and never unblocked.
+        router.post("/api/v1/cooldown/unblock")
+            .handler(new AuthzHandler(this.policy, ApiCooldownPermission.WRITE))
+            .handler(this::unblockBulk);
     }
 
     /**
@@ -964,24 +972,8 @@ public final class CooldownHandler {
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
         final String unblockIp = CooldownHandler.clientIp(ctx);
         // DB write completes first, then synchronous cache invalidation, then response
-        this.cooldown.unblock(repoType, name, artifact, version, actor)
-            .thenRun(() -> {
-                // CooldownCache L1+L2 invalidation (handler-level guarantee)
-                if (this.cooldownCache != null) {
-                    this.cooldownCache.unblock(name, artifact, version);
-                }
-                // FilteredMetadataCache invalidation
-                this.metadataService.invalidate(repoType, name, artifact);
-                CooldownHandler.recordAdminMetric("unblock");
-                StructuredLogger.local().forComponent(LOG_COMPONENT)
-                    .message("Admin unblock: version unblocked")
-                    .field("repository.name", name)
-                    .field("repository.type", repoType)
-                    .field("package.name", artifact)
-                    .field("package.version", version)
-                    .field("user.name", actor)
-                    .info();
-            })
+        this.unblockOne(name, repoType, artifact, version, actor)
+            .thenRun(() -> CooldownHandler.recordAdminMetric("unblock"))
             .whenComplete((ignored, error) -> {
                 if (error == null) {
                     CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK", name,
@@ -1004,6 +996,96 @@ public final class CooldownHandler {
                     );
                 }
             });
+    }
+
+    /**
+     * The single-unblock path shared by the per-repository route and the bulk
+     * route: DB write, then CooldownCache L1+L2 and FilteredMetadataCache
+     * invalidation, all complete before the returned future resolves.
+     * @param name Repository name
+     * @param repoType Repository type
+     * @param artifact Normalised artifact name
+     * @param version Version
+     * @param actor Authenticated principal
+     * @return Completes when the version is released and caches are invalidated
+     * @checkstyle ParameterNumberCheck (3 lines)
+     */
+    private CompletableFuture<Void> unblockOne(final String name, final String repoType,
+        final String artifact, final String version, final String actor) {
+        return this.cooldown.unblock(repoType, name, artifact, version, actor)
+            .thenRun(() -> {
+                if (this.cooldownCache != null) {
+                    this.cooldownCache.unblock(name, artifact, version);
+                }
+                this.metadataService.invalidate(repoType, name, artifact);
+                StructuredLogger.local().forComponent(LOG_COMPONENT)
+                    .message("Admin unblock: version unblocked")
+                    .field("repository.name", name)
+                    .field("repository.type", repoType)
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .field("user.name", actor)
+                    .info();
+            });
+    }
+
+    /**
+     * POST /api/v1/cooldown/unblock — unblock up to
+     * {@link BulkUnblockRequest#MAX_ITEMS} artifact versions across
+     * repositories in one request. Items run sequentially through the
+     * single-unblock path (see {@link BulkUnblocker}); a per-item failure
+     * (unknown repository, missing per-repository write grant, service or
+     * lookup error, refused executor slot) is reported in {@code failed} and
+     * never fails the request.
+     * @param ctx Routing context
+     */
+    private void unblockBulk(final RoutingContext ctx) {
+        final List<BulkUnblockRequest.Item> items;
+        try {
+            items = new BulkUnblockRequest(ctx.body().asString()).items();
+        } catch (final IllegalArgumentException ex) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", ex.getMessage());
+            return;
+        }
+        final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String context = ctx.user().principal().getString(AuthTokenRest.CONTEXT);
+        final String ip = CooldownHandler.clientIp(ctx);
+        final PermissionCollection perms =
+            this.policy.getPermissions(new AuthUser(actor, context));
+        new BulkUnblocker(
+            name -> this.repoType(new RepositoryName.Simple(name)),
+            name -> perms.implies(new AdapterBasicPermission(name, Action.Standard.WRITE)),
+            (repo, type, artifact, version) ->
+                this.unblockOne(repo, type, artifact, version, actor),
+            (repo, details, ok) -> CooldownHandler.audit(
+                actor, "COOLDOWN_UNBLOCK", repo, details, ok, ip
+            ),
+            HandlerExecutor.get()
+        ).run(items).whenComplete((out, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", String.valueOf(err.getMessage()));
+                return;
+            }
+            CooldownHandler.recordAdminMetric("unblock_bulk");
+            StructuredLogger.local().forComponent(LOG_COMPONENT)
+                .message(
+                    String.format(
+                        "Admin bulk unblock finished: %d unblocked, %d failed",
+                        out.unblocked().size(), out.failed().size()
+                    )
+                )
+                .field("user.name", actor)
+                .field("event.outcome", out.failed().isEmpty() ? "success" : "failure")
+                .info();
+            ctx.response().setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end(
+                    new JsonObject()
+                        .put("unblocked", out.unblocked())
+                        .put("failed", out.failed())
+                        .encode()
+                );
+        });
     }
 
     /**

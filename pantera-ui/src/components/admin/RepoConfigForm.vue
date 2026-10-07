@@ -72,6 +72,9 @@ const preservedKeys = ref<Record<string, unknown>>({})
 const hadStorage = ref(true)
 
 // Keys buildConfig() owns outright — everything else is preserved verbatim.
+// `immutable` is deliberately NOT listed: buildConfig() owns it only for the
+// types it applies to (see supportsImmutable); on proxy/group/docker configs
+// any stray value is round-tripped untouched like any other unmodelled key.
 const OWNED_KEYS = [
   'type', 'url', 'storage', 'remotes', 'members', 'cooldown',
   'anonymous_read', 'anonymous_write',
@@ -247,9 +250,20 @@ const cooldownDuration = ref('P30D')
 const anonymousRead = ref(false)
 const anonymousWrite = ref(false)
 
+// Immutable artifacts (per-repo `immutable` flag). A missing key means true on
+// the server, so new repos start checked; only an explicit false loads off.
+const immutableArtifacts = ref(true)
+
 // Computed type flags
 const isProxy = computed(() => repoType.value.endsWith('-proxy'))
 const isGroup = computed(() => repoType.value.endsWith('-group'))
+
+// `immutable` governs published artifacts of hosted repositories only. Proxies
+// and groups never accept uploads, and docker tag moves are governed by the
+// `overwrite` permission action instead.
+const supportsImmutable = computed(() =>
+  !isProxy.value && !isGroup.value && repoType.value !== 'docker',
+)
 
 const repoTypes = REPO_TYPE_CREATE_OPTIONS
 
@@ -339,6 +353,12 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
   // Matches the backend RepositorySlices.anonymousPolicy contract.
   anonymousRead.value  = repo.anonymous_read  ?? false
   anonymousWrite.value = repo.anonymous_write ?? false
+
+  // Missing ⇒ immutable (server default). Tolerate a string "false" from
+  // hand-edited YAML/JSON configs.
+  const rawImmutable: unknown = repo.immutable
+  immutableArtifacts.value = !(rawImmutable === false
+    || (typeof rawImmutable === 'string' && rawImmutable.trim().toLowerCase() === 'false'))
 
   // Storage
   if (typeof repo.storage === 'string') {
@@ -480,6 +500,13 @@ function buildConfig(): RepoConfigEnvelope {
   repo.anonymous_read  = anonymousRead.value
   repo.anonymous_write = anonymousWrite.value
 
+  // Emitted explicitly for every type it governs, so the operator's choice is
+  // persisted rather than left to the server default. For proxy/group/docker
+  // nothing is added (a pre-existing value stays via preservedKeys).
+  if (supportsImmutable.value) {
+    repo.immutable = immutableArtifacts.value
+  }
+
   return { repo }
 }
 
@@ -496,6 +523,7 @@ watch(
     s3Bucket, s3Region, s3Endpoint,
     cooldownEnabled, cooldownDuration,
     anonymousRead, anonymousWrite,
+    immutableArtifacts,
     clientBaseUrl,
   ],
   () => { emitConfig() },
@@ -510,6 +538,8 @@ defineExpose({
   cooldownDuration,
   anonymousRead,
   anonymousWrite,
+  immutableArtifacts,
+  supportsImmutable,
 })
 </script>
 
@@ -913,6 +943,27 @@ defineExpose({
           <InputText v-model="cooldownDuration" placeholder="P30D" class="w-48" />
           <p class="text-xs text-gray-400 mt-1">e.g. P30D = 30 days, P7D = 7 days, PT12H = 12 hours</p>
         </div>
+      </div>
+    </template>
+  </Card>
+
+  <!-- Publishing (immutable artifacts — hosted, non-docker repos only) -->
+  <Card v-if="supportsImmutable" class="shadow-sm">
+    <template #title>Publishing</template>
+    <template #content>
+      <div class="space-y-3">
+        <div class="flex items-center gap-2">
+          <Checkbox v-model="immutableArtifacts" :binary="true" input-id="immutableArtifacts" />
+          <label for="immutableArtifacts" class="text-sm cursor-pointer">
+            Immutable artifacts
+          </label>
+        </div>
+        <p class="text-xs text-gray-400">
+          When on, a published artifact can't be overwritten — re-uploading an
+          existing version is refused (typically <code>409 Conflict</code>). Users with
+          delete permission can still delete it. When off, users with write
+          permission can overwrite.
+        </p>
       </div>
     </template>
   </Card>

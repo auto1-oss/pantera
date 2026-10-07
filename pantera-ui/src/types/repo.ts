@@ -31,6 +31,12 @@ export interface RepoConfig {
   /** Allow unauthenticated writes. Default false everywhere. */
   anonymous_write?: boolean
   /**
+   * Published artifacts cannot be overwritten (re-upload of an existing
+   * version is refused). Missing ⇒ true. Hosted, non-docker repos only;
+   * delete stays governed by the `delete` permission.
+   */
+  immutable?: boolean
+  /**
    * Keys this UI does not model (e.g. `path`, the deb/rpm `settings` block).
    * They are round-tripped verbatim by RepoConfigForm: the server stores the
    * config as one JSONB document and PUT replaces it wholesale, so any key

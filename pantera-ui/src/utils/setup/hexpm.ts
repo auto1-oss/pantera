@@ -80,7 +80,7 @@ function publish(ctx: SnippetCtx): Step[] {
       title: 'Upload the package',
       description:
         'Upload the tarball with curl. Expect HTTP 201. Use <code>replace=true</code> to overwrite an existing '
-        + 'version.',
+        + 'version (only on a repository whose <em>Immutable artifacts</em> setting is off).',
       code: [
         `curl -fsS -u ${sq(`${ctx.user}:${ctx.token}`)} \\`,
         `  -H 'Content-Type: application/octet-stream' \\`,

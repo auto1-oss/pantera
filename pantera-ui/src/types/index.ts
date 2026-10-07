@@ -63,9 +63,21 @@ export interface UserInfo {
   }
 }
 
+export type RepoMode = 'hosted' | 'proxy' | 'group'
+
 export interface RepoListItem {
   name: string
   type: string
+  /** hosted | proxy | group, derived server-side from the type suffix */
+  mode?: RepoMode
+  /** `fs`, `s3` or a storage alias name; null for groups */
+  storage?: string | null
+  anonymous_read?: boolean
+  anonymous_write?: boolean
+  /** true/false when set on the repository, null = format default */
+  immutable?: boolean | null
+  updated_at?: string | null
+  updated_by?: string | null
 }
 
 // Repository

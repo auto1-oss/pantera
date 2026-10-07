@@ -122,7 +122,7 @@ Pantera takes the package version from the first of these that is present:
 
 ### Re-uploading a Version
 
-Published releases are immutable:
+In a repository with the **Immutable artifacts** setting on (the default), published releases cannot be replaced:
 
 | Upload | Result |
 |--------|--------|
@@ -136,13 +136,22 @@ Pantera compares the files inside the two archives, not their bytes. It compares
 
 To ship a change, publish a new version. The same rules apply to JSON package registrations (`PUT /` with a package JSON body, or `PUT /?version=1.0.0` for a body without a `version` field).
 
+When the administrator has turned the setting off, a release is replaced like a dev branch: any re-upload by a user with `write` answers `201` and replaces the published archive. See [Overwrite rules](../getting-started.md#overwrite-rules-immutable).
+
 Every uploaded archive is listed with `dist.shasum`, the SHA-1 of the archive as Pantera stores it (Pantera writes the resolved version into its `composer.json`, so it differs from the SHA-1 of the file you uploaded). Composer records it in `composer.lock` and checks every download against it. After a dev branch is re-uploaded, `composer install` from an older lock file fails the checksum check; run `composer update <package>` to lock the new upload. Releases uploaded before Pantera 2.2.9 keep their entry without `dist.shasum`, and Composer skips the check for them.
 
 An archive that cannot be read, has no `composer.json`, or has a `composer.json` that is not valid JSON is rejected with `400 Bad Request`.
 
 ### Delete a Package Archive
 
-Composer has no delete command. Delete an archive from the Pantera UI or with the REST API ([`DELETE /api/v1/repositories/:name/artifacts`](../../rest-api-reference.md)), using its storage path:
+Composer has no delete command. Delete an archive with an HTTP `DELETE` of its storage path on the repository URL (needs the `delete` permission; answers `204`, or `404` when nothing is stored there):
+
+```bash
+curl -u your-username:your-api-token -X DELETE \
+  http://pantera-host:8080/php-local/artifacts/vendor/my-package/1.0.0/vendor-my-package-1.0.0.zip
+```
+
+Deleting the directory `artifacts/<vendor>/<package>/<version>` removes that version. The Pantera UI and the REST API ([`DELETE /api/v1/repositories/:name/artifacts`](../../rest-api-reference.md#delete-apiv1repositoriesnameartifacts)) do the same:
 
 ```bash
 curl -X DELETE http://pantera-host:8086/api/v1/repositories/php-local/artifacts \
@@ -151,7 +160,9 @@ curl -X DELETE http://pantera-host:8086/api/v1/repositories/php-local/artifacts 
   -d '{"path": "artifacts/vendor/my-package/1.0.0/vendor-my-package-1.0.0.zip"}'
 ```
 
-Uploaded archives are stored as `artifacts/<vendor>/<package>/<version>/<vendor>-<package>-<version>.<zip|tar.gz>`. Consumers that locked the deleted version fail to install it. To ship a fix, publish a new version.
+Uploaded archives are stored as `artifacts/<vendor>/<package>/<version>/<vendor>-<package>-<version>.<zip|tar.gz>`. The deleted version is removed from `p2/<vendor>/<package>.json` and from search. Consumers that locked the deleted version fail to install it. To ship a fix, publish a new version.
+
+On a `php-proxy`, the same `DELETE` of a cached path evicts it, and the next request fetches it from the upstream again. See [Delete an artifact](../getting-started.md#delete-an-artifact).
 
 ---
 
@@ -164,7 +175,7 @@ Uploaded archives are stored as `artifacts/<vendor>/<package>/<version>/<vendor>
 | `curl error 60: SSL certificate problem` | HTTPS verification failure | Set `"secure-http": false` in composer.json (non-HTTPS) or install proper certs |
 | Package found on Packagist but not resolving | Proxy not configured for packagist.org | Ask admin to verify the php-proxy remote URL |
 | `Your requirements could not be resolved` | Dependency conflict, not a Pantera issue | Run `composer update --with-all-dependencies` to resolve conflicts |
-| `409 Conflict` on upload | That release is already published with different content, or the two archives could not be compared (corrupt or too large) | Publish a new version |
+| `409 Conflict` on upload | The repository is immutable and that release is already published with different content, or the two archives could not be compared (corrupt or too large) | Publish a new version, or delete the published one first |
 | `400 Bad Request` on upload | The archive is unreadable or its `composer.json` is missing or invalid | Rebuild the archive with `composer archive` |
 | `503 Service Unavailable` with `Retry-After` from a group, or `502` from a proxy | The upstream could not be reached or sent invalid metadata | Retry later. The package is not reported as missing during an upstream outage |
 | `403 Forbidden` from a group | Your account cannot read one of the group's member repositories | Ask an admin for read access on the member repositories |

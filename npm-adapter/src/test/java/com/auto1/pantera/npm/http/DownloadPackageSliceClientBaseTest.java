@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.ClientBaseUrlSettings;
 import com.auto1.pantera.http.headers.ClientBaseUrlSettingsRegistry;
@@ -34,6 +35,7 @@ import java.net.URI;
 import java.net.URL;
 import java.util.List;
 import java.util.Optional;
+import org.hamcrest.core.IsNot;
 
 /**
  * I3 regression coverage: {@code npm.http.DownloadPackageSlice} is the LOCAL
@@ -147,6 +149,41 @@ final class DownloadPackageSliceClientBaseTest {
         MatcherAssert.assertThat(
             tarballOf(response),
             new IsEqual<>("http://packages.example.com" + TARBALL_SUFFIX)
+        );
+    }
+
+    @Test
+    void etagFollowsTheBaseSoAStaleHostCannotRevalidate() throws Exception {
+        // A client that cached the packument under one host sends that ETag
+        // from another host (or scheme): the served tarball URLs differ, so
+        // it must get the new body, not 304 and its stale URLs.
+        final Response first = this.responseFor(
+            Headers.from(ClientBaseUrl.HEADER, "https://a.example.com/npm")
+        );
+        final String etag = first.headers().single("ETag").getValue();
+        final Response other = this.responseFor(
+            Headers.from(ClientBaseUrl.HEADER, "https://b.example.com/npm")
+                .copy().add("If-None-Match", etag)
+        );
+        MatcherAssert.assertThat(
+            "another base is a different representation",
+            other.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "and carries its own ETag",
+            other.headers().single("ETag").getValue(), new IsNot<>(new IsEqual<>(etag))
+        );
+        MatcherAssert.assertThat(
+            "the tarball in the new body is under the new base",
+            tarballOf(other), new IsEqual<>("https://b.example.com/npm" + TARBALL_SUFFIX)
+        );
+        final Response same = this.responseFor(
+            Headers.from(ClientBaseUrl.HEADER, "https://a.example.com/npm")
+                .copy().add("If-None-Match", etag)
+        );
+        MatcherAssert.assertThat(
+            "the same base still revalidates",
+            same.status(), new IsEqual<>(RsStatus.NOT_MODIFIED)
         );
     }
 

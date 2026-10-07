@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.manifest.Manifest;
 import com.auto1.pantera.docker.misc.Pagination;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -58,4 +59,31 @@ public interface Manifests {
      * @return Tags.
      */
     CompletableFuture<Tags> tags(Pagination pagination);
+
+    /**
+     * Delete manifest by reference (tag or digest).
+     *
+     * <p>By tag: removes only that tag's link (OCI distribution semantics).
+     * The manifest stays pullable by digest, and other tags that reference
+     * the same digest are untouched.
+     *
+     * <p>By digest: removes the by-digest link and untags every tag of the
+     * image whose link points at that digest (registry semantics — a client
+     * such as {@code skopeo delete} resolves a tag to its digest and deletes
+     * by digest), so the manifest is no longer reachable by any reference.
+     *
+     * <p>Fails (does not silently no-op) when {@code ref} does not resolve
+     * to an existing manifest, so the HTTP slice can answer {@code 404
+     * MANIFEST_UNKNOWN} rather than a false {@code 202 Accepted}.
+     *
+     * <p>Does not cascade into deleting the underlying blob — blob GC is
+     * {@link Layers#delete}, a separate operation, since content-addressed
+     * blobs may be referenced by more than one manifest.
+     *
+     * @param ref Manifest reference to delete.
+     * @return Names of the tags removed by this delete (possibly empty for a
+     *         digest no tag points at); fails if {@code ref} does not
+     *         resolve to an existing manifest.
+     */
+    CompletableFuture<Collection<String>> delete(ManifestReference ref);
 }

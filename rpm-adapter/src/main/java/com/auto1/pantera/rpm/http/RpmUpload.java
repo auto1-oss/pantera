@@ -12,6 +12,7 @@ package com.auto1.pantera.rpm.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -29,6 +30,7 @@ import com.google.common.collect.Streams;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CompletionStage;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -80,15 +82,41 @@ public final class RpmUpload implements Slice {
     private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
 
     /**
-     * Ctor with synchronous index writer.
+     * Whether an existing package may never be replaced, not even with
+     * {@code ?override=true}.
+     */
+    private final boolean immutable;
+
+    /**
+     * Ctor with synchronous index writer; an existing package is replaced
+     * only with {@code ?override=true}.
      */
     RpmUpload(final Storage storage, final RepoConfig config,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+        this(storage, config, events, syncIndex, false);
+    }
+
+    /**
+     * Primary ctor.
+     *
+     * @param storage Storage
+     * @param config Repository configuration
+     * @param events Pantera artifact upload/remove events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable Whether an existing package may never be replaced:
+     *  {@code true} answers 409 even with {@code ?override=true}; {@code false}
+     *  replaces it when the client sends {@code ?override=true}
+     */
+    RpmUpload(final Storage storage, final RepoConfig config,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable) {
         this.asto = storage;
         this.config = config;
         this.events = events;
         this.syncIndex = syncIndex;
+        this.immutable = immutable;
     }
 
     @Override
@@ -97,21 +125,52 @@ public final class RpmUpload implements Slice {
         final Content body) {
         final Request request = new Request(line);
         final Key key = request.file();
-        final CompletionStage<Boolean> conflict;
-        if (request.override()) {
-            conflict = CompletableFuture.completedFuture(false);
-        } else {
-            conflict = this.asto.exists(key);
-        }
-        return conflict.thenCompose(
-                conflicts -> {
+        final Key pending = new Key.From(RpmUpload.TO_ADD, key);
+        // The existence check and the staging write run under one lock on
+        // the package, kept in storage, so two uploads of the same package,
+        // here or on another instance sharing the storage, cannot both pass
+        // the check; a package staged but not yet moved into place counts.
+        final AtomicBoolean started = new AtomicBoolean();
+        return new IndexUpdateLock(this.asto, key).run(
+            locked -> {
+                started.set(true);
+                final CompletionStage<Boolean> conflict;
+                if (request.override() && !this.immutable) {
+                    conflict = CompletableFuture.completedFuture(false);
+                } else {
+                    conflict = locked.exists(key).thenCombine(
+                        locked.exists(pending), (stored, staged) -> stored || staged
+                    );
+                }
+                return conflict.thenCompose(
+                    conflicts -> {
+                        final CompletionStage<Boolean> staged;
+                        if (conflicts) {
+                            // Drain the refused upload so its buffers are released.
+                            staged = body.discard().handle((ignored, err) -> false);
+                        } else {
+                            staged = locked.save(pending, new Content.From(body))
+                                .thenApply(ignored -> true);
+                        }
+                        return staged;
+                    }
+                );
+            }
+        ).exceptionallyCompose(
+            err -> {
+                // The lock was never acquired: nothing read the body yet.
+                final CompletableFuture<Void> drained = started.get()
+                    ? CompletableFuture.completedFuture(null)
+                    : body.discard().toCompletableFuture();
+                return drained.thenCompose(ignored -> CompletableFuture.failedFuture(err));
+            }
+        ).thenCompose(
+                staged -> {
                     final CompletionStage<RsStatus> status;
-                    if (conflicts) {
+                    if (!staged) {
                         status = CompletableFuture.completedFuture(RsStatus.CONFLICT);
                     } else {
-                        status = this.asto.save(
-                            new Key.From(RpmUpload.TO_ADD, key), new Content.From(body)
-                        ).thenCompose(
+                        status = CompletableFuture.completedFuture(null).thenCompose(
                             ignored -> {
                                 final CompletionStage<Void> result;
                                 if (request.skipUpdate()

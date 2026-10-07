@@ -15,16 +15,23 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.auth.AuthScheme;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.index.SyncArtifactIndexer;
+import com.auto1.pantera.security.policy.Policy;
 import org.hamcrest.MatcherAssert;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Optional;
+
 /**
- * B77: registries that do not support deletion MUST answer 405 on the
- * manifest and blob DELETE endpoints (OCI distribution spec), not a bare
- * 404 that tells the client the image does not exist.
+ * B77: a registry that does not support deletion — a read-only
+ * ({@code docker-proxy}) slice — MUST answer 405 on the manifest and blob
+ * DELETE endpoints (OCI distribution spec), not a bare 404 that tells the
+ * client the image does not exist. Hosted repositories support DELETE
+ * (see {@link DeleteManifestSliceTest} / {@link DeleteBlobSliceTest}).
  */
 final class DeleteUnsupportedTest {
 
@@ -36,8 +43,11 @@ final class DeleteUnsupportedTest {
     })
     void answersMethodNotAllowed(final String path) {
         MatcherAssert.assertThat(
-            new DockerSlice(new AstoDocker("test_registry", new InMemoryStorage()))
-                .response(new RequestLine(RqMethod.DELETE, path), Headers.EMPTY, Content.EMPTY)
+            new DockerSlice(
+                new AstoDocker("test_registry", new InMemoryStorage()),
+                Policy.FREE, AuthScheme.NONE, Optional.empty(),
+                SyncArtifactIndexer.NOOP, false
+            ).response(new RequestLine(RqMethod.DELETE, path), Headers.EMPTY, Content.EMPTY)
                 .join(),
             new IsErrorsResponse(RsStatus.METHOD_NOT_ALLOWED, "UNSUPPORTED")
         );
