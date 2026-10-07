@@ -16,18 +16,25 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.ContentWithSize;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.index.SyncArtifactIndexer;
+import com.auto1.pantera.maven.metadata.MavenMetadataRegenerator;
 import com.auto1.pantera.maven.metadata.MavenTimestamp;
 import com.auto1.pantera.maven.metadata.Version;
+import com.auto1.pantera.maven.security.KeyringStoreRegistry;
+import com.auto1.pantera.maven.security.PgpVerifier;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.jcabi.xml.XMLDocument;
 
@@ -41,11 +48,14 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
+import org.slf4j.MDC;
 import org.w3c.dom.Document;
 import org.xml.sax.ErrorHandler;
 import org.xml.sax.InputSource;
@@ -63,6 +73,33 @@ public final class UploadSlice implements Slice {
      * Supported checksum algorithms.
      */
     private static final List<String> CHECKSUM_ALGS = Arrays.asList("sha512", "sha256", "sha1", "md5");
+
+    /**
+     * Detached-signature suffixes recognised by {@link #isSignatureSidecar}.
+     */
+    private static final List<String> SIGNATURE_SUFFIXES = List.of(".asc", ".sig");
+
+    /**
+     * Key prefix under which a primary artifact is quarantined while
+     * {@code verifyPgp} is enabled and no verified signature has committed
+     * it to its real (servable) key yet (H1 fix). Chosen so it can never
+     * collide with a real Maven GAV path: no valid Maven groupId/artifactId
+     * segment starts with {@code .}, and {@link MavenMetadataRegenerator}'s
+     * per-GA {@code storage.list(baseKey)} scan for {@code <versions>}
+     * never descends into this entirely separate top-level prefix, so a
+     * staged (unverified) primary can never be counted as a published
+     * version.
+     *
+     * <p>Package-private (not {@code private}): {@link MavenSlice} reads
+     * this to install a routing-level guard rejecting any request whose
+     * path addresses this namespace directly — {@code Storage} is a flat
+     * key/value space, so without that guard a client could {@code GET
+     * /.pgp-pending/<real-path>} and read a staged, not-yet-verified
+     * primary straight out of quarantine, or {@code PUT} into it directly.
+     * Staging alone (hiding the path from normal listings) is not
+     * sufficient; the path must be unaddressable.
+     */
+    static final String STAGING_PREFIX = ".pgp-pending";
 
     /**
      * Storage.
@@ -88,19 +125,22 @@ public final class UploadSlice implements Slice {
     private final SyncArtifactIndexer syncIndex;
 
     /**
-     * Whether published release files are immutable. When true an existing
+     * Hosted-write policy (WS4-maven.2/.6): {@code verifyPgp} and the
+     * repository's {@code immutable} setting. When immutable, an existing
      * release file is never overwritten (identical bytes: idempotent 201,
-     * different bytes: 409). When false a re-upload overwrites it through the
+     * different bytes: 409); otherwise a re-upload overwrites it through the
      * normal save path (checksums regenerated, publish event emitted).
+     * Defaults to {@link MavenHostedPolicy#DEFAULT} (byte-identical to
+     * pre-2.3.0 behaviour) for every ctor overload that predates this flag.
      */
-    private final boolean immutable;
+    private final MavenHostedPolicy policy;
 
     /**
      * Ctor without events.
      * @param storage Abstract storage
      */
     public UploadSlice(final Storage storage) {
-        this(storage, Optional.empty(), "maven", SyncArtifactIndexer.NOOP);
+        this(storage, Optional.empty(), "maven", SyncArtifactIndexer.NOOP, MavenHostedPolicy.DEFAULT);
     }
 
     /**
@@ -115,7 +155,7 @@ public final class UploadSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final String rname
     ) {
-        this(storage, events, rname, SyncArtifactIndexer.NOOP);
+        this(storage, events, rname, SyncArtifactIndexer.NOOP, MavenHostedPolicy.DEFAULT);
     }
 
     /**
@@ -131,12 +171,12 @@ public final class UploadSlice implements Slice {
         final String rname,
         final SyncArtifactIndexer syncIndex
     ) {
-        this(storage, events, rname, syncIndex, true);
+        this(storage, events, rname, syncIndex, MavenHostedPolicy.DEFAULT);
     }
 
     /**
      * Ctor with synchronous index writer and the repository's
-     * {@code immutable} setting.
+     * {@code immutable} setting (no PGP verify).
      * @param storage Storage
      * @param events Artifact events queue
      * @param rname Repository name
@@ -150,11 +190,31 @@ public final class UploadSlice implements Slice {
         final SyncArtifactIndexer syncIndex,
         final boolean immutable
     ) {
+        this(storage, events, rname, syncIndex, new MavenHostedPolicy(false, immutable));
+    }
+
+    /**
+     * Ctor with synchronous index writer AND hosted-write policy
+     * (WS4-maven.2/.6). The single field-initializing constructor — every
+     * other overload delegates here with {@link MavenHostedPolicy#DEFAULT}.
+     * @param storage Storage
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param policy Hosted-write policy
+     */
+    public UploadSlice(
+        final Storage storage,
+        final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final SyncArtifactIndexer syncIndex,
+        final MavenHostedPolicy policy
+    ) {
         this.storage = storage;
         this.events = events;
         this.rname = rname;
         this.syncIndex = syncIndex;
-        this.immutable = immutable;
+        this.policy = policy;
     }
 
     @Override
@@ -205,6 +265,10 @@ public final class UploadSlice implements Slice {
         }
         
         final String keyPath = key.string();
+        // Captured before any async hop (CLAUDE.md audit rules) — used by the
+        // checksum-mismatch / release-immutability / pgp-verification-failed
+        // audit paths below.
+        final AuditContext auditCtx = this.captureAuditContext(headers);
 
         // For maven-metadata.xml checksums, SKIP them - we generate our own
         // from the (normalised) metadata we actually store.
@@ -270,17 +334,24 @@ public final class UploadSlice implements Slice {
         // Artifact checksums: the server generates them from the stored
         // bytes, so a client checksum is only verified, never trusted.
         if (isChecksum(keyPath)) {
-            return this.uploadChecksum(key, body, headers, owner, size);
+            return this.uploadChecksum(key, body, headers, owner, size, auditCtx);
+        }
+
+        // WS4-maven.2 (hosted half): verify `.asc`/`.sig` against the stored
+        // or quarantined primary when verifyPgp is enabled for this repo.
+        if (this.policy.verifyPgp() && isSignatureSidecar(keyPath)) {
+            return this.handleSignatureUpload(key, keyPath, body, headers, owner, size, auditCtx);
         }
 
         // In an immutable repository published release files can never be
         // overwritten: an identical re-upload (CI retry) is idempotent,
         // different bytes are a 409 Conflict. SNAPSHOT directories stay
-        // writable. A mutable repository overwrites through the normal save
-        // path, which regenerates the checksum sidecars from the new bytes
-        // (so the client's own checksum upload that follows verifies) and
-        // emits the publish event that upserts the search index.
-        if (this.immutable && isReleaseFile(keyPath)) {
+        // writable. A mutable repository (immutable: false; the deprecated
+        // releaseImmutable alias) overwrites through the normal save path,
+        // which regenerates the checksum sidecars from the new bytes (so the
+        // client's own checksum upload that follows verifies) and emits the
+        // publish event that upserts the search index.
+        if (this.policy.immutable() && isReleaseFile(keyPath)) {
             // Check and write under one lock on the file, kept in storage:
             // two first-time uploads of the same release file, here or on
             // another instance sharing the storage, cannot both see it absent.
@@ -291,9 +362,11 @@ public final class UploadSlice implements Slice {
                     return locked.exists(key).thenCompose(
                         exists -> {
                             if (exists) {
-                                return this.redeploy(key, body, headers);
+                                return this.redeploy(key, body, headers, owner, size, auditCtx);
                             }
-                            return this.save(key, body, headers, owner, size);
+                            return this.publish(
+                                key, keyPath, body, headers, owner, size, auditCtx
+                            );
                         }
                     );
                 }
@@ -302,10 +375,28 @@ public final class UploadSlice implements Slice {
                     // The lock was never acquired: nothing read the body yet.
                     final CompletableFuture<Void> drained = started.get()
                         ? CompletableFuture.completedFuture(null)
-                        : body.discard().toCompletableFuture();
+                        : body.discard();
                     return drained.thenCompose(ignored -> CompletableFuture.failedFuture(err));
                 }
             );
+        }
+        return this.publish(key, keyPath, body, headers, owner, size, auditCtx);
+    }
+
+    /**
+     * Store a primary or companion file at its servable key — or, when
+     * {@code verifyPgp} is enabled, quarantine it until a matching verified
+     * signature promotes it (WS4-maven.2, H1; see
+     * {@link #stagePrimaryForVerification}). Without {@code verifyPgp} this
+     * is the plain hosted write, {@link #save}.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> publish(
+        final Key key, final String keyPath, final Content body, final Headers headers,
+        final String owner, final long size, final AuditContext auditCtx
+    ) {
+        if (this.policy.verifyPgp()) {
+            return this.stagePrimaryForVerification(key, keyPath, body, headers, owner, size, auditCtx);
         }
         return this.save(key, body, headers, owner, size);
     }
@@ -324,11 +415,12 @@ public final class UploadSlice implements Slice {
      * @param headers Request headers
      * @param owner Uploader
      * @param size Declared size
+     * @param auditCtx Audit context captured at the top of the request
      * @return Response future
      */
     private CompletableFuture<Response> uploadChecksum(
         final Key key, final Content body, final Headers headers,
-        final String owner, final long size
+        final String owner, final long size, final AuditContext auditCtx
     ) {
         final String path = key.string();
         final int dot = path.lastIndexOf('.');
@@ -341,7 +433,9 @@ public final class UploadSlice implements Slice {
                 }
                 return new ContentWithSize(body, headers).asBytesFuture().thenCompose(
                     bytes -> this.storedDigest(primary, alg).thenCompose(
-                        expected -> this.verifiedChecksum(key, expected, bytes)
+                        expected -> this.verifiedChecksum(
+                            key, primary, expected, bytes, owner, size, auditCtx
+                        )
                     )
                 );
             }
@@ -352,12 +446,17 @@ public final class UploadSlice implements Slice {
      * Compare a client checksum with the server-computed digest.
      *
      * @param key Checksum key
+     * @param primary Stored primary the checksum describes
      * @param expected Server-computed lower-case hex digest of the primary
      * @param claimed Uploaded checksum file bytes
+     * @param owner Uploader
+     * @param size Declared size
+     * @param auditCtx Audit context captured at the top of the request
      * @return 201 after storing the canonical value, or 400 on mismatch
      */
     private CompletableFuture<Response> verifiedChecksum(
-        final Key key, final String expected, final byte[] claimed
+        final Key key, final Key primary, final String expected, final byte[] claimed,
+        final String owner, final long size, final AuditContext auditCtx
     ) {
         final String text = new String(claimed, StandardCharsets.UTF_8).trim();
         final String token = text.isEmpty() ? "" : text.split("\\s+", 2)[0];
@@ -376,6 +475,14 @@ public final class UploadSlice implements Slice {
             .field("url.path", "/" + key.string())
             .field("log.source", "application")
             .log();
+        final GavCoordinates gav = GavCoordinates.parse(primary.string()).orElse(null);
+        AuditLogger.publish(
+            auditCtx, "maven", this.rname,
+            gav != null ? gav.artifactName() : primary.string(),
+            gav != null ? gav.version() : null,
+            size, owner, null, null,
+            AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_CHECKSUM_MISMATCH
+        );
         return CompletableFuture.completedFuture(
             ResponseBuilder.badRequest()
                 .textBody(
@@ -395,15 +502,23 @@ public final class UploadSlice implements Slice {
      * @param key File key
      * @param body Request body
      * @param headers Request headers
+     * @param owner Uploader
+     * @param size Declared size
+     * @param auditCtx Audit context captured at the top of the request
      * @return Response future
      */
     private CompletableFuture<Response> redeploy(
-        final Key key, final Content body, final Headers headers
+        final Key key, final Content body, final Headers headers,
+        final String owner, final long size, final AuditContext auditCtx
     ) {
         return new ContentDigest(new ContentWithSize(body, headers), Digests.SHA256).hex()
             .thenCompose(
                 incoming -> this.storedDigest(key, "sha256")
-                    .thenApply(existing -> this.redeployResponse(key, incoming, existing))
+                    .thenApply(
+                        existing -> this.redeployResponse(
+                            key, incoming, existing, owner, size, auditCtx
+                        )
+                    )
             ).toCompletableFuture();
     }
 
@@ -448,10 +563,14 @@ public final class UploadSlice implements Slice {
      * @param key File key
      * @param incoming SHA-256 of the uploaded bytes
      * @param existing SHA-256 of the stored bytes
+     * @param owner Uploader
+     * @param size Declared size
+     * @param auditCtx Audit context captured at the top of the request
      * @return 201 for identical bytes, 409 otherwise
      */
     private Response redeployResponse(
-        final Key key, final String incoming, final String existing
+        final Key key, final String incoming, final String existing,
+        final String owner, final long size, final AuditContext auditCtx
     ) {
         if (incoming.equals(existing)) {
             return ResponseBuilder.created().build();
@@ -466,6 +585,14 @@ public final class UploadSlice implements Slice {
             .field("url.path", "/" + key.string())
             .field("log.source", "application")
             .log();
+        final GavCoordinates gav = GavCoordinates.parse(key.string()).orElse(null);
+        AuditLogger.publish(
+            auditCtx, "maven", this.rname,
+            gav != null ? gav.artifactName() : key.string(),
+            gav != null ? gav.version() : null,
+            size, owner, null, null,
+            AuditLogger.OUTCOME_FAILURE, "release_immutable"
+        );
         return ResponseBuilder.from(com.auto1.pantera.http.RsStatus.CONFLICT)
             .textBody(
                 "Release file /" + key.string() + " already exists with different "
@@ -476,8 +603,8 @@ public final class UploadSlice implements Slice {
     }
 
     /**
-     * Save an uploaded file, generate its checksums and emit the artifact
-     * event.
+     * Save an uploaded file, generate its checksums, regenerate the GA-level
+     * {@code maven-metadata.xml} (WS4-maven.4) and emit the artifact event.
      *
      * @param key File key
      * @param body Request body
@@ -502,9 +629,14 @@ public final class UploadSlice implements Slice {
                     .field("log.source", "application")
                     .log();
 
-                // For non-metadata/checksum files, generate checksums
+                // For non-metadata/checksum files, generate checksums, then
+                // regenerate the GA-level maven-metadata.xml so concurrent or
+                // stale deploys converge on the true version set (WS4-maven.4).
                 if (this.shouldGenerateChecksums(key)) {
-                    return this.generateChecksums(key);
+                    return this.generateChecksums(key).thenCompose(
+                        sha256 -> this.regenerateMetadataIfPrimary(keyPath)
+                            .thenApply(ignored -> sha256)
+                    );
                 } else {
                     return CompletableFuture.<String>completedFuture(null);
                 }
@@ -526,6 +658,458 @@ public final class UploadSlice implements Slice {
                 return ResponseBuilder.internalError().build();
             }
         );
+    }
+
+    /**
+     * Checksums + GA {@code maven-metadata.xml} regeneration (WS4-maven.4)
+     * + {@link ArtifactEvent} recording for a primary that just became
+     * servable at {@code key} — the tail shared by the plain hosted-write
+     * path ({@link #saveAndRegenerate}, {@code verifyPgp} disabled) and by
+     * H1's quarantine promotion once a staged primary's signature verifies
+     * ({@link #verifyStagedPrimary}). The caller is responsible for the
+     * primary already being at its real, servable {@code key} by the time
+     * this runs.
+     *
+     * @param key Primary artifact key (already at its real location)
+     * @param keyPath Same key as a path string (avoids re-deriving it)
+     * @param owner Uploading user
+     * @param size Artifact size, for the audit/event record
+     * @param headers Request headers carrying the request context
+     * @return Completable future yielding the 201 Created response
+     */
+    private CompletableFuture<Response> publishPrimary(
+        final Key key, final String keyPath, final String owner, final long size,
+        final Headers headers
+    ) {
+        final CompletableFuture<String> checksums = this.shouldGenerateChecksums(key)
+            ? this.generateChecksums(key)
+            : CompletableFuture.completedFuture(null);
+        return checksums.thenCompose(
+            sha256 -> this.regenerateMetadataIfPrimary(keyPath).thenApply(ignored -> sha256)
+        ).thenCompose(
+            sha256 -> this.addEvent(key, owner, size, sha256, headers)
+                .thenApply(ignored -> ResponseBuilder.created().build())
+        );
+    }
+
+    /**
+     * WS4-maven.4: regenerate the GA-level {@code maven-metadata.xml}
+     * after a primary-artifact save, under a per-GA exclusive lock, so
+     * concurrent/stale deploys converge on the true version set in
+     * storage instead of last-write-wins client XML. A best-effort
+     * operation: failures are logged, never surfaced to the client — the
+     * artifact itself is already safely stored, and the next deploy (or
+     * an admin re-trigger) retries the regeneration.
+     *
+     * @param keyPath Path just saved
+     * @return Completion stage, always resolves (never fails)
+     */
+    private CompletionStage<Void> regenerateMetadataIfPrimary(final String keyPath) {
+        final Optional<GavCoordinates> gav = GavCoordinates.parse(keyPath);
+        if (gav.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        final GavCoordinates coords = gav.get();
+        return new MavenMetadataRegenerator(this.storage)
+            .regenerate(coords.baseKey(), coords.groupId(), coords.artifactId(), coords.version())
+            .exceptionally(err -> {
+                EcsLogger.warn("com.auto1.pantera.maven")
+                    .message("maven-metadata.xml regeneration failed for "
+                        + coords.baseKey().string() + "; a subsequent deploy will retry")
+                    .eventCategory("file")
+                    .eventAction("maven_metadata_regenerate")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.rname)
+                    .error(err)
+                    .field("log.source", "application")
+                    .log();
+                return null;
+            });
+    }
+
+    /**
+     * WS4-maven.2 (hosted half) + H1 fix: verify a {@code .asc}/{@code .sig}
+     * upload against the primary it signs.
+     *
+     * <ul>
+     *   <li>The primary already lives at its real, servable key (published
+     *       before {@code verifyPgp} was enabled, or this is a re-signature):
+     *       verify directly against it — pre-H1 behaviour, unchanged. On
+     *       failure the (already-public) primary and its checksum sidecars
+     *       are deleted so nothing tampered/unsigned is left published.</li>
+     *   <li>No real primary yet, but one is quarantined (H1's normal case —
+     *       the primary's own PUT staged it first): verify against the
+     *       staged bytes. VERIFIED promotes the staged primary to its real
+     *       key (see {@link #verifyStagedPrimary}); anything else deletes
+     *       the staged primary — it was never published, so there is
+     *       nothing to "unpublish".</li>
+     *   <li>Neither a real nor a staged primary exists (H1 bypass (a): the
+     *       signature arrived first): the signature bytes are themselves
+     *       quarantined so the primary's own upload can find and verify
+     *       against them the moment it arrives (see
+     *       {@link #stagePrimaryForVerification}) — verification never runs
+     *       against absent bytes, and nothing is ever served unverified.</li>
+     * </ul>
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> handleSignatureUpload(
+        final Key key, final String keyPath, final Content body, final Headers headers,
+        final String owner, final long size, final AuditContext auditCtx
+    ) {
+        final String suffix = keyPath.endsWith(".asc") ? ".asc" : ".sig";
+        final Key primaryKey = new Key.From(keyPath.substring(0, keyPath.length() - suffix.length()));
+        return new ContentWithSize(body, headers).asBytesFuture().thenCompose(
+            sigBytes -> this.storage.exists(primaryKey).thenCompose(primaryExists -> {
+                if (primaryExists) {
+                    return this.verifyAgainstPublishedPrimary(
+                        primaryKey, keyPath, key, sigBytes, owner, size, auditCtx
+                    );
+                }
+                return this.verifyAgainstStagedOrDefer(
+                    primaryKey, primaryKey.string(), key, sigBytes, owner, size, auditCtx, headers
+                );
+            })
+        ).exceptionally(throwable -> {
+            EcsLogger.error("com.auto1.pantera.maven")
+                .message("Failed to verify/save PGP signature")
+                .eventCategory("web")
+                .eventAction("pgp_verification_failed")
+                .eventOutcome("failure")
+                .error(throwable)
+                .field("package.path", keyPath)
+                .field("log.source", "application")
+                .log();
+            return ResponseBuilder.internalError().build();
+        });
+    }
+
+    /**
+     * Pre-H1 verification path: the primary is already real/servable
+     * (published before {@code verifyPgp} was turned on for this repo, or
+     * this is a re-signature of an already-published release). Verify
+     * directly against it; unchanged from pre-2.3.2 behaviour.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> verifyAgainstPublishedPrimary(
+        final Key primaryKey, final String signaturePath, final Key sigKey, final byte[] sigBytes,
+        final String owner, final long size, final AuditContext auditCtx
+    ) {
+        return this.storage.value(primaryKey).thenCompose(Content::asBytesFuture).thenCompose(
+            primaryBytes -> {
+                final PgpVerifier.Result result = new PgpVerifier(KeyringStoreRegistry.active())
+                    .verify(primaryBytes, sigBytes);
+                if (result == PgpVerifier.Result.VERIFIED) {
+                    return this.storage.save(sigKey, new Content.From(sigBytes))
+                        .thenApply(nothing -> ResponseBuilder.created().build());
+                }
+                return this.rejectPgpVerification(primaryKey, signaturePath, result, owner, size, auditCtx);
+            }
+        );
+    }
+
+    /**
+     * H1 fix: no real (servable) primary exists yet. If one is quarantined
+     * — the ordinary case, since the primary's own PUT reaches storage
+     * first in a standard {@code mvn deploy}/{@code gpg:sign-and-deploy}
+     * flow — verify against the staged bytes now. Otherwise (bypass (a):
+     * the signature arrived before even a staged primary exists) stage the
+     * signature itself so the eventual primary upload can find and verify
+     * against it — see {@link #stagePrimaryForVerification}.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> verifyAgainstStagedOrDefer(
+        final Key primaryKey, final String primaryPath, final Key sigKey, final byte[] sigBytes,
+        final String owner, final long size, final AuditContext auditCtx, final Headers headers
+    ) {
+        return this.storage.exists(this.stagingKey(primaryKey)).thenCompose(staged -> {
+            if (staged) {
+                return this.storage.value(this.stagingKey(primaryKey)).thenCompose(Content::asBytesFuture)
+                    .thenCompose(primaryBytes -> this.verifyStagedPrimary(
+                        primaryKey, primaryPath, primaryBytes, sigBytes, owner, size, auditCtx,
+                        headers, () -> this.storage.save(sigKey, new Content.From(sigBytes))
+                    ));
+            }
+            return this.storage.save(this.stagingKey(sigKey), new Content.From(sigBytes))
+                .thenApply(nothing -> ResponseBuilder.created().build());
+        });
+    }
+
+    /**
+     * H1 fix: quarantine an uploaded primary instead of saving it to its
+     * real (servable) key while {@code verifyPgp} is enabled for this repo.
+     * A primary staged here is invisible to every read path — {@code
+     * LocalMavenSlice} only ever looks at the real key, and {@link
+     * MavenMetadataRegenerator}'s per-GA listing never descends into
+     * {@link #STAGING_PREFIX} — so it cannot be served, and cannot appear
+     * in {@code maven-metadata.xml}'s {@code <versions>}, until promoted.
+     *
+     * <p>If a signature was already staged for this exact primary (bypass
+     * (a): the {@code .asc} arrived first), verifies immediately —
+     * regardless of upload order, a matching verified signature is
+     * required before anything becomes servable. Otherwise responds 201
+     * (the client's PUT succeeds; nothing is servable yet) and waits for
+     * {@link #handleSignatureUpload} to find this staged primary later.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> stagePrimaryForVerification(
+        final Key key, final String keyPath, final Content body, final Headers headers,
+        final String owner, final long size, final AuditContext auditCtx
+    ) {
+        final Key staged = this.stagingKey(key);
+        return this.storage.save(staged, new ContentWithSize(body, headers)).thenCompose(
+            nothing -> {
+                EcsLogger.debug("com.auto1.pantera.maven")
+                    .message("Staged primary artifact pending PGP signature: " + keyPath)
+                    .eventCategory("file")
+                    .eventAction("pgp_stage")
+                    .field("repository.name", this.rname)
+                    .field("package.path", keyPath)
+                    .field("log.source", "application")
+                    .log();
+                return this.findStagedSignatureKey(key);
+            }
+        ).thenCompose(sigKeyOpt -> {
+            if (sigKeyOpt.isEmpty()) {
+                return CompletableFuture.completedFuture(ResponseBuilder.created().build());
+            }
+            final Key stagedSigKey = sigKeyOpt.get();
+            return this.storage.value(staged).thenCompose(Content::asBytesFuture)
+                .thenCompose(primaryBytes -> this.storage.value(stagedSigKey).thenCompose(Content::asBytesFuture)
+                    .thenCompose(sigBytes -> this.verifyStagedPrimary(
+                        key, keyPath, primaryBytes, sigBytes, owner, size, auditCtx,
+                        headers, () -> this.storage.move(stagedSigKey, unstagedKey(stagedSigKey))
+                    )));
+        }).exceptionally(throwable -> {
+            EcsLogger.error("com.auto1.pantera.maven")
+                .message("Failed to stage primary pending PGP verification")
+                .eventCategory("web")
+                .eventAction("pgp_verification_failed")
+                .eventOutcome("failure")
+                .error(throwable)
+                .field("package.path", keyPath)
+                .field("log.source", "application")
+                .log();
+            return ResponseBuilder.internalError().build();
+        });
+    }
+
+    /**
+     * The one place H1's staged/verify/promote-or-reject decision is made,
+     * shared by both directions a staged primary can meet its signature:
+     * the primary arriving after an already-staged signature ({@link
+     * #stagePrimaryForVerification}) and the signature arriving after an
+     * already-staged primary ({@link #verifyAgainstStagedOrDefer}).
+     *
+     * <p>VERIFIED promotes: moves the staged primary to its real key,
+     * lands the signature at its real key via the caller-supplied {@code
+     * landSignature} (a move-from-staging or a fresh save, depending on
+     * which direction triggered this), then runs the same checksums +
+     * metadata-regeneration + {@link ArtifactEvent} tail a non-quarantined
+     * publish does ({@link #publishPrimary}) — so a PGP-verified hosted
+     * publish is indistinguishable from a plain one once it lands. Any
+     * other {@link PgpVerifier.Result} rejects: the staged primary (and any
+     * staged signature) is deleted — nothing was ever published, so there
+     * is nothing to unpublish, only quarantine to discard.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> verifyStagedPrimary(
+        final Key primaryKey, final String primaryPath, final byte[] primaryBytes, final byte[] sigBytes,
+        final String owner, final long size, final AuditContext auditCtx,
+        final Headers headers, final Supplier<CompletableFuture<Void>> landSignature
+    ) {
+        final PgpVerifier.Result result = new PgpVerifier(KeyringStoreRegistry.active())
+            .verify(primaryBytes, sigBytes);
+        if (result == PgpVerifier.Result.VERIFIED) {
+            return this.storage.move(this.stagingKey(primaryKey), primaryKey)
+                .thenCompose(nothing -> landSignature.get())
+                .thenCompose(
+                    nothing -> this.publishPrimary(primaryKey, primaryPath, owner, size, headers)
+                );
+        }
+        return this.rejectStagedPgp(primaryKey, primaryPath, result, owner, size, auditCtx);
+    }
+
+    /**
+     * Roll back a quarantined publish that failed PGP verification: log the
+     * {@code pgp_verification_failed} state transition, emit the {@code
+     * artifact_publish} failure audit, and delete the staged primary plus
+     * any staged signature — nothing real was ever created, so (unlike
+     * {@link #rejectPgpVerification}) there is no published artifact to
+     * unpublish.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> rejectStagedPgp(
+        final Key primaryKey, final String primaryPath, final PgpVerifier.Result result,
+        final String owner, final long size, final AuditContext auditCtx
+    ) {
+        final GavCoordinates gav = GavCoordinates.parse(primaryPath).orElse(null);
+        EcsLogger.warn("com.auto1.pantera.maven")
+            .message("PGP verification failed for staged hosted upload (" + result
+                + "); " + primaryPath + " was never published")
+            .eventCategory("file")
+            .eventAction("pgp_verification_failed")
+            .eventOutcome("failure")
+            .field("repository.name", this.rname)
+            .field("package.path", primaryPath)
+            .field("event.reason", result.name())
+            .field("log.source", "application")
+            .log();
+        AuditLogger.publish(
+            auditCtx, "maven", this.rname,
+            gav != null ? gav.artifactName() : primaryPath,
+            gav != null ? gav.version() : null,
+            size, owner, null, null,
+            AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_CHECKSUM_MISMATCH
+        );
+        return this.deleteStagedArtifacts(primaryKey).thenApply(ignored -> ResponseBuilder.forbidden().build());
+    }
+
+    /**
+     * Best-effort delete of a staged primary plus any staged {@code .asc}/
+     * {@code .sig} counterpart — the quarantine-side analogue of {@link
+     * #deleteWithChecksums}.
+     * @param primaryKey Real (unstaged) primary key
+     * @return Completion stage, always resolves
+     */
+    private CompletableFuture<Void> deleteStagedArtifacts(final Key primaryKey) {
+        CompletableFuture<Void> chain = this.deleteIfExists(this.stagingKey(primaryKey));
+        for (final String suffix : SIGNATURE_SUFFIXES) {
+            final Key stagedSig = this.stagingKey(new Key.From(primaryKey.string() + suffix));
+            chain = chain.thenCompose(ignored -> this.deleteIfExists(stagedSig));
+        }
+        return chain;
+    }
+
+    /**
+     * @param key Key to delete if present
+     * @return Completion stage, always resolves (best-effort — a delete
+     *         failure is swallowed, same posture as {@link #deleteWithChecksums})
+     */
+    private CompletableFuture<Void> deleteIfExists(final Key key) {
+        return this.storage.exists(key).thenCompose(
+            exists -> exists
+                ? this.storage.delete(key).exceptionally(ignored -> null)
+                : CompletableFuture.<Void>completedFuture(null)
+        );
+    }
+
+    /**
+     * Look for a staged {@code .asc} or {@code .sig} counterpart of {@code
+     * primaryKey} (in that preference order — {@code .asc} is the
+     * conventional OpenPGP armored form).
+     * @param primaryKey Real (unstaged) primary key
+     * @return The staged signature key, if either suffix is staged
+     */
+    private CompletableFuture<Optional<Key>> findStagedSignatureKey(final Key primaryKey) {
+        CompletableFuture<Optional<Key>> chain = CompletableFuture.completedFuture(Optional.empty());
+        for (final String suffix : SIGNATURE_SUFFIXES) {
+            final Key candidate = this.stagingKey(new Key.From(primaryKey.string() + suffix));
+            chain = chain.thenCompose(
+                found -> found.isPresent()
+                    ? CompletableFuture.completedFuture(found)
+                    : this.storage.exists(candidate).thenApply(
+                        exists -> exists ? Optional.of(candidate) : Optional.<Key>empty()
+                    )
+            );
+        }
+        return chain;
+    }
+
+    /**
+     * @param real Real (servable) key
+     * @return The quarantine-namespaced key {@code real} is staged under
+     *         while awaiting PGP verification
+     */
+    private Key stagingKey(final Key real) {
+        return new Key.From(STAGING_PREFIX, real.string());
+    }
+
+    /**
+     * Inverse of {@link #stagingKey}.
+     * @param staged A key produced by {@link #stagingKey}
+     * @return The real key {@code staged} quarantines
+     */
+    private static Key unstagedKey(final Key staged) {
+        final String prefix = STAGING_PREFIX + "/";
+        final String path = staged.string();
+        return new Key.From(path.substring(prefix.length()));
+    }
+
+    /**
+     * Roll back a hosted PGP-verification failure: delete the primary and
+     * its checksum sidecars (best-effort), log the
+     * {@code pgp_verification_failed} state transition, and emit the
+     * {@code artifact_publish} failure audit.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> rejectPgpVerification(
+        final Key primaryKey, final String signaturePath, final PgpVerifier.Result result,
+        final String owner, final long size, final AuditContext auditCtx
+    ) {
+        final GavCoordinates gav = GavCoordinates.parse(primaryKey.string()).orElse(null);
+        EcsLogger.warn("com.auto1.pantera.maven")
+            .message("PGP verification failed for hosted upload (" + result
+                + "); removing primary " + primaryKey.string())
+            .eventCategory("file")
+            .eventAction("pgp_verification_failed")
+            .eventOutcome("failure")
+            .field("repository.name", this.rname)
+            .field("package.path", signaturePath)
+            .field("event.reason", result.name())
+            .field("log.source", "application")
+            .log();
+        AuditLogger.publish(
+            auditCtx, "maven", this.rname,
+            gav != null ? gav.artifactName() : signaturePath,
+            gav != null ? gav.version() : null,
+            size, owner, null, null,
+            AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_CHECKSUM_MISMATCH
+        );
+        return this.deleteWithChecksums(primaryKey)
+            .thenApply(ignored -> ResponseBuilder.forbidden().build());
+    }
+
+    /**
+     * Best-effort delete of a primary plus its {@code .md5}/{@code .sha1}/
+     * {@code .sha256}/{@code .sha512} sidecars.
+     * @param primaryKey Primary artifact key
+     * @return Completion stage, always resolves
+     */
+    private CompletableFuture<Void> deleteWithChecksums(final Key primaryKey) {
+        CompletableFuture<Void> chain = this.storage.delete(primaryKey)
+            .exceptionally(ignored -> null);
+        for (final String ext : List.of(".md5", ".sha1", ".sha256", ".sha512")) {
+            final Key sidecarKey = new Key.From(primaryKey.string() + ext);
+            chain = chain.thenCompose(
+                ignored -> this.storage.exists(sidecarKey).thenCompose(
+                    exists -> exists
+                        ? this.storage.delete(sidecarKey).exceptionally(ignored2 -> null)
+                        : CompletableFuture.<Void>completedFuture(null)
+                )
+            );
+        }
+        return chain;
+    }
+
+    /**
+     * @param path Upload path
+     * @return True for a {@code .asc}/{@code .sig} detached signature sidecar
+     */
+    private static boolean isSignatureSidecar(final String path) {
+        return path.endsWith(".asc") || path.endsWith(".sig");
+    }
+
+    /**
+     * Capture request correlation (trace id / client IP) for audit
+     * emission, mirroring {@code BaseCachedProxySlice#captureAuditContext}.
+     * Must be called before any async hop — MDC does not survive worker-
+     * thread hops (CLAUDE.md).
+     * @param headers Inbound request headers
+     * @return Captured context
+     */
+    private AuditContext captureAuditContext(final Headers headers) {
+        RequestContextHeaders.bindToMdc(headers);
+        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
     }
 
     /**

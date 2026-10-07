@@ -152,6 +152,32 @@ public class LatestSliceTest {
     }
 
     @Test
+    void selectsHighestSemverVersionNotLexicographic() throws ExecutionException, InterruptedException {
+        final Storage storage = new InMemoryStorage();
+        for (final String version : new String[]{"v0.2.0", "v0.9.0", "v0.10.0"}) {
+            storage.save(
+                new KeyFromPath("example.com/semver/mod/@v/" + version + ".info"),
+                new Content.From(
+                    ("{\"Version\":\"" + version + "\"}").getBytes(StandardCharsets.UTF_8)
+                )
+            ).get();
+            // A version is only a candidate once its zip is published.
+            storage.save(
+                new KeyFromPath("example.com/semver/mod/@v/" + version + ".zip"),
+                Content.EMPTY
+            ).get();
+        }
+        final Response response = new LatestSlice(storage).response(
+            RequestLine.from("GET example.com/semver/mod/@latest HTTP/1.1"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            new String(response.body().asBytes(), StandardCharsets.UTF_8),
+            new IsEqual<>("{\"Version\":\"v0.10.0\"}")
+        );
+    }
+
+    @Test
     void returnsNotFondWhenModuleNotFound() {
         Response response = new LatestSlice(new InMemoryStorage()).response(
             RequestLine.from("GET example.com/first/@latest HTTP/1.1"), Headers.EMPTY, Content.EMPTY

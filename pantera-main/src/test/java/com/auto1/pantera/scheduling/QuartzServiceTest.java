@@ -10,12 +10,9 @@
  */
 package com.auto1.pantera.scheduling;
 
-import java.util.Queue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 import org.awaitility.Awaitility;
-import org.cactoos.list.ListOf;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +25,10 @@ import org.quartz.SchedulerException;
 
 /**
  * Test for {@link QuartzService}.
+ * <p>
+ * Artifact-events queue draining is no longer scheduled through
+ * {@link QuartzService} — see {@link LocalEventDrainSchedulerTest} for that
+ * mechanism's coverage (WS2.2, 2.3.0).
  * @since 1.3
  */
 public final class QuartzServiceTest {
@@ -45,25 +46,6 @@ public final class QuartzServiceTest {
     @AfterEach
     void stop() {
         this.service.stop();
-    }
-
-    @Test
-    void runsEventProcessorJobs() throws SchedulerException, InterruptedException {
-        final TestConsumer first = new TestConsumer();
-        final TestConsumer second = new TestConsumer();
-        final TestConsumer third = new TestConsumer();
-        final Queue<Character> queue = this.service.addPeriodicEventsProcessor(
-            1, new ListOf<Consumer<Character>>(first, second, third)
-        );
-        this.service.start();
-        for (char sym = 'a'; sym <= 'z'; sym++) {
-            queue.add(sym);
-            if ((int) sym % 5 == 0) {
-                Thread.sleep(1500);
-            }
-        }
-        Awaitility.await().atMost(10, TimeUnit.SECONDS)
-            .until(() -> first.cnt.get() + second.cnt.get() + third.cnt.get() == 26);
     }
 
     @Test
@@ -87,23 +69,6 @@ public final class QuartzServiceTest {
             },
             "Calling stop() twice must not throw an exception"
         );
-    }
-
-    /**
-     * Test consumer.
-     * @since 1.3
-     */
-    static final class TestConsumer implements Consumer<Character> {
-
-        /**
-         * Count for accept method call.
-         */
-        private final AtomicInteger cnt = new AtomicInteger();
-
-        @Override
-        public void accept(final Character strings) {
-            this.cnt.incrementAndGet();
-        }
     }
 
     /**

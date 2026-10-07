@@ -85,6 +85,12 @@ public enum RsStatus {
      */
     METHOD_NOT_ALLOWED(HttpStatus.SC_METHOD_NOT_ALLOWED),
     /**
+     * Not Acceptable — none of the representations available for the
+     * resource are acceptable per the client's {@code Accept} header
+     * (WS4-docker.7: OCI/Docker manifest content negotiation).
+     */
+    NOT_ACCEPTABLE(HttpStatus.SC_NOT_ACCEPTABLE),
+    /**
      * Request Time-out.
      */
     REQUEST_TIMEOUT(HttpStatus.SC_REQUEST_TIMEOUT),
@@ -122,9 +128,6 @@ public enum RsStatus {
      */
     PAYMENT_REQUIRED(HttpStatus.SC_PAYMENT_REQUIRED),
     /**
-     * Not Acceptable.
-     */
-    NOT_ACCEPTABLE(HttpStatus.SC_NOT_ACCEPTABLE),
     /**
      * Gone.
      */

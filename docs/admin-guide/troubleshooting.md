@@ -396,12 +396,12 @@ docker exec -it pantera-db psql -U pantera -d pantera \
 
 **Symptoms:** Pantera exits during startup with `FlywayValidateException: Validate failed: Migrations have failed validation` and `Migration checksum mismatch for migration version 116`.
 
-**Cause:** Flyway checksums cover every line of a migration file, comments included. 2.2.9 shipped a comment edit inside the already-applied `V116` migration, so the file in that image no longer matches what earlier releases recorded in `flyway_schema_history`. 2.2.10 restores the original file. The failure therefore appears in two situations:
+**Cause:** Flyway checksums cover every line of a migration file, comments included. 2.2.9 shipped a comment edit inside the already-applied `V116` migration, so the file in that image no longer matches what earlier releases recorded in `flyway_schema_history`. 2.2.10 (and 2.3.0) restore the original file. The failure therefore appears in two situations:
 
 | Database first ran `V116` under | Image being started | Recorded checksum | What to do |
 |---|---|---|---|
-| 2.2.8 or earlier | 2.2.9 | `-1980887255` | Do not patch the database. Start 2.2.10 instead (or roll back to 2.2.8). |
-| 2.2.9 | 2.2.10 or later | `-1336931361` | Run the statement below once, then start 2.2.10. |
+| 2.2.8 or earlier | 2.2.9 | `-1980887255` | Do not patch the database. Start 2.2.10 or 2.3.0 instead (or roll back to 2.2.8). |
+| 2.2.9 | 2.2.10 or later | `-1336931361` | Run the statement below once, then start the new image. |
 
 **Resolution (second row only):**
 

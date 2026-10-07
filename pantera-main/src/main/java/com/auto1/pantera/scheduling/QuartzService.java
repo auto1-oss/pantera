@@ -12,16 +12,12 @@ package com.auto1.pantera.scheduling;
 
 import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
-import java.util.Objects;
 import java.util.Properties;
-import java.util.Queue;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 import javax.sql.DataSource;
 import org.quartz.CronScheduleBuilder;
 import org.quartz.Job;
@@ -36,6 +32,7 @@ import org.quartz.SimpleTrigger;
 import org.quartz.Trigger;
 import org.quartz.TriggerBuilder;
 import org.quartz.impl.StdSchedulerFactory;
+import org.quartz.impl.matchers.GroupMatcher;
 import org.quartz.utils.DBConnectionManager;
 
 /**
@@ -58,6 +55,39 @@ public final class QuartzService {
      * Scheduler instance name shared across all clustered nodes.
      */
     private static final String SCHED_NAME = "PanteraScheduler";
+
+    /**
+     * Job group name the pre-2.3.0 clustered artifact-events drain used
+     * ({@code EventsProcessor.class.getSimpleName()} via the since-removed
+     * {@code addPeriodicEventsProcessor}). That drain now runs on a per-node
+     * {@code LocalEventDrainScheduler} instead of clustered Quartz (WS2.2,
+     * 2.3.0), so any QRTZ_* rows surviving under this group from an older
+     * deployment are permanently orphaned — their {@link JobDataRegistry}
+     * entries died with the JVM that created them, and nothing will ever
+     * schedule under this group again. Safe to purge once, on JDBC boot,
+     * instead of the blanket {@code scheduler.clear()} this replaces (that
+     * call wiped every node's jobs, including live cron jobs).
+     */
+    private static final String STALE_EVENTS_JOB_GROUP = "EventsProcessor";
+
+    /**
+     * Job group names the pre-2.3.0 clustered per-repository
+     * proxy-package-processor pipeline used (each is a
+     * {@code *ProxyPackageProcessor.class.getSimpleName()}, matching the
+     * job group {@link #schedulePeriodicJob(int, int, Class, JobDataMap)}
+     * derives from the job class). As of the WS2.2b fix, this pipeline runs
+     * on a per-node {@code LocalEventDrainScheduler} instead — same
+     * rationale as {@link #STALE_EVENTS_JOB_GROUP} — so QRTZ_* rows
+     * surviving under these groups from a pre-fix deployment are orphaned
+     * and, worse, reference job classes that no longer implement
+     * {@code org.quartz.Job} at all: leaving them would make Quartz fail to
+     * instantiate the job on the next misfire-driven or clustered-recovery
+     * firing attempt. Purged once, on JDBC boot, same as the events group.
+     */
+    private static final String[] STALE_PROXY_PROCESSOR_JOB_GROUPS = {
+        "GoProxyPackageProcessor", "MavenProxyPackageProcessor", "NpmProxyPackageProcessor",
+        "PyProxyPackageProcessor", "ComposerProxyPackageProcessor",
+    };
 
     /**
      * Quartz scheduler.
@@ -114,11 +144,15 @@ public final class QuartzService {
             factory.initialize(props);
             this.scheduler = factory.getScheduler();
             this.clustered = true;
-            // 4. Clear stale jobs from previous runs. In JDBC mode, jobs
-            // persist across restarts but their in-memory JobDataRegistry
-            // entries are lost. Old jobs would fire with null dependencies,
-            // fail, and loop indefinitely if not cleaned up.
-            this.scheduler.clear();
+            // 4. Purge stale rows left by a pre-2.3.0 deployment's clustered
+            // events-drain jobs — see STALE_EVENTS_JOB_GROUP — and, as of
+            // the WS2.2b fix, a pre-fix deployment's clustered per-repository
+            // proxy-package-processor jobs too. Scoped purge, not a blanket
+            // clear(): a blanket clear() would also delete live cron jobs.
+            this.purgeStaleJobGroup(QuartzService.STALE_EVENTS_JOB_GROUP);
+            for (final String group : QuartzService.STALE_PROXY_PROCESSOR_JOB_GROUPS) {
+                this.purgeStaleJobGroup(group);
+            }
             this.addShutdownHook();
             EcsLogger.info("com.auto1.pantera.scheduling")
                 .message("Quartz JDBC clustering enabled (scheduler: "
@@ -155,59 +189,6 @@ public final class QuartzService {
             // checks and readiness probes.
             return false;
         }
-    }
-
-    /**
-     * Adds event processor to the quarts job. The job is repeating forever every
-     * given seconds. Jobs are run in parallel, if several consumers are passed, consumer for job.
-     * If consumers amount is bigger than thread pool size, parallel jobs mode is
-     * limited to thread pool size.
-     * @param seconds Seconds interval for scheduling
-     * @param consumer How to consume the data for each job
-     * @param <T> Data item object type
-     * @return Queue to add the events into
-     * @throws SchedulerException On error
-     */
-    public <T> Queue<T> addPeriodicEventsProcessor(
-        final int seconds, final List<Consumer<T>> consumer) throws SchedulerException {
-        final Queue<T> queue = new ConcurrentLinkedDeque<>();
-        final String id = String.join(
-            "-", EventsProcessor.class.getSimpleName(), UUID.randomUUID().toString()
-        );
-        final TriggerBuilder<SimpleTrigger> trigger = TriggerBuilder.newTrigger()
-            .startNow().withSchedule(SimpleScheduleBuilder.repeatSecondlyForever(seconds));
-        final int count = this.parallelJobs(consumer.size());
-        for (int item = 0; item < count; item = item + 1) {
-            final JobDataMap data = new JobDataMap();
-            if (this.clustered) {
-                final String queueKey = "elements-" + id;
-                final String actionKey = "action-" + id + "-" + item;
-                JobDataRegistry.register(queueKey, queue);
-                JobDataRegistry.register(
-                    actionKey, Objects.requireNonNull(consumer.get(item))
-                );
-                data.put("elements_key", queueKey);
-                data.put("action_key", actionKey);
-            } else {
-                data.put("elements", queue);
-                data.put("action", Objects.requireNonNull(consumer.get(item)));
-            }
-            // Stamp the scheduling thread's MDC trace context so the Quartz
-            // worker thread (possibly on another node in JDBC cluster mode)
-            // can restore trace.id / span.id when Job.execute runs.
-            TracingJobWrapper.stampMdc(data);
-            this.scheduler.scheduleJob(
-                JobBuilder.newJob(EventsProcessor.class).setJobData(data).withIdentity(
-                    QuartzService.jobId(id, item), EventsProcessor.class.getSimpleName()
-                ).build(),
-                trigger.withIdentity(
-                    QuartzService.triggerId(id, item),
-                    EventsProcessor.class.getSimpleName()
-                ).build()
-            );
-        }
-        this.log(count, EventsProcessor.class.getSimpleName(), seconds);
-        return queue;
     }
 
     /**
@@ -278,6 +259,43 @@ public final class QuartzService {
             .forJob(job)
             .build();
         this.scheduler.scheduleJob(job, trigger);
+    }
+
+    /**
+     * Purge every job currently registered under {@code group} from the
+     * (possibly JDBC-shared) job store. Used once at JDBC boot to remove
+     * jobs orphaned by a pre-2.3.0 deployment — see
+     * {@link #STALE_EVENTS_JOB_GROUP}. Failure is logged and swallowed: a
+     * purge that can't run must never block boot, and a future boot (on
+     * this or another node) gets another chance.
+     * @param group Job group name to purge
+     */
+    private void purgeStaleJobGroup(final String group) {
+        try {
+            final Set<JobKey> stale = this.scheduler.getJobKeys(
+                GroupMatcher.jobGroupEquals(group)
+            );
+            if (!stale.isEmpty()) {
+                this.scheduler.deleteJobs(new ArrayList<>(stale));
+                EcsLogger.info("com.auto1.pantera.scheduling")
+                    .message("Purged " + stale.size() + " stale QRTZ_* job(s) from group '"
+                        + group + "' (orphaned by a pre-2.3.0 clustered events-drain deployment)")
+                    .eventCategory("process")
+                    .eventAction("quartz_stale_purge")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+            }
+        } catch (final SchedulerException error) {
+            EcsLogger.error("com.auto1.pantera.scheduling")
+                .message("Failed to purge stale Quartz job group '" + group + "'")
+                .eventCategory("process")
+                .eventAction("quartz_stale_purge")
+                .eventOutcome("failure")
+                .error(error)
+                .field("log.source", "application")
+                .log();
+        }
     }
 
     /**

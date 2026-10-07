@@ -11,6 +11,7 @@
 package com.auto1.pantera.hex.http;
 
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.Authentication;
@@ -73,11 +74,16 @@ public final class HexSlice extends Slice.Wrap {
                     final Optional<Queue<ArtifactEvent>> events, final String name,
                     final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
                     final RegistrySigner signer) {
-        this(storage, policy, users, events, name, syncIndex, signer, false);
+        this(storage, policy, users, events, name, syncIndex, signer, DownloadPolicy.streamOnly());
     }
 
     /**
-     * Primary ctor.
+     * Ctor with synchronous artifact-index writer, registry signer and an
+     * explicit WS1.7 (spec {@code WS1-storage-for-scale.md} &sect;3.B2)
+     * download policy. Only the {@code /tarballs/} package-byte route is made
+     * redirect-eligible; {@code /packages/} registry records always stream
+     * (they are re-signed for this repository on the way out), as does
+     * {@code /public_key}.
      * @param storage The storage for package.
      * @param policy Access policy.
      * @param users Concrete identities.
@@ -85,6 +91,19 @@ public final class HexSlice extends Slice.Wrap {
      * @param name Repository name
      * @param syncIndex Synchronous artifact-index writer
      * @param signer Registry signer; its public key is served at /public_key
+     * @param downloadPolicy WS1.7 download policy for the tarball route
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public HexSlice(final Storage storage, final Policy<?> policy, final Authentication users,
+                    final Optional<Queue<ArtifactEvent>> events, final String name,
+                    final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+                    final RegistrySigner signer, final DownloadPolicy downloadPolicy) {
+        this(storage, policy, users, events, name, syncIndex, signer, downloadPolicy, false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
      * @param immutable Whether an existing release may never be replaced, not
      *  even with {@code ?replace=true} (422); when false {@code ?replace=true}
      *  overwrites it
@@ -94,6 +113,23 @@ public final class HexSlice extends Slice.Wrap {
                     final Optional<Queue<ArtifactEvent>> events, final String name,
                     final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
                     final RegistrySigner signer, final boolean immutable) {
+        this(storage, policy, users, events, name, syncIndex, signer, DownloadPolicy.streamOnly(),
+            immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable Whether an existing release may never be replaced, not
+     *  even with {@code ?replace=true} (422); when false {@code ?replace=true}
+     *  overwrites it
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public HexSlice(final Storage storage, final Policy<?> policy, final Authentication users,
+                    final Optional<Queue<ArtifactEvent>> events, final String name,
+                    final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+                    final RegistrySigner signer, final DownloadPolicy downloadPolicy,
+                    final boolean immutable) {
         super(new SliceRoute(
                 new RtRulePath(
                     new RtRule.All(
@@ -122,7 +158,7 @@ public final class HexSlice extends Slice.Wrap {
                         )
                     ),
                     new BasicAuthzSlice(
-                        new DownloadSlice(storage, name, signer),
+                        new DownloadSlice(storage, name, signer, downloadPolicy),
                         users,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)

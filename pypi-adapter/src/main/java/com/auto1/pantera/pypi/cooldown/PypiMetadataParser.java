@@ -97,6 +97,17 @@ public final class PypiMetadataParser implements MetadataParser<PypiSimpleIndex>
     );
 
     /**
+     * Pattern to extract {@code data-yanked="value"} (PEP 592) from tag
+     * attributes. Absence of the attribute means "not yanked"; presence
+     * (even with an empty value) means yanked, with the value as the
+     * human-readable reason.
+     */
+    private static final Pattern DATA_YANKED_PATTERN = Pattern.compile(
+        "data-yanked\\s*=\\s*\"([^\"]*)\"",
+        Pattern.CASE_INSENSITIVE
+    );
+
+    /**
      * Pattern to extract a version from a PyPI distribution filename.
      * Handles sdist (.tar.gz, .zip) and wheel (.whl) naming conventions.
      *
@@ -180,9 +191,10 @@ public final class PypiMetadataParser implements MetadataParser<PypiSimpleIndex>
             final String requiresPython = extractAttr(DATA_REQ_PYTHON_PATTERN, attrs);
             final String distInfoMetadata = extractAttr(DATA_METADATA_PATTERN, attrs);
             final String uploadTime = extractAttr(DATA_UPLOAD_TIME_PATTERN, attrs);
+            final String yanked = extractAttr(DATA_YANKED_PATTERN, attrs);
             final String version = extractVersionFromFilename(text);
             links.add(new PypiSimpleIndex.Link(
-                href, text, version, requiresPython, distInfoMetadata, uploadTime
+                href, text, version, requiresPython, distInfoMetadata, uploadTime, yanked
             ));
         }
         return new PypiSimpleIndex(html, links);
@@ -219,9 +231,10 @@ public final class PypiMetadataParser implements MetadataParser<PypiSimpleIndex>
             final String requiresPython = textOrNull(file, "requires-python");
             final String distInfoMetadata = extractDistInfoMetadata(file);
             final String uploadTime = textOrNull(file, "upload-time");
+            final String yanked = extractYanked(file);
             final String version = extractVersionFromFilename(filename);
             links.add(new PypiSimpleIndex.Link(
-                href, filename, version, requiresPython, distInfoMetadata, uploadTime
+                href, filename, version, requiresPython, distInfoMetadata, uploadTime, yanked
             ));
         }
         return new PypiSimpleIndex("", links);
@@ -268,6 +281,27 @@ public final class PypiMetadataParser implements MetadataParser<PypiSimpleIndex>
                 return "sha256=" + sha256.asText();
             }
             return "true";
+        }
+        return null;
+    }
+
+    /**
+     * PEP 691 {@code yanked} field: boolean {@code false} (not yanked,
+     * mapped to {@code null}) or a string (yanked — the reason, possibly
+     * empty). A non-compliant boolean {@code true} is treated as "yanked,
+     * no reason" (empty string) rather than dropped, since some mirrors
+     * emit the legacy boolean form.
+     */
+    private static String extractYanked(final JsonNode file) {
+        final JsonNode yanked = file.path("yanked");
+        if (yanked.isMissingNode() || yanked.isNull()) {
+            return null;
+        }
+        if (yanked.isTextual()) {
+            return yanked.asText();
+        }
+        if (yanked.isBoolean()) {
+            return yanked.booleanValue() ? "" : null;
         }
         return null;
     }

@@ -12,6 +12,7 @@ package com.auto1.pantera.conda.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.conda.http.auth.TokenAuth;
 import com.auto1.pantera.conda.http.auth.TokenAuthScheme;
 import com.auto1.pantera.conda.http.auth.TokenAuthSlice;
@@ -95,7 +96,8 @@ public final class CondaSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer. Stream-only download
+     * policy (pre-WS1.7 behaviour); delegates to the policy-aware ctor.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public CondaSlice(final Storage storage, final Policy<?> policy, final Authentication users,
@@ -123,12 +125,13 @@ public final class CondaSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final UploadTickets tickets) {
-        this(storage, policy, users, tokens, url, repo, events, syncIndex, tickets, false);
+        this(storage, policy, users, tokens, url, repo, events, syncIndex, tickets,
+            DownloadPolicy.streamOnly(), false);
     }
 
     /**
      * Ctor with synchronous artifact-index writer, upload tickets and the
-     * immutability switch.
+     * immutability switch (stream-only download policy).
      * @param storage Storage
      * @param policy Permissions
      * @param users Users
@@ -148,6 +151,50 @@ public final class CondaSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final UploadTickets tickets, final boolean immutable) {
+        this(storage, policy, users, tokens, url, repo, events, syncIndex, tickets,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer, upload tickets and the
+     * WS1.7 per-repo download policy (package files overwrite on re-upload).
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public CondaSlice(final Storage storage, final Policy<?> policy, final Authentication users,
+        final Tokens tokens, final String url, final String repo,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final UploadTickets tickets, final DownloadPolicy downloadPolicy) {
+        this(storage, policy, users, tokens, url, repo, events, syncIndex, tickets,
+            downloadPolicy, false);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer, upload tickets and the
+     * WS1.7 per-repo download policy: only package bytes ({@code .tar.bz2},
+     * {@code .conda}) may redirect to a presigned URL; {@code repodata.json}
+     * always streams — and the immutability switch.
+     * @param storage Storage
+     * @param policy Permissions
+     * @param users Users
+     * @param tokens Tokens
+     * @param url Application url
+     * @param repo Repository name
+     * @param events Events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @param tickets Upload tickets for the anaconda-client form upload
+     * @param downloadPolicy Per-repo download policy
+     * @param immutable When {@code true} an upload of an already stored
+     *  package file answers 409 Conflict; when {@code false} it overwrites
+     *  the file and its repodata entry
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public CondaSlice(final Storage storage, final Policy<?> policy, final Authentication users,
+        final Tokens tokens, final String url, final String repo,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final UploadTickets tickets, final DownloadPolicy downloadPolicy,
+        final boolean immutable) {
         super(
             new SliceRoute(
                 // anaconda-client's check_server HEADs the repository base URL
@@ -167,7 +214,8 @@ public final class CondaSlice extends Slice.Wrap {
                             new PostStageCommitSlice(url, tickets, repo),
                             new UploadSlices(
                                 new UpdateSlice(storage, events, repo, syncIndex, immutable), tickets
-                            )
+                            ),
+                            downloadPolicy
                         )
                     )
                 )
@@ -180,9 +228,13 @@ public final class CondaSlice extends Slice.Wrap {
      * @param setup Repository setup
      * @param stage Stage/commit slice
      * @param upload Upload slices
+     * @param downloadPolicy WS1.7 download policy for package downloads
      * @return Route slice
      */
-    private static Slice routes(final Setup setup, final Slice stage, final UploadSlices upload) {
+    private static Slice routes(
+        final Setup setup, final Slice stage, final UploadSlices upload,
+        final DownloadPolicy downloadPolicy
+    ) {
         final OperationControl read = setup.control(Action.Standard.READ);
         final OperationControl write = setup.control(Action.Standard.WRITE);
         final Tokens tokens = setup.tokens;
@@ -203,7 +255,7 @@ public final class CondaSlice extends Slice.Wrap {
                 // The token (or dist) prefix is not part of the storage key:
                 // serve the package stored under "<subdir>/<file>".
                 new TokenAuthSlice(
-                    new PackageKeySlice(new StorageArtifactSlice(setup.storage)),
+                    new PackageKeySlice(new StorageArtifactSlice(setup.storage, downloadPolicy)),
                     read, tokens.auth()
                 )
             ),
@@ -211,7 +263,7 @@ public final class CondaSlice extends Slice.Wrap {
                 new RtRule.All(
                     new RtRule.ByPath(".*(\\.tar\\.bz2|\\.conda)$"), MethodRule.GET
                 ),
-                new AuthzSlice(new StorageArtifactSlice(setup.storage), setup.readScheme(), read)
+                new AuthzSlice(new StorageArtifactSlice(setup.storage, downloadPolicy), setup.readScheme(), read)
             ),
             new RtRulePath(
                 new RtRule.All(

@@ -19,18 +19,18 @@ import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.concurrent.TimeUnit;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.quartz.JobBuilder;
-import org.quartz.JobDataMap;
-import org.quartz.Scheduler;
-import org.quartz.SchedulerException;
-import org.quartz.TriggerBuilder;
-import org.quartz.impl.StdSchedulerFactory;
-import org.awaitility.Awaitility;
 
 /**
  * Test for {@link NpmProxyPackageProcessor}.
+ * <p>
+ * As of the WS2.2b fix, this processor no longer implements {@code org.quartz.Job}
+ * — it runs as a plain {@link Runnable} tick on a per-node scheduler (see
+ * {@code MetadataEventQueues}/{@code LocalEventDrainScheduler}), so these tests
+ * wire and invoke it directly instead of scheduling it through a real Quartz
+ * {@code Scheduler}.
  * @since 1.5
  */
 class NpmProxyPackageProcessorTest {
@@ -51,31 +51,24 @@ class NpmProxyPackageProcessorTest {
     private Queue<ProxyArtifactEvent> packages;
 
     /**
-     * Scheduler.
+     * Processor under test.
      */
-    private Scheduler scheduler;
-
-    /**
-     * Job data map.
-     */
-    private JobDataMap data;
+    private NpmProxyPackageProcessor processor;
 
     @BeforeEach
-    void init() throws SchedulerException {
+    void init() {
         this.asto = new InMemoryStorage();
         this.events = new LinkedList<>();
         this.packages = new LinkedList<>();
-        this.scheduler = new StdSchedulerFactory().getScheduler();
-        this.data = new JobDataMap();
-        this.data.put("events", this.events);
-        this.data.put("packages", this.packages);
-        this.data.put("rname", "my-npm");
-        this.data.put("storage", this.asto);
-        this.data.put("host", "localhost");
+        this.processor = new NpmProxyPackageProcessor();
+        this.processor.setEvents(this.events);
+        this.processor.setPackages(this.packages);
+        this.processor.setStorage(this.asto);
+        this.processor.setHost("localhost");
     }
 
     @Test
-    void addsEvents() throws SchedulerException {
+    void addsEvents() {
         this.saveFilesToRegistry();
         this.packages.add(
             new ProxyArtifactEvent(
@@ -85,28 +78,14 @@ class NpmProxyPackageProcessorTest {
                 "my-npm"
             )
         );
-        this.scheduler.scheduleJob(
-            JobBuilder.newJob(NpmProxyPackageProcessor.class).setJobData(this.data).withIdentity(
-                "job1", NpmProxyPackageProcessor.class.getSimpleName()
-            ).build(),
-            TriggerBuilder.newTrigger().startNow()
-                .withIdentity("trigger1", NpmProxyPackageProcessor.class.getSimpleName()).build()
-        );
-        this.scheduler.start();
+        this.processor.run();
         Awaitility.await().atMost(30, TimeUnit.SECONDS).until(() -> this.events.size() == 1);
     }
 
     @Test
-    void doesNotAddsItemToQueueIfTgzNotExists() throws SchedulerException {
+    void doesNotAddsItemToQueueIfTgzNotExists() {
         this.packages.add(new ProxyArtifactEvent(new Key.From("not-existing.tgz"), "npm-proxy"));
-        this.scheduler.scheduleJob(
-            JobBuilder.newJob(NpmProxyPackageProcessor.class).setJobData(this.data).withIdentity(
-                "job1", NpmProxyPackageProcessor.class.getSimpleName()
-            ).build(),
-            TriggerBuilder.newTrigger().startNow()
-                .withIdentity("trigger1", NpmProxyPackageProcessor.class.getSimpleName()).build()
-        );
-        this.scheduler.start();
+        this.processor.run();
         Awaitility.await().pollDelay(8, TimeUnit.SECONDS).until(() -> this.events.size() == 0);
     }
 

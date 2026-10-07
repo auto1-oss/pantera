@@ -92,9 +92,13 @@ public final class IndexGenerator {
         private final String sha256;
         /** Sidecar metadata (may be empty for legacy uploads). */
         private final Optional<PypiSidecar.Meta> meta;
-        /** File size in bytes, negative when unknown. */
+        /** File size in bytes (PEP 700), negative when unknown. */
         private final long size;
-        /** Version directory the file lives in (nullable for flat files). */
+        /**
+         * Version directory the file lives in; {@code null} for a file
+         * stored flat under the package directory (the PEP 700
+         * {@code versions[]} array then derives it from the filename).
+         */
         private final String version;
 
         Entry(
@@ -130,10 +134,24 @@ public final class IndexGenerator {
     public CompletableFuture<Void> generate() {
         return RxFuture.single(this.storage.list(this.packageKey))
             .flatMapPublisher(Flowable::fromIterable)
+            // PEP 658 .metadata sidecars live alongside the distribution
+            // file in storage (WS4-pypi.6) but are not themselves a
+            // distribution — storage.list() is a flat/recursive listing,
+            // so without this filter each .metadata file would be
+            // enumerated as a bogus extra "release file".
+            .filter(key -> !isPep658MetadataFile(key))
             .concatMapSingle(
                 key -> RxFuture.single(
                     this.storage.list(key).thenCompose(
-                        subKeys -> {
+                        rawSubKeys -> {
+                            // storage.list() does a raw string-prefix match, so
+                            // re-listing a real file's own key ALSO returns its
+                            // ".metadata" sibling (whose key literally has the
+                            // real file's key as a string prefix) — filter it
+                            // out here too, not just at the outer level above.
+                            final List<Key> subKeys = rawSubKeys.stream()
+                                .filter(k -> !isPep658MetadataFile(k))
+                                .toList();
                             final List<CompletableFuture<Entry>> futures = new ArrayList<>();
                             if (subKeys.isEmpty()) {
                                 // Key is a file directly under the package dir
@@ -366,6 +384,17 @@ public final class IndexGenerator {
             .add("projects", projects)
             .build()
             .toString();
+    }
+
+    /**
+     * Whether the given storage key is a PEP 658 {@code .metadata} sidecar
+     * file rather than an actual distribution file.
+     *
+     * @param key Storage key
+     * @return true if the key's last segment ends with {@code .metadata}
+     */
+    static boolean isPep658MetadataFile(final Key key) {
+        return key.string().endsWith(".metadata");
     }
 
     /**

@@ -91,6 +91,21 @@ Each runbook covers what the signal means, the metric to confirm the diagnosis, 
 
 ---
 
+## v2.3.0 storage alert runbook
+
+| Alert | Runbook |
+|---|---|
+| `write-back-queue-near-capacity` | [Write-Back Queue Near Capacity](../runbooks/write-back-queue-near-capacity.md) |
+
+The durable write-back queue (`CachedBlobStorage`, WS1.2/WS1.6) admits a
+cache write before its S3-compatible PUT completes; this alert warns at 80%
+of the configured queue capacity, before the queue actually fills and starts
+rejecting new admissions with a client-visible 503. See
+[Monitoring: Storage Metrics](monitoring.md) for the full WS1.6/WS1.7 metric
+reference and the companion **Cache & Storage** Grafana dashboard.
+
+---
+
 ## Related Pages
 
 - [Troubleshooting](troubleshooting.md) -- Diagnostic tool catalogue.

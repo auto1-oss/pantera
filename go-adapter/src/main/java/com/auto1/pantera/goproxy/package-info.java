@@ -9,11 +9,18 @@
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
 /**
- * Goproxy files.
+ * Go proxy metadata event processing.
  *
- * @author Yegor Bugayenko (yegor256@gmail.com)
- * @version $Id$
- * @since 0.1
+ * <p>{@link com.auto1.pantera.goproxy.GoProxyPackageProcessor} is the
+ * Quartz job that drains the {@code go-proxy} artifact-event queue and
+ * writes module metadata to the DB/index/audit trail. The legacy
+ * {@code Goproxy} server-side zip-construction helper (270 lines,
+ * referenced only by its own now-deleted tests) was removed as dead code
+ * (WS4-go.7) — hosted publish uses {@link
+ * com.auto1.pantera.http.GoUploadSlice}, proxy caching uses {@code
+ * CachedProxySlice}.</p>
+ *
+ * @since 2.3.0
  */
 package com.auto1.pantera.goproxy;
 

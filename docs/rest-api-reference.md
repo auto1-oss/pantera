@@ -3080,7 +3080,7 @@ Partial updates are accepted; omitted keys keep their current values. The merged
 
 ### POST /api/v1/admin/revoke-user/:username
 
-Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is propagated to all cluster nodes via Valkey pub/sub (sub-second propagation when Valkey is available; DB polling fallback otherwise).
+Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is written to the `revocation_blocklist` table (the durable source of truth on every node) and, when Valkey is available, propagated to all cluster nodes via Valkey pub/sub for sub-second fan-out; every node — with or without Valkey — also reconciles against the DB on a throttled 5-second poll, and a node that boots after the revocation hydrates it immediately, so a restart or a missed pub/sub message never re-honors a revoked token.
 
 > Note: Access tokens (which are not DB-stored) issued up to the moment of revocation are rejected until they expire naturally. Tokens issued afterwards are unaffected, so the user can sign in again immediately — to keep a user out, disable the account (`POST /api/v1/users/:name/disable`). The same revocation runs when a user's password is changed or reset.
 
@@ -3117,6 +3117,103 @@ Immediately revoke all tokens (access, refresh, and API) for the specified user.
 
 ```bash
 curl -X POST http://localhost:8086/api/v1/admin/revoke-user/jdoe \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### GET /api/v1/admin/pgp-keys
+
+List trusted PGP public keys registered for Maven/Gradle `.asc` signature verification (WS4-maven.3). Never returns the armored key material — identity/provenance fields only.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:read`
+
+**Response (200):**
+
+```json
+{
+  "keys": [
+    {
+      "key_id_hex": "DEADBEEF12345678",
+      "fingerprint": "0123456789ABCDEF0123456789ABCDEF01234567",
+      "uploaded_by": "admin",
+      "uploaded_at": "2026-07-25T10:00:00Z",
+      "description": "Release signing key"
+    }
+  ]
+}
+```
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/pgp-keys \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### POST /api/v1/admin/pgp-keys
+
+Upload an ASCII-armored PGP public key block. The block may contain a master key plus sub-keys — one row is registered per key found, since a `.asc` signature may be produced by any of them. Repos with `verifyPgp: true` (see `configuration-reference.md`) consult this keyring on every proxy fetch and hosted store; the in-process cache is invalidated immediately so the very next verification sees the new key.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:update`
+
+**Request Body:**
+
+```json
+{
+  "public_key_armored": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----",
+  "description": "Release signing key"
+}
+```
+
+**Response (201):**
+
+```json
+{
+  "keys": [
+    {"key_id_hex": "DEADBEEF12345678", "fingerprint": "0123456789ABCDEF0123456789ABCDEF01234567"}
+  ]
+}
+```
+
+**Response (400):** malformed or empty `public_key_armored`.
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/admin/pgp-keys \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"public_key_armored\": \"$(cat signer-public-key.asc | sed 's/"/\\"/g')\"}"
+```
+
+---
+
+### DELETE /api/v1/admin/pgp-keys/:keyId
+
+Remove a trusted key by its 16-char hex long key id. The in-process cache is invalidated immediately, so the next verification of that signer returns `UNTRUSTED_KEY`.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:update`
+
+**Path Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `keyId` | 16-char uppercase hex long key id (the `key_id_hex` from the list response) |
+
+**Response (204):** no body.
+
+**Response (404):** no key with that id.
+
+**curl example:**
+
+```bash
+curl -X DELETE http://localhost:8086/api/v1/admin/pgp-keys/DEADBEEF12345678 \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 

@@ -13,7 +13,9 @@ package com.auto1.pantera.docker;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.docker.misc.ImageTag;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * Manifest reference.
@@ -23,6 +25,36 @@ import java.util.Arrays;
  * @param digest String representation.
  */
 public record ManifestReference(Key link, String digest) {
+
+    /**
+     * Scopes this reference to a negotiated {@code Accept}-variant for
+     * proxy-cache keying (WS4-docker.7).
+     *
+     * <p>A tag reference resolves to different manifest media types depending
+     * on the client's {@code Accept} header, so its cache link gets an extra
+     * variant-token segment ({@code .../tags/<tag>/current/<token>/link}),
+     * storing each variant independently. Tag enumeration is unaffected: the
+     * token sits below the tag node, which stays the direct child of the tags
+     * root. A digest reference is content-addressed — one immutable
+     * representation — so it is returned unchanged, keeping the shared
+     * by-digest revision link across variants. A non-negotiated variant
+     * (absent/wildcard {@code Accept}) also returns {@code this}, preserving
+     * the legacy single-key layout.</p>
+     *
+     * @param variant Negotiated variant.
+     * @return A variant-scoped reference, or {@code this} when no scoping applies.
+     */
+    public ManifestReference withVariant(final ManifestVariant variant) {
+        final ManifestReference result;
+        if (!variant.negotiated() || new Digest.FromString(this.digest).valid()) {
+            result = this;
+        } else {
+            final List<String> parts = new ArrayList<>(this.link.parts());
+            parts.add(parts.size() - 1, variant.cacheToken());
+            result = new ManifestReference(new Key.From(parts), this.digest);
+        }
+        return result;
+    }
 
     /**
      * Creates a manifest reference from a Content Digest.

@@ -32,6 +32,7 @@ import java.util.Optional;
 import java.util.TreeSet;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.json.Json;
@@ -50,6 +51,10 @@ import javax.json.JsonString;
  * over the merged list. The generic first-wins walk relayed one member's
  * catalog as is, under that member's names, and left out the rest.</p>
  *
+ * <p>{@code GET /v2/<group>/<image>/tags/list} (2.3.0, WS4-docker.3) is the
+ * sorted union of every member's tags for that image, paged the same way;
+ * when no member holds the image the walk answers, so an unknown image is a
+ * member's 404 and never an empty 200.</p>
  * <p>Every other request goes to the {@link GroupResolver} walk; a
  * {@code Link: rel="next"} header on its answer (a full tags page) is
  * rewritten from the member's path to the group's, so a client following
@@ -79,6 +84,11 @@ public final class DockerGroupSlice implements Slice {
      * A Link header value naming a repository-routed registry path.
      */
     private static final Pattern LINK = Pattern.compile("^</v2/([^/>]+)(/[^>]*)>(.*)$");
+
+    /**
+     * Group-relative tags-list path; the first group is the image path.
+     */
+    private static final Pattern TAGS = Pattern.compile("^/(.+)/tags/list$");
 
     /**
      * Group walk handling every other request.
@@ -122,8 +132,14 @@ public final class DockerGroupSlice implements Slice {
     public CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
     ) {
-        if ("GET".equals(line.method().value()) && CATALOG.equals(line.uri().getPath())) {
+        final boolean get = "GET".equals(line.method().value());
+        if (get && CATALOG.equals(line.uri().getPath())) {
             return body.asBytesFuture().thenCompose(ignored -> this.catalog(line, headers));
+        }
+        final Matcher tagsPath = TAGS.matcher(line.uri().getPath());
+        if (get && tagsPath.matches()) {
+            final String image = tagsPath.group(1);
+            return body.asBytesFuture().thenCompose(ignored -> this.tags(line, headers, image));
         }
         return this.delegate.response(line, headers, body).thenApply(this::groupLinks);
     }
@@ -142,11 +158,7 @@ public final class DockerGroupSlice implements Slice {
                 ResponseBuilder.badRequest().jsonBody(ex.json()).build()
             );
         }
-        final Headers forwarded = new Headers(
-            headers.asList().stream()
-                .filter(h -> !"X-FullPath".equalsIgnoreCase(h.getKey()))
-                .toList()
-        ).copy().add(new Header(EcsLoggingSlice.INTERNAL_ROUTING_HEADER, "true"));
+        final Headers forwarded = forwarded(headers);
         final List<CompletableFuture<MemberCatalog>> all = new ArrayList<>(this.members.size());
         for (final MemberSlice member : this.members) {
             all.add(this.fetch(member, cursor, page.limit(), forwarded));
@@ -157,6 +169,77 @@ public final class DockerGroupSlice implements Slice {
                     all.stream().map(CompletableFuture::join).toList(), page, line
                 )
             );
+    }
+
+    /**
+     * Merge the members' tags for an image into one group tags page
+     * (WS4-docker.3). Tags carry no member prefix, so the cursor is handed
+     * over unchanged; when no member holds the image the walk answers.
+     */
+    private CompletableFuture<Response> tags(
+        final RequestLine line, final Headers headers, final String image
+    ) {
+        final Pagination page;
+        try {
+            page = Pagination.from(line.uri());
+        } catch (final PaginationNumberInvalidException ex) {
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.badRequest().jsonBody(ex.json()).build()
+            );
+        }
+        final Headers forwarded = forwarded(headers);
+        final Optional<String> cursor = Optional.ofNullable(page.last());
+        final List<CompletableFuture<MemberCatalog>> all = new ArrayList<>(this.members.size());
+        for (final MemberSlice member : this.members) {
+            all.add(this.fetchTags(member, image, cursor, page.limit(), forwarded));
+        }
+        return CompletableFuture.allOf(all.toArray(CompletableFuture[]::new))
+            .thenCompose(
+                done -> this.answerTags(
+                    all.stream().map(CompletableFuture::join).toList(), page, line, headers, image
+                )
+            );
+    }
+
+    /**
+     * Build the group tags page from every member's outcome; without any
+     * contributing member the walk answers (a member's 404, or 503 when
+     * members were unavailable).
+     */
+    private CompletableFuture<Response> answerTags(
+        final List<MemberCatalog> results, final Pagination page, final RequestLine line,
+        final Headers headers, final String image
+    ) {
+        final Merged all = merge(results);
+        final CompletableFuture<Response> res;
+        if (all.contributed()) {
+            final List<String> tags = all.page(page);
+            final JsonArrayBuilder array = Json.createArrayBuilder();
+            tags.forEach(array::add);
+            final ResponseBuilder found = ResponseBuilder.ok().jsonBody(
+                Json.createObjectBuilder().add("name", image).add("tags", array).build()
+            );
+            page.nextLink(String.format("/v2/%s/%s/tags/list", this.group, image), tags)
+                .ifPresent(link -> found.header("Link", link));
+            res = CompletableFuture.completedFuture(found.build());
+        } else if (all.unavailable()) {
+            res = CompletableFuture.completedFuture(this.unavailable(line, all.retry()));
+        } else {
+            res = this.delegate.response(line, headers, Content.EMPTY).thenApply(this::groupLinks);
+        }
+        return res;
+    }
+
+    /**
+     * Headers forwarded to a member: the caller's minus the routing
+     * {@code X-FullPath}, plus the internal-routing marker.
+     */
+    private static Headers forwarded(final Headers headers) {
+        return new Headers(
+            headers.asList().stream()
+                .filter(h -> !"X-FullPath".equalsIgnoreCase(h.getKey()))
+                .toList()
+        ).copy().add(new Header(EcsLoggingSlice.INTERNAL_ROUTING_HEADER, "true"));
     }
 
     /**
@@ -188,10 +271,7 @@ public final class DockerGroupSlice implements Slice {
         final Headers headers
     ) {
         if (member.isCircuitOpen()) {
-            this.metric(member, "circuit_open");
-            return CompletableFuture.completedFuture(
-                new MemberCatalog(Optional.empty(), Outcome.SKIPPED, member.retryAfterSeconds())
-            );
+            return this.skipped(member);
         }
         final RequestLine request = member.rewritePath(
             new RequestLine(
@@ -200,29 +280,67 @@ public final class DockerGroupSlice implements Slice {
                     .uriWithPagination(CATALOG)
             )
         );
-        return member.slice().response(request, headers, Content.EMPTY)
-            .thenCompose(resp -> resp.body().asBytesFuture().thenApply(
-                bytes -> this.classify(member, resp, bytes)
-            ))
-            .exceptionally(err -> this.failure(member, err));
+        return this.ask(member, request, CATALOG, headers, bytes -> this.names(member, bytes));
     }
 
     /**
-     * Classify a member's catalog response the way the group walk does.
+     * One member's tags for an image, asked from the group cursor on.
+     */
+    private CompletableFuture<MemberCatalog> fetchTags(
+        final MemberSlice member, final String image, final Optional<String> cursor,
+        final int limit, final Headers headers
+    ) {
+        if (member.isCircuitOpen()) {
+            return this.skipped(member);
+        }
+        final String path = String.format("/%s/tags/list", image);
+        final RequestLine request = member.rewritePath(
+            new RequestLine("GET", new Pagination(cursor.orElse(null), limit).uriWithPagination(path))
+        );
+        return this.ask(member, request, path, headers, DockerGroupSlice::tagNames);
+    }
+
+    /**
+     * A member whose group circuit is open takes no part in a merge.
+     */
+    private CompletableFuture<MemberCatalog> skipped(final MemberSlice member) {
+        this.metric(member, "circuit_open");
+        return CompletableFuture.completedFuture(
+            new MemberCatalog(Optional.empty(), Outcome.SKIPPED, member.retryAfterSeconds())
+        );
+    }
+
+    /**
+     * Ask one member for a listing and classify its answer.
+     */
+    private CompletableFuture<MemberCatalog> ask(
+        final MemberSlice member, final RequestLine request, final String path,
+        final Headers headers, final Function<byte[], Optional<List<String>>> parser
+    ) {
+        return member.slice().response(request, headers, Content.EMPTY)
+            .thenCompose(resp -> resp.body().asBytesFuture().thenApply(
+                bytes -> this.classify(member, resp, bytes, path, parser)
+            ))
+            .exceptionally(err -> this.failure(member, path, err));
+    }
+
+    /**
+     * Classify a member's listing response the way the group walk does.
      */
     private MemberCatalog classify(
-        final MemberSlice member, final Response resp, final byte[] bytes
+        final MemberSlice member, final Response resp, final byte[] bytes, final String path,
+        final Function<byte[], Optional<List<String>>> parser
     ) {
         final RsStatus status = resp.status();
         final MemberCatalog res;
         if (status == RsStatus.OK) {
-            final Optional<List<String>> names = this.names(member, bytes);
+            final Optional<List<String>> names = parser.apply(bytes);
             if (names.isPresent()) {
                 member.recordSuccess();
                 this.metric(member, "success");
                 res = new MemberCatalog(names, Outcome.ANSWERED, 0L);
             } else {
-                res = this.failed(member, "unparseable catalog", status.code());
+                res = this.failed(member, path, "unparseable listing", status.code());
             }
         } else if (status.serverError()
             && !resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
@@ -231,7 +349,7 @@ public final class DockerGroupSlice implements Slice {
                 Optional.empty(), Outcome.SKIPPED, GroupResolver.parseRetryAfterSeconds(resp)
             );
         } else if (status.serverError()) {
-            res = this.failed(member, "status", status.code());
+            res = this.failed(member, path, "status", status.code());
         } else {
             // 401 / 403 / 404: the member holds nothing this caller may list.
             this.metric(member, status == RsStatus.NOT_FOUND ? "not_found" : "success");
@@ -269,13 +387,15 @@ public final class DockerGroupSlice implements Slice {
     /**
      * A member call that threw: a failure unless it was cancelled.
      */
-    private MemberCatalog failure(final MemberSlice member, final Throwable err) {
+    private MemberCatalog failure(
+        final MemberSlice member, final String path, final Throwable err
+    ) {
         final Throwable cause = err.getCause() != null ? err.getCause() : err;
         final MemberCatalog res;
         if (cause instanceof CancellationException) {
             res = new MemberCatalog(Optional.empty(), Outcome.ANSWERED, 0L);
         } else {
-            res = this.failed(member, cause.getMessage(), 0);
+            res = this.failed(member, path, cause.getMessage(), 0);
         }
         return res;
     }
@@ -283,19 +403,21 @@ public final class DockerGroupSlice implements Slice {
     /**
      * Record and log a genuine member failure.
      */
-    private MemberCatalog failed(final MemberSlice member, final String reason, final int code) {
+    private MemberCatalog failed(
+        final MemberSlice member, final String path, final String reason, final int code
+    ) {
         member.recordFailure();
         this.metric(member, "error");
         EcsLogger.warn(LOGGER)
             .message(
-                "Docker group member failed to answer the catalog: " + member.name()
+                "Docker group member failed to answer " + path + ": " + member.name()
                     + " (" + reason + ")"
             )
             .eventCategory("web")
             .eventAction("group_docker_catalog_member_failed")
             .eventOutcome("failure")
             .field("repository.name", this.group)
-            .field("url.path", CATALOG)
+            .field("url.path", path)
             .field("http.response.status_code", code)
             .field("log.source", "application")
             .log();
@@ -308,22 +430,12 @@ public final class DockerGroupSlice implements Slice {
     private Response answer(
         final List<MemberCatalog> results, final Pagination page, final RequestLine line
     ) {
-        final TreeSet<String> merged = new TreeSet<>();
-        boolean contributed = false;
-        boolean unavailable = false;
-        long retry = 0L;
-        for (final MemberCatalog result : results) {
-            result.names().ifPresent(merged::addAll);
-            contributed |= result.names().isPresent();
-            unavailable |= result.outcome() != Outcome.ANSWERED;
-            retry = Math.max(retry, result.retryAfter());
-        }
+        final Merged all = merge(results);
         final Response res;
-        if (!contributed && unavailable) {
-            res = this.unavailable(line, retry);
+        if (!all.contributed() && all.unavailable()) {
+            res = this.unavailable(line, all.retry());
         } else {
-            final List<String> names = (page.last() == null ? merged : merged.tailSet(page.last(), false))
-                .stream().limit(page.limit()).toList();
+            final List<String> names = all.page(page);
             final JsonArrayBuilder repos = Json.createArrayBuilder();
             names.forEach(repos::add);
             final ResponseBuilder found = ResponseBuilder.ok()
@@ -342,8 +454,8 @@ public final class DockerGroupSlice implements Slice {
         final long retry = Math.max(5L, hint);
         EcsLogger.warn(LOGGER)
             .message(
-                "All docker group members unavailable for the catalog — returning 503,"
-                    + " Retry-After " + retry + "s"
+                "All docker group members unavailable for " + line.uri().getPath()
+                    + " — returning 503, Retry-After " + retry + "s"
             )
             .eventCategory("network")
             .eventAction("group_all_members_unavailable")
@@ -401,6 +513,64 @@ public final class DockerGroupSlice implements Slice {
         if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
             com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordGroupMemberRequest(this.group, member.name(), result);
+        }
+    }
+
+    /**
+     * Fold the members' outcomes into one sorted listing.
+     */
+    private static Merged merge(final List<MemberCatalog> results) {
+        final TreeSet<String> merged = new TreeSet<>();
+        boolean contributed = false;
+        boolean unavailable = false;
+        long retry = 0L;
+        for (final MemberCatalog result : results) {
+            result.names().ifPresent(merged::addAll);
+            contributed |= result.names().isPresent();
+            unavailable |= result.outcome() != Outcome.ANSWERED;
+            retry = Math.max(retry, result.retryAfter());
+        }
+        return new Merged(merged, contributed, unavailable, retry);
+    }
+
+    /**
+     * A member's tags for an image.
+     *
+     * @param bytes Tags-list JSON
+     * @return Tags; empty when the document does not parse
+     */
+    private static Optional<List<String>> tagNames(final byte[] bytes) {
+        Optional<List<String>> tags;
+        try (JsonReader reader = Json.createReader(new ByteArrayInputStream(bytes))) {
+            final JsonArray array = reader.readObject().getJsonArray("tags");
+            tags = Optional.of(
+                array == null ? List.of()
+                    : array.getValuesAs(JsonString.class).stream().map(JsonString::getString).toList()
+            );
+        } catch (final JsonException | ClassCastException ex) {
+            tags = Optional.empty();
+        }
+        return tags;
+    }
+
+    /**
+     * The members' outcomes folded into one sorted listing.
+     *
+     * @param names Sorted, de-duplicated names the answering members contributed
+     * @param contributed Whether any member answered a listing
+     * @param unavailable Whether any member was skipped or failed
+     * @param retry Largest Retry-After hint among skipped members
+     */
+    private record Merged(TreeSet<String> names, boolean contributed, boolean unavailable, long retry) {
+        /**
+         * The requested page of the merged names.
+         *
+         * @param page Page size and cursor
+         * @return Names after the cursor, at most one page
+         */
+        List<String> page(final Pagination page) {
+            return (page.last() == null ? this.names : this.names.tailSet(page.last(), false))
+                .stream().limit(page.limit()).toList();
         }
     }
 

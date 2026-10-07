@@ -11,6 +11,7 @@
 package com.auto1.pantera.files;
 
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -100,7 +101,7 @@ public final class FilesSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with combined authentication support.
+     * Ctor with combined authentication support -- stream-only downloads.
      * @param storage The storage. And default parameters for free access.
      * @param perms Access permissions.
      * @param basicAuth Basic authentication.
@@ -109,21 +110,42 @@ public final class FilesSlice extends Slice.Wrap {
      * @param events Repository artifact events
      */
     public FilesSlice(
-        final Storage storage, final Policy<?> perms, final Authentication basicAuth, 
+        final Storage storage, final Policy<?> perms, final Authentication basicAuth,
         final TokenAuthentication tokenAuth, final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(storage, perms, basicAuth, tokenAuth, name, events, false);
+        this(storage, perms, basicAuth, tokenAuth, name, events, DownloadPolicy.streamOnly());
     }
 
     /**
-     * Ctor with the repository's {@code immutable} setting.
+     * Ctor with an explicit WS1.7 download policy. In a repo whose policy is
+     * not {@link DownloadPolicy#streamOnly()}, an ordinary object GET (the
+     * stored blob IS the artifact) becomes a presigned 302, while a {@code
+     * ?meta=true} request is always streamed so its appended {@code
+     * X-Pantera-*} metadata headers survive (see {@link FileMetaSlice}), and
+     * directory-listing views ({@code Accept: text/plain|json|html}) are
+     * unaffected.
      * @param storage The storage. And default parameters for free access.
      * @param perms Access permissions.
      * @param basicAuth Basic authentication.
      * @param tokenAuth Token authentication.
      * @param name Repository name
      * @param events Repository artifact events
+     * @param downloadPolicy WS1.7 download policy for the object GET route
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public FilesSlice(
+        final Storage storage, final Policy<?> perms, final Authentication basicAuth,
+        final TokenAuthentication tokenAuth, final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final DownloadPolicy downloadPolicy
+    ) {
+        this(storage, perms, basicAuth, tokenAuth, name, events, downloadPolicy, false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
      * @param immutable When true a stored file can never be overwritten
      *  (identical re-upload is an idempotent 201, different bytes are a 409);
      *  when false a re-upload overwrites it
@@ -132,7 +154,27 @@ public final class FilesSlice extends Slice.Wrap {
     public FilesSlice(
         final Storage storage, final Policy<?> perms, final Authentication basicAuth,
         final TokenAuthentication tokenAuth, final String name,
-        final Optional<Queue<ArtifactEvent>> events, final boolean immutable
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean immutable
+    ) {
+        this(storage, perms, basicAuth, tokenAuth, name, events, DownloadPolicy.streamOnly(),
+            immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable When true a stored file can never be overwritten
+     *  (identical re-upload is an idempotent 201, different bytes are a 409);
+     *  when false a re-upload overwrites it
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public FilesSlice(
+        final Storage storage, final Policy<?> perms, final Authentication basicAuth,
+        final TokenAuthentication tokenAuth, final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
     ) {
         super(
             new SliceRoute(
@@ -203,6 +245,7 @@ public final class FilesSlice extends Slice.Wrap {
                                 RtRule.FALLBACK,
                                 new SliceWithHeaders(
                                     new FileMetaSlice(
+                                        new StorageArtifactSlice(storage, downloadPolicy),
                                         new StorageArtifactSlice(storage),
                                         storage
                                     ),

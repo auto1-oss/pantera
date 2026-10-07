@@ -44,6 +44,13 @@ import java.util.concurrent.CompletableFuture;
  * counts as a reference, so a blob is never classified as unshared on
  * incomplete evidence.</p>
  *
+ * <p>OCI 1.1 referrers (signatures, SBOMs, attestations) are pushed as
+ * ordinary manifests and get the same revision link, so their config,
+ * layers and {@code subject} count like any other manifest's — also once
+ * their tag is gone, since a tag delete keeps the manifest pullable by
+ * digest. The referrers-index entries under {@code _manifests/referrers/}
+ * are descriptors of those manifests, not manifests, and are not read.</p>
+ *
  * <p>Cost: one recursive listing of {@code repositories/} (manifest digests
  * are taken from the key path, no link reads) plus reads of the candidate
  * manifests, {@value #BATCH} at a time, stopping at the first match.</p>

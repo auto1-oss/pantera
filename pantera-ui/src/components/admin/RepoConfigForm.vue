@@ -355,8 +355,11 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
   anonymousWrite.value = repo.anonymous_write ?? false
 
   // Missing ⇒ immutable (server default). Tolerate a string "false" from
-  // hand-edited YAML/JSON configs.
-  const rawImmutable: unknown = repo.immutable
+  // hand-edited YAML/JSON configs. Without an `immutable` key the deprecated
+  // maven alias `releaseImmutable` is honoured, exactly as the server does.
+  const rawImmutable: unknown = 'immutable' in repo
+    ? repo.immutable
+    : repo.releaseImmutable
   immutableArtifacts.value = !(rawImmutable === false
     || (typeof rawImmutable === 'string' && rawImmutable.trim().toLowerCase() === 'false'))
 
@@ -505,6 +508,9 @@ function buildConfig(): RepoConfigEnvelope {
   // nothing is added (a pre-existing value stays via preservedKeys).
   if (supportsImmutable.value) {
     repo.immutable = immutableArtifacts.value
+    // `immutable` supersedes the deprecated maven alias; drop it so the
+    // stored config carries a single source of truth.
+    delete repo.releaseImmutable
   }
 
   return { repo }

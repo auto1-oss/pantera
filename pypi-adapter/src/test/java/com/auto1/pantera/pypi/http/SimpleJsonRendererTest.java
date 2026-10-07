@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import javax.json.Json;
+import javax.json.JsonArray;
 import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -37,7 +38,9 @@ class SimpleJsonRendererTest {
             uploadTime,
             false,
             Optional.empty(),
-            Optional.empty()
+            Optional.empty(),
+            1024L,
+            "1.0.0"
         );
         final String json = SimpleJsonRenderer.render("mylib", List.of(entry));
         final JsonObject root = Json.createReader(new StringReader(json)).readObject();
@@ -70,6 +73,11 @@ class SimpleJsonRendererTest {
             file.getBoolean("yanked"),
             new IsEqual<>(false)
         );
+        MatcherAssert.assertThat(
+            "PEP 700 per-file size must be emitted",
+            file.getJsonNumber("size").longValue(),
+            new IsEqual<>(1024L)
+        );
     }
 
     @Test
@@ -82,7 +90,9 @@ class SimpleJsonRendererTest {
             null,
             false,
             Optional.empty(),
-            Optional.empty()
+            Optional.empty(),
+            0L,
+            "1.0.0"
         );
         final String json = SimpleJsonRenderer.render("mylib", List.of(entry));
         final JsonObject file = Json.createReader(new StringReader(json))
@@ -115,7 +125,9 @@ class SimpleJsonRendererTest {
             nanos,
             false,
             Optional.empty(),
-            Optional.empty()
+            Optional.empty(),
+            2048L,
+            "1.0.0"
         );
         final JsonObject file = Json.createReader(new StringReader(
             SimpleJsonRenderer.render("pkg", List.of(entry))
@@ -148,7 +160,9 @@ class SimpleJsonRendererTest {
             null,
             true,
             Optional.of("Security vulnerability"),
-            Optional.empty()
+            Optional.empty(),
+            512L,
+            "0.9.0"
         );
         final String json = SimpleJsonRenderer.render("mylib", List.of(entry));
         final JsonObject file = Json.createReader(new StringReader(json))
@@ -267,5 +281,84 @@ class SimpleJsonRendererTest {
                 .collect(java.util.stream.Collectors.toList()),
             new IsEqual<>(List.of("1.1.0", "1.2.0"))
         );
+    }
+
+    @Test
+    void emitsPep714CoreMetadataKeyNotHtmlAttributeName() {
+        final SimpleJsonRenderer.FileEntry entry = new SimpleJsonRenderer.FileEntry(
+            "mylib-1.0.0-py3-none-any.whl",
+            "https://example.com/packages/mylib-1.0.0-py3-none-any.whl",
+            "abc123",
+            null,
+            null,
+            false,
+            Optional.empty(),
+            Optional.of("deadbeefcafe"),
+            256L,
+            "1.0.0"
+        );
+        final JsonObject file = Json.createReader(new StringReader(
+            SimpleJsonRenderer.render("mylib", List.of(entry))
+        )).readObject().getJsonArray("files").getJsonObject(0);
+        MatcherAssert.assertThat(
+            "JSON must use the PEP 714 'core-metadata' key, not the HTML "
+                + "attribute name 'data-dist-info-metadata'",
+            file.getJsonObject("core-metadata").getString("sha256"),
+            new IsEqual<>("deadbeefcafe")
+        );
+        MatcherAssert.assertThat(
+            "The legacy 'dist-info-metadata' key is retained for older clients",
+            file.getJsonObject("dist-info-metadata").getString("sha256"),
+            new IsEqual<>("deadbeefcafe")
+        );
+        MatcherAssert.assertThat(
+            "The non-compliant HTML-attribute-shaped key must not be emitted",
+            file.containsKey("data-dist-info-metadata"),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void omitsCoreMetadataWhenAbsent() {
+        final SimpleJsonRenderer.FileEntry entry = new SimpleJsonRenderer.FileEntry(
+            "mylib-1.0.0-py3-none-any.whl",
+            "https://example.com/packages/mylib-1.0.0-py3-none-any.whl",
+            "abc123",
+            null,
+            null,
+            false,
+            Optional.empty(),
+            Optional.empty(),
+            256L,
+            "1.0.0"
+        );
+        final JsonObject file = Json.createReader(new StringReader(
+            SimpleJsonRenderer.render("mylib", List.of(entry))
+        )).readObject().getJsonArray("files").getJsonObject(0);
+        MatcherAssert.assertThat(
+            "no core-metadata key without a digest",
+            file.containsKey("core-metadata"),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "no legacy dist-info-metadata key without a digest",
+            file.containsKey("dist-info-metadata"),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void excludesFilesWithUnknownVersionFromVersionsArray() {
+        // No version directory and a filename with no "name-version" shape:
+        // the version cannot be determined, so the file is left out of
+        // versions[] rather than surfaced as a bogus entry.
+        final SimpleJsonRenderer.FileEntry unknown = new SimpleJsonRenderer.FileEntry(
+            "legacyfile.tar.gz", "legacyfile.tar.gz", "aaa", null, null,
+            false, Optional.empty(), Optional.empty(), 10L, null
+        );
+        final String json = SimpleJsonRenderer.render("mylib", List.of(unknown));
+        final JsonArray versions = Json.createReader(new StringReader(json))
+            .readObject().getJsonArray("versions");
+        MatcherAssert.assertThat(versions.size(), new IsEqual<>(0));
     }
 }

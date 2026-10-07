@@ -12,6 +12,7 @@ package com.auto1.pantera.pypi.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -93,8 +94,8 @@ public final class PySlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer; published files are
-     * immutable.
+     * Ctor with synchronous artifact-index writer. Stream-only download
+     * policy (pre-WS1.7 behaviour); delegates to the policy-aware ctor.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public PySlice(
@@ -106,18 +107,35 @@ public final class PySlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> queue,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
-        this(storage, policy, basicAuth, tokenAuth, name, queue, syncIndex, true);
+        this(storage, policy, basicAuth, tokenAuth, name, queue, syncIndex,
+            DownloadPolicy.streamOnly());
     }
 
     /**
-     * Primary ctor.
-     * @param storage Storage
-     * @param policy Security policy
-     * @param basicAuth Basic authentication
-     * @param tokenAuth Token authentication, may be null
-     * @param name Repository name
-     * @param queue Artifact events queue
-     * @param syncIndex Synchronous artifact-index writer
+     * Ctor with an explicit WS1.7 download policy. Only the concrete
+     * distribution-file GET route ({@code .whl}/{@code .tar.gz}/{@code
+     * .zip}/... bytes) becomes redirect-eligible under a non-{@link
+     * DownloadPolicy#streamOnly()} policy. The PEP 658 {@code .metadata}
+     * sidecar route, the HEAD probe routes, the simple index and legacy JSON
+     * are metadata and always stream.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PySlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> queue,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, queue, syncIndex, downloadPolicy, true);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
      * @param immutable Whether a published file may never be replaced by a
      *  re-upload with different content
      * @checkstyle ParameterNumberCheck (5 lines)
@@ -132,8 +150,56 @@ public final class PySlice extends Slice.Wrap {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final boolean immutable
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, queue, syncIndex,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable Whether a published file may never be replaced by a
+     *  re-upload with different content
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PySlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> queue,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
         super(
             new SliceRoute(
+                // PEP 658 .metadata files. Placed before the general
+                // artifact route below so the ".metadata" suffix match
+                // wins even if that route's extension list ever widens
+                // (today the two patterns don't overlap: the artifact
+                // route requires the string to END in one of the listed
+                // extensions, and "<file>.whl.metadata" ends in
+                // ".metadata", not ".whl").
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.GET,
+                        new RtRule.ByPath(
+                            ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)\\.metadata"
+                        )
+                    ),
+                    PySlice.createAuthSlice(
+                        new SliceWithHeaders(
+                            new StorageArtifactSlice(storage),
+                            Headers.from(ContentType.mime("application/octet-stream"))
+                        ),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
                 new RtRulePath(
                     new RtRule.All(
                         MethodRule.GET,
@@ -141,7 +207,7 @@ public final class PySlice extends Slice.Wrap {
                     ),
                     PySlice.createAuthSlice(
                         new SliceWithHeaders(
-                            new StorageArtifactSlice(storage),
+                            new StorageArtifactSlice(storage, downloadPolicy),
                             Headers.from(ContentType.mime("application/octet-stream"))
                         ),
                         basicAuth,
@@ -177,6 +243,26 @@ public final class PySlice extends Slice.Wrap {
                     // pip search (XML-RPC) only reads the repository.
                     PySlice.createAuthSlice(
                         new SearchSlice(storage),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                // Legacy JSON API (poetry / pip-tools): /pypi/<pkg>/json.
+                // Synthesized from the persisted index + sidecars — package
+                // scoped only (version-level legacy JSON is not served
+                // locally; see LegacyJsonSlice javadoc). MUST precede the
+                // SliceIndex catch-all below: "/pypi/<pkg>/json" also
+                // matches that rule's permissive trailing-segment pattern.
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.GET,
+                        new RtRule.ByPath(".*/pypi/[^/]+/json/?$")
+                    ),
+                    PySlice.createAuthSlice(
+                        new LegacyJsonSlice(storage, name),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
@@ -235,6 +321,27 @@ public final class PySlice extends Slice.Wrap {
                 // Both HEAD routes delegate to the same handlers as their GET
                 // counterparts via {@link HeadAsGetSlice}, which drains the
                 // body and returns the response headers.
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.HEAD,
+                        new RtRule.ByPath(
+                            ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)\\.metadata"
+                        )
+                    ),
+                    PySlice.createAuthSlice(
+                        new HeadAsGetSlice(
+                            new SliceWithHeaders(
+                                new StorageArtifactSlice(storage),
+                                Headers.from(ContentType.mime("application/octet-stream"))
+                            )
+                        ),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
                 new RtRulePath(
                     new RtRule.All(
                         MethodRule.HEAD,

@@ -51,6 +51,12 @@ public record PypiSimpleIndex(String originalHtml, List<Link> links) {
      *                   {@code inspector.releaseDate} fetch — same shortcut
      *                   the npm/composer adapters take with packument-inline
      *                   timestamps (commit {@code dbdde1736}).
+     * @param yanked PEP 592 yank status. {@code null} means not yanked;
+     *               a non-null value (possibly empty string) is the yank
+     *               reason and means the file IS yanked. Wire form:
+     *               HTML {@code data-yanked="<reason>"} attribute (absent
+     *               when not yanked); JSON boolean {@code false} (not
+     *               yanked) or a string (yanked, possibly empty reason).
      */
     public record Link(
         String href,
@@ -58,7 +64,8 @@ public record PypiSimpleIndex(String originalHtml, List<Link> links) {
         String version,
         String requiresPython,
         String distInfoMetadata,
-        String uploadTime
+        String uploadTime,
+        String yanked
     ) {
         /**
          * Constructor.

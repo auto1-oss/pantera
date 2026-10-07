@@ -91,6 +91,86 @@ class SimpleApiFormatTest {
     }
 
     @Test
+    void lowQJsonYieldsToHigherQHtml() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header(
+                        "Accept",
+                        "application/vnd.pypi.simple.v1+json;q=0.1, text/html;q=1.0"
+                    )
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.HTML)
+        );
+    }
+
+    @Test
+    void latestJsonAliasAloneSelectsJson() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(new Header("Accept", "application/vnd.pypi.simple.latest+json"))
+            ),
+            new IsEqual<>(SimpleApiFormat.JSON)
+        );
+    }
+
+    @Test
+    void latestHtmlAliasAloneSelectsHtml() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(new Header("Accept", "application/vnd.pypi.simple.latest+html"))
+            ),
+            new IsEqual<>(SimpleApiFormat.HTML)
+        );
+    }
+
+    @Test
+    void equalQValuesPreferJson() {
+        // On a tie the explicit PEP 691 type is the more specific request,
+        // so JSON wins.
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header(
+                        "Accept",
+                        "application/vnd.pypi.simple.v1+json;q=0.5, text/html;q=0.5"
+                    )
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.JSON)
+        );
+    }
+
+    @Test
+    void higherQJsonWinsOverLowerQHtml() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header(
+                        "Accept",
+                        "application/vnd.pypi.simple.v1+json;q=1.0, text/html;q=0.2"
+                    )
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.JSON)
+        );
+    }
+
+    @Test
+    void malformedQValueDefaultsToFullyAcceptable() {
+        MatcherAssert.assertThat(
+            "A malformed q param should not crash negotiation; treat as q=1.0",
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header("Accept", "application/vnd.pypi.simple.v1+json;q=bogus")
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.JSON)
+        );
+    }
+
+    @Test
     void jsonContentTypeIsCorrect() {
         MatcherAssert.assertThat(
             SimpleApiFormat.JSON.contentType(),

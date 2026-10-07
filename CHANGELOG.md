@@ -1,5 +1,46 @@
 # Changelog
 
+## Version 2.3.0
+
+### 🌟 New features
+
+- **Docker registries implement the OCI 1.1 Referrers API** (`GET .../referrers/<digest>`, `subject`/`OCI-Subject`), so cosign, notation, `oras attach`/`discover`, and SBOM attachment work against hosted repos. Deleting a referrer manifest by digest removes it from the listing, and a blob a referrer uses counts as in use for blob `DELETE`. ([@aydasraf](https://github.com/aydasraf))
+- **A `docker-group` answers `tags/list` with the union of its members' tags.** ([@aydasraf](https://github.com/aydasraf))
+- **PyPI hosted repositories serve PEP 658 core metadata and the legacy JSON API** — `twine upload` extracts the distribution's `METADATA`/`PKG-INFO` and serves it at `<file>.metadata`, advertised through the PEP 714 `core-metadata` key / `data-core-metadata` attribute (the legacy `dist-info-metadata` forms are kept for older clients), and `GET /pypi/<package>/json` is synthesized from the same persisted files for poetry and pip-tools. ([@aydasraf](https://github.com/aydasraf))
+- **The Go proxy forwards checksum-database (`sumdb`) lookups** upstream (cached, offline-safe), so `go get` can keep `GOSUMDB` on; a group forwards them through its `go-proxy` member and a local repository answers `404`. ([@aydasraf](https://github.com/aydasraf))
+- **`releaseImmutable` is accepted as a deprecated alias of `immutable`** on hosted `maven`/`gradle` repositories: it is read only when `immutable` is absent, and the UI replaces it with `immutable` on save. ([@aydasraf](https://github.com/aydasraf))
+- **Presigned direct-download for all formats** — a per-repo `download-mode` (`stream`/`redirect`/`auto`) `302`s the immutable artifact byte to a time-limited object-store URL for Docker, npm, PyPI, conda, Go, Gem, RPM, Helm, Debian, generic files, Maven/Gradle, NuGet, Composer, and Hex; metadata is never redirected, and streaming stays the default and automatic fallback. ([@aydasraf](https://github.com/aydasraf))
+- **Cross-node invalidation for `cache.mode: index`** — a write/delete on one node drops peers' stale disk-cache entries over pub/sub instead of waiting out the TTL. ([@aydasraf](https://github.com/aydasraf))
+- **Admin UI and API for the Maven PGP keyring** — `GET`/`POST`/`DELETE /api/v1/admin/pgp-keys` and a *Maven PGP Keyring* admin page list, add and remove the trusted signing keys backing `verifyPgp`. ([@aydasraf](https://github.com/aydasraf))
+- **S3 storage gains a configurable `storage-class`** and moves behind a backend-agnostic `BlobStore`/`Presigner` layer, the basis of presigned downloads and `cache.mode: index` on AWS S3 and S3-compatible endpoints (MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph). ([@aydasraf](https://github.com/aydasraf))
+
+### ⚡ Performance
+
+- **Opt-in index-accelerated S3 cache (`cache.mode: index`)** — an in-memory `StorageIndex` answers `exists`/`metadata`/`list` and a disk hit's `value()` with zero S3 round-trips (vs 1–2 HEADs per hit), single-flighting cold misses. ([@aydasraf](https://github.com/aydasraf))
+- **`cache.mode: index` async durable write-back** — `save()` is acked from local disk and uploaded to S3 by a bounded, retrying, crash-replaying pool (a saturated queue `503`s; `cache.write-through: true` restores synchronous), with write-back/eviction metrics + a `PanteraWriteBackQueueNearCapacity` alert. ([@aydasraf](https://github.com/aydasraf))
+- **`cache.mode: index` byte-bounded eviction** — an in-memory byte counter with LRU/LFU watermark eviction (`cache.max-disk-bytes`, `cache.eviction-*`), no `Files.walk`, sharded across a 2-level fan-out. ([@aydasraf](https://github.com/aydasraf))
+- **The PyPI proxy legacy JSON API is TTL-cached** with single-flight and serve-stale, so an upstream blip no longer breaks `poetry` resolution of cached packages. ([@aydasraf](https://github.com/aydasraf))
+- **PyPI `/simple/` cooldown-filtered index is cached, not recomputed per request** — materialised into the shared cooldown cache (self-busting on content change, reusing every existing invalidation hook), so a hot package isn't re-filtered each time. ([@aydasraf](https://github.com/aydasraf))
+
+### 🔧 Bug fixes
+
+- **Clustered deployments no longer drop artifact events or proxy index/audit records** — the per-node event drain and the per-format proxy index/audit processors (Maven, npm, PyPI, Go, Composer) ran through cluster-shared Quartz, which could fire them on the wrong node or delete another node's job; they now run on each node's own scheduler. ([@aydasraf](https://github.com/aydasraf))
+- **Docker manifest `GET`/`HEAD` honour `Accept`** — a `406` when the client accepts none of the manifest's media types (wildcards respected), instead of an unparseable body. ([@aydasraf](https://github.com/aydasraf))
+- **Docker proxy caches manifests per negotiated `Accept`-variant** — the client's `Accept` is forwarded upstream and keys the cache, so a multi-variant tag no longer cross-serves the wrong media type. ([@aydasraf](https://github.com/aydasraf))
+- **PyPI uploads verify the client's `sha256_digest`** — a `twine upload` whose declared digest does not match the uploaded bytes is refused with `400`. ([@aydasraf](https://github.com/aydasraf))
+- **Go dependency resolution survives upstream outages** — `@v/list` and `@latest` on a proxy are TTL-cached, single-flighted, and serve the last fetched copy when upstream is unreachable; cooldown evaluation of `@v/list` is bounded to the newest 50 versions (older versions are always listed). ([@aydasraf](https://github.com/aydasraf))
+- **Hosted `maven-metadata.xml` no longer drops versions under concurrent deploys** (per-GA lock with bounded retry), and proxy artifact responses carry the full conditional/validator header set. ([@aydasraf](https://github.com/aydasraf))
+- **Composer `packages/list.json` and `p2/available-packages.json` are served** on hosted repositories (and forwarded upstream on proxies) instead of answering `404`. ([@aydasraf](https://github.com/aydasraf))
+- **PyPI proxy repositories keep `data-yanked` through the cooldown filter** — a release yanked upstream stays marked `data-yanked` in the filtered `/simple/<pkg>/` HTML and `yanked` in the JSON, so pip's yank handling works for proxied packages. ([@aydasraf](https://github.com/aydasraf))
+
+### 🔒 Security
+
+- **Maven/Gradle PGP verification is enforced, not inert** — `verifyPgp` verifies `.asc` signatures against the admin keyring (`/api/v1/admin/pgp-keys`): a proxy fetch fails closed (the cache entry is removed), and a hosted primary is quarantined (unresolvable, excluded from `maven-metadata.xml`) until a matching signature verifies, in either upload order. ([@aydasraf](https://github.com/aydasraf))
+- **Composer proxied dist archives are verified against the packument `dist.shasum`** — the SHA-1 is computed over the streamed bytes before the cache commit; a mismatch is never cached and is audited as `checksum_mismatch` (Composer rejects the mismatching archive client-side as well). ([@aydasraf](https://github.com/aydasraf))
+- **Docker proxy repositories verify cached blob integrity** — the cache-store path re-hashes the streamed bytes and rejects a digest mismatch. ([@aydasraf](https://github.com/aydasraf))
+- **Authorization and resilience-threshold changes propagate across the cluster** — role/permission, publishing-filter and circuit-breaker threshold edits made on one node invalidate every peer's cache over pub/sub, with the cache TTL as the backstop. ([@aydasraf](https://github.com/aydasraf))
+- **Removed a non-functional Go archive integrity claim** — the proxy no longer writes a `.ziphash` sidecar the GOPROXY protocol does not define; genuine verification is the proxied `sumdb`. ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.10
 
 ### ⚠️ Breaking changes

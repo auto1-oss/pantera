@@ -367,6 +367,124 @@ public final class MicrometerMetrics {
             .record(java.time.Duration.ofMillis(durationMs));
     }
 
+    // ========== WS1.6: BlobStore-tier + cache-tier metrics (spec sect 3.G) ==========
+    //
+    // Distinct from recordStorageOperation() above (that one meters the
+    // FileStorage-oriented Storage interface verbs -- exists/value/save/...
+    // with no backend dimension). These meter the BlobStore interface's own
+    // verbs (get/head/put/delete/list) plus a bounded `backend` dimension,
+    // recorded by MeteredBlobStore (pantera-storage-core) via the
+    // BlobStoreMetricsCollector dependency-inversion seam -- see
+    // BlobStoreMetricsRecorder, the bridge installed at boot.
+
+    /**
+     * Record one {@code BlobStore}-tier call (GET/HEAD/PUT/DELETE/LIST).
+     * Emits {@code pantera_storage_blobstore_requests_total{backend,
+     * operation, outcome}} (count) and {@code
+     * pantera_storage_blobstore_request_duration_seconds{backend, operation,
+     * outcome}} (latency, transfer SLO ladder -- see {@code VertxMain}).
+     *
+     * @param backend Bounded backend kind (e.g. {@code "s3"}).
+     * @param operation Bounded {@code BlobStore} verb (e.g. {@code "get"}).
+     * @param outcome Bounded outcome: {@code "success"}, {@code "throttled"},
+     *  or {@code "error"}.
+     * @param durationMs Call duration in milliseconds.
+     * @since 2.3.0
+     */
+    public void recordBlobStoreOperation(
+        final String backend, final String operation, final String outcome, final long durationMs
+    ) {
+        Counter.builder("pantera.storage.blobstore.requests")
+            .description("BlobStore-tier (S3 and compatible) calls, labelled by backend kind, "
+                + "operation, and outcome. Zero on a cache.mode:index hit by design -- only "
+                + "calls that actually reach the object store are counted here.")
+            .tags("backend", backend, "operation", operation, "outcome", outcome)
+            .register(registry)
+            .increment();
+        Timer.builder("pantera.storage.blobstore.request.duration")
+            .description("BlobStore-tier call latency, labelled by backend kind, operation, and outcome.")
+            .tags("backend", backend, "operation", operation, "outcome", outcome)
+            .register(registry)
+            .record(java.time.Duration.ofMillis(durationMs));
+    }
+
+    /**
+     * Record bytes freed by one WS1.4 index-driven eviction (the "eviction
+     * bytes/sec" metric WS1.4 deferred -- a rate is a query-time {@code
+     * rate()} over this monotonic counter). Emits {@code
+     * pantera_cache_eviction_bytes_total{cache_type, cache_tier}}.
+     *
+     * @param cacheType Bounded cache type (e.g. {@code "blob_disk"}).
+     * @param cacheTier Bounded cache tier (e.g. {@code "disk"}).
+     * @param bytes Bytes freed.
+     * @since 2.3.0
+     */
+    public void recordCacheEvictionBytes(final String cacheType, final String cacheTier, final long bytes) {
+        Counter.builder("pantera.cache.eviction.bytes")
+            .description("Bytes freed by cache eviction. Chart rate() for an eviction-bytes/sec panel.")
+            .tags("cache_type", cacheType, "cache_tier", cacheTier)
+            .baseUnit("bytes")
+            .register(registry)
+            .increment(bytes);
+    }
+
+    /**
+     * Record a WS1.5 cross-node storage-cache invalidation lifecycle event
+     * (the publish/receive/drop metrics WS1.5 deferred). Emits {@code
+     * pantera_storage_invalidation_total{stage, outcome}}.
+     *
+     * @param stage One of {@code "published"} (this node sent one), {@code
+     *  "received"} (this node's bus delivered one to its listeners), or
+     *  {@code "applied"} (a {@code CachedBlobStorage} listener actually
+     *  dropped its local entry as a result).
+     * @param outcome Bounded, stage-specific outcome -- for {@code
+     *  "received"}: {@code "ok"}/{@code "malformed"}; for {@code "applied"}:
+     *  {@code "applied"}/{@code "ignored_pending_write"}/{@code
+     *  "ignored_superseded_by_local_write"}/{@code "ignored_not_cached"}.
+     * @since 2.3.0
+     */
+    public void recordStorageInvalidation(final String stage, final String outcome) {
+        Counter.builder("pantera.storage.invalidation")
+            .description("WS1.5 cross-node cache-invalidation lifecycle: publish (sender), "
+                + "receive (bus delivery, incl. malformed-message drops), and apply "
+                + "(CachedBlobStorage's own accept/ignore decision).")
+            .tags("stage", stage, "outcome", outcome)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Record a WS1.7 (spec &sect;3.B2) presigned-direct-download serving
+     * decision for one redirect-eligible byte-object GET (Docker blob GET is
+     * the first wired route -- see docker-adapter's {@code GetBlobsSlice}).
+     * Emits {@code pantera_storage_download_decision_total{repo_name,
+     * decision}} -- both dashboards WS7 wants come from this one counter:
+     * the "presign issuance rate" is the rate of {@code decision="redirect"},
+     * and the "redirect-vs-stream ratio" is {@code redirect} vs {@code
+     * stream}'s relative share. Never recorded for metadata routes -- those
+     * are never wired to reach this call at all.
+     *
+     * @param repoName Bounded repo name ({@code RepoNameMeterFilter} caps
+     *  cardinality).
+     * @param decision {@code "redirect"} (a presigned {@code 302} was
+     *  issued) or {@code "stream"} (bytes were served through Pantera --
+     *  either the repo's configured {@code download-mode} is {@code
+     *  stream}, or a {@code redirect}/{@code auto} attempt fell back because
+     *  the object was not durably present or presigning was not configured).
+     * @since 2.3.0
+     */
+    public void recordDownloadDecision(final String repoName, final String decision) {
+        Counter.builder("pantera.storage.download.decision")
+            .description("WS1.7 presigned-direct-download serving decision per redirect-eligible "
+                + "byte GET: \"redirect\" (302 to a presigned URL, zero blob-store round trip on "
+                + "Pantera's side) or \"stream\" (bytes served through Pantera -- explicit stream "
+                + "mode, or a redirect/auto fallback). Feeds both the redirect-vs-stream ratio and "
+                + "the presign issuance rate panels.")
+            .tags("repo_name", repoName, "decision", decision)
+            .register(registry)
+            .increment();
+    }
+
     // ========== Proxy & Upstream Metrics ==========
 
     public void recordProxyRequest(String repoName, String upstream, String result, long durationMs) {

@@ -12,7 +12,9 @@ package com.auto1.pantera.docker.http.manifest;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.ManifestVariant;
 import com.auto1.pantera.docker.error.ManifestError;
+import com.auto1.pantera.docker.error.ManifestNotAcceptableError;
 import com.auto1.pantera.docker.http.DigestHeader;
 import com.auto1.pantera.docker.http.DockerActionSlice;
 import com.auto1.pantera.docker.perms.DockerActions;
@@ -20,6 +22,7 @@ import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.headers.Accept;
 import com.auto1.pantera.http.headers.ContentType;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -58,14 +61,43 @@ public class HeadManifestSlice extends DockerActionSlice {
         // RequestContextHeaders.bindToMdc), which propagate even when
         // the per-thread MDC does not.
         final String login = new Login(headers).getValue();
+        // WS4-docker.7: parse the client's Accept header up-front, same as
+        // GetManifestSlice -- headers is a Slice argument, so it survives
+        // the async hops below. An absent header always accepts, preserving
+        // pre-negotiation behaviour.
+        final ManifestAccept accept = new ManifestAccept(headers);
+        // Proxy-cache/upstream variant derived from the same Accept header so
+        // the proxy fetches and caches each media-type variant independently
+        // (never cross-serving); non-proxy modes ignore it via the default get.
+        final ManifestVariant variant = ManifestVariant.fromAccept(new Accept(headers).values());
         return body.asBytesFuture().thenCompose(ignored -> {
             MDC.put("user.name", login);
             com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
             return this.docker.repo(request.name()).manifests()
-                .get(request.reference())
+                .get(request.reference(), variant)
                 .thenApply(
                     manifest -> manifest.map(
                         found -> {
+                            if (!accept.accepts(found.mediaType())) {
+                                EcsLogger.warn("com.auto1.pantera.docker")
+                                    .message("Manifest media type not acceptable to client")
+                                    .eventCategory("web")
+                                    .eventAction("manifest_head")
+                                    .eventOutcome("failure")
+                                    .field("event.reason", "not_acceptable")
+                                    .field("container.image.name", request.name())
+                                    .field("container.image.tag", request.reference().digest())
+                                    .field("file.type", found.mediaType())
+                                    .field("log.source", "application")
+                                    .log();
+                                return ResponseBuilder.notAcceptable()
+                                    .jsonBody(
+                                        new ManifestNotAcceptableError(
+                                            request.reference(), found.mediaType()
+                                        ).json()
+                                    )
+                                    .build();
+                            }
                             long size = found.size();
                             Content head = new Content.From(size, Flowable.<ByteBuffer>empty());
 

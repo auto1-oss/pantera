@@ -80,23 +80,32 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
 
     /**
      * Ctor with default cache settings.
+     * <p>
+     * {@code expireAfterWrite} (not {@code expireAfterAccess}, WS2.3,
+     * 2.3.0): a continuously-hit role/permission under
+     * {@code expireAfterAccess} never expired on its own on a peer that
+     * missed (or predates) the cross-node invalidation broadcast — every
+     * access reset the TTL clock, so a busy entry could stay stale forever.
+     * {@code expireAfterWrite} guarantees a bounded backstop — at most 3
+     * minutes stale — independent of request volume, even if a
+     * {@code PublishingCleanable} broadcast is missed entirely.
      * @param source Database data source
      */
     public CachedDbPolicy(final DataSource source) {
         this(
             Caffeine.newBuilder()
                 .maximumSize(10_000)
-                .expireAfterAccess(Duration.ofMinutes(3))
+                .expireAfterWrite(Duration.ofMinutes(3))
                 .recordStats()
                 .build(),
             Caffeine.newBuilder()
                 .maximumSize(10_000)
-                .expireAfterAccess(Duration.ofMinutes(3))
+                .expireAfterWrite(Duration.ofMinutes(3))
                 .recordStats()
                 .build(),
             Caffeine.newBuilder()
                 .maximumSize(1_000)
-                .expireAfterAccess(Duration.ofMinutes(3))
+                .expireAfterWrite(Duration.ofMinutes(3))
                 .recordStats()
                 .build(),
             source
