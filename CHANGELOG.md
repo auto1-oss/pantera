@@ -26,6 +26,10 @@
 - **Link rewriting in served JSON metadata is stream-through** — hosted npm packuments and Composer metadata have their `dist` links substituted as the bytes flow, without buffering or parsing the document; the second full parse of every served npm packument is gone.
   ([@dmitry-auto1](https://github.com/dmitry-auto1))
 
+### 🔒 Security
+
+- **Repository paths inside the storage lock namespace are refused.** Storage-backed locks keep their entries under `.pantera-locks/` in the repository storage; a request addressing that prefix on any repository, with any method, now answers `404` instead of reaching storage, so a client can no longer plant or remove lock entries. ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔧 Bug fixes
 
 - **Two concurrent uploads of the same artifact can no longer both succeed on an immutable repository.** For `npm`, `file`, `go`, `php`, `maven`, `rpm` and `pypi` the existence check and the write now run under one lock kept in the repository storage, keyed by package or file, so the second upload sees the files of the first and is refused, on one instance and across instances sharing the storage. The other formats already held such a lock. ([@aydasraf](https://github.com/aydasraf))

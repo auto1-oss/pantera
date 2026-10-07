@@ -75,6 +75,7 @@ import com.auto1.pantera.http.timeout.AutoBlockRegistry;
 import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import com.auto1.pantera.http.slice.DeleteRoutingSlice;
 import com.auto1.pantera.http.slice.PathPrefixStripSlice;
+import com.auto1.pantera.http.slice.ReservedPathSlice;
 import com.auto1.pantera.http.slice.NativeDeleteCascadeSlice;
 import com.auto1.pantera.http.slice.ProxyEvictSlice;
 import com.auto1.pantera.http.slice.ProxyPathCaches;
@@ -412,6 +413,22 @@ public class RepositorySlices {
      * @return Resolved slice
      */
     public Slice slice(final Key name, final int port, final int depth) {
+        // Every dispatch to a repository goes through here: the main pipeline
+        // (SliceByPath), dedicated-port servers and group member walks. The
+        // storage lock namespace (.pantera-locks/) is refused for all of them
+        // before any adapter can turn such a path into a storage key.
+        return new ReservedPathSlice(this.resolved(name, port, depth));
+    }
+
+    /**
+     * The repository slice itself, from the cache or freshly resolved.
+     *
+     * @param name Repository name
+     * @param port Port
+     * @param depth Group nesting depth
+     * @return Slice
+     */
+    private Slice resolved(final Key name, final int port, final int depth) {
         final SliceKey skey = new SliceKey(name, port);
         final SliceValue cached = this.slices.getIfPresent(skey);
         if (cached != null) {

@@ -264,7 +264,7 @@ public final class ArtifactHandler {
         final String repoName = ctx.pathParam("name");
         final String path = ctx.queryParam("path").stream()
             .findFirst().orElse("/");
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -669,7 +669,7 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -788,7 +788,7 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -867,7 +867,7 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -961,7 +961,7 @@ public final class ArtifactHandler {
     private void streamArtifact(
         final RoutingContext ctx, final String repoName, final String path
     ) {
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -1036,7 +1036,7 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
             return;
         }
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -1129,7 +1129,7 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Field 'path' is required");
             return;
         }
-        if (ArtifactHandler.traversedPath(path)) {
+        if (ArtifactHandler.traversedPath(path) || ArtifactHandler.reservedPath(path)) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid path");
             return;
         }
@@ -1272,6 +1272,25 @@ public final class ArtifactHandler {
             );
         }
         return instructions;
+    }
+
+    /**
+     * Whether a path addresses the storage lock namespace
+     * ({@code .pantera-locks/}), which no API may read, list or delete:
+     * deleting a lock entry releases a lock another upload is holding.
+     *
+     * @param path Request path
+     * @return True when the path is reserved
+     */
+    static boolean reservedPath(final String path) {
+        boolean found = false;
+        for (final String segment : path.split("/")) {
+            if (com.auto1.pantera.http.slice.ReservedPathSlice.LOCKS.equals(segment)) {
+                found = true;
+                break;
+            }
+        }
+        return found;
     }
 
     /**
