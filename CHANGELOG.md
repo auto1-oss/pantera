@@ -1,5 +1,17 @@
 # Changelog
 
+## Version 2.2.10
+
+### 🌟 New features
+
+- **`url:` is optional for Composer `php` and `php-proxy` repositories; served links follow the host the client used** — `packages.json` and every `p2/<vendor>/<package>.json` are served with `dist.url`, `metadata-url` and `available-packages-url` rooted at the base resolved per request (the same three tiers as npm), so one repository serves several hostnames and a group serves its members' archives under the group, proxied ones included. A `dist.url` stored under an older host or imported from another registry is re-rooted on the way out; dists hosted elsewhere are left alone. A configured `url:` (or the older `settings.url` of a hosted repository) still pins every client to that host.
+  ([@dmitry-auto1](https://github.com/dmitry-auto1))
+
+### ⚡ Performance
+
+- **Link rewriting in served JSON metadata is stream-through** — hosted npm packuments and Composer metadata have their `dist` links substituted as the bytes flow, without buffering or parsing the document; the second full parse of every served npm packument is gone.
+  ([@dmitry-auto1](https://github.com/dmitry-auto1))
+
 ## Version 2.2.9
 
 This release contains security hardening and a broad set of bug fixes across formats. Upgrading is recommended. Some specifics of the hardening are intentionally withheld here to protect deployments that have not yet upgraded; the operational changes an administrator must be aware of are listed below. For coordinated-disclosure details, contact the maintainers.

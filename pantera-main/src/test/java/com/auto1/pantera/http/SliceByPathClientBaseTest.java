@@ -33,9 +33,10 @@ import org.hamcrest.core.StringContains;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -144,6 +145,26 @@ final class SliceByPathClientBaseTest {
         MatcherAssert.assertThat(
             this.observedBase("/npm_proxy/pnpm", Optional.empty()),
             new IsEqual<>(Optional.of("https://upstream.example.com/npm_proxy"))
+        );
+    }
+
+    @Test
+    void legacyComposerSettingsUrlIsStampedLikeRepoUrl() {
+        // A hosted php repository configured the pre-2.2.10 way (settings.url)
+        // keeps pinning its clients to that URL after upgrading.
+        MatcherAssert.assertThat(
+            this.observedBase("/php_legacy/packages.json", Optional.empty()),
+            new IsEqual<>(Optional.of("https://pinned.example.com/artifactory/php_legacy"))
+        );
+    }
+
+    @Test
+    void settingsUrlOfOtherTypesIsNotAClientFacingBase() {
+        // settings.url only ever meant "client-facing URL" for php; for any
+        // other type it stays whatever that adapter means by it.
+        MatcherAssert.assertThat(
+            this.observedBase("/npm_legacy/pnpm", Optional.empty()),
+            new IsEqual<>(Optional.of("http://reg.example.com/npm_legacy"))
         );
     }
 
@@ -355,29 +376,62 @@ final class SliceByPathClientBaseTest {
      * @return Repositories stub
      */
     private static Repositories repositories() {
-        final RepoConfig group = SliceByPathClientBaseTest.repoConfig("npm_group", "npm-group", null);
-        final RepoConfig proxy = SliceByPathClientBaseTest.repoConfig(
-            "npm_proxy", "npm-proxy", "https://upstream.example.com/npm_proxy"
+        final Map<String, RepoConfig> configs = new HashMap<>();
+        configs.put("npm_group", SliceByPathClientBaseTest.repoConfig("npm_group", "npm-group", null));
+        configs.put(
+            "npm_proxy",
+            SliceByPathClientBaseTest.repoConfig(
+                "npm_proxy", "npm-proxy", "https://upstream.example.com/npm_proxy"
+            )
+        );
+        configs.put(
+            "php_legacy",
+            SliceByPathClientBaseTest.legacyRepoConfig(
+                "php_legacy", "php", "https://pinned.example.com/artifactory/php_legacy"
+            )
+        );
+        configs.put(
+            "npm_legacy",
+            SliceByPathClientBaseTest.legacyRepoConfig(
+                "npm_legacy", "npm-group", "https://pinned.example.com/artifactory/npm_legacy"
+            )
         );
         return new Repositories() {
             @Override
             public Optional<RepoConfig> config(final String name) {
-                final Optional<RepoConfig> result;
-                if ("npm_group".equals(name)) {
-                    result = Optional.of(group);
-                } else if ("npm_proxy".equals(name)) {
-                    result = Optional.of(proxy);
-                } else {
-                    result = Optional.empty();
-                }
-                return result;
+                return Optional.ofNullable(configs.get(name));
             }
 
             @Override
             public Collection<RepoConfig> configs() {
-                return Arrays.asList(group, proxy);
+                return configs.values();
             }
         };
+    }
+
+    /**
+     * Build a minimal {@link RepoConfig} whose URL lives under the legacy
+     * {@code settings.url} node instead of {@code repo.url}.
+     *
+     * @param name Repository name
+     * @param type Repository type
+     * @param url Legacy settings URL
+     * @return Repo configuration
+     */
+    private static RepoConfig legacyRepoConfig(final String name, final String type, final String url) {
+        return RepoConfig.from(
+            Yaml.createYamlMappingBuilder().add(
+                "repo",
+                Yaml.createYamlMappingBuilder()
+                    .add("type", type)
+                    .add("settings", Yaml.createYamlMappingBuilder().add("url", url).build())
+                    .build()
+            ).build(),
+            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
+            new Key.From(name),
+            new TestStoragesCache(),
+            false
+        );
     }
 
     /**

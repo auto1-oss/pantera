@@ -681,4 +681,25 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
         );
     }
 
+    @Test
+    void putPhpWithoutUrlIsAccepted(
+        final Vertx vertx, final VertxTestContext ctx
+    ) throws Exception {
+        // Since 2.2.10 a hosted php repository resolves its dist and metadata
+        // links per request, so url: is optional for it too.
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "php")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/php-no-url",
+            body,
+            res -> Assertions.assertEquals(200, res.statusCode())
+        );
+    }
+
 }

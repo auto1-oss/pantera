@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.composer.http;
 
+import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.Authentication;
@@ -76,7 +77,8 @@ public final class PhpComposer extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer, for a repository without a
+     * configured {@code url:}.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public PhpComposer(
@@ -87,6 +89,32 @@ public final class PhpComposer extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            new ComposerBaseUrl(Optional.empty(), name));
+    }
+
+    /**
+     * Primary ctor.
+     * @param repository Repository
+     * @param policy Access permissions
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact repository events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param base Client-facing base URL the served metadata links are rooted at
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ComposerBaseUrl base
     ) {
         super(
             new SliceRoute(
@@ -99,7 +127,7 @@ public final class PhpComposer extends Slice.Wrap {
                         MethodRule.GET
                     ),
                     PhpComposer.createAuthSlice(
-                        new PackageMetadataSlice(repository),
+                        new PackageMetadataSlice(repository, base),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

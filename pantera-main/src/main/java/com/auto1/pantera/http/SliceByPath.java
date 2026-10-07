@@ -136,7 +136,9 @@ final class SliceByPath implements Slice {
     /**
      * Explicitly configured {@code url:} of the addressed repository. Only the
      * addressed repository is consulted — never a group member's own URL,
-     * which is the bug this whole mechanism exists to fix.
+     * which is the bug this whole mechanism exists to fix. A hosted Composer
+     * repository may carry its URL under the legacy {@code settings.url}
+     * instead of {@code repo.url}; that pin is honoured the same way.
      *
      * @param key Repository key
      * @return Configured URL, or empty
@@ -145,7 +147,25 @@ final class SliceByPath implements Slice {
         Optional<String> result = Optional.empty();
         final Repositories repos = this.slices.repositories();
         if (repos != null) {
-            result = repos.config(key.string()).flatMap(RepoConfig::urlOpt);
+            result = repos.config(key.string())
+                .flatMap(cfg -> cfg.urlOpt().or(() -> SliceByPath.legacyComposerUrl(cfg)));
+        }
+        return result;
+    }
+
+    /**
+     * The {@code settings.url} of a hosted Composer repository, the place
+     * its client-facing URL lived before {@code repo.url} applied to it.
+     *
+     * @param cfg Repository configuration
+     * @return Configured URL, or empty for any other repository type
+     */
+    private static Optional<String> legacyComposerUrl(final RepoConfig cfg) {
+        final Optional<String> result;
+        if ("php".equals(cfg.type())) {
+            result = cfg.settings().flatMap(yaml -> Optional.ofNullable(yaml.string("url")));
+        } else {
+            result = Optional.empty();
         }
         return result;
     }
