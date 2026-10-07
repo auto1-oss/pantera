@@ -11,6 +11,8 @@
 package com.auto1.pantera.composer.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.composer.ComposerBaseUrl;
+import com.auto1.pantera.composer.MetadataLinks;
 import com.auto1.pantera.composer.Name;
 import com.auto1.pantera.composer.Packages;
 import com.auto1.pantera.composer.Repository;
@@ -28,7 +30,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Slice that serves package metadata.
+ * Slice that serves package metadata, with its links re-rooted at the base URL
+ * resolved for the request (see {@link ComposerBaseUrl}, {@link MetadataLinks}).
  */
 public final class PackageMetadataSlice implements Slice {
 
@@ -49,23 +52,42 @@ public final class PackageMetadataSlice implements Slice {
     private final Repository repository;
 
     /**
-     * @param repository Repository.
+     * Client-facing base URL of this repository.
      */
-    PackageMetadataSlice(final Repository repository) {
+    private final ComposerBaseUrl base;
+
+    /**
+     * Link rewriter.
+     */
+    private final MetadataLinks links;
+
+    /**
+     * @param repository Repository.
+     * @param base Client-facing base URL of this repository.
+     */
+    PackageMetadataSlice(final Repository repository, final ComposerBaseUrl base) {
         this.repository = repository;
+        this.base = base;
+        this.links = new MetadataLinks(base.repository());
     }
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         // GET requests should have empty body, but we must consume it to complete the request
+        final String path = line.uri().getPath();
         return body.asBytesFuture().thenCompose(ignored ->
-            this.packages(line.uri().getPath())
+            this.packages(path)
                 .toCompletableFuture()
                 .thenApply(
                     opt -> opt.map(
                         packages -> packages.content()
-                            .thenApply(cnt -> ResponseBuilder.ok().body(cnt).build())
+                            .thenApply(
+                                stored -> ResponseBuilder.ok()
+                                    .varyHeader(this.base.vary(headers))
+                                    .body(this.relinked(path, stored, headers))
+                                    .build()
+                            ).toCompletableFuture()
                     ).orElse(
                         CompletableFuture.completedFuture(
                             ResponseBuilder.notFound().build()
@@ -76,11 +98,21 @@ public final class PackageMetadataSlice implements Slice {
     }
 
     /**
-     * Builds key to storage value from path.
+     * The stored document with its links re-rooted at the base resolved for
+     * this request, streamed through without buffering.
      *
-     * @param path Resource path.
-     * @return Key to storage value.
+     * @param path Request path
+     * @param stored Stored document
+     * @param headers Request headers
+     * @return Document to serve
      */
+    private Content relinked(final String path, final Content stored, final Headers headers) {
+        final String resolved = this.base.resolve(headers);
+        return ALL_PACKAGES.matcher(path).matches()
+            ? this.links.root(stored, resolved)
+            : this.links.packages(stored, resolved);
+    }
+
     private CompletionStage<Optional<Packages>> packages(final String path) {
         final Matcher matcher = PACKAGE.matcher(path);
         if (matcher.find()) {

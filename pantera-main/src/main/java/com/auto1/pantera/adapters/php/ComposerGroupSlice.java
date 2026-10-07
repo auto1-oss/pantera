@@ -13,6 +13,7 @@ package com.auto1.pantera.adapters.php;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.group.SliceResolver;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
@@ -353,7 +354,9 @@ public final class ComposerGroupSlice implements Slice {
                 return CompletableFuture.completedFuture(resp);
             }
             return resp.body().asBytesFuture().thenCompose(bytes -> {
-                final Optional<Response> rewritten = this.rewritePackagesJson(member, bytes);
+                final Optional<Response> rewritten = this.rewritePackagesJson(
+                    member, bytes, new ClientBaseUrl(headers).varyHeaderValue()
+                );
                 if (rewritten.isPresent()) {
                     return CompletableFuture.completedFuture(rewritten.get());
                 }
@@ -377,9 +380,12 @@ public final class ComposerGroupSlice implements Slice {
      *
      * @param member Winning member
      * @param bytes Member body
+     * @param vary Vary header value of the rebuilt response
      * @return Rewritten response, or empty when the body is not a JSON object
      */
-    private Optional<Response> rewritePackagesJson(final String member, final byte[] bytes) {
+    private Optional<Response> rewritePackagesJson(
+        final String member, final byte[] bytes, final String vary
+    ) {
         final JsonObject json;
         try (JsonReader reader = Json.createReader(new ByteArrayInputStream(bytes))) {
             json = reader.readObject();
@@ -469,9 +475,12 @@ public final class ComposerGroupSlice implements Slice {
         }
 
         final byte[] outBytes = out.build().toString().getBytes(StandardCharsets.UTF_8);
+        // The member's links were re-rooted at the base resolved for this
+        // request, so the rebuilt document varies by the same headers.
         return Optional.of(
             ResponseBuilder.ok()
                 .header("Content-Type", "application/json")
+                .varyHeader(vary)
                 .body(outBytes)
                 .build()
         );

@@ -183,21 +183,20 @@ public final class MetadataUrlRewriter {
         final String version,
         final JsonObject dist
     ) {
-        // Check if already rewritten (has original_url field)
-        if (dist.containsKey("original_url")) {
-            // Already rewritten, return as-is
-            return dist;
-        }
-
         final JsonObjectBuilder distBuilder = Json.createObjectBuilder();
 
-        // Store original URL first (before copying other fields)
-        final String originalUrl = dist.getString("url", null);
-        
-        // Copy all dist fields except url
+        // A dist rewritten earlier (the cache stores rewritten metadata)
+        // keeps its upstream URL under original_url; its proxy URL is
+        // rebuilt at the base resolved for THIS request, so one cached
+        // document serves every host and every group it is reached by.
+        final String originalUrl = dist.containsKey("original_url")
+            ? dist.getString("original_url", null)
+            : dist.getString("url", null);
+
+        // Copy all dist fields except the two URLs
         for (final Map.Entry<String, JsonValue> entry : dist.entrySet()) {
             final String key = entry.getKey();
-            if (!"url".equals(key)) {
+            if (!"url".equals(key) && !"original_url".equals(key)) {
                 distBuilder.add(key, entry.getValue());
             }
         }
