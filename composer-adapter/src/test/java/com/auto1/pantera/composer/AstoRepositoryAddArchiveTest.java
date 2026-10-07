@@ -124,12 +124,38 @@ final class AstoRepositoryAddArchiveTest {
         );
     }
 
+    @Test
+    void distUrlIsAbsoluteUnderTheConfiguredUrl() {
+        this.saveZipArchive();
+        MatcherAssert.assertThat(
+            this.storedDistUrl(),
+            new IsEqual<>("http://pantera:8080/artifacts/" + this.name.full())
+        );
+    }
+
+    @Test
+    void distUrlIsRepositoryRelativeWithoutAConfiguredUrl() {
+        new AstoRepository(this.storage).addArchive(new Archive.Zip(this.name), this.archive).join();
+        MatcherAssert.assertThat(
+            this.storedDistUrl(),
+            new IsEqual<>("artifacts/" + this.name.full())
+        );
+    }
+
     private void saveZipArchive() {
         new AstoRepository(this.storage, Optional.of("http://pantera:8080/"))
             .addArchive(
                 new Archive.Zip(this.name),
                 this.archive
             ).join();
+    }
+
+    private String storedDistUrl() {
+        return this.packages(new Key.From("p2/psr/log.json"))
+            .getJsonObject("psr/log")
+            .getJsonObject(this.name.version())
+            .getJsonObject("dist")
+            .getString("url");
     }
 
     private JsonObject packages(final Key key) {

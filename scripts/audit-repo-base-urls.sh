@@ -15,8 +15,9 @@
 #
 # Types whose adapter builds absolute URLs without the per-request derivation
 # still hard-require `url:` — this script never touches those, it lists them
-# for manual review instead. As of 2.2.6 hosted `npm` is NOT one of them, and
-# `conan` never was — it builds its download_urls from the request Host.
+# for manual review instead. As of 2.2.6 hosted `npm` and as of 2.2.10 hosted
+# `php` and `php-proxy` are NOT among them, and `conan` never was — it builds its
+# download_urls from the request Host.
 #
 # Usage:
 #     scripts/audit-repo-base-urls.sh [options]
@@ -41,7 +42,7 @@ set -euo pipefail
 
 # Adapters that construct absolute URLs directly and still need `url:`.
 # Keep in sync with docs/configuration-reference.md §2.2.
-REQUIRED_TYPES="helm php nuget conda"
+REQUIRED_TYPES="helm nuget conda"
 
 STALE_HOSTS=()
 REPOS=()

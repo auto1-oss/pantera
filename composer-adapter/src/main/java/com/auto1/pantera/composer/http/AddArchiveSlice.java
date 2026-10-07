@@ -11,6 +11,8 @@
 package com.auto1.pantera.composer.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.http.Headers;
@@ -289,7 +291,12 @@ final class AddArchiveSlice implements Slice {
         }
         final Archive archive = this.archive(parts[0], parts[1], version, upload);
         final String sanitizedVersion = archive.name().version();
-        return new ReleaseGuard(this.repository, this.immutable).check(
+        // Verdict and store run under one lock on the package, kept in the
+        // repository storage: two uploads of the same release, here or on
+        // another instance sharing the storage, cannot both pass the guard.
+        return new IndexUpdateLock(
+            this.repository.storage(), AddArchiveSlice.publishLock(parts[0], parts[1])
+        ).run(locked -> new ReleaseGuard(this.repository, this.immutable).check(
             archive.name().artifact(), packageName, sanitizedVersion, upload.zip(), bytes
         ).thenCompose(verdict -> {
             if (verdict == ReleaseGuard.Verdict.CONFLICT) {
@@ -318,7 +325,7 @@ final class AddArchiveSlice implements Slice {
                 return ResponseBuilder.created().completedFuture();
             }
             return this.store(archive, bytes, packageName, version, upload);
-        }).exceptionally(error -> {
+        })).exceptionally(error -> {
             EcsLogger.error("com.auto1.pantera.composer")
                 .message("Failed to process Composer package")
                 .eventCategory("web")
@@ -514,5 +521,18 @@ final class AddArchiveSlice implements Slice {
      * @param headers Request headers
      */
     private record Upload(String uri, String filename, boolean zip, Headers headers) {
+    }
+
+    /**
+     * Lock key of a package's publishes. A sibling of the package's p2 key,
+     * not an extension of it: {@code SatisLayout} locks the p2 key itself
+     * while merging the entry, and lock entries are found by key prefix.
+     *
+     * @param vendor Vendor
+     * @param pkg Package
+     * @return Lock key
+     */
+    static Key publishLock(final String vendor, final String pkg) {
+        return new Key.From("p2", vendor, ".publish", pkg);
     }
 }

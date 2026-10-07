@@ -114,7 +114,7 @@ final class ComposerProxySliceRootBootstrapTest {
             Authenticator.ANONYMOUS,
             Cache.NOP,
             Optional.empty(),
-            "php_proxy_test",
+            "php_proxy",
             "php-proxy",
             NoopCooldownService.INSTANCE,
             new RegistryBackedInspector("php-proxy", PublishDateRegistries.instance()),
@@ -136,8 +136,9 @@ final class ComposerProxySliceRootBootstrapTest {
         );
         final JsonObject root = Json.createReader(new java.io.StringReader(body)).readObject();
         MatcherAssert.assertThat(
-            "metadata-url must send per-package lookups back to this proxy (host-relative)",
-            root.getString("metadata-url"), new IsEqual<>("/php_proxy/p2/%package%.json")
+            "metadata-url must send per-package lookups back to this proxy, under its base",
+            root.getString("metadata-url"),
+            new IsEqual<>(BASE_URL + "/p2/%package%.json")
         );
         MatcherAssert.assertThat(
             "No served root field may leak the upstream host",

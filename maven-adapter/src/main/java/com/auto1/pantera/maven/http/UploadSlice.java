@@ -13,6 +13,7 @@ package com.auto1.pantera.maven.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.audit.AuditContext;
@@ -48,6 +49,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import javax.xml.parsers.DocumentBuilder;
@@ -124,9 +126,12 @@ public final class UploadSlice implements Slice {
 
     /**
      * Hosted-write policy (WS4-maven.2/.6): {@code verifyPgp} and the
-     * repository's {@code immutable} setting. Defaults to {@link MavenHostedPolicy#DEFAULT}
-     * (byte-identical to pre-2.3.0 behaviour) for every ctor overload that
-     * predates this flag.
+     * repository's {@code immutable} setting. When immutable, an existing
+     * release file is never overwritten (identical bytes: idempotent 201,
+     * different bytes: 409); otherwise a re-upload overwrites it through the
+     * normal save path (checksums regenerated, publish event emitted).
+     * Defaults to {@link MavenHostedPolicy#DEFAULT} (byte-identical to
+     * pre-2.3.0 behaviour) for every ctor overload that predates this flag.
      */
     private final MavenHostedPolicy policy;
 
@@ -347,12 +352,31 @@ public final class UploadSlice implements Slice {
         // client's own checksum upload that follows verifies) and emits the
         // publish event that upserts the search index.
         if (this.policy.immutable() && isReleaseFile(keyPath)) {
-            return this.storage.exists(key).thenCompose(
-                exists -> {
-                    if (exists) {
-                        return this.redeploy(key, body, headers, owner, size, auditCtx);
-                    }
-                    return this.publish(key, keyPath, body, headers, owner, size, auditCtx);
+            // Check and write under one lock on the file, kept in storage:
+            // two first-time uploads of the same release file, here or on
+            // another instance sharing the storage, cannot both see it absent.
+            final AtomicBoolean started = new AtomicBoolean();
+            return new IndexUpdateLock(this.storage, key).run(
+                locked -> {
+                    started.set(true);
+                    return locked.exists(key).thenCompose(
+                        exists -> {
+                            if (exists) {
+                                return this.redeploy(key, body, headers, owner, size, auditCtx);
+                            }
+                            return this.publish(
+                                key, keyPath, body, headers, owner, size, auditCtx
+                            );
+                        }
+                    );
+                }
+            ).exceptionallyCompose(
+                err -> {
+                    // The lock was never acquired: nothing read the body yet.
+                    final CompletableFuture<Void> drained = started.get()
+                        ? CompletableFuture.completedFuture(null)
+                        : body.discard();
+                    return drained.thenCompose(ignored -> CompletableFuture.failedFuture(err));
                 }
             );
         }

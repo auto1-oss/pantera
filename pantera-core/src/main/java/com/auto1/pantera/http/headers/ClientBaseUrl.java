@@ -404,7 +404,7 @@ public final class ClientBaseUrl {
      * @param repoPath Repository base path
      * @return Absolute URL without a trailing slash
      */
-    private String absolute(final String repoPath) {
+    public String absolute(final String repoPath) {
         final String path = ClientBaseUrl.withoutTrailingSlash(repoPath);
         final String result;
         if (this.canonicalOrigin.isEmpty()) {

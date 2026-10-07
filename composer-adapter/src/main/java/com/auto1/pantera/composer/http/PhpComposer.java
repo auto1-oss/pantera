@@ -12,6 +12,7 @@ package com.auto1.pantera.composer.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.blob.DownloadPolicy;
+import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -83,7 +84,8 @@ public final class PhpComposer extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer, for a repository without a
+     * configured {@code url:}.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public PhpComposer(
@@ -118,7 +120,8 @@ public final class PhpComposer extends Slice.Wrap {
     }
 
     /**
-     * Ctor with the repository's {@code immutable} setting.
+     * Ctor with the repository's {@code immutable} setting, for a repository
+     * without a configured {@code url:}.
      * @param repository Repository
      * @param policy Access permissions
      * @param basicAuth Basic authentication
@@ -141,8 +144,39 @@ public final class PhpComposer extends Slice.Wrap {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final boolean immutable
     ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, immutable,
+            new ComposerBaseUrl(Optional.empty(), name));
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting and the
+     * client-facing base its served links are rooted at.
+     * @param repository Repository
+     * @param policy Access permissions
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact repository events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When true a published release cannot be overwritten
+     *  (identical re-upload: 201, different content: 409); when false release
+     *  uploads overwrite. Dev versions are always mutable.
+     * @param base Client-facing base URL the served metadata links are rooted at
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable,
+        final ComposerBaseUrl base
+    ) {
         this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, ArtifactIndex.NOP,
-            DownloadPolicy.streamOnly(), immutable);
+            DownloadPolicy.streamOnly(), immutable, base);
     }
 
     /**
@@ -170,20 +204,9 @@ public final class PhpComposer extends Slice.Wrap {
     }
 
     /**
-     * Full ctor: read-side artifact index, WS1.7 download policy and the
-     * repository's {@code immutable} setting.
-     * @param repository Repository
-     * @param policy Access permissions
-     * @param basicAuth Basic authentication
-     * @param tokenAuth Token authentication
-     * @param name Repository name
-     * @param events Artifact repository events
-     * @param syncIndex Synchronous artifact-index writer
-     * @param artifactIndex Read-side shared artifact index
-     * @param downloadPolicy Per-repo download policy (dist archives only)
-     * @param immutable When true a published release cannot be overwritten
-     *  (identical re-upload: 201, different content: 409); when false release
-     *  uploads overwrite. Dev versions are always mutable.
+     * Ctor with the read-side artifact index, WS1.7 download policy and the
+     * repository's {@code immutable} setting, for a repository without a
+     * configured {@code url:}.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public PhpComposer(
@@ -198,6 +221,42 @@ public final class PhpComposer extends Slice.Wrap {
         final DownloadPolicy downloadPolicy,
         final boolean immutable
     ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, artifactIndex,
+            downloadPolicy, immutable, new ComposerBaseUrl(Optional.empty(), name));
+    }
+
+    /**
+     * Primary ctor: read-side artifact index, WS1.7 download policy, the
+     * repository's {@code immutable} setting and the client-facing base its
+     * served links are rooted at.
+     * @param repository Repository
+     * @param policy Access permissions
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact repository events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param artifactIndex Read-side shared artifact index
+     * @param downloadPolicy Per-repo download policy (dist archives only)
+     * @param immutable When true a published release cannot be overwritten
+     *  (identical re-upload: 201, different content: 409); when false release
+     *  uploads overwrite. Dev versions are always mutable.
+     * @param base Client-facing base URL the served metadata links are rooted at
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable,
+        final ComposerBaseUrl base
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -210,7 +269,7 @@ public final class PhpComposer extends Slice.Wrap {
                     ),
                     PhpComposer.headAware(
                         PhpComposer.createAuthSlice(
-                            new PackageMetadataSlice(repository),
+                            new PackageMetadataSlice(repository, base),
                             basicAuth,
                             tokenAuth,
                             new OperationControl(

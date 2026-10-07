@@ -26,6 +26,7 @@ import com.auto1.pantera.auth.LoggingAuth;
 import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.http.PhpComposer;
 import com.auto1.pantera.conan.ItemTokenizer;
 import com.auto1.pantera.conan.http.ConanSlice;
@@ -74,6 +75,7 @@ import com.auto1.pantera.http.timeout.AutoBlockRegistry;
 import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import com.auto1.pantera.http.slice.DeleteRoutingSlice;
 import com.auto1.pantera.http.slice.PathPrefixStripSlice;
+import com.auto1.pantera.http.slice.ReservedPathSlice;
 import com.auto1.pantera.http.slice.NativeDeleteCascadeSlice;
 import com.auto1.pantera.http.slice.ProxyEvictSlice;
 import com.auto1.pantera.http.slice.ProxyPathCaches;
@@ -411,6 +413,22 @@ public class RepositorySlices {
      * @return Resolved slice
      */
     public Slice slice(final Key name, final int port, final int depth) {
+        // Every dispatch to a repository goes through here: the main pipeline
+        // (SliceByPath), dedicated-port servers and group member walks. The
+        // storage lock namespace (.pantera-locks/) is refused for all of them
+        // before any adapter can turn such a path into a storage key.
+        return new ReservedPathSlice(this.resolved(name, port, depth));
+    }
+
+    /**
+     * The repository slice itself, from the cache or freshly resolved.
+     *
+     * @param name Repository name
+     * @param port Port
+     * @param depth Group nesting depth
+     * @return Slice
+     */
+    private Slice resolved(final Key name, final int port, final int depth) {
         final SliceKey skey = new SliceKey(name, port);
         final SliceValue cached = this.slices.getIfPresent(skey);
         if (cached != null) {
@@ -982,22 +1000,12 @@ public class RepositorySlices {
                 );
                 break;
             case "php":
-                // Extract base URL from config, handling trailing slashes consistently
-                // The URL should be the full path to the repository for provider URLs to work
-                String baseUrl = cfg.settings()
+                // url: is optional: served dist/metadata links are re-rooted per
+                // request (ComposerBaseUrl); a configured url: only fixes the base
+                // stored for new uploads and still wins for every client.
+                final Optional<String> phpUrl = cfg.settings()
                     .flatMap(yaml -> Optional.ofNullable(yaml.string("url")))
-                    .orElseGet(() -> cfg.url().toString());
-                
-                // Normalize: remove all trailing slashes
-                baseUrl = baseUrl.replaceAll("/+$", "");
-                
-                // Ensure URL ends with the repository name for correct routing
-                // Provider URLs will be: {baseUrl}/p2/%package%.json
-                String normalizedRepo = cfg.name().replaceAll("^/+", "").replaceAll("/+$", "");
-                if (!baseUrl.endsWith("/" + normalizedRepo)) {
-                    baseUrl = baseUrl + "/" + normalizedRepo;
-                }
-                
+                    .or(() -> RepositorySlices.optionalUrl(cfg).map(java.net.URL::toString));
                 // The alias is stripped OUTSIDE the generic delete, so a
                 // DELETE through /direct-dists/<x> removes the key <x> that
                 // a GET of the same URL serves; plain storage-key paths are
@@ -1007,7 +1015,7 @@ public class RepositorySlices {
                         this.hostedDelete(cfg, new PhpComposer(
                             new AstoRepository(
                                 cfg.storage(),
-                                Optional.of(baseUrl),
+                                phpUrl,
                                 Optional.of(cfg.name())
                             ),
                             securityPolicy(),
@@ -1020,7 +1028,8 @@ public class RepositorySlices {
                             // WS1.7: only the dist-archive download redirects;
                             // packages.json / provider metadata always stream.
                             cfg.downloadPolicy(),
-                            cfg.immutable()
+                            cfg.immutable(),
+                            new ComposerBaseUrl(phpUrl, cfg.name())
                         )),
                         "direct-dists"
                     ),

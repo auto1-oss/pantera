@@ -189,8 +189,18 @@ public final class DownloadPackageSlice implements Slice {
         // Convert to string once for ETag calculation
         final String responseStr = response.toString();
 
-        // P0.2: Calculate ETag from JSON string (no extra buffering)
-        final String etag = new MetadataETag(responseStr).calculate();
+        // Root the served tarball URL at the base stamped by SliceByPath for
+        // the repository the client actually addressed (so a group member
+        // emits the GROUP's URLs, not its own configured url:), falling
+        // back to this repository's own base when nothing was stamped —
+        // the same precedence SingleVersionSlice#serve uses.
+        final String prefix = this.base.resolve(headers);
+        // The ETag covers the served bytes, which embed the resolved base:
+        // a client that cached the packument under another host or scheme
+        // must not be told 304 and keep its stale tarball URLs.
+        final String etag = MetadataETag.derive(
+            new MetadataETag(responseStr).calculate(), prefix
+        );
         final String vary = this.base.vary(headers);
 
         // P0.2: Check if client has matching ETag (304 Not Modified)
@@ -202,18 +212,13 @@ public final class DownloadPackageSlice implements Slice {
                 .varyHeader(vary)
                 .build();
         } else {
-            // Root the served tarball URL at the base stamped by SliceByPath for
-            // the repository the client actually addressed (so a group member
-            // emits the GROUP's URLs, not its own configured url:), falling
-            // back to this repository's own base when nothing was stamped —
-            // the same precedence SingleVersionSlice#serve uses.
-            final String prefix = this.base.resolve(headers);
-            // Apply tarball URL rewriting and STREAM response (no buffering!)
+            // The packument is already materialised (enhanced, abbreviated,
+            // ETag'd); the tarball rewrite streams over those bytes without
+            // parsing them a second time.
             final Content content = new Content.From(
                 responseStr.getBytes(StandardCharsets.UTF_8)
             );
             final Content rewritten = new Tarballs(content, prefix).value();
-            // Return streaming response - memory usage: ~4KB instead of 200MB+
             result = ResponseBuilder.ok()
                 .header("Content-Type", abbreviated
                     ? "application/vnd.npm.install-v1+json; charset=utf-8"
@@ -222,7 +227,7 @@ public final class DownloadPackageSlice implements Slice {
                 .header("Cache-Control", "public, max-age=300")
                 .header("CDN-Cache-Control", "public, max-age=600")
                 .varyHeader(vary)
-                .body(rewritten)  // STREAM IT - no asBytesFuture()!
+                .body(rewritten)
                 .build();
         }
         return result;

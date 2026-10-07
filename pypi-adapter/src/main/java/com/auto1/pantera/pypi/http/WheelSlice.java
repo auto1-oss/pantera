@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.asto.streams.ContentAsStream;
@@ -351,17 +352,22 @@ final class WheelSlice implements Slice {
         final PackageInfo info = extracted.info();
         final String packageName = new NormalizedProjectName.Simple(info.name()).value();
         final Key name = new Key.From(packageName, info.version(), filename);
-        return this.storage.exists(name).thenCompose(
-            exists -> {
-                final CompletionStage<Response> res;
-                if (exists) {
-                    res = this.existing(temp, name, packageName, extracted, headers);
-                } else {
-                    res = this.store(temp, name, packageName, extracted, headers)
-                        .thenApply(ignored -> ResponseBuilder.from(RsStatus.CREATED).build());
+        // Check and write under one lock on the file, kept in storage: two
+        // uploads of the same file, here or on another instance sharing the
+        // storage, cannot both see it absent and both move their upload in.
+        return new IndexUpdateLock(this.storage, name).run(
+            locked -> locked.exists(name).thenCompose(
+                exists -> {
+                    final CompletionStage<Response> res;
+                    if (exists) {
+                        res = this.existing(temp, name, packageName, extracted, headers);
+                    } else {
+                        res = this.store(temp, name, packageName, extracted, headers)
+                            .thenApply(ignored -> ResponseBuilder.from(RsStatus.CREATED).build());
+                    }
+                    return res;
                 }
-                return res;
-            }
+            )
         );
     }
 

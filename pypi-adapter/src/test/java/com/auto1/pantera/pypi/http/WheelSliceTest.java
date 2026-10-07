@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.ParkedStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.headers.ContentType;
@@ -40,6 +41,7 @@ import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Test for {@link WheelSlice}.
@@ -79,7 +81,7 @@ class WheelSliceTest {
                     new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-pypi"),
                     new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
                 ),
-                new Content.From(this.multipartBody(body, boundary, filename))
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
             )
         );
         MatcherAssert.assertThat(
@@ -129,7 +131,7 @@ class WheelSliceTest {
                 Headers.from(
                     ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
                 ),
-                new Content.From(this.multipartBody(body, boundary, filename))
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
             )
         );
         MatcherAssert.assertThat(
@@ -166,7 +168,7 @@ class WheelSliceTest {
                 Headers.from(
                     ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
                 ),
-                new Content.From(this.multipartBody(body, boundary, filename))
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
                 )
         );
         MatcherAssert.assertThat(
@@ -193,7 +195,7 @@ class WheelSliceTest {
                 Headers.from(
                     ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
                 ),
-                new Content.From(this.multipartBody(body, boundary, filename))
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
             )
         );
         MatcherAssert.assertThat(
@@ -272,7 +274,7 @@ class WheelSliceTest {
                 Headers.from(
                     ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
                 ),
-                new Content.From(this.multipartBody(body, boundary, filename))
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
             )
         );
         final Key metadataKey = new Key.From(
@@ -505,6 +507,44 @@ class WheelSliceTest {
     }
 
     @Test
+    void concurrentUploadsOfAFileAcrossInstancesAreSerialised() throws Exception {
+        // Two upload fronts over one storage stand in for two instances
+        // sharing it. The first upload is parked while moving its upload
+        // into place, after its existence check passed; the second, with
+        // different bytes, must wait for it in storage and then be refused.
+        // Without the storage lock both see the file absent and both move,
+        // last one wins.
+        final String filename = "pantera-sample-0.2.tar";
+        final ParkedStorage parked = new ParkedStorage(
+            new InMemoryStorage(), key -> key.equals(new Key.From("pantera-sample", "0.2", filename))
+        );
+        final byte[] original = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        final byte[] tampered = WheelSliceTest.tamper(original);
+        final CompletableFuture<RsStatus> first = CompletableFuture.supplyAsync(
+            () -> WheelSliceTest.uploadQuietly(parked, filename, original)
+        );
+        parked.arrived().get(10, TimeUnit.SECONDS);
+        final CompletableFuture<RsStatus> second = CompletableFuture.supplyAsync(
+            () -> WheelSliceTest.uploadQuietly(parked, filename, tampered)
+        );
+        parked.contender().get(10, TimeUnit.SECONDS);
+        parked.release();
+        MatcherAssert.assertThat(
+            "the first upload is created",
+            first.get(30, TimeUnit.SECONDS), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the second upload is refused",
+            second.get(30, TimeUnit.SECONDS), new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "the first bytes are kept",
+            parked.value(new Key.From("pantera-sample", "0.2", filename)).join().asBytes(),
+            new IsEqual<>(original)
+        );
+    }
+
+    @Test
     void mutableRepoOverwritesDifferingReuploadAndRegeneratesIndex() throws IOException {
         final String filename = "pantera-sample-0.2.tar";
         final Key key = new Key.From("pantera-sample", "0.2", filename);
@@ -617,8 +657,30 @@ class WheelSliceTest {
             Headers.from(
                 ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
             ),
-            new Content.From(this.multipartBody(body, boundary, filename))
+            new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
         ).join();
+    }
+
+    private static RsStatus uploadQuietly(
+        final Storage storage, final String filename, final byte[] body
+    ) {
+        final String boundary = "b0undary";
+        try {
+            final com.auto1.pantera.http.Response response = new WheelSlice(
+                storage, Optional.empty(), "test",
+                com.auto1.pantera.index.SyncArtifactIndexer.NOOP, true
+            ).response(
+                new RequestLine(RqMethod.POST, "/"),
+                Headers.from(
+                    ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
+                ),
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
+            ).join();
+            response.body().asBytes();
+            return response.status();
+        } catch (final IOException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     private static byte[] tamper(final byte[] original) {
@@ -637,7 +699,7 @@ class WheelSliceTest {
         }
     }
 
-    private byte[] multipartBody(final byte[] input, final String boundary, final String filename)
+    private static byte[] multipartBody(final byte[] input, final String boundary, final String filename)
         throws IOException {
         final ByteArrayOutputStream body = new ByteArrayOutputStream();
         body.write(

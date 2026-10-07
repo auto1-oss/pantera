@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.ParkedStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -38,6 +39,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import javax.json.Json;
 import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
@@ -112,6 +114,50 @@ final class ImmutablePublishTest {
             this.storage.list(Key.ROOT).join().stream()
                 .anyMatch(key -> key.string().endsWith("-uploaded")),
             new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void concurrentPublishesOfTheSameVersionAcrossInstancesAreSerialised() throws Exception {
+        // Two publish fronts over one storage, as two instances sharing it:
+        // the in-process serialisation of the front is keyed by repository
+        // name, so a second name stands in for a second instance. The
+        // first publish is parked inside its first write, after its version
+        // check passed. A second publish of the same version through the
+        // other front must not race past the check: it has to wait for the
+        // first one, in storage, and then be refused. Without the storage
+        // lock it passes the check (nothing is written yet) and both succeed.
+        final ParkedStorage parked = new ParkedStorage(new InMemoryStorage(), key -> !key.string().endsWith("-uploaded"));
+        this.storage = parked;
+        final Slice one = this.cli(true);
+        final Slice other = this.cli(true, "npm-local-on-another-instance");
+        final CompletableFuture<Response> first = CompletableFuture.supplyAsync(
+            () -> this.put(one, ImmutablePublishTest.payload())
+        );
+        parked.arrived().get(10, TimeUnit.SECONDS);
+        final CompletableFuture<Response> second = CompletableFuture.supplyAsync(
+            () -> this.put(other, ImmutablePublishTest.payload())
+        );
+        MatcherAssert.assertThat(
+            "nothing of the publish is stored while the first one is parked",
+            parked.list(Key.ROOT).join().stream().anyMatch(
+                key -> !key.string().endsWith("-uploaded") && !key.string().contains(".pantera-locks")
+            ),
+            new IsEqual<>(false)
+        );
+        parked.contender().get(10, TimeUnit.SECONDS);
+        parked.release();
+        MatcherAssert.assertThat(
+            "the first publish succeeds",
+            first.get(30, TimeUnit.SECONDS).status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the second publish is refused",
+            second.get(30, TimeUnit.SECONDS).status(), new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "exactly one publish is an event",
+            this.events.size(), new IsEqual<>(1)
         );
     }
 
@@ -520,9 +566,13 @@ final class ImmutablePublishTest {
     }
 
     private Slice cli(final boolean immutable) {
+        return this.cli(immutable, ImmutablePublishTest.REPO);
+    }
+
+    private Slice cli(final boolean immutable, final String rname) {
         return new UploadSlice(
             new CliPublish(this.storage, immutable), this.storage, Optional.of(this.events),
-            ImmutablePublishTest.REPO, SyncArtifactIndexer.NOOP, immutable
+            rname, SyncArtifactIndexer.NOOP, immutable
         );
     }
 

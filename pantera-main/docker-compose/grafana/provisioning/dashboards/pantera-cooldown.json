@@ -1352,7 +1352,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Cooldown admin actions (unblock, unblock_all, policy_change) by action",
+      "description": "Cooldown admin actions (unblock, unblock_bulk, unblock_all, policy_change) by action",
       "fieldConfig": {
         "defaults": {
           "color": {

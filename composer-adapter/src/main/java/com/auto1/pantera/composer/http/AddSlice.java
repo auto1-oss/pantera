@@ -11,6 +11,7 @@
 package com.auto1.pantera.composer.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.composer.JsonPackage;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.http.Headers;
@@ -29,6 +30,8 @@ import javax.json.JsonReader;
 import javax.json.JsonString;
 import javax.json.JsonValue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -89,7 +92,10 @@ final class AddSlice implements Slice {
                         .textBody("The body must be a Composer package JSON object")
                         .completedFuture();
                 }
-                return this.guard(json, query).thenCompose(verdict -> {
+                // Verdict and write run under one lock on the package, kept
+                // in the repository storage, so two registrations of the same
+                // version cannot both pass the guard (see AddArchiveSlice).
+                return this.locked(json, () -> this.guard(json, query).thenCompose(verdict -> {
                     if (verdict == ReleaseGuard.Verdict.CONFLICT) {
                         return ResponseBuilder.from(RsStatus.CONFLICT)
                             .textBody(
@@ -103,7 +109,7 @@ final class AddSlice implements Slice {
                     }
                     return this.repository.addJson(new Content.From(bytes), query)
                         .thenApply(nothing -> ResponseBuilder.created().build());
-                });
+                }));
             });
         }
         return ResponseBuilder.badRequest().completedFuture();
@@ -117,6 +123,31 @@ final class AddSlice implements Slice {
      * @param query Version from the query string
      * @return Verdict
      */
+    /**
+     * Run a registration under the package's publish lock when the payload
+     * names a package; an unnamed payload is refused downstream anyway.
+     *
+     * @param json Uploaded package json
+     * @param action The registration
+     * @return Response
+     */
+    private CompletableFuture<Response> locked(
+        final JsonObject json, final Supplier<CompletionStage<Response>> action
+    ) {
+        final CompletableFuture<Response> result;
+        final JsonValue name = json.get("name");
+        final String[] parts = name instanceof JsonString str
+            ? str.getString().split("/") : new String[0];
+        if (parts.length == 2) {
+            result = new IndexUpdateLock(
+                this.repository.storage(), AddArchiveSlice.publishLock(parts[0], parts[1])
+            ).run(locked -> action.get());
+        } else {
+            result = action.get().toCompletableFuture();
+        }
+        return result;
+    }
+
     private CompletableFuture<ReleaseGuard.Verdict> guard(
         final JsonObject json, final Optional<String> query
     ) {

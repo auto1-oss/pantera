@@ -391,7 +391,7 @@ curl -X DELETE http://localhost:8086/api/v1/auth/tokens/550e8400-e29b-41d4-a716-
 
 ### GET /api/v1/repositories
 
-List all repositories with pagination, optional type filtering, and name search. Results are filtered by the caller's `read` permission on each repository.
+List all repositories with pagination, filtering, name search and sorting. Results are filtered by the caller's `read` permission on each repository. The list is built from one query over the repository table and projects only the fields below out of each configuration, so credentials cannot appear in it.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:read`
@@ -404,14 +404,27 @@ List all repositories with pagination, optional type filtering, and name search.
 | `size`    | integer | 20      | Items per page (max 100)                 |
 | `type`    | string  | --      | Filter by repository type (substring)    |
 | `q`       | string  | --      | Filter by repository name (substring)    |
+| `mode`    | string  | --      | `hosted`, `proxy` or `group`             |
+| `sort`    | string  | `name`  | `name`, `type` or `updated_at`           |
+| `order`   | string  | `asc`   | `asc` or `desc`                          |
+
+An unknown `mode`, `sort` or `order` value answers `400 BAD_REQUEST`.
 
 **Response (200):**
 
 ```json
 {
   "items": [
-    { "name": "maven-central", "type": "maven-proxy" },
-    { "name": "npm-local", "type": "npm" }
+    {
+      "name": "maven-central", "type": "maven-proxy", "mode": "proxy",
+      "storage": "fs", "anonymous_read": false, "anonymous_write": false,
+      "immutable": null, "updated_at": "2026-10-01T09:12:44Z", "updated_by": "ayd"
+    },
+    {
+      "name": "npm-local", "type": "npm", "mode": "hosted",
+      "storage": "s3-main", "anonymous_read": true, "anonymous_write": false,
+      "immutable": true, "updated_at": "2026-10-03T15:02:10Z", "updated_by": "ci-bot"
+    }
   ],
   "page": 0,
   "size": 20,
@@ -419,6 +432,15 @@ List all repositories with pagination, optional type filtering, and name search.
   "hasMore": false
 }
 ```
+
+| Field | Description |
+|-------|-------------|
+| `mode` | `hosted`, `proxy` (type ends in `-proxy`) or `group` (type ends in `-group`) |
+| `storage` | `fs`, `s3`, or the storage alias name the repository references; `null` when it has no storage (groups) |
+| `anonymous_read`, `anonymous_write` | The repository's anonymous-access flags; `false` when unset |
+| `immutable` | `true` or `false` when set on the repository, `null` for the format default |
+| `updated_at` | Last change time; `null` on a YAML-only deployment |
+| `updated_by` | Last editor, else the creator, else `null` |
 
 **curl example:**
 
@@ -2216,6 +2238,56 @@ until that version's original `blocked_until`, exactly as for a single unblock.
 ```bash
 curl -X POST http://localhost:8086/api/v1/repositories/maven-central/cooldown/unblock-all \
   -H "Authorization: Bearer eyJhbGciOi..."
+```
+
+---
+
+### POST /api/v1/cooldown/unblock
+
+Unblock several artifact versions, across repositories, in one request. Each
+item goes through exactly the single-unblock path above (release held until
+the version's original `blocked_until`, archived as `MANUAL_UNBLOCK`, filtered
+metadata invalidated), and every item is audited as `COOLDOWN_UNBLOCK` with
+`bulk=true`. Items are processed in order; duplicates collapse to one (after the artifact name is normalised, so a Maven `g:a` and `g.a` of the same version count once). Each entry in the response echoes the item as it was sent.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_cooldown_permissions:write`, plus the repository's `write`
+permission for each item. An item on a repository the caller may not write is
+reported in `failed` with reason `forbidden` and is not unblocked.
+
+**Request Body:** 1 to 500 items; every item needs `repo`, `artifact` and
+`version`. An empty, oversized or malformed body answers `400` and nothing is
+unblocked.
+
+```json
+{
+  "items": [
+    { "repo": "npm-proxy",   "artifact": "lodash",          "version": "4.17.21" },
+    { "repo": "maven-central", "artifact": "com.example:lib", "version": "1.0.0" }
+  ]
+}
+```
+
+**Response (200):** always `200` for a valid request; per-item outcomes:
+
+```json
+{
+  "unblocked": [
+    { "repo": "npm-proxy", "artifact": "lodash", "version": "4.17.21" }
+  ],
+  "failed": [
+    { "repo": "maven-central", "artifact": "com.example:lib", "version": "1.0.0", "reason": "Repository 'maven-central' not found" }
+  ]
+}
+```
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/cooldown/unblock \
+  -H "Authorization: Bearer eyJhbGciOi..." \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"repo":"npm-proxy","artifact":"lodash","version":"4.17.21"}]}'
 ```
 
 ---

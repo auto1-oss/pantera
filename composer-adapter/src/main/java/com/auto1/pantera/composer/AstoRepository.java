@@ -19,11 +19,7 @@ import com.auto1.pantera.composer.http.Archive;
 
 import javax.json.Json;
 import javax.json.JsonObject;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -85,7 +81,7 @@ public final class AstoRepository implements Repository {
         final Optional<String> repo
     ) {
         this.asto = storage;
-        this.prefix = prefix.map(url -> AstoRepository.ensureRepoUrl(url, repo));
+        this.prefix = prefix.map(url -> ComposerBaseUrl.withRepository(url, repo));
         this.satis = new SatisLayout(storage, this.prefix);
     }
 
@@ -213,30 +209,19 @@ public final class AstoRepository implements Repository {
      * @param path Prefix path for uploading archive (includes extension)
      * @param sha Hex SHA-1 of the stored archive; published as
      *  {@code dist.shasum} so Composer verifies the file it downloads
-     * @return Composer json with added `dist` field.
+     * @return Composer json with added `dist` field. The URL is absolute under
+     *  the configured {@code url:}, or repository-relative without one; either
+     *  way it is re-rooted per request when served ({@link MetadataLinks}).
      */
     private byte[] addDist(final JsonObject compos, final Key path, final String sha) {
-        final String url = this.prefix.orElseThrow(
-            () -> new IllegalStateException("Prefix url for `dist` for uploaded archive was empty.")
-        ).replaceAll("/$", "");
-
-        // Detect archive type from path extension
         final String pathStr = path.string();
         final String distType = pathStr.endsWith(".tar.gz") || pathStr.endsWith(".tgz")
             ? "tar"
             : "zip";
-
-        // Build full URL by appending path to base URL
-        // Note: URI.resolve() with absolute paths replaces the path, so we concatenate instead
-        final String fullUrl;
-        if (pathStr.startsWith("/")) {
-            // Path is absolute, append to base URL
-            fullUrl = url.endsWith("/") ? url + pathStr.substring(1) : url + pathStr;
-        } else {
-            // Path is relative, ensure proper separation
-            fullUrl = url.endsWith("/") ? url + pathStr : url + "/" + pathStr;
-        }
-
+        final String relative = pathStr.replaceFirst("^/+", "");
+        final String fullUrl = this.prefix
+            .map(url -> url.replaceAll("/+$", "") + "/" + relative)
+            .orElse(relative);
         return Json.createObjectBuilder(compos).add(
             "dist", Json.createObjectBuilder()
                 .add("url", fullUrl)
@@ -246,52 +231,6 @@ public final class AstoRepository implements Repository {
         ).build()
             .toString()
             .getBytes(StandardCharsets.UTF_8);
-    }
-
-    /**
-     * Ensure repository URL contains repository name as the last segment.
-     * @param base Base URL from configuration
-     * @param repo Repository name
-     * @return Base URL guaranteed to end with the repository name segment
-     */
-    private static String ensureRepoUrl(final String base, final Optional<String> repo) {
-        if (repo.isEmpty() || repo.get().isBlank()) {
-            return base;
-        }
-        final String normalizedRepo = repo.get().trim()
-            .replaceAll("^/+", "")
-            .replaceAll("/+$", "");
-        if (normalizedRepo.isEmpty()) {
-            return base;
-        }
-        try {
-            final URI uri = new URI(base);
-            final String path = uri.getPath();
-            final List<String> segments = new ArrayList<>();
-            if (path != null && !path.isBlank()) {
-                for (final String segment : path.split("/")) {
-                    if (!segment.isEmpty()) {
-                        segments.add(segment);
-                    }
-                }
-            }
-            if (segments.isEmpty() || !segments.get(segments.size() - 1).equals(normalizedRepo)) {
-                segments.add(normalizedRepo);
-            }
-            final String newPath = "/" + String.join("/", segments);
-            final URI updated = new URI(
-                uri.getScheme(),
-                uri.getUserInfo(),
-                uri.getHost(),
-                uri.getPort(),
-                newPath,
-                uri.getQuery(),
-                uri.getFragment()
-            );
-            return updated.toString();
-        } catch (final URISyntaxException ex) {
-            return base;
-        }
     }
 
     /**

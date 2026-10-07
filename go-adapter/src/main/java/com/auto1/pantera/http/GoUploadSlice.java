@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.http.cache.NegativeCacheRegistry;
@@ -228,9 +229,18 @@ final class GoUploadSlice implements Slice {
         final String version = matcher.group("version");
         final String ext = matcher.group("ext").toLowerCase(Locale.ROOT);
         final boolean zip = "zip".equals(ext);
+        // In process, uploads of one file are serialised by SERIAL; across
+        // instances sharing the storage, the existence check and the write
+        // run under one lock on the module version, kept in storage (the
+        // .info check reads the .zip, so the version is the unit, not the file).
+        final Key lock = new Key.From(
+            key.string().substring(0, key.string().length() - ext.length() - 1)
+        );
         return SERIAL.run(
             this.repo + '|' + key.string(),
-            () -> this.store(key, headers, body, this.immutable(ext, module, version))
+            () -> new IndexUpdateLock(this.storage, lock).run(
+                locked -> this.store(key, headers, body, this.immutable(ext, module, version))
+            )
         ).thenCompose(
             outcome -> {
                 if (outcome == Outcome.CONFLICT) {

@@ -29,6 +29,8 @@ import javax.json.JsonValue;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
@@ -114,21 +116,33 @@ public final class CliPublish implements Publish {
                 } catch (final InvalidPublishException ex) {
                     return CompletableFuture.failedFuture(ex);
                 }
-                return this.guard(prefix, uploaded, version)
-                    .thenCompose(
-                        ignored -> new MetaUpdate.ByJson(uploaded).update(prefix, this.storage)
-                    )
-                    .thenCompose(ignored -> this.signPublishedVersion(prefix, uploaded, version))
-                    .thenCompose(ignored -> this.updateSourceArchives(uploaded, version))
-                    .thenApply(
-                        size -> new PackageInfo(
-                            prefix.toString(), version, size,
-                            new Key.From(
-                                prefix.string(), "-",
-                                String.format("%s-%s.tgz", prefix.string(), version)
-                            ).string()
-                        )
-                    );
+                final Supplier<CompletionStage<Publish.PackageInfo>> write =
+                    () -> new MetaUpdate.ByJson(uploaded).update(prefix, this.storage)
+                        .thenCompose(ignored -> this.signPublishedVersion(prefix, uploaded, version))
+                        .thenCompose(ignored -> this.updateSourceArchives(uploaded, version))
+                        .thenApply(
+                            size -> new PackageInfo(
+                                prefix.toString(), version, size,
+                                new Key.From(
+                                    prefix.string(), "-",
+                                    String.format("%s-%s.tgz", prefix.string(), version)
+                                ).string()
+                            )
+                        );
+                if (!this.immutable) {
+                    return write.get().toCompletableFuture();
+                }
+                final List<Key> tarballs;
+                try {
+                    tarballs = CliPublish.tarballs(prefix, uploaded, version);
+                } catch (final InvalidPublishException ex) {
+                    return CompletableFuture.failedFuture(ex);
+                }
+                // Check and write under one lock: a concurrent publish of the
+                // same version must see this one's files, not race past the
+                // check.
+                return new ImmutableVersionGuard(this.storage)
+                    .guarded(prefix, version, tarballs, write);
             }
         );
     }
@@ -139,42 +153,26 @@ public final class CliPublish implements Publish {
     }
 
     /**
-     * In an immutable repository, refuse a publish that would overwrite
-     * anything of an already published version. Every write of the publish
-     * targets the single {@link PublishedVersion}: its per-version metadata
-     * file, its registry signature, its attestation bundle and its tarball.
-     * The version file existing means the version is published (that also
-     * covers the signature and the attestation, which are written for that
-     * version only); a stored tarball is refused too.
-     *
-     * <p>The payload must be consistent with that target: its {@code name}
-     * must be the package being published (attachments are stored under
-     * {@code name}, the version metadata under the request's package), and
-     * every tarball attachment must be that version's tarball. Otherwise an
-     * attachment could land on another package or version than the one the
-     * guard checked.</p>
+     * The tarball keys an immutable publish writes, after checking the
+     * payload is consistent: it names this package and attaches only the
+     * tarball of the version it publishes (an attestation bundle is stored
+     * for that version only and is covered by the version check).
      *
      * @param prefix Package key
      * @param uploaded The uploaded json
      * @param version Version the publish writes
-     * @return Completion, failed with {@link InvalidPublishException} for an
-     *  inconsistent payload or {@link com.auto1.pantera.npm.VersionExistsException}
-     *  when the version is already published
+     * @return Tarball keys
+     * @throws InvalidPublishException For an inconsistent payload
      */
-    private CompletableFuture<Void> guard(
+    private static List<Key> tarballs(
         final Key prefix, final JsonObject uploaded, final String version
     ) {
-        if (!this.immutable) {
-            return CompletableFuture.completedFuture(null);
-        }
         final String name = uploaded.getString(CliPublish.NAME, null);
         if (!prefix.string().equals(name)) {
-            return CompletableFuture.failedFuture(
-                new InvalidPublishException(
-                    String.format(
-                        "publish payload name %s does not match the package %s",
-                        name, prefix.string()
-                    )
+            throw new InvalidPublishException(
+                String.format(
+                    "publish payload name %s does not match the package %s",
+                    name, prefix.string()
                 )
             );
         }
@@ -183,22 +181,19 @@ public final class CliPublish implements Publish {
         final List<Key> tarballs = new ArrayList<>(1);
         for (final String file : attachments.keySet()) {
             if (CliPublish.isAttestationBundle(file, attachments.getJsonObject(file))) {
-                // stored for `version` only: covered by the version check
                 continue;
             }
             if (!expected.equals(file)) {
-                return CompletableFuture.failedFuture(
-                    new InvalidPublishException(
-                        String.format(
-                            "publish payload targets version %s but attaches tarball %s",
-                            version, file
-                        )
+                throw new InvalidPublishException(
+                    String.format(
+                        "publish payload targets version %s but attaches tarball %s",
+                        version, file
                     )
                 );
             }
             tarballs.add(new Key.From(name, "-", file));
         }
-        return new ImmutableVersionGuard(this.storage).check(prefix, version, tarballs);
+        return tarballs;
     }
 
     /**

@@ -1,43 +1,47 @@
 <template>
   <Dialog
     v-model:visible="visibleModel"
-    header="Set anonymous-access policy"
+    :header="title"
     :modal="true"
     :style="{ width: '32rem' }"
   >
     <div class="space-y-4">
       <p class="text-sm">
-        Apply to <b>{{ scopeDescription }}</b>.
+        Anonymous requests are rejected with 401 unless a repository allows them.
+        Applies to <b>{{ scopeDescription }}</b>. Switch a row on to change that
+        setting; rows left off keep each repository's current value.
       </p>
 
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-3">
         <ToggleSwitch v-model="setRead" input-id="setRead" />
-        <label for="setRead" class="text-sm">
-          Set <code>anonymous_read</code> to
-        </label>
+        <div class="flex-1">
+          <label for="setRead" class="block text-sm">Allow anonymous download</label>
+          <span class="text-xs text-gray-500"><code>anonymous_read</code></span>
+        </div>
         <Checkbox
           v-model="anonymousRead"
           :binary="true"
           :disabled="!setRead"
           input-id="anonReadVal"
         />
-        <span class="text-xs text-gray-500">
+        <span class="w-28 text-xs text-gray-500">
           {{ anonymousRead ? 'allowed' : 'rejected (401)' }}
         </span>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-3">
         <ToggleSwitch v-model="setWrite" input-id="setWrite" />
-        <label for="setWrite" class="text-sm">
-          Set <code>anonymous_write</code> to
-        </label>
+        <div class="flex-1">
+          <label for="setWrite" class="block text-sm">Allow anonymous upload</label>
+          <span class="text-xs text-gray-500"><code>anonymous_write</code></span>
+        </div>
         <Checkbox
           v-model="anonymousWrite"
           :binary="true"
           :disabled="!setWrite"
           input-id="anonWriteVal"
         />
-        <span class="text-xs text-gray-500">
+        <span class="w-28 text-xs text-gray-500">
           {{ anonymousWrite ? 'allowed' : 'rejected (401)' }}
         </span>
       </div>
@@ -104,6 +108,13 @@ const setRead = ref(false)
 const setWrite = ref(false)
 const anonymousRead = ref(false)
 const anonymousWrite = ref(false)
+
+const title = computed(() => {
+  const n = props.selectedNames && props.selectedNames.length > 0
+    ? props.selectedNames.length
+    : props.scopeCount
+  return `Anonymous access for ${n} repositor${n === 1 ? 'y' : 'ies'}`
+})
 
 const scopeDescription = computed(() => {
   if (props.selectedNames && props.selectedNames.length > 0) {

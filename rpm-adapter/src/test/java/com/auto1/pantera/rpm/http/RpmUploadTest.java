@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.ParkedStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.RsStatus;
@@ -32,6 +33,8 @@ import java.nio.file.Files;
 import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Test for {@link RpmUpload}.
@@ -147,6 +150,39 @@ public final class RpmUploadTest {
         );
         MatcherAssert.assertThat(
             "immutable: nothing is published", events.get().isEmpty(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void concurrentUploadsOfAPackageAcrossInstancesAreSerialised() throws Exception {
+        // Two upload fronts over one storage stand in for two instances
+        // sharing it. The first upload is parked inside its staging write
+        // after its check passed; the second must wait for it in storage,
+        // see the staged package and be refused. Without the storage lock
+        // both pass the check and both stage, last one wins.
+        final ParkedStorage parked = new ParkedStorage(new InMemoryStorage());
+        final byte[] abc = Files.readAllBytes(new TestRpm.Abc().path());
+        final byte[] time = Files.readAllBytes(new TestRpm.Time().path());
+        final CompletableFuture<RsStatus> first = CompletableFuture.supplyAsync(
+            () -> RpmUploadTest.upload(parked, "/race.rpm", abc).status()
+        );
+        parked.arrived().get(10, TimeUnit.SECONDS);
+        final CompletableFuture<RsStatus> second = CompletableFuture.supplyAsync(
+            () -> RpmUploadTest.upload(parked, "/race.rpm", time).status()
+        );
+        parked.contender().get(10, TimeUnit.SECONDS);
+        parked.release();
+        MatcherAssert.assertThat(
+            "the first upload is accepted",
+            first.get(60, TimeUnit.SECONDS), new IsEqual<>(RsStatus.ACCEPTED)
+        );
+        MatcherAssert.assertThat(
+            "the second upload is refused",
+            second.get(60, TimeUnit.SECONDS), new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the first package is what is stored",
+            new BlockingStorage(parked).value(new Key.From("race.rpm")), new IsEqual<>(abc)
         );
     }
 
@@ -294,6 +330,15 @@ public final class RpmUploadTest {
             new BlockingStorage(this.storage).list(new Key.From("repodata")).isEmpty(),
             new IsEqual<>(true)
         );
+    }
+
+    private static com.auto1.pantera.http.Response upload(
+        final Storage storage, final String path, final byte[] body
+    ) {
+        return new RpmUpload(
+            storage, new RepoConfig.Simple(), Optional.empty(),
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, true
+        ).response(new RequestLine("PUT", path), Headers.EMPTY, new Content.From(body)).join();
     }
 
     private com.auto1.pantera.http.Response upload(

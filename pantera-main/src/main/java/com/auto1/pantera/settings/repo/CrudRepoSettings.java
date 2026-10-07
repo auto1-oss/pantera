@@ -48,6 +48,28 @@ public interface CrudRepoSettings {
     JsonStructure value(RepositoryName name);
 
     /**
+     * One summary per repository. The default derives rows from
+     * {@link #listAll()} and {@link #value(RepositoryName)} and leaves the
+     * audit columns null; database-backed implementations override it with
+     * a single query.
+     * @return Summaries, in {@link #listAll()} order
+     */
+    default Collection<RepoSummary> summaries() {
+        final java.util.List<RepoSummary> res = new java.util.ArrayList<>();
+        final RepoSummaries factory = new RepoSummaries();
+        for (final String name : this.listAll()) {
+            JsonStructure cfg = null;
+            try {
+                cfg = this.value(new RepositoryName.Simple(name));
+            } catch (final RuntimeException ignored) {
+                // an unreadable config still lists, as type "unknown"
+            }
+            res.add(factory.from(name, null, cfg, null, null, null));
+        }
+        return res;
+    }
+
+    /**
      * Add new repository.
      * @param rname Repository name.
      * @param value New repository settings

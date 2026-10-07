@@ -17,6 +17,8 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.ContentIs;
+import com.auto1.pantera.asto.test.ParkedStorage;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.hm.RsHasStatus;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -34,6 +36,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -91,6 +94,41 @@ final class GoUploadSliceTest {
         MatcherAssert.assertThat(
             "the originally published bytes must be kept",
             storage.value(new Key.From(path)).join(),
+            new ContentIs("first".getBytes(StandardCharsets.UTF_8))
+        );
+    }
+
+    @Test
+    void concurrentPublishesOfAVersionAcrossInstancesAreSerialised() throws Exception {
+        // Two upload fronts over one storage stand in for two instances
+        // sharing it (the in-process serializer is keyed by repository name).
+        // The first publish is parked inside its write after its check
+        // passed; the second must wait for it in storage and be refused.
+        // Without the storage lock both see the version absent and both win.
+        final ParkedStorage parked = new ParkedStorage(new InMemoryStorage());
+        final GoUploadSlice one = new GoUploadSlice(parked, "go-local", Optional.empty());
+        final GoUploadSlice other = new GoUploadSlice(parked, "go-local-b", Optional.empty());
+        final String path = String.format("%s/@v/v1.0.0.zip", MODULE);
+        final CompletableFuture<Response> first = CompletableFuture.supplyAsync(
+            () -> GoUploadSliceTest.put(one, path, "first")
+        );
+        parked.arrived().get(10, TimeUnit.SECONDS);
+        final CompletableFuture<Response> second = CompletableFuture.supplyAsync(
+            () -> GoUploadSliceTest.put(other, path, "second")
+        );
+        parked.contender().get(10, TimeUnit.SECONDS);
+        parked.release();
+        MatcherAssert.assertThat(
+            "the first publish succeeds",
+            first.get(30, TimeUnit.SECONDS), new RsHasStatus(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the second publish is refused",
+            second.get(30, TimeUnit.SECONDS), new RsHasStatus(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the first bytes are kept",
+            parked.value(new Key.From(path)).join(),
             new ContentIs("first".getBytes(StandardCharsets.UTF_8))
         );
     }

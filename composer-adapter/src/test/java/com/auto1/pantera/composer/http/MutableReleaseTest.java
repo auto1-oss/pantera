@@ -13,7 +13,9 @@ package com.auto1.pantera.composer.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.ParkedStorage;
 import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.Name;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Slice;
@@ -30,7 +32,9 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import javax.json.JsonObject;
@@ -108,6 +112,44 @@ final class MutableReleaseTest {
     }
 
     @Test
+    void concurrentUploadsOfAReleaseAcrossInstancesAreSerialised() throws Exception {
+        // Two upload fronts over one storage stand in for two instances
+        // sharing it. The first upload is parked inside its archive write
+        // after the release guard passed; the second, with different
+        // content, must wait for it in storage and then be refused. Without
+        // the storage lock both get NEW and both are stored, last one wins.
+        final ParkedStorage parked = new ParkedStorage(
+            new InMemoryStorage(), key -> key.equals(MutableReleaseTest.STORED)
+        );
+        final Slice one = new AddArchiveSlice(
+            new AstoRepository(parked, Optional.of("http://pantera:8080/php")),
+            Optional.of(this.events), "php", SyncArtifactIndexer.NOOP, true
+        );
+        final Slice other = new AddArchiveSlice(
+            new AstoRepository(parked, Optional.of("http://pantera:8080/php")),
+            Optional.of(this.events), "php", SyncArtifactIndexer.NOOP, true
+        );
+        final CompletableFuture<Integer> first = CompletableFuture.supplyAsync(
+            () -> MutableReleaseTest.putQuietly(one, "hi")
+        );
+        parked.arrived().get(10, TimeUnit.SECONDS);
+        final CompletableFuture<Integer> second = CompletableFuture.supplyAsync(
+            () -> MutableReleaseTest.putQuietly(other, "hi-CHANGED")
+        );
+        parked.contender().get(10, TimeUnit.SECONDS);
+        parked.release();
+        MatcherAssert.assertThat(
+            "the first upload is created", first.get(30, TimeUnit.SECONDS), new IsEqual<>(201)
+        );
+        MatcherAssert.assertThat(
+            "the second upload is refused", second.get(30, TimeUnit.SECONDS), new IsEqual<>(409)
+        );
+        MatcherAssert.assertThat(
+            "exactly one upload is published", this.events.size(), new IsEqual<>(1)
+        );
+    }
+
+    @Test
     void immutableRepositoryStillRefusesAReleaseArchive() throws Exception {
         final Slice slice = new AddArchiveSlice(
             this.repository, Optional.of(this.events), "php", SyncArtifactIndexer.NOOP, true
@@ -164,7 +206,8 @@ final class MutableReleaseTest {
     private Slice php(final boolean immutable) {
         return new PhpComposer(
             this.repository, Policy.FREE, new Authentication.Single("user", "secret"), null,
-            "php", Optional.of(this.events), SyncArtifactIndexer.NOOP, immutable
+            "php", Optional.of(this.events), SyncArtifactIndexer.NOOP, immutable,
+            new ComposerBaseUrl(Optional.empty(), "php")
         );
     }
 
@@ -187,6 +230,14 @@ final class MutableReleaseTest {
                 MutableReleaseTest.zip("{\"name\":\"qa/helper\",\"version\":\"1.0.0\"}", code)
             )
         ).join().status().code();
+    }
+
+    private static int putQuietly(final Slice slice, final String code) {
+        try {
+            return MutableReleaseTest.put(slice, code, Headers.EMPTY);
+        } catch (final Exception ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     private static int json(final Slice slice, final String body) {

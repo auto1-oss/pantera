@@ -12,16 +12,20 @@ package com.auto1.pantera.composer.http.proxy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import javax.json.Json;
+import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsNot;
 import org.hamcrest.core.StringContains;
 import org.junit.jupiter.api.Test;
 
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Tests for {@link MetadataUrlRewriter#rewriteRoot}.
+ * Tests for {@link MetadataUrlRewriter#rewriteRoot} and the per-package
+ * {@link MetadataUrlRewriter#rewrite} (dist re-rooting).
  *
  * <p>WS4-composer.2: every top-level URL field a Composer repository
  * root document advertises must be rewritten to a Pantera-local
@@ -201,10 +205,12 @@ final class MetadataUrlRewriterTest {
     }
 
     @Test
-    void packagesRewriteIsIdempotent() throws Exception {
+    void packagesRewriteReRootsDistAtTheLatestBase() throws Exception {
         // A group member's packages.json has already been rewritten once
         // (by its own proxy root handler) by the time ComposerGroupSlice
-        // calls rewriteRoot again — dist.url must not be double-rewritten.
+        // calls rewriteRoot again: the dist is re-rooted at the group's
+        // base (never double-prefixed with the first proxy URL) and keeps
+        // the upstream URL under original_url.
         final String once = new String(
             new MetadataUrlRewriter(BASE_URL).rewriteRoot(
                 """
@@ -227,11 +233,13 @@ final class MetadataUrlRewriterTest {
             new MetadataUrlRewriter(groupBase).rewriteRoot(once, groupBase)
         );
         final JsonNode dist = twice.get("packages").get("acme/foo").get("1.0.0").get("dist");
-        // Unchanged by the second pass — still anchored to the first
-        // rewriter's base, not double-prefixed or reset to the group base.
         MatcherAssert.assertThat(
-            "dist.url not double-rewritten on a second rewriteRoot pass",
-            dist.get("url").asText(), new IsEqual<>(BASE_URL + "/dist/acme/foo/1.0.0.zip")
+            "dist.url follows the group base on a second rewriteRoot pass",
+            dist.get("url").asText(), new IsEqual<>(groupBase + "/dist/acme/foo/1.0.0.zip")
+        );
+        MatcherAssert.assertThat(
+            "dist.url is not prefixed with the first rewriter's base",
+            dist.get("url").asText(), new IsNot<>(new StringContains(false, BASE_URL))
         );
         MatcherAssert.assertThat(
             "original_url unchanged on a second rewriteRoot pass",
@@ -263,8 +271,62 @@ final class MetadataUrlRewriterTest {
         MatcherAssert.assertThat(raw, new IsNot<>(new StringContains(false, "packagist.org")));
     }
 
+    @Test
+    void alreadyRewrittenDistIsReRootedAndKeepsItsUpstreamUrl() {
+        final JsonObject dist = MetadataUrlRewriterTest.rewritePackages(
+            "https://b.example/php_proxy",
+            "{\"packages\":{\"acme/lib\":{\"1.0\":{\"dist\":{\"type\":\"zip\","
+                + "\"url\":\"https://a.example/php_proxy/dist/acme/lib/1.0.zip\","
+                + "\"original_url\":\"https://up.example/lib-1.0.zip\"}}}}}"
+        ).getJsonObject("packages").getJsonObject("acme/lib").getJsonObject("1.0").getJsonObject("dist");
+        MatcherAssert.assertThat(
+            "url follows the new base",
+            dist.getString("url"),
+            new IsEqual<>("https://b.example/php_proxy/dist/acme/lib/1.0.zip")
+        );
+        MatcherAssert.assertThat(
+            "original_url is the upstream one, not the previous proxy URL",
+            dist.getString("original_url"),
+            new IsEqual<>("https://up.example/lib-1.0.zip")
+        );
+    }
+
+    @Test
+    void upstreamDistGetsAProxyUrlAndKeepsTheUpstreamOne() {
+        final JsonObject dist = MetadataUrlRewriterTest.rewritePackages(
+            "https://b.example/php_proxy",
+            "{\"packages\":{\"acme/lib\":[{\"version\":\"2.0\",\"dist\":{\"type\":\"zip\","
+                + "\"url\":\"https://up.example/lib-2.0.zip\"}}]}}"
+        ).getJsonObject("packages").getJsonArray("acme/lib").getJsonObject(0).getJsonObject("dist");
+        MatcherAssert.assertThat(
+            "url points at the proxy",
+            dist.getString("url"),
+            new IsEqual<>("https://b.example/php_proxy/dist/acme/lib/2.0.zip")
+        );
+        MatcherAssert.assertThat(
+            "original_url is recorded",
+            dist.getString("original_url"),
+            new IsEqual<>("https://up.example/lib-2.0.zip")
+        );
+    }
+
     private static JsonNode rewrite(final String json) throws Exception {
         final byte[] rewritten = new MetadataUrlRewriter(BASE_URL).rewriteRoot(json, BASE_URL);
         return MAPPER.readTree(rewritten);
+    }
+
+    /**
+     * Rewrite a per-package document ({@link MetadataUrlRewriter#rewrite}).
+     *
+     * @param base Base URL
+     * @param json Document
+     * @return Rewritten document
+     */
+    private static JsonObject rewritePackages(final String base, final String json) {
+        return Json.createReader(
+            new StringReader(
+                new String(new MetadataUrlRewriter(base).rewrite(json), StandardCharsets.UTF_8)
+            )
+        ).readObject();
     }
 }

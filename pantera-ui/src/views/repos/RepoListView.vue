@@ -3,6 +3,7 @@ import { onMounted, onBeforeUnmount, ref, watch, defineAsyncComponent } from 'vu
 import { useRouter } from 'vue-router'
 import { listRepos } from '@/api/repos'
 import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
+import { useDebouncedSearch } from '@/composables/useDebouncedSearch'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import InputText from 'primevue/inputtext'
@@ -20,56 +21,45 @@ const items = ref<RepoListItem[]>([])
 const page = ref(0)
 const size = ref(20)
 const total = ref(0)
-const loading = ref(false)
-const searchQuery = ref('')
-let debounceTimer: ReturnType<typeof setTimeout> | null = null
-let fetchAbortCtrl: AbortController | null = null
 
-watch(searchQuery, () => {
-  if (debounceTimer) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => { page.value = 0; fetchRepos() }, 300)
-})
-
-onBeforeUnmount(() => {
-  if (debounceTimer) clearTimeout(debounceTimer)
-  if (fetchAbortCtrl) fetchAbortCtrl.abort()
-})
-
-function onTypeChange() {
-  page.value = 0
-  fetchRepos()
-}
-
-function onPageChange(event: { page: number; rows: number }) {
-  page.value = event.page
-  size.value = event.rows
-  fetchRepos()
-}
-
-async function fetchRepos() {
-  if (fetchAbortCtrl) fetchAbortCtrl.abort()
-  fetchAbortCtrl = new AbortController()
-  const ctrl = fetchAbortCtrl
-  loading.value = true
+// Typing is debounced and every run aborts the previous request, so a slow
+// earlier page can never overwrite a newer one.
+const search = useDebouncedSearch(async (signal) => {
   try {
     const resp = await listRepos({
       page: page.value,
       size: size.value,
       type: typeFilter.value ?? undefined,
-      q: searchQuery.value || undefined,
-    }, ctrl.signal)
-    if (ctrl.signal.aborted) return
+      q: search.query.value || undefined,
+    }, signal)
+    if (signal.aborted) return
     items.value = resp.items
     total.value = resp.total
-  } catch (err: unknown) {
-    if (ctrl.signal.aborted) return
+  } catch {
+    if (signal.aborted) return
     items.value = []
-  } finally {
-    if (!ctrl.signal.aborted) loading.value = false
   }
+})
+const searchQuery = search.query
+const loading = search.loading
+
+// A new query always starts from the first page.
+watch(searchQuery, () => { page.value = 0 })
+
+onBeforeUnmount(search.dispose)
+
+function onTypeChange() {
+  page.value = 0
+  void search.run()
 }
 
-onMounted(fetchRepos)
+function onPageChange(event: { page: number; rows: number }) {
+  page.value = event.page
+  size.value = event.rows
+  void search.run()
+}
+
+onMounted(() => { void search.run() })
 
 // Set Me Up drawer for one row
 const setupOpen = ref(false)
