@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.http.Headers;
@@ -27,6 +28,7 @@ import com.auto1.pantera.http.slice.ContentWithSize;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Upload guard of an immutable file repository: a file that is already
@@ -84,12 +86,30 @@ final class ImmutableUploadSlice implements Slice {
         if (key.string().isEmpty()) {
             return this.origin.response(line, headers, body);
         }
-        return this.storage.exists(key).thenCompose(
-            exists -> {
-                if (!exists) {
-                    return this.origin.response(line, headers, body);
-                }
-                return this.redeploy(key, new ContentWithSize(body, headers));
+        // The existence check and the write run under one lock on the file,
+        // kept in the repository storage: two uploads of the same new path,
+        // on this instance or on another one sharing the storage, cannot
+        // both pass the check and both write.
+        final AtomicBoolean started = new AtomicBoolean();
+        return new IndexUpdateLock(this.storage, key).run(
+            locked -> {
+                started.set(true);
+                return locked.exists(key).thenCompose(
+                    exists -> {
+                        if (!exists) {
+                            return this.origin.response(line, headers, body);
+                        }
+                        return this.redeploy(key, new ContentWithSize(body, headers));
+                    }
+                );
+            }
+        ).exceptionallyCompose(
+            err -> {
+                // The lock was never acquired: nothing read the body yet.
+                final CompletableFuture<Void> drained = started.get()
+                    ? CompletableFuture.completedFuture(null)
+                    : body.discard().toCompletableFuture();
+                return drained.thenCompose(ignored -> CompletableFuture.failedFuture(err));
             }
         );
     }

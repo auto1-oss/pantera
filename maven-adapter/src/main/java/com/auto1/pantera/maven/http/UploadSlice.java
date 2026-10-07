@@ -13,6 +13,7 @@ package com.auto1.pantera.maven.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.storage.IndexUpdateLock;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.http.Headers;
@@ -40,6 +41,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -279,12 +281,29 @@ public final class UploadSlice implements Slice {
         // (so the client's own checksum upload that follows verifies) and
         // emits the publish event that upserts the search index.
         if (this.immutable && isReleaseFile(keyPath)) {
-            return this.storage.exists(key).thenCompose(
-                exists -> {
-                    if (exists) {
-                        return this.redeploy(key, body, headers);
-                    }
-                    return this.save(key, body, headers, owner, size);
+            // Check and write under one lock on the file, kept in storage:
+            // two first-time uploads of the same release file, here or on
+            // another instance sharing the storage, cannot both see it absent.
+            final AtomicBoolean started = new AtomicBoolean();
+            return new IndexUpdateLock(this.storage, key).run(
+                locked -> {
+                    started.set(true);
+                    return locked.exists(key).thenCompose(
+                        exists -> {
+                            if (exists) {
+                                return this.redeploy(key, body, headers);
+                            }
+                            return this.save(key, body, headers, owner, size);
+                        }
+                    );
+                }
+            ).exceptionallyCompose(
+                err -> {
+                    // The lock was never acquired: nothing read the body yet.
+                    final CompletableFuture<Void> drained = started.get()
+                        ? CompletableFuture.completedFuture(null)
+                        : body.discard().toCompletableFuture();
+                    return drained.thenCompose(ignored -> CompletableFuture.failedFuture(err));
                 }
             );
         }

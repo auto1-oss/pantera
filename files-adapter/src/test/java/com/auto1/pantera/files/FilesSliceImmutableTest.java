@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.ParkedStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
@@ -29,6 +30,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.StringContains;
@@ -122,6 +125,41 @@ final class FilesSliceImmutableTest {
         MatcherAssert.assertThat(
             "first upload is published",
             this.events.size(), new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void concurrentUploadsOfANewPathAcrossInstancesAreSerialised() throws Exception {
+        // Two upload fronts over one storage stand in for two instances
+        // sharing it. The first upload is parked inside its write, after its
+        // existence check passed; a second upload of different content to
+        // the same path through the other front must wait for it in storage
+        // and then be refused. Without the storage lock both see the path
+        // free and both succeed, last writer wins.
+        final ParkedStorage parked = new ParkedStorage(new InMemoryStorage());
+        this.storage = parked;
+        final Slice one = this.slice(true);
+        final Slice other = this.slice(true);
+        final CompletableFuture<Response> first = CompletableFuture.supplyAsync(
+            () -> this.put(one, "first content")
+        );
+        parked.arrived().get(10, TimeUnit.SECONDS);
+        final CompletableFuture<Response> second = CompletableFuture.supplyAsync(
+            () -> this.put(other, "second content, different")
+        );
+        parked.contender().get(10, TimeUnit.SECONDS);
+        parked.release();
+        MatcherAssert.assertThat(
+            "the first upload succeeds",
+            first.get(30, TimeUnit.SECONDS).status(), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the second upload is refused",
+            second.get(30, TimeUnit.SECONDS).status(), new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the first content is what is stored",
+            this.read(), new IsEqual<>("first content")
         );
     }
 

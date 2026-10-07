@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.ParkedStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
@@ -32,6 +33,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -99,6 +101,40 @@ final class UploadSliceImmutabilityTest {
         MatcherAssert.assertThat(
             "the generated checksum still describes the published bytes",
             this.read(JAR + ".sha1"), new IsEqual<>(hex("SHA-1", "one"))
+        );
+    }
+
+    @Test
+    void concurrentUploadsOfAReleaseFileAcrossInstancesAreSerialised() throws Exception {
+        // Two upload fronts over one storage stand in for two instances
+        // sharing it. The first upload is parked inside its write after its
+        // existence check passed; the second, with different bytes, must
+        // wait for it in storage and then be refused. Without the storage
+        // lock both see the file absent and both save, last one wins.
+        final ParkedStorage parked = new ParkedStorage(new InMemoryStorage());
+        final Slice one = new UploadSlice(parked, Optional.of(this.events), "maven");
+        final Slice other = new UploadSlice(parked, Optional.of(this.events), "maven");
+        final CompletableFuture<RsStatus> first = CompletableFuture.supplyAsync(
+            () -> UploadSliceImmutabilityTest.put(one, JAR, "first bytes")
+        );
+        parked.arrived().get(10, TimeUnit.SECONDS);
+        final CompletableFuture<RsStatus> second = CompletableFuture.supplyAsync(
+            () -> UploadSliceImmutabilityTest.put(other, JAR, "second bytes")
+        );
+        parked.contender().get(10, TimeUnit.SECONDS);
+        parked.release();
+        MatcherAssert.assertThat(
+            "the first upload is created",
+            first.get(30, TimeUnit.SECONDS), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the second upload is refused",
+            second.get(30, TimeUnit.SECONDS), new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the first bytes are kept",
+            new String(parked.value(new Key.From(JAR.substring(1))).join().asBytes(), StandardCharsets.UTF_8),
+            new IsEqual<>("first bytes")
         );
     }
 
@@ -349,6 +385,17 @@ final class UploadSliceImmutabilityTest {
             "the stored bytes are the new ones",
             this.read(other), new IsEqual<>("two")
         );
+    }
+
+    private static RsStatus put(final Slice slice, final String path, final String body) {
+        final byte[] data = body.getBytes(StandardCharsets.UTF_8);
+        return slice.response(
+            new RequestLine(RqMethod.PUT, path),
+            Headers.from(
+                new ContentLength(data.length), new Authorization.Basic("alice", "secret")
+            ),
+            new Content.From(data)
+        ).join().status();
     }
 
     private RsStatus put(final String path, final String body) {
