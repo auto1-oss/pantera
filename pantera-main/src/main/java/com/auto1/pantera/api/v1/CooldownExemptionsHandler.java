@@ -404,17 +404,21 @@ public final class CooldownExemptionsHandler {
             .put("released", released);
     }
 
+    /**
+     * Audited client IP: forwarded headers count only when the deployment
+     * declares a trusted proxy ({@code trust_forwarded_headers}), as for every
+     * other audit record; otherwise the TCP peer.
+     */
     private static String clientIp(final RoutingContext ctx) {
-        final String forwarded = ctx.request().getHeader("X-Forwarded-For");
-        final String result;
-        if (forwarded != null && !forwarded.isBlank()) {
-            result = forwarded.split(",", 2)[0].trim();
-        } else if (ctx.request().remoteAddress() != null) {
-            result = ctx.request().remoteAddress().host();
-        } else {
-            result = null;
-        }
-        return result;
+        final io.vertx.core.net.SocketAddress remote = ctx.request().remoteAddress();
+        return new com.auto1.pantera.api.ClientIpResolver(
+            com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier()
+                .get().trustForwardedHeaders()
+        ).resolve(
+            remote == null ? null : remote.host(),
+            ctx.request().getHeader("X-Forwarded-For"),
+            ctx.request().getHeader("X-Real-IP")
+        );
     }
 
     /**
