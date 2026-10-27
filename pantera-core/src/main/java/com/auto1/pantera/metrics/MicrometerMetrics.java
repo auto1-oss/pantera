@@ -39,20 +39,12 @@ public final class MicrometerMetrics {
 
     private final MeterRegistry registry;
 
-    // === Active request tracking ===
-    private final AtomicLong activeRequests = new AtomicLong(0);
-
     // === Upstream availability tracking ===
     private final Map<String, AtomicLong> upstreamAvailability = new ConcurrentHashMap<>();
     private final Map<String, AtomicLong> consecutiveFailures = new ConcurrentHashMap<>();
 
     private MicrometerMetrics(final MeterRegistry registry) {
         this.registry = registry;
-
-        // Register active requests gauge
-        Gauge.builder("pantera.http.active.requests", activeRequests, AtomicLong::get)
-            .description("Currently active HTTP requests")
-            .register(registry);
 
         EcsLogger.info("com.auto1.pantera.metrics.MicrometerMetrics")
             .message("Micrometer metrics initialized with Prometheus registry")
@@ -184,14 +176,6 @@ public final class MicrometerMetrics {
             .baseUnit("bytes")
             .register(registry)
             .record(bytes);
-    }
-
-    public void incrementActiveRequests() {
-        activeRequests.incrementAndGet();
-    }
-
-    public void decrementActiveRequests() {
-        activeRequests.decrementAndGet();
     }
 
     // ========== Repository Operation Metrics ==========

@@ -35,6 +35,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -217,6 +218,26 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final AuditContext auditCtx,
         final String owner
     ) {
+        return this.filterMetadataLazily(
+            repoType, repoName, variant, packageName,
+            () -> CompletableFuture.completedFuture(rawMetadata),
+            parser, filter, rewriter, auditCtx, owner
+        ).thenApply(filtered -> filtered.orElse(rawMetadata));
+    }
+
+    @Override
+    public <T> CompletableFuture<Optional<byte[]>> filterMetadataLazily(
+        final String repoType,
+        final String repoName,
+        final String variant,
+        final String packageName,
+        final Supplier<CompletableFuture<byte[]>> rawMetadata,
+        final MetadataParser<T> parser,
+        final MetadataFilter<T> filter,
+        final MetadataRewriter<T> rewriter,
+        final AuditContext auditCtx,
+        final String owner
+    ) {
         // Check if cooldown is enabled for this repo identity.
         // Precedence: per-repo-name override → per-repo-type override → global.
         // Mirrors JdbcCooldownService.effectiveEnabled so the metadata-filter
@@ -238,7 +259,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             AuditLogger.resolution(
                 auditCtx, repoType, repoName, packageName, owner, List.of()
             );
-            return CompletableFuture.completedFuture(rawMetadata);
+            return CompletableFuture.completedFuture(Optional.empty());
         }
 
         final long startTime = System.nanoTime();
@@ -253,9 +274,11 @@ public final class MetadataFilterService implements CooldownMetadataService {
             repoName,
             variant,
             packageName,
-            () -> this.computeFilteredMetadata(
-                repoType, repoName, packageName, rawMetadata,
-                parser, filter, rewriter, startTime, auditCtx, owner
+            () -> rawMetadata.get().thenCompose(
+                raw -> this.computeFilteredMetadata(
+                    repoType, repoName, packageName, raw,
+                    parser, filter, rewriter, startTime, auditCtx, owner
+                )
             )
         ).whenComplete((entry, error) -> {
             final Throwable cause = unwrapCompletion(error);
@@ -281,7 +304,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
                     );
                 }
             }
-        }).thenApply(FilteredMetadataCache.CacheEntry::data);
+        }).thenApply(entry -> Optional.of(entry.data()));
     }
 
     /**

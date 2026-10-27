@@ -1233,7 +1233,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Currently active HTTP requests (gauge pantera_http_active_requests)",
+      "description": "Currently active HTTP requests across all methods (Vert.x gauge vertx_http_server_active_requests)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1318,7 +1318,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "pantera_http_active_requests{job=\"pantera\"}",
+          "expr": "sum(vertx_http_server_active_requests{job=\"pantera\"})",
           "legendFormat": "In-flight",
           "range": true,
           "refId": "A"

@@ -22,7 +22,10 @@ import java.nio.file.Path;
  */
 public interface NpmRemote extends Closeable {
     /**
-     * Loads package from remote repository.
+     * Loads package from remote repository. The package body may be backed
+     * by a temp file the subscriber owns: hand it to
+     * {@link NpmProxyStorage#save(NpmPackage)} (which releases it) or call
+     * {@code body().release()}.
      * @param name Package name
      * @return NPM package or empty
      */

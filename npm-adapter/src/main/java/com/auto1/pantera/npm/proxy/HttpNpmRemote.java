@@ -21,19 +21,20 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.asto.rx.RxFuture;
+import com.auto1.pantera.http.context.ContextualExecutor;
+import com.auto1.pantera.http.misc.StorageExecutors;
 import com.auto1.pantera.npm.misc.DateTimeNowStr;
-import com.auto1.pantera.npm.proxy.json.CachedContent;
 import com.auto1.pantera.npm.proxy.model.NpmAsset;
 import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import io.reactivex.Maybe;
+import io.reactivex.Single;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * Base NPM Remote client implementation. It calls remote NPM repository
@@ -48,64 +49,77 @@ public final class HttpNpmRemote implements NpmRemote {
     private final Slice origin;
 
     /**
+     * Executor for the blocking temp-file writes of a packument ingest.
+     */
+    private final Executor executor;
+
+    /**
+     * Directory for packument temp files.
+     */
+    private final Path tmp;
+
+    /**
      * @param origin Client slice
      */
     public HttpNpmRemote(final Slice origin) {
+        this(
+            origin,
+            ContextualExecutor.contextualize(StorageExecutors.WRITE),
+            Path.of(System.getProperty("java.io.tmpdir"))
+        );
+    }
+
+    /**
+     * Ctor with explicit ingest executor and temp directory.
+     *
+     * @param origin Client slice
+     * @param executor Executor for blocking temp-file writes
+     * @param tmp Directory for packument temp files
+     */
+    HttpNpmRemote(final Slice origin, final Executor executor, final Path tmp) {
         this.origin = origin;
+        this.executor = executor;
+        this.tmp = tmp;
     }
 
     @Override
     public Maybe<NpmPackage> loadPackage(final String name) {
-        // Use non-blocking RxFuture.maybe instead of blocking Maybe.fromFuture
-        return RxFuture.maybe(
-            this.performRemoteRequest(name, Headers.EMPTY).thenCompose(
-                pair -> pair.getKey().asStringFuture().thenApply(
-                    str -> {
-                        // Transform to cached format (strip upstream URLs)
-                        // PERFORMANCE: Use valueString() instead of value().toString()
-                        // This avoids an extra JSON parse/serialize cycle
-                        final String cachedContent = new CachedContent(str, name).valueString();
-                        return new NpmPackage(
-                            name,
-                            cachedContent,
-                            HttpNpmRemote.lastModifiedOrNow(pair.getValue()),
-                            OffsetDateTime.now(),
-                            HttpNpmRemote.extractETag(pair.getValue())
-                        );
+        // Use non-blocking RxFuture.maybe instead of blocking Maybe.fromFuture.
+        // The body is streamed into a temp file in its cached form (upstream
+        // tarball URLs stripped) — never buffered whole in heap.
+        return RxFuture.maybe(this.performRemoteRequest(name, Headers.EMPTY))
+            .flatMap(pair -> this.ingest(name, pair).toMaybe())
+            .onErrorResumeNext(
+                throwable -> {
+                    // Distinguish between true 404s and transient errors so the
+                    // negative cache only stores real "not found" responses.
+                    // Other errors (timeouts, connection issues) are propagated so
+                    // they are not cached as 404.
+                    if (HttpNpmRemote.isNotFoundError(throwable)) {
+                        EcsLogger.debug("com.auto1.pantera.npm")
+                            .message("Package not found upstream (404)")
+                            .eventCategory("web")
+                            .eventAction("get_package")
+                            .eventOutcome("failure")
+                            .field("event.reason", "artifact_not_found")
+                            .field("package.name", name)
+                            .field("log.source", "application")
+                            .log();
+                        return Maybe.empty();
                     }
-                )
-            )
-        ).onErrorResumeNext(
-            throwable -> {
-                // Distinguish between true 404s and transient errors so the
-                // negative cache only stores real "not found" responses.
-                // Other errors (timeouts, connection issues) are propagated so
-                // they are not cached as 404.
-                if (HttpNpmRemote.isNotFoundError(throwable)) {
-                    EcsLogger.debug("com.auto1.pantera.npm")
-                        .message("Package not found upstream (404)")
+                    // For transient errors, log and re-throw to prevent negative cache poisoning
+                    EcsLogger.error("com.auto1.pantera.npm")
+                        .message("Error occurred when process get package call")
                         .eventCategory("web")
                         .eventAction("get_package")
                         .eventOutcome("failure")
-                        .field("event.reason", "artifact_not_found")
                         .field("package.name", name)
+                        .error(throwable)
                         .field("log.source", "application")
                         .log();
-                    return Maybe.empty();
+                    return Maybe.error(throwable);
                 }
-                // For transient errors, log and re-throw to prevent negative cache poisoning
-                EcsLogger.error("com.auto1.pantera.npm")
-                    .message("Error occurred when process get package call")
-                    .eventCategory("web")
-                    .eventAction("get_package")
-                    .eventOutcome("failure")
-                    .field("package.name", name)
-                    .error(throwable)
-                    .field("log.source", "application")
-                    .log();
-                return Maybe.error(throwable);
-            }
-        );
+            );
     }
 
     @Override
@@ -165,35 +179,50 @@ public final class HttpNpmRemote implements NpmRemote {
      */
     public Maybe<NpmPackage> loadPackageConditional(final String name, final String etag) {
         final Headers conditionalHeaders = Headers.from("If-None-Match", etag);
-        return RxFuture.maybe(
-            this.performRemoteRequest(name, conditionalHeaders).thenCompose(
-                pair -> pair.getKey().asStringFuture().thenApply(
-                    str -> {
-                        final String cachedContent = new CachedContent(str, name).valueString();
-                        return new NpmPackage(
-                            name,
-                            cachedContent,
-                            HttpNpmRemote.lastModifiedOrNow(pair.getValue()),
-                            OffsetDateTime.now(),
-                            HttpNpmRemote.extractETag(pair.getValue())
-                        );
+        return RxFuture.maybe(this.performRemoteRequest(name, conditionalHeaders))
+            .flatMap(pair -> this.ingest(name, pair).toMaybe())
+            .onErrorResumeNext(
+                throwable -> {
+                    if (HttpNpmRemote.isNotModified(throwable)) {
+                        return Maybe.empty();
                     }
-                )
-            )
-        ).onErrorResumeNext(
-            throwable -> {
-                if (HttpNpmRemote.isNotModified(throwable)) {
-                    return Maybe.empty();
+                    // A 404 is NOT "not modified". Before 2.2.7 it was collapsed
+                    // into the same empty signal, and NpmProxy.conditionalRefresh
+                    // answered an upstream 404 by bumping the refresh timestamp —
+                    // silently re-arming the metadata TTL on stale content with
+                    // no log trace. Propagate it (like every other failure) so
+                    // the caller logs the outcome and retries on a later request.
+                    return Maybe.error(throwable);
                 }
-                // A 404 is NOT "not modified". Before 2.2.7 it was collapsed
-                // into the same empty signal, and NpmProxy.conditionalRefresh
-                // answered an upstream 404 by bumping the refresh timestamp —
-                // silently re-arming the metadata TTL on stale content with
-                // no log trace. Propagate it (like every other failure) so
-                // the caller logs the outcome and retries on a later request.
-                return Maybe.error(throwable);
-            }
-        );
+            );
+    }
+
+    /**
+     * Stream a successful upstream packument response into its cached form
+     * (see {@link PackumentIngest}) and wrap it with the response metadata.
+     * The temp file the package carries is owned by the subscriber, which
+     * releases it after {@link NpmProxyStorage#save(NpmPackage)}.
+     *
+     * @param name Package name
+     * @param response Upstream body and headers
+     * @return Package backed by a temp file
+     */
+    private Single<NpmPackage> ingest(final String name, final Pair<Content, Headers> response) {
+        return new PackumentIngest(name, this.executor, this.tmp)
+            .ingest(response.getKey())
+            .map(
+                body -> new NpmPackage(
+                    name,
+                    body,
+                    new NpmPackage.Metadata(
+                        HttpNpmRemote.lastModifiedOrNow(response.getValue()),
+                        OffsetDateTime.now(),
+                        null,
+                        null,
+                        HttpNpmRemote.extractETag(response.getValue())
+                    )
+                )
+            );
     }
 
     /**

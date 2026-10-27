@@ -862,7 +862,13 @@ public class NpmProxy {
         return pckg.flatMap(
             pkg -> this.storage.save(pkg)
                 .doOnComplete(() -> this.firePackumentWriteHook(pkg.name()))
-                .andThen(Maybe.just(pkg.meta()))
+                // The stored meta.meta, not pkg.meta(): only the stored one
+                // carries the content hashes the served ETag derives from,
+                // so the first serve gets the same ETag as every later one.
+                .andThen(
+                    Maybe.defer(() -> this.storage.getPackageMetadata(name))
+                        .switchIfEmpty(Maybe.just(pkg.meta()))
+                )
         );
     }
 

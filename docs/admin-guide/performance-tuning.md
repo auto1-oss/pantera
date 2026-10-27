@@ -36,6 +36,7 @@ The default Docker image ships with the following JVM settings, optimized for co
 | `-XX:+HeapDumpOnOutOfMemoryError` | Enabled | Generate heap dump on OOM for analysis |
 | `-Dio.netty.allocator.maxOrder=11` | 11 | Limits Netty direct memory chunks to 4 MB |
 | `-Dio.netty.leakDetection.level=simple` | simple | Lightweight Netty buffer leak detection |
+| `-Djava.io.tmpdir=/var/pantera/cache/tmp` | `/var/pantera/cache/tmp` | Staging directory for proxy cache fills. npm proxy packuments (up to tens of MB each) are streamed through two temp files here instead of heap, so size the volume for the concurrent fills you expect |
 
 ### Overriding JVM Settings
 

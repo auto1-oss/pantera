@@ -12,7 +12,9 @@ package com.auto1.pantera.cooldown.metadata;
 
 import com.auto1.pantera.audit.AuditContext;
 
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 /**
  * Service for filtering package metadata to remove blocked versions.
@@ -156,6 +158,49 @@ public interface CooldownMetadataService {
             repoType, repoName, packageName, rawMetadata, parser, filter,
             rewriter, ctx, owner
         );
+    }
+
+    /**
+     * Lazy variant of {@link #filterMetadata(String, String, String, String,
+     * byte[], MetadataParser, MetadataFilter, MetadataRewriter, AuditContext,
+     * String)}: the raw metadata is only produced when it is actually needed,
+     * i.e. on a filtered-envelope cache miss. A caller whose raw metadata is
+     * expensive to produce (an npm packument skeleton, streamed out of a
+     * document of tens of MB) pays nothing on an envelope hit.
+     *
+     * @param repoType Repository type (e.g., "npm", "maven")
+     * @param repoName Repository name
+     * @param variant Body-shape discriminator
+     * @param packageName Package name
+     * @param rawMetadata Produces the raw metadata bytes
+     * @param parser Parser for this metadata format
+     * @param filter Filter for this metadata format
+     * @param rewriter Rewriter for this metadata format
+     * @param ctx Request correlation context (trace id / client IP)
+     * @param owner Requesting user name
+     * @param <T> Type of parsed metadata
+     * @return Filtered metadata bytes; empty when cooldown does not apply to
+     *  this repository, so the stored metadata may be served as stored
+     * @throws AllVersionsBlockedException If all versions are blocked
+     */
+    default <T> CompletableFuture<Optional<byte[]>> filterMetadataLazily(
+        final String repoType,
+        final String repoName,
+        final String variant,
+        final String packageName,
+        final Supplier<CompletableFuture<byte[]>> rawMetadata,
+        final MetadataParser<T> parser,
+        final MetadataFilter<T> filter,
+        final MetadataRewriter<T> rewriter,
+        final AuditContext ctx,
+        final String owner
+    ) {
+        return rawMetadata.get().thenCompose(
+            raw -> this.filterMetadata(
+                repoType, repoName, variant, packageName, raw, parser, filter,
+                rewriter, ctx, owner
+            )
+        ).thenApply(Optional::of);
     }
 
     /**
