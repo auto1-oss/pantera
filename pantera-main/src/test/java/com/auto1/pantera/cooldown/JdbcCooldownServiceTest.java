@@ -352,6 +352,132 @@ final class JdbcCooldownServiceTest {
     }
 
     @Test
+    void exemptPackageIsAllowedWithoutConsultingTheInspectorOrTheDatabase() {
+        final CooldownSettings settings = CooldownSettings.defaults();
+        settings.setRepoExemptions(
+            "npm",
+            new com.auto1.pantera.cooldown.config.CooldownExemptions(List.of(
+                new com.auto1.pantera.cooldown.config.CooldownExemptions.Rule(
+                    "left-*", Optional.empty(), "", "admin", Instant.EPOCH
+                )
+            ))
+        );
+        final JdbcCooldownService svc = new JdbcCooldownService(settings, this.repository, this.executor);
+        final java.util.concurrent.atomic.AtomicInteger lookups =
+            new java.util.concurrent.atomic.AtomicInteger();
+        final CooldownInspector inspector = new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
+                lookups.incrementAndGet();
+                return CompletableFuture.completedFuture(Optional.of(Instant.now()));
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        final CooldownRequest exempt =
+            new CooldownRequest("npm-proxy", "npm", "left-pad", "1.1.0", "bob", Instant.now());
+        MatcherAssert.assertThat(
+            "exempt fresh release is allowed", svc.evaluate(exempt, inspector).join().blocked(), Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "known-date path allows it too",
+            svc.evaluateWithKnownDate(exempt, Optional.of(Instant.now())).join().blocked(), Matchers.is(false)
+        );
+        MatcherAssert.assertThat("release date never looked up", lookups.get(), Matchers.is(0));
+        MatcherAssert.assertThat(
+            "no block row written", svc.activeBlocks("npm-proxy", "npm").join(), Matchers.empty()
+        );
+        MatcherAssert.assertThat(
+            "a non-matching package is still blocked",
+            svc.evaluate(
+                new CooldownRequest("npm-proxy", "npm", "right-pad", "1.0.0", "bob", Instant.now()), inspector
+            ).join().blocked(),
+            Matchers.is(true)
+        );
+    }
+
+    @Test
+    void exemptionStoreRoundTripsAndReleasesMatchingBlocks() {
+        final CooldownInspector fresh = new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(Optional.of(Instant.now().minus(Duration.ofHours(1))));
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        for (final String pkg : List.of("@auto1/ui", "@auto1/core", "lodash")) {
+            this.service.evaluate(
+                new CooldownRequest("npm-proxy", "npm", pkg, "1.0.0", "bob", Instant.now()), fresh
+            ).join();
+        }
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(
+                "INSERT INTO repositories (name, type, config) VALUES ('npm', 'npm-proxy', '{}'::jsonb)"
+                    + " ON CONFLICT (name) DO NOTHING"
+            )) {
+            stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException(err);
+        }
+        final CooldownSettings settings = CooldownSettings.defaults();
+        final CooldownExemptionStore store = new CooldownExemptionStore(this.dataSource, settings);
+        store.replace(
+            "npm",
+            List.of(
+                new com.auto1.pantera.cooldown.config.CooldownExemptions.Rule(
+                    "@AUTO1/*", Optional.of(Instant.now().plus(Duration.ofDays(1))), "internal", "admin",
+                    Instant.parse("2026-01-01T00:00:00Z")
+                )
+            )
+        );
+        MatcherAssert.assertThat("applied in memory", settings.exempt("npm", "@auto1/ui"), Matchers.is(true));
+        final CooldownSettings fromDb = CooldownSettings.defaults();
+        MatcherAssert.assertThat(
+            "loaded by another node", new CooldownExemptionStore(this.dataSource, fromDb).loadAll(), Matchers.is(1)
+        );
+        MatcherAssert.assertThat("exempt after load", fromDb.exempt("npm", "@auto1/core"), Matchers.is(true));
+        MatcherAssert.assertThat("others not exempt", fromDb.exempt("npm", "lodash"), Matchers.is(false));
+        MatcherAssert.assertThat(
+            "rule fields survive the round trip",
+            fromDb.repoExemptions("npm").rules().get(0).reason(), Matchers.is("internal")
+        );
+        MatcherAssert.assertThat(
+            "both @auto1 blocks released",
+            this.repository.archiveAndReleaseMatching(
+                "npm", List.of(), List.of("@auto1/"), ArchiveReason.MANUAL_UNBLOCK, "admin"
+            ),
+            Matchers.is(2)
+        );
+        MatcherAssert.assertThat(
+            "only lodash stays blocked",
+            this.service.activeBlocks("npm-proxy", "npm").join().stream()
+                .map(CooldownBlock::artifact).collect(java.util.stream.Collectors.toList()),
+            Matchers.contains("lodash")
+        );
+        MatcherAssert.assertThat("refresh sees no change", store.refresh(), Matchers.is(false));
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(
+                "UPDATE repositories SET name = 'npm-renamed' WHERE name = 'npm'"
+            )) {
+            stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException(err);
+        }
+        MatcherAssert.assertThat("refresh picks up the rename", store.refresh(), Matchers.is(true));
+        MatcherAssert.assertThat("follows the renamed repo", settings.exempt("npm-renamed", "@auto1/ui"), Matchers.is(true));
+        MatcherAssert.assertThat("gone from the old name", settings.exempt("npm", "@auto1/ui"), Matchers.is(false));
+        store.replace("npm-renamed", List.of());
+        MatcherAssert.assertThat("cleared", settings.exempt("npm-renamed", "@auto1/ui"), Matchers.is(false));
+    }
+
+    @Test
     void perRepoDisabledOverridesGlobalEnabled() {
         // Global: enabled; per-repo "internal-npm": disabled
         final CooldownSettings settings = CooldownSettings.defaults();
@@ -1160,7 +1286,7 @@ final class JdbcCooldownServiceTest {
     private void truncate() {
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(
-                "TRUNCATE TABLE artifact_cooldowns, artifact_cooldowns_history, artifacts RESTART IDENTITY"
+                "TRUNCATE TABLE artifact_cooldowns, artifact_cooldowns_history, artifacts, cooldown_exemptions, repositories RESTART IDENTITY CASCADE"
             )) {
             stmt.executeUpdate();
         } catch (final SQLException err) {

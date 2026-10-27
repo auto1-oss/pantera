@@ -261,6 +261,22 @@ public final class MetadataFilterService implements CooldownMetadataService {
             );
             return CompletableFuture.completedFuture(Optional.empty());
         }
+        if (this.settings.exempt(repoName, packageName)) {
+            // Exempt package: nothing to filter, so the raw metadata is never
+            // produced, parsed or cached. Audited like a disabled repository.
+            EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
+                .message("Package exempt from cooldown, returning raw metadata")
+                .eventCategory("database")
+                .eventAction("metadata_filter")
+                .field("repository.name", repoName)
+                .field("package.name", packageName)
+                .field("log.source", "application")
+                .log();
+            AuditLogger.resolution(
+                auditCtx, repoType, repoName, packageName, owner, List.of()
+            );
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
 
         final long startTime = System.nanoTime();
 

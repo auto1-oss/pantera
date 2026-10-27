@@ -209,6 +209,51 @@ moment -- its manifest digest and, for a multi-arch image, the per-platform
 child manifests -- so the pull succeeds end to end. Other digests of the same
 image are not released.
 
+### Exempt Packages from Cooldown
+
+A proxy repository can exempt packages (or Docker images) from cooldown: their
+versions are never blocked and never filtered out of metadata, while every
+other package of the repository keeps the cooldown. Typical uses are your own
+organisation's packages mirrored through a proxy, or a vendor you trust to
+ship fixes the same day.
+
+Edit them on the repository's edit page, in the **Cooldown** card under
+**Exemptions** (saved with the page's **Save** button), or through the API.
+A `PUT` replaces the repository's whole list:
+
+```bash
+curl -X PUT http://pantera-host:8086/api/v1/repositories/npm-proxy/cooldown/exemptions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"exemptions":[
+        {"pattern":"@myorg/*","reason":"our own packages"},
+        {"pattern":"left-pad","expires_at":"2026-12-31T00:00:00Z"}]}'
+```
+
+- **Pattern:** an exact package name, or a prefix ending in a single `*`
+  (`@myorg/*`, `com.example.*`, `library/nginx*`). `*` is allowed only as the
+  last character, and `*` alone is rejected (disable cooldown for the
+  repository instead). Write the name as the blocked list shows it -- see the
+  naming table above. Matching ignores case; a Maven `groupId:artifactId` is
+  stored as `groupId.artifactId` and a PyPI name is normalised (PEP 503).
+  On a Docker Hub proxy, an official image is `library/<name>`.
+- **Expiry:** optional `expires_at` (ISO-8601, in the future). After it the
+  exemption stops applying and cooldown blocks new versions again; the
+  expired rule stays listed until removed.
+- **Saving** releases the package's current blocks (recorded in history as
+  `MANUAL_UNBLOCK`) and drops the repository's cooldown decision and
+  filtered-metadata caches. Other nodes reload the list immediately when
+  Valkey is configured; every node also re-reads it once a minute, which
+  covers renamed and deleted repositories (their rules follow the rename and
+  go with the repository).
+- Up to 500 rules per repository; only proxy repositories accept them.
+
+Exemptions cost nothing on the request path: each repository's list is held in
+memory as a hash set of names plus a short list of prefixes, checked before any
+cache or database lookup, so an exempt package skips cooldown work entirely.
+Group repositories have no list of their own -- add the exemption on the proxy
+members.
+
 ### Inspect a Package
 
 When a version is unblocked but clients still cannot see it (or a blocked
