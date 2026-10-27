@@ -23,6 +23,7 @@ import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.http.group.RaceSlice;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.maven.http.MavenProxySlice;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.auto1.pantera.settings.repo.RepoConfig;
@@ -89,7 +90,10 @@ public final class MavenProxy implements Slice {
                     asto,  // Pass storage for checksum persistence
                     cooldownMetadata
                 )
-            ).collect(Collectors.toList())
+            ).collect(Collectors.toList()),
+            line -> asto.map(
+                sto -> sto.exists(new KeyFromPath(line.uri().getPath()))
+            ).orElseGet(() -> CompletableFuture.completedFuture(false))
         ));
     }
 

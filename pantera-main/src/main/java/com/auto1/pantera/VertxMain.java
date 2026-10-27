@@ -1546,7 +1546,8 @@ public final class VertxMain {
             )
             .setHttp2ConnectionWindowSize(128 * 1024 * 1024)
             .setCompressionSupported(true)
-            .setCompressionLevel(6);
+            // Level 1, as in VertxSliceServer: deflate holds off GC while it runs.
+            .setCompressionLevel(1);
         if (useProxyProtocol) {
             opts.setUseProxyProtocol(true);
             EcsLogger.info("com.auto1.pantera")

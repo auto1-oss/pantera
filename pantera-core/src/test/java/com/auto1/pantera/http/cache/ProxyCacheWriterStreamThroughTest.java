@@ -315,6 +315,51 @@ final class ProxyCacheWriterStreamThroughTest {
         );
     }
 
+    @Test
+    @DisplayName("commit streams the primary from the temp file in bounded chunks")
+    void commitNeverHandsStorageTheWholePrimary() throws Exception {
+        final byte[] large = new byte[1024 * 1024];
+        new java.util.Random(7).nextBytes(large);
+        final java.util.concurrent.atomic.AtomicInteger largest =
+            new java.util.concurrent.atomic.AtomicInteger();
+        final Storage cache = new Storage.Wrap(new InMemoryStorage()) {
+            @Override
+            public CompletableFuture<Void> save(
+                final Key key, final com.auto1.pantera.asto.Content content
+            ) {
+                if (!key.equals(PRIMARY_KEY)) {
+                    return super.save(key, content);
+                }
+                return super.save(key, new com.auto1.pantera.asto.Content.From(
+                    content.size(),
+                    Flowable.fromPublisher(content)
+                        .doOnNext(buf -> largest.accumulateAndGet(buf.remaining(), Math::max))
+                ));
+            }
+        };
+        final ProxyCacheWriter writer = new ProxyCacheWriter(cache, "stream-test");
+        final ProxyCacheWriter.StreamedArtifact artifact =
+            ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) writer.streamThroughAndCommit(
+                PRIMARY_KEY, UPSTREAM_URI,
+                Optional.of((long) large.length),
+                chunkedUpstream(large, large.length),
+                Map.of(ChecksumAlgo.SHA1, sidecarServing(sha1Hex(large))),
+                null, null
+            ).toCompletableFuture().join()).value();
+        artifact.body().asBytesFuture().get(5, TimeUnit.SECONDS);
+        final Result<Void> commit = artifact.verificationOutcome()
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertThat("commit succeeds", commit, instanceOf(Result.Ok.class));
+        assertTrue(
+            largest.get() <= 64 * 1024,
+            "largest buffer handed to storage was " + largest.get() + " bytes"
+        );
+        assertArrayEquals(
+            large, cache.value(PRIMARY_KEY).join().asBytes(),
+            "cache bytes match upstream"
+        );
+    }
+
     /**
      * Chunk a byte array into a back-pressure-friendly Flowable that emits
      * {@code chunkSize}-sized ByteBuffers. The chunks are emitted from a

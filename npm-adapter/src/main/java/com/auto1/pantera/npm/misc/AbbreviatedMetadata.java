@@ -65,8 +65,12 @@ public final class AbbreviatedMetadata {
      *
      * <p>libc: glibc vs musl compatibility for native binary packages (npm 9+).
      * Without it, the wrong native binary could be selected on Alpine Linux (musl).
+     *
+     * <p>Package-private: {@link AbbreviatedMetadataStream} (the streaming
+     * proxy-ingest generator) keeps exactly these fields, in this order. Never
+     * mutate it.
      */
-    private static final String[] ESSENTIAL_FIELDS = {
+    static final String[] ESSENTIAL_FIELDS = {
         "name", "version", "dist", "dependencies", "devDependencies",
         "peerDependencies", "peerDependenciesMeta",
         "optionalDependencies", "bundleDependencies", "bundledDependencies",

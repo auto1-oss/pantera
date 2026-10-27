@@ -1,5 +1,22 @@
 # Changelog
 
+## Version 2.2.11
+
+### ⚡ Performance
+
+- **npm packuments are streamed, never held in memory.** A packument of tens of MB (`@prisma/client`, `renovate`, `next`) used to be read whole and parsed several times per request. Now cooldown decides on a small skeleton of the document (`name`, `dist-tags`, `time`, version keys), the filtered-metadata cache stores that verdict instead of the whole filtered document, and the response is streamed from storage through it, for full, abbreviated and single-version (`GET /<pkg>/<version>`) requests. A filtered packument is now compact JSON with an `ETag` derived from the stored content hash and the verdict, so clients revalidate once after upgrading. ([@aydasraf](https://github.com/aydasraf))
+- **Proxy cache fills stream into storage.** Committing an artifact fetched from upstream used to read the whole file into memory first; it is now copied to storage in 64 KiB chunks. ([@aydasraf](https://github.com/aydasraf))
+- **A cache hit on a proxy with several remotes is served by one remote.** Every remote of a `maven` proxy used to serve the same cached file in parallel, and each losing response was read whole into memory before being dropped. A cached file is now served once; the remotes still race on a cache miss, and losing responses are drained without buffering for every proxy format. ([@aydasraf](https://github.com/aydasraf))
+- **npm packuments are streamed on ingest too.** A packument fetched from upstream goes through the tarball-URL rewrite into a temporary file and is abbreviated with a streaming parser, instead of being held as several whole copies. Stored `meta.json` bytes and their ETags do not change. Packuments are staged under `java.io.tmpdir`. ([@aydasraf](https://github.com/aydasraf))
+- **HTTP response compression runs at level 1 instead of 6.** On npm packuments it is about 1.7 times faster for about 20% larger output; binary artifacts stay uncompressed as before. ([@aydasraf](https://github.com/aydasraf))
+
+### 🔧 Bug fixes
+
+- **HTTP/2 uploads no longer hang until the idle timeout.** An upload over HTTP/2 could stall and fail after 60 s (curl `(16) Error in the HTTP2 framing layer`, nothing logged on the server) when the storage writer asked for more data just as the request body ended. Request-body demand is now handled on the request's own event loop, so it can no longer reach a finished HTTP/2 stream. ([@aydasraf](https://github.com/aydasraf))
+- **One `artifact_access` audit record per download.** A `maven` proxy with several remotes wrote one record per remote for each cached download. ([@aydasraf](https://github.com/aydasraf))
+- **The cooldown filtered-metadata cache is bounded by size.** It was bounded only by entry count, so large packuments could take gigabytes of heap. It now also holds at most 1 GiB of entries (`PANTERA_COOLDOWN_METADATA_L1_MAX_BYTES`). ([@aydasraf](https://github.com/aydasraf))
+- **The "In-flight HTTP requests" panel shows real values.** It charted `pantera_http_active_requests`, a gauge nothing updated, so it always read 0. The panel now charts Vert.x's `vertx_http_server_active_requests` and the unused gauge is removed. ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.10
 
 ### ⚠️ Breaking changes

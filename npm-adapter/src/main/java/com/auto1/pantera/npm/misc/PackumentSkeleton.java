@@ -1,0 +1,70 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.npm.misc;
+
+import com.auto1.pantera.asto.Content;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * The parts of a packument that cooldown filtering decides on: {@code name},
+ * {@code dist-tags}, {@code time} and the keys of {@code versions} (each
+ * version's object replaced by {@code {}}).
+ *
+ * <p>Extracted by streaming the stored document through
+ * {@link PackumentTransform}; the skeleton itself is small (well under 1 MB
+ * for a package with ten thousand versions), so the whole cooldown pipeline
+ * (parse, evaluate, re-point {@code latest}, cache) runs on it instead of on
+ * a document of tens of MB.</p>
+ *
+ * @since 2.2.11
+ */
+public final class PackumentSkeleton {
+
+    /**
+     * Stored packument.
+     */
+    private final Content packument;
+
+    /**
+     * Ctor.
+     *
+     * @param packument Stored packument (full or abbreviated)
+     */
+    public PackumentSkeleton(final Content packument) {
+        this.packument = packument;
+    }
+
+    /**
+     * Extract the skeleton.
+     *
+     * @return Skeleton JSON bytes
+     */
+    public CompletableFuture<byte[]> bytes() {
+        final PackumentTransform skeleton = new PackumentTransform(
+            this.packument,
+            new PackumentTransform.Rules(
+                Map.of(
+                    "name", PackumentTransform.Section.COPY,
+                    "dist-tags", PackumentTransform.Section.COPY,
+                    "time", PackumentTransform.Section.COPY,
+                    "versions", PackumentTransform.Section.STUBS
+                ),
+                PackumentTransform.Section.SKIP,
+                Map.of(),
+                Map.of(),
+                Optional.empty()
+            )
+        );
+        return new SmallJson(skeleton).bytes();
+    }
+}

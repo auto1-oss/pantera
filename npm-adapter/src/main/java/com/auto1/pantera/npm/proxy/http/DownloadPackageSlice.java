@@ -10,9 +10,7 @@
  */
 package com.auto1.pantera.npm.proxy.http;
 
-import com.auto1.pantera.asto.Concatenation;
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -22,31 +20,28 @@ import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.npm.proxy.NpmProxy;
-import com.auto1.pantera.npm.proxy.json.ClientContent;
-import com.auto1.pantera.npm.misc.AbbreviatedMetadata;
 import com.auto1.pantera.npm.misc.MetadataETag;
-import com.auto1.pantera.npm.misc.MetadataEnhancer;
-import com.auto1.pantera.npm.misc.StreamingJsonTransformer;
-import com.auto1.pantera.npm.misc.ByteLevelUrlTransformer;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.cooldown.metadata.AllVersionsBlockedException;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.npm.cooldown.NpmMetadataParser;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
+import com.auto1.pantera.http.body.JsonStringRewrite;
 import com.auto1.pantera.npm.cooldown.NpmMetadataFilter;
+import com.auto1.pantera.npm.misc.PackumentDecision;
+import com.auto1.pantera.npm.misc.PackumentSkeleton;
+import com.auto1.pantera.npm.cooldown.NpmMetadataParser;
 import com.auto1.pantera.npm.cooldown.NpmMetadataRewriter;
-import com.auto1.pantera.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
-import io.reactivex.Flowable;
 import org.apache.commons.lang3.StringUtils;
-import javax.json.Json;
-import javax.json.JsonObject;
-import java.io.StringReader;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.net.URL;
 import java.net.URLDecoder;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import java.util.stream.StreamSupport;
 
 /**
@@ -62,6 +57,18 @@ import java.util.stream.StreamSupport;
  * request.
  */
 public final class DownloadPackageSlice implements Slice {
+
+    /**
+     * Filtered-metadata envelope variant: the cooldown verdict on a
+     * packument's skeleton, shared by full, abbreviated and single-version
+     * requests. Distinct from the pre-2.2.11 whole-document variants.
+     */
+    static final String SKELETON = "skeleton";
+
+    /**
+     * Path of every version's tarball URL in a packument.
+     */
+    private static final String TARBALL = "versions/*/dist/tarball";
     /**
      * NPM Proxy facade.
      */
@@ -181,10 +188,10 @@ public final class DownloadPackageSlice implements Slice {
             if (abbreviated) {
                 // FAST PATH: Serve pre-computed abbreviated metadata directly
                 // This avoids loading/parsing full metadata (38MB → 3MB, no JSON parsing)
-                return this.serveAbbreviated(rawPackageName, headers, clientETag, auditCtx, owner);
+                return this.serve(rawPackageName, headers, clientETag, auditCtx, owner, true);
             } else {
                 // FULL PATH: Load and process full metadata
-                return this.serveFull(rawPackageName, headers, clientETag, auditCtx, owner);
+                return this.serve(rawPackageName, headers, clientETag, auditCtx, owner, false);
             }
         }).whenComplete((r, e) -> recordPhase("packument_total", entryNs))
         .exceptionally(error -> {
@@ -249,551 +256,294 @@ public final class DownloadPackageSlice implements Slice {
     }
 
     /**
-     * Serve abbreviated metadata using pre-computed cached version.
-     * MEMORY OPTIMIZATION: ~90% memory reduction for npm install requests.
-     * 
-     * COOLDOWN: If cooldown is enabled, we must apply filtering even to abbreviated
-     * metadata. This requires loading abbreviated bytes and filtering, but still
-     * avoids full JSON parsing since abbreviated is much smaller (~3MB vs 38MB).
+     * Serve a packument streamed from storage; the document is never read
+     * into memory whole.
+     *
+     * <p>Without cooldown the stored document is streamed with its relative
+     * tarball URLs rewritten in place ({@link JsonStringRewrite}). With
+     * cooldown, the verdict is taken on the document's
+     * {@link PackumentSkeleton}, which the filtered-metadata envelope caches
+     * (the document is only scanned on an envelope miss), and the body is
+     * streamed through the verdict's allow-list ({@link PackumentDecision#apply}):
+     * a version the cached verdict has not seen is withheld, never served
+     * unevaluated.</p>
+     *
+     * <p>An abbreviated request is answered from the stored abbreviated
+     * document when there is one, otherwise with the full document (a
+     * superset every npm client accepts).</p>
      */
-    private CompletableFuture<Response> serveAbbreviated(
+    private CompletableFuture<Response> serve(
         final String packageName,
         final Headers headers,
         final Optional<String> clientETag,
-        final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String owner
+        final AuditContext auditCtx,
+        final String owner,
+        final boolean abbreviated
     ) {
-        // Phase 10.5: time the metadata-only fetch (drives upstream when cache miss).
         final long metaNs = System.nanoTime();
         return this.npm.getPackageMetadataOnly(packageName)
             .doOnEvent((m, e) -> recordPhase("packument_metadata_fetch", metaNs))
-            .flatMap(metadata -> {
-                // PERF: Early 304 exit — skip content loading when the derived
-                // ETag matches. Valid ONLY when cooldown filtering is inactive:
-                // the derived ETag folds the immutable upstream hash, which does
-                // not change when a version is blocked/unblocked. With cooldown
-                // active we fall through and let buildAbbreviatedResponse
-                // (filtered=true) compute the ETag from the filtered bytes, so a
-                // block-state change busts the client cache instead of returning
-                // a stale 304.
-                if (!this.cooldownActive() && clientETag.isPresent()
-                    && metadata.abbreviatedHash().isPresent()) {
-                    final String tarballPrefix = this.getTarballPrefix(headers);
-                    final String derivedEtag = MetadataETag.derive(
-                        metadata.abbreviatedHash().get(), tarballPrefix
-                    );
-                    if (clientETag.get().equals(derivedEtag)) {
-                        // Taxonomy: a 304 revalidation is still a metadata
-                        // listing view — audit it. The filter never runs on
-                        // this path so the filtered-version detail is unknown.
-                        com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
-                            auditCtx, this.repoType, this.repoName, packageName,
-                            owner, "etag revalidation (304)"
-                        );
-                        return io.reactivex.Maybe.just(
-                            ResponseBuilder.from(RsStatus.NOT_MODIFIED)
-                                .header("ETag", derivedEtag)
-                                .header("Cache-Control", "public, max-age=300")
-                                .varyHeader(this.vary(headers))
-                                .build()
-                        );
-                    }
-                }
-                // Try to get pre-computed abbreviated content
-                return this.npm.getAbbreviatedContentStream(packageName)
-                    .flatMap(abbreviatedStream -> {
-                        final long abbrevSize = abbreviatedStream.size().orElse(-1L);
-                        return Concatenation.withSize(abbreviatedStream, abbrevSize)
-                            .single()
-                            .map(buf -> new Remaining(buf).bytes())
-                            .toMaybe()
-                            .flatMap(abbreviatedBytes -> {
-                                // COOLDOWN: Apply filtering if enabled
-                                if (this.cooldownMetadata != null && this.repoType != null) {
-                                    return this.applyAbbreviatedCooldown(
-                                        abbreviatedBytes, packageName, metadata, headers, clientETag,
-                                        auditCtx, owner
-                                    );
-                                }
-                                // No cooldown wired - serve directly; still a
-                                // metadata listing view, audit with no filtering.
-                                com.auto1.pantera.audit.AuditLogger.resolution(
-                                    auditCtx, this.repoType, this.repoName, packageName,
-                                    owner, java.util.List.of()
-                                );
-                                return io.reactivex.Maybe.just(
-                                    this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, false, clientETag)
-                                );
-                            });
-                    })
-                    // Fall back to full metadata if abbreviated not available
-                    // This can happen for legacy cached data before abbreviated was added
-                    .switchIfEmpty(io.reactivex.Maybe.defer(() ->
-                        this.npm.getPackageContentStream(packageName).flatMap(contentStream -> {
-                            // OPTIMIZATION: Use size from Content when available for pre-allocation
-                            final long contentSize = contentStream.size().orElse(-1L);
-                            return Concatenation.withSize(contentStream, contentSize)
-                                .single()
-                                .map(buf -> new Remaining(buf).bytes())
-                                .toMaybe()
-                                .flatMap(rawBytes -> {
-                                    // Apply cooldown filtering to full metadata too
-                                    if (this.cooldownMetadata != null && this.repoType != null) {
-                                        return this.applyFullMetadataCooldown(
-                                            rawBytes, packageName, metadata, headers, clientETag,
-                                            auditCtx, owner
-                                        );
-                                    }
-                                    com.auto1.pantera.audit.AuditLogger.resolution(
-                                        auditCtx, this.repoType, this.repoName, packageName,
-                                        owner, java.util.List.of()
-                                    );
-                                    return io.reactivex.Maybe.just(
-                                        this.buildResponse(rawBytes, metadata, headers, true, false, clientETag)
-                                    );
-                                });
-                        })
-                    ));
-            })
-            .toSingle(ResponseBuilder.notFound().build())
+            .map(Optional::of)
+            .toSingle(Optional.empty())
             .to(SingleInterop.get())
-            .toCompletableFuture();
-    }
-
-    /**
-     * Apply cooldown filtering to abbreviated metadata.
-     *
-     * Abbreviated metadata contains the "time" field with release dates
-     * (added for pnpm compatibility in AbbreviatedMetadata.generate()).
-     * CooldownMetadataService.filterMetadata() handles parsing and date extraction
-     * internally via NpmMetadataParser which implements ReleaseDateProvider.
-     * No need to pre-parse here - that would be redundant.
-     */
-    private io.reactivex.Maybe<Response> applyAbbreviatedCooldown(
-        final byte[] abbreviatedBytes,
-        final String packageName,
-        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
-        final Headers headers,
-        final Optional<String> clientETag,
-        final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String owner
-    ) {
-        // filterMetadata() parses JSON once and extracts release dates via ReleaseDateProvider
-        // No need to pre-parse - that would double the parsing overhead
-        final CompletableFuture<Response> filterFuture = this.applyFilterAndBuildResponse(
-            abbreviatedBytes, packageName, metadata, headers, clientETag, auditCtx, owner
-        );
-        return RxFuture.maybe(filterFuture);
-    }
-
-    /**
-     * Apply cooldown filtering to full metadata (fallback when abbreviated not available).
-     * Full metadata contains the "time" field. CooldownMetadataService handles parsing.
-     */
-    private io.reactivex.Maybe<Response> applyFullMetadataCooldown(
-        final byte[] fullBytes,
-        final String packageName,
-        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
-        final Headers headers,
-        final Optional<String> clientETag,
-        final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String owner
-    ) {
-        final CompletableFuture<Response> filterFuture = this.cooldownMetadata.filterMetadata(
-            this.repoType,
-            this.repoName,
-            "full",
-            packageName,
-            fullBytes,
-            new NpmMetadataParser(),
-            new NpmMetadataFilter(),
-            new NpmMetadataRewriter(),
-            auditCtx,
-            owner
-        ).handle((filtered, ex) -> {
-            if (ex != null) {
-                Throwable cause = ex;
-                while (cause != null) {
-                    if (cause instanceof AllVersionsBlockedException) {
-                        EcsLogger.info("com.auto1.pantera.npm")
-                            .message("All versions blocked by cooldown (full fallback)")
-                            .eventCategory("database")
-                            .eventAction("all_versions_blocked")
-                            .field("package.name", packageName)
-                            .field("log.source", "application")
-                            .log();
-                        final String json = String.format(
-                            "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
-                            packageName, packageName
-                        );
-                        return ResponseBuilder.forbidden()
-                            .header("X-Pantera-Cooldown", "all-blocked")
-                            .jsonBody(json)
-                            .build();
-                    }
-                    cause = cause.getCause();
-                }
-                EcsLogger.warn("com.auto1.pantera.npm")
-                    .message("Cooldown filter error (full fallback) - serving unfiltered")
-                    .eventCategory("database")
-                    .eventAction("filter_error")
-                    .field("package.name", packageName)
-                    .error(ex)
-                    .field("log.source", "application")
-                    .log();
-                return this.buildResponse(fullBytes, metadata, headers, true, false, clientETag);
-            }
-            return this.buildResponse(filtered, metadata, headers, true, true, clientETag);
-        });
-        return RxFuture.maybe(filterFuture);
-    }
-
-    /**
-     * Apply cooldown filtering and build abbreviated response.
-     * CooldownMetadataService handles JSON parsing and release date extraction internally.
-     * Release dates are sourced from the canonical {@code PublishDateRegistry}
-     * (via {@code RegistryBackedInspector}), populated from upstream metadata.
-     */
-    private CompletableFuture<Response> applyFilterAndBuildResponse(
-        final byte[] abbreviatedBytes,
-        final String packageName,
-        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
-        final Headers headers,
-        final Optional<String> clientETag,
-        final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String owner
-    ) {
-        return this.cooldownMetadata.filterMetadata(
-            this.repoType,
-            this.repoName,
-            "abbreviated",
-            packageName,
-            abbreviatedBytes,
-            new NpmMetadataParser(),
-            new NpmMetadataFilter(),
-            new NpmMetadataRewriter(),
-            auditCtx,
-            owner
-        ).handle((filtered, ex) -> {
-                if (ex != null) {
-                    Throwable cause = ex;
-                    while (cause != null) {
-                        if (cause instanceof AllVersionsBlockedException) {
-                            EcsLogger.info("com.auto1.pantera.npm")
-                                .message("All versions blocked by cooldown (abbreviated)")
-                                .eventCategory("database")
-                                .eventAction("all_versions_blocked")
-                                .field("package.name", packageName)
-                                .field("log.source", "application")
-                                .log();
-                            final String json = String.format(
-                                "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
-                                packageName, packageName
-                            );
-                            return ResponseBuilder.forbidden()
-                                .header("X-Pantera-Cooldown", "all-blocked")
-                                .jsonBody(json)
-                                .build();
-                        }
-                        cause = cause.getCause();
-                    }
-                    EcsLogger.warn("com.auto1.pantera.npm")
-                        .message("Cooldown filter error (abbreviated) - falling back to unfiltered")
-                        .eventCategory("database")
-                        .eventAction("filter_error")
-                        .field("package.name", packageName)
-                        .error(ex)
-                        .field("log.source", "application")
-                        .log();
-                    return this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, false, clientETag);
-                }
-                // Success - build response with filtered abbreviated metadata
-                return this.buildAbbreviatedResponse(filtered, metadata, headers, true, clientETag);
-            });
-    }
-
-    /**
-     * Serve full metadata with cooldown filtering support.
-     */
-    private CompletableFuture<Response> serveFull(
-        final String packageName,
-        final Headers headers,
-        final Optional<String> clientETag,
-        final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String owner
-    ) {
-        return this.npm.getPackageMetadataOnly(packageName)
-            .flatMap(metadata -> {
-                // PERF: Early 304 exit — skip content loading when the derived
-                // ETag matches. Valid ONLY when cooldown filtering is inactive
-                // (see serveAbbreviated): the derived ETag ignores the filtered
-                // output, so with cooldown active we fall through to
-                // buildResponse (filtered=true) to key the ETag to the served
-                // filtered bytes.
-                if (!this.cooldownActive() && clientETag.isPresent()
-                    && metadata.contentHash().isPresent()) {
-                    final String tarballPrefix = this.getTarballPrefix(headers);
-                    final String derivedEtag = MetadataETag.derive(
-                        metadata.contentHash().get(), tarballPrefix
-                    );
-                    if (clientETag.get().equals(derivedEtag)) {
-                        // Taxonomy: a 304 revalidation is still a metadata
-                        // listing view — audit it. The filter never runs on
-                        // this path so the filtered-version detail is unknown.
-                        com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
-                            auditCtx, this.repoType, this.repoName, packageName,
-                            owner, "etag revalidation (304)"
-                        );
-                        return io.reactivex.Maybe.just(
-                            ResponseBuilder.from(RsStatus.NOT_MODIFIED)
-                                .header("ETag", derivedEtag)
-                                .header("Cache-Control", "public, max-age=300")
-                                .varyHeader(this.vary(headers))
-                                .build()
-                        );
-                    }
-                }
-                return this.npm.getPackageContentStream(packageName).flatMap(contentStream -> {
-                    // OPTIMIZATION: Use size from Content when available for pre-allocation
-                    final long contentSize = contentStream.size().orElse(-1L);
-                    return Concatenation.withSize(contentStream, contentSize)
-                        .single()
-                        .map(buf -> new Remaining(buf).bytes())
-                        .toMaybe()
-                        .flatMap(rawBytes -> {
-                            // Apply cooldown filtering if available
-                            if (this.cooldownMetadata != null && this.repoType != null) {
-                                final CompletableFuture<Response> filterFuture =
-                                    this.cooldownMetadata.filterMetadata(
-                                        this.repoType,
-                                        this.repoName,
-                                        "full",
-                                        packageName,
-                                        rawBytes,
-                                        new NpmMetadataParser(),
-                                        new NpmMetadataFilter(),
-                                        new NpmMetadataRewriter(),
-                                        auditCtx,
-                                        owner
-                                    ).handle((filtered, ex) -> {
-                                        if (ex != null) {
-                                            Throwable cause = ex;
-                                            while (cause != null) {
-                                                if (cause instanceof AllVersionsBlockedException) {
-                                                    EcsLogger.info("com.auto1.pantera.npm")
-                                                        .message("All versions blocked by cooldown")
-                                                        .eventCategory("database")
-                                                        .eventAction("all_versions_blocked")
-                                                        .field("package.name", packageName)
-                                                        .field("log.source", "application")
-                                                        .log();
-                                                    final String json = String.format(
-                                                        "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
-                                                        packageName, packageName
-                                                    );
-                                                    return ResponseBuilder.forbidden()
-                                                        .header("X-Pantera-Cooldown", "all-blocked")
-                                                        .jsonBody(json)
-                                                        .build();
-                                                }
-                                                cause = cause.getCause();
-                                            }
-                                            EcsLogger.warn("com.auto1.pantera.npm")
-                                                .message("Cooldown filter error - falling back to unfiltered")
-                                                .eventCategory("database")
-                                                .eventAction("filter_error")
-                                                .field("package.name", packageName)
-                                                .error(ex)
-                                                .field("log.source", "application")
-                                                .log();
-                                            return this.buildResponse(rawBytes, metadata, headers, false, false, clientETag);
-                                        }
-                                        return this.buildResponse(filtered, metadata, headers, false, true, clientETag);
-                                    });
-                                return RxFuture.maybe(filterFuture);
-                            }
-                            // No cooldown wired - serve directly; still a
-                            // metadata listing view, audit with no filtering.
-                            com.auto1.pantera.audit.AuditLogger.resolution(
-                                auditCtx, this.repoType, this.repoName, packageName,
-                                owner, java.util.List.of()
-                            );
-                            return io.reactivex.Maybe.just(
-                                this.buildResponse(rawBytes, metadata, headers, false, false, clientETag)
-                            );
-                        });
-                });
-            })
-            .toSingle(ResponseBuilder.notFound().build())
-            .to(SingleInterop.get())
-            .toCompletableFuture();
-    }
-
-    /**
-     * Build response from pre-computed abbreviated metadata.
-     * MEMORY EFFICIENT: Uses byte-level URL transformation - no JSON parsing.
-     */
-    private Response buildAbbreviatedResponse(
-        final byte[] abbreviatedBytes,
-        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
-        final Headers headers,
-        final boolean filtered,
-        final Optional<String> clientETag
-    ) {
-        final String tarballPrefix = this.getTarballPrefix(headers);
-        // A filtered body keys its ETag to the served bytes (they change on
-        // block/unblock); a raw body keeps the fast derive() from the stored
-        // abbreviated hash (~100 bytes to hash, ~1000x faster than SHA-256 of
-        // the full 3-5MB content).
-        final String etag = filtered
-            ? this.filteredEtag(abbreviatedBytes, tarballPrefix)
-            : this.rawAbbreviatedEtag(metadata, abbreviatedBytes, tarballPrefix);
-        // Check for 304 Not Modified BEFORE URL transformation
-        if (clientETag.isPresent() && clientETag.get().equals(etag)) {
-            return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
-                .header("ETag", etag)
-                .header("Cache-Control", "public, max-age=300")
-                .varyHeader(this.vary(headers))
-                .build();
-        }
-        // Only transform bytes when we actually need to send them
-        final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
-        final byte[] transformedBytes = transformer.transform(abbreviatedBytes, tarballPrefix);
-        final Content streamedContent = new Content.From(
-            Flowable.fromArray(ByteBuffer.wrap(transformedBytes))
-        );
-        return ResponseBuilder.ok()
-            .header("Content-Type", "application/vnd.npm.install-v1+json; charset=utf-8")
-            .header("Last-Modified", metadata.lastModified())
-            .header("ETag", etag)
-            .header("Cache-Control", "public, max-age=300")
-            .header("CDN-Cache-Control", "public, max-age=600")
-            .varyHeader(this.vary(headers))
-            .body(streamedContent)
-            .build();
-    }
-
-    /**
-     * Build HTTP response from metadata bytes.
-     * MEMORY OPTIMIZATION: Uses streaming JSON transformation for URL rewriting.
-     */
-    private Response buildResponse(
-        final byte[] rawBytes,
-        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
-        final Headers headers,
-        final boolean abbreviated,
-        final boolean filtered,
-        final Optional<String> clientETag
-    ) {
-        try {
-            final String tarballPrefix = this.getTarballPrefix(headers);
-            // For full metadata requests (abbreviated=false), we can skip JSON parsing
-            if (!abbreviated) {
-                // A filtered body keys its ETag to the served bytes (they change
-                // on block/unblock); a raw body keeps the fast derive() from the
-                // stored upstream hash (~1000x faster than SHA-256 of the body).
-                final String etag = filtered
-                    ? this.filteredEtag(rawBytes, tarballPrefix)
-                    : this.rawFullEtag(metadata, rawBytes, tarballPrefix);
-                if (clientETag.isPresent() && clientETag.get().equals(etag)) {
-                    return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
-                        .header("ETag", etag)
-                        .header("Cache-Control", "public, max-age=300")
-                        .varyHeader(this.vary(headers))
-                        .build();
-                }
-                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
-                final byte[] transformedBytes = transformer.transform(rawBytes, tarballPrefix);
-                final Content streamedContent = new Content.From(
-                    Flowable.fromArray(ByteBuffer.wrap(transformedBytes))
-                );
-                return ResponseBuilder.ok()
-                    .header("Content-Type", "application/json; charset=utf-8")
-                    .header("Last-Modified", metadata.lastModified())
-                    .header("ETag", etag)
-                    .header("Cache-Control", "public, max-age=300")
-                    .header("CDN-Cache-Control", "public, max-age=600")
-                    .varyHeader(this.vary(headers))
-                    .body(streamedContent)
-                    .build();
-            }
-            // Abbreviated requests should use serveAbbreviated() path, but handle fallback
-            final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
-            final byte[] transformedBytes = transformer.transform(rawBytes, tarballPrefix);
-            final String clientContent = new String(transformedBytes, StandardCharsets.UTF_8);
-            final JsonObject fullJson = Json.createReader(new StringReader(clientContent)).readObject();
-            final JsonObject enhanced = new MetadataEnhancer(fullJson).enhance();
-            final JsonObject response = new AbbreviatedMetadata(enhanced).generate();
-            final String responseStr = response.toString();
-            final String etag = new MetadataETag(responseStr).calculate();
-            if (clientETag.isPresent() && clientETag.get().equals(etag)) {
-                return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
-                    .header("ETag", etag)
-                    .header("Cache-Control", "public, max-age=300")
-                    .varyHeader(this.vary(headers))
-                    .build();
-            }
-            final Content streamedContent = new Content.From(
-                Flowable.fromArray(ByteBuffer.wrap(responseStr.getBytes(StandardCharsets.UTF_8)))
+            .toCompletableFuture()
+            .thenCompose(
+                metadata -> metadata.map(
+                    meta -> this.serveStored(
+                        new Stored(
+                            packageName, meta,
+                            abbreviated && meta.abbreviatedHash().isPresent()
+                        ),
+                        headers, clientETag, auditCtx, owner
+                    )
+                ).orElseGet(
+                    () -> CompletableFuture.completedFuture(ResponseBuilder.notFound().build())
+                )
             );
-            return ResponseBuilder.ok()
-                .header("Content-Type", "application/vnd.npm.install-v1+json; charset=utf-8")
-                .header("Last-Modified", metadata.lastModified())
-                .header("ETag", etag)
-                .header("Cache-Control", "public, max-age=300")
-                .header("CDN-Cache-Control", "public, max-age=600")
-                .varyHeader(this.vary(headers))
-                .body(streamedContent)
-                .build();
-        } catch (final Exception e) {
-            // Fallback to original implementation if streaming fails
-            return this.buildResponseFallback(rawBytes, metadata, headers, abbreviated, clientETag);
-        }
     }
-    
-    /**
-     * Fallback response builder using DOM parsing (for error cases).
-     */
-    private Response buildResponseFallback(
-        final byte[] rawBytes,
-        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
+
+    private CompletableFuture<Response> serveStored(
+        final Stored stored,
         final Headers headers,
-        final boolean abbreviated,
+        final Optional<String> clientETag,
+        final AuditContext auditCtx,
+        final String owner
+    ) {
+        final String prefix = this.getTarballPrefix(headers);
+        if (!this.cooldownActive()) {
+            return this.raw(stored, prefix, headers, clientETag, Optional.of(auditCtx), owner);
+        }
+        return this.cooldownMetadata.filterMetadataLazily(
+            this.repoType, this.repoName, DownloadPackageSlice.SKELETON, stored.name(),
+            () -> this.open(stored).thenCompose(
+                content -> content.map(body -> new PackumentSkeleton(body).bytes()).orElseGet(
+                    () -> CompletableFuture.failedFuture(
+                        new IllegalStateException("packument vanished: " + stored.name())
+                    )
+                )
+            ),
+            new NpmMetadataParser(), new NpmMetadataFilter(), new NpmMetadataRewriter(),
+            auditCtx, owner
+        ).handle(
+            (skeleton, ex) -> {
+                final CompletableFuture<Response> result;
+                if (ex != null) {
+                    result = this.filterFailed(stored, prefix, headers, clientETag, ex);
+                } else if (skeleton.isEmpty()) {
+                    result = this.raw(stored, prefix, headers, clientETag, Optional.empty(), owner);
+                } else {
+                    result = this.filtered(
+                        stored, new PackumentDecision(skeleton.get()), skeleton.get(),
+                        prefix, headers, clientETag
+                    );
+                }
+                return result;
+            }
+        ).thenCompose(Function.identity());
+    }
+
+    /**
+     * Cooldown could not decide: every version under cooldown answers 403,
+     * any other failure serves the document unfiltered (as before 2.2.11).
+     */
+    private CompletableFuture<Response> filterFailed(
+        final Stored stored,
+        final String prefix,
+        final Headers headers,
+        final Optional<String> clientETag,
+        final Throwable error
+    ) {
+        final CompletableFuture<Response> result;
+        if (DownloadPackageSlice.allBlocked(error)) {
+            EcsLogger.info("com.auto1.pantera.npm")
+                .message("All versions blocked by cooldown")
+                .eventCategory("database")
+                .eventAction("all_versions_blocked")
+                .field("package.name", stored.name())
+                .field("log.source", "application")
+                .log();
+            result = CompletableFuture.completedFuture(
+                ResponseBuilder.forbidden()
+                    .header("X-Pantera-Cooldown", "all-blocked")
+                    .jsonBody(
+                        String.format(
+                            "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
+                            stored.name(), stored.name()
+                        )
+                    )
+                    .build()
+            );
+        } else {
+            EcsLogger.warn("com.auto1.pantera.npm")
+                .message("Cooldown filter error - falling back to unfiltered")
+                .eventCategory("database")
+                .eventAction("filter_error")
+                .field("package.name", stored.name())
+                .error(error)
+                .field("log.source", "application")
+                .log();
+            result = this.raw(stored, prefix, headers, clientETag, Optional.empty(), "");
+        }
+        return result;
+    }
+
+    /**
+     * Stream the stored document with only its relative tarball URLs
+     * rewritten. Its ETag derives from the stored content hash.
+     *
+     * @param audit Context to emit the resolution audit with; empty when
+     *  the cooldown service already emitted it
+     */
+    private CompletableFuture<Response> raw(
+        final Stored stored,
+        final String prefix,
+        final Headers headers,
+        final Optional<String> clientETag,
+        final Optional<AuditContext> audit,
+        final String owner
+    ) {
+        final Optional<String> etag = stored.hash().map(hash -> MetadataETag.derive(hash, prefix));
+        final CompletableFuture<Response> result;
+        if (etag.isPresent() && etag.equals(clientETag)) {
+            audit.ifPresent(
+                ctx -> AuditLogger.resolutionDetailUnknown(
+                    ctx, this.repoType, this.repoName, stored.name(), owner,
+                    "etag revalidation (304)"
+                )
+            );
+            result = CompletableFuture.completedFuture(this.notModified(etag.get(), headers));
+        } else {
+            audit.ifPresent(
+                ctx -> AuditLogger.resolution(
+                    ctx, this.repoType, this.repoName, stored.name(), owner, List.of()
+                )
+            );
+            result = this.open(stored).thenApply(
+                content -> content.map(
+                    body -> this.ok(
+                        stored,
+                        new JsonStringRewrite(
+                            body,
+                            Map.of(
+                                DownloadPackageSlice.TARBALL,
+                                url -> url.startsWith("/") ? prefix + url : url
+                            )
+                        ),
+                        etag, headers
+                    )
+                ).orElseGet(() -> ResponseBuilder.notFound().build())
+            );
+        }
+        return result;
+    }
+
+    /**
+     * Stream the stored document through the cooldown verdict. Its ETag
+     * derives from the stored content hash and the filtered skeleton, so it
+     * changes when either the document or the verdict does.
+     */
+    private CompletableFuture<Response> filtered(
+        final Stored stored,
+        final PackumentDecision decision,
+        final byte[] skeleton,
+        final String prefix,
+        final Headers headers,
         final Optional<String> clientETag
     ) {
-        final String rawContent = new String(rawBytes, StandardCharsets.UTF_8);
-        final String clientContent = this.clientFormat(rawContent, headers);
-        final JsonObject fullJson = Json.createReader(new StringReader(clientContent)).readObject();
-        final JsonObject enhanced = new MetadataEnhancer(fullJson).enhance();
-        final JsonObject response = abbreviated
-            ? new AbbreviatedMetadata(enhanced).generate()
-            : enhanced;
-        final String responseStr = response.toString();
-        final String etag = new MetadataETag(responseStr).calculate();
-
-        if (clientETag.isPresent() && clientETag.get().equals(etag)) {
-            return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
-                .header("ETag", etag)
-                .header("Cache-Control", "public, max-age=300")
-                .varyHeader(this.vary(headers))
-                .build();
-        }
-
-        final Content streamedContent = new Content.From(
-            Flowable.fromArray(ByteBuffer.wrap(responseStr.getBytes(StandardCharsets.UTF_8)))
+        final String etag = MetadataETag.derive(
+            new MetadataETag(
+                stored.hash().orElse(stored.metadata().lastModified())
+                    + ':' + new MetadataETag(skeleton).calculate()
+            ).calculate(),
+            prefix
         );
+        final CompletableFuture<Response> result;
+        if (clientETag.isPresent() && clientETag.get().equals(etag)) {
+            result = CompletableFuture.completedFuture(this.notModified(etag, headers));
+        } else {
+            result = this.open(stored).thenApply(
+                content -> content.map(
+                    body -> this.ok(stored, decision.apply(body, prefix), Optional.of(etag), headers)
+                ).orElseGet(() -> ResponseBuilder.notFound().build())
+            );
+        }
+        return result;
+    }
 
-        return ResponseBuilder.ok()
-            .header("Content-Type", abbreviated
-                ? "application/vnd.npm.install-v1+json; charset=utf-8"
-                : "application/json; charset=utf-8")
-            .header("Last-Modified", metadata.lastModified())
-            .header("ETag", etag)
+    private CompletableFuture<Optional<Content>> open(final Stored stored) {
+        final io.reactivex.Maybe<Content> stream;
+        if (stored.abbreviated()) {
+            stream = this.npm.getAbbreviatedContentStream(stored.name());
+        } else {
+            stream = this.npm.getPackageContentStream(stored.name());
+        }
+        return stream.map(Optional::of)
+            .toSingle(Optional.empty())
+            .to(SingleInterop.get())
+            .toCompletableFuture();
+    }
+
+    private Response ok(
+        final Stored stored,
+        final Content body,
+        final Optional<String> etag,
+        final Headers headers
+    ) {
+        final ResponseBuilder builder = ResponseBuilder.ok()
+            .header(
+                "Content-Type",
+                stored.abbreviated()
+                    ? "application/vnd.npm.install-v1+json; charset=utf-8"
+                    : "application/json; charset=utf-8"
+            )
+            .header("Last-Modified", stored.metadata().lastModified());
+        etag.ifPresent(tag -> builder.header("ETag", tag));
+        return builder
             .header("Cache-Control", "public, max-age=300")
             .header("CDN-Cache-Control", "public, max-age=600")
             .varyHeader(this.vary(headers))
-            .body(streamedContent)
+            .body(body)
             .build();
+    }
+
+    private Response notModified(final String etag, final Headers headers) {
+        return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
+            .header("ETag", etag)
+            .header("Cache-Control", "public, max-age=300")
+            .varyHeader(this.vary(headers))
+            .build();
+    }
+
+    private static boolean allBlocked(final Throwable error) {
+        Throwable cause = error;
+        boolean blocked = false;
+        while (cause != null && !blocked) {
+            blocked = cause instanceof AllVersionsBlockedException;
+            cause = cause.getCause();
+        }
+        return blocked;
+    }
+
+    /**
+     * Stored packument being served.
+     *
+     * @param name Package name
+     * @param metadata Stored {@code meta.meta}
+     * @param abbreviated Whether the stored abbreviated document is served
+     */
+    private record Stored(
+        String name,
+        com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
+        boolean abbreviated
+    ) {
+        /**
+         * Stored SHA-256 of the served document.
+         *
+         * @return Hash, empty for entries stored before hashes were recorded
+         */
+        Optional<String> hash() {
+            return this.abbreviated ? this.metadata.abbreviatedHash() : this.metadata.contentHash();
+        }
     }
 
     /**
@@ -843,76 +593,6 @@ public final class DownloadPackageSlice implements Slice {
     }
 
     /**
-     * ETag for a cooldown-FILTERED body. Keyed to the bytes we actually serve
-     * so it changes the instant a version is blocked or unblocked — which is
-     * exactly what a raw-upstream-hash ETag does NOT do, because filtering
-     * removes versions at serve time without touching the stored upstream
-     * bytes. Without this, a client revalidating with {@code If-None-Match}
-     * gets a stale {@code 304} and never sees a version that just aged out of
-     * (or was released from) cooldown until it clears its own cache. Mirrors
-     * the Maven adapter's served-bytes ETag. Hashes the pre-transform filtered
-     * bytes; the tarball prefix is folded in by {@link MetadataETag#derive} so
-     * the {@code 304} comparison still runs before URL transformation.
-     *
-     * @param servedBytes Pre-transform filtered metadata bytes
-     * @param tarballPrefix Tarball URL prefix that the transform will apply
-     * @return ETag derived from the filtered content
-     */
-    private String filteredEtag(final byte[] servedBytes, final String tarballPrefix) {
-        return MetadataETag.derive(new MetadataETag(servedBytes).calculate(), tarballPrefix);
-    }
-
-    /**
-     * ETag for a RAW full-metadata body — the fast path. Derives from the
-     * immutable upstream content hash (~100 bytes hashed) when present, else
-     * falls back to hashing the transformed bytes. Correct only for bytes that
-     * are byte-for-byte the upstream packument (no cooldown, or a filter-error
-     * fallback that serves unfiltered bytes); use {@link #filteredEtag} for any
-     * body that went through the cooldown filter.
-     *
-     * @param metadata Package metadata carrying the stored content hash
-     * @param rawBytes Raw metadata bytes (fallback hash source)
-     * @param tarballPrefix Tarball URL prefix
-     * @return ETag derived from the stored upstream hash
-     */
-    private String rawFullEtag(
-        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
-        final byte[] rawBytes,
-        final String tarballPrefix
-    ) {
-        return metadata.contentHash()
-            .map(hash -> MetadataETag.derive(hash, tarballPrefix))
-            .orElseGet(() -> {
-                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
-                return new MetadataETag(transformer.transform(rawBytes, tarballPrefix)).calculate();
-            });
-    }
-
-    /**
-     * ETag for a RAW abbreviated-metadata body — the fast path, keyed to the
-     * stored abbreviated content hash. See {@link #rawFullEtag}; use
-     * {@link #filteredEtag} for filtered bodies.
-     *
-     * @param metadata Package metadata carrying the stored abbreviated hash
-     * @param abbreviatedBytes Raw abbreviated bytes (fallback hash source)
-     * @param tarballPrefix Tarball URL prefix
-     * @return ETag derived from the stored abbreviated hash
-     */
-    private String rawAbbreviatedEtag(
-        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
-        final byte[] abbreviatedBytes,
-        final String tarballPrefix
-    ) {
-        return metadata.abbreviatedHash()
-            .map(hash -> MetadataETag.derive(hash, tarballPrefix))
-            .orElseGet(() -> {
-                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
-                final byte[] transformed = transformer.transform(abbreviatedBytes, tarballPrefix);
-                return new MetadataETag(transformed).calculate();
-            });
-    }
-
-    /**
      * Check if client requests abbreviated manifest.
      * 
      * @param headers Request headers
@@ -937,16 +617,6 @@ public final class DownloadPackageSlice implements Slice {
             .map(etag -> etag.startsWith("W/") ? etag.substring(2) : etag)
             .map(etag -> etag.replaceAll("\"", "")) // Remove quotes
             .findFirst();
-    }
-
-    /**
-     * Transform internal package format for external clients.
-     * @param data Internal package data
-     * @param headers Request headers
-     * @return External client package
-     */
-    private String clientFormat(final String data, final Headers headers) {
-        return new ClientContent(data, this.getTarballPrefix(headers)).value().toString();
     }
 
     /**

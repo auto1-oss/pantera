@@ -313,6 +313,25 @@ public final class NpmProxyTest {
     @Nested
     class MetadataStillFresh {
         @Test
+        public void getsStoredMetadataWithHashesAfterFirstFetch() throws IOException {
+            final String name = "asdas";
+            final NpmPackage fetched = defaultPackage(OffsetDateTime.now());
+            final NpmPackage.Metadata stored = new NpmPackage.Metadata(
+                NpmProxyTest.LAST_MODIFIED, OffsetDateTime.now(), "full-hash", "abbreviated-hash"
+            );
+            Mockito.when(NpmProxyTest.this.storage.getPackageMetadata(name))
+                .thenReturn(Maybe.empty(), Maybe.just(stored));
+            Mockito.doReturn(Maybe.just(fetched))
+                .when(NpmProxyTest.this.remote).loadPackage(name);
+            Mockito.when(NpmProxyTest.this.storage.save(fetched)).thenReturn(Completable.complete());
+            MatcherAssert.assertThat(
+                "First fetch answers with the stored meta.meta, which carries the hashes",
+                NpmProxyTest.this.npm.getPackageMetadataOnly(name).blockingGet(),
+                new IsSame<>(stored)
+            );
+        }
+
+        @Test
         public void getsMetadataOnlyFromCacheWithoutRemoteCall() throws IOException {
             final String name = "asdas";
             // Fresh metadata (30 minutes old, within 1h TTL)

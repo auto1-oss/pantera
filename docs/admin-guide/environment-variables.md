@@ -42,6 +42,8 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 |----------|---------|-------------|
 | `PANTERA_DEDUP_MAX_AGE_MS` | `300000` | Maximum age of in-flight dedup entries (ms) -- 5 minutes. Stale entries are cleaned up by a background thread. |
 | `PANTERA_DOCKER_CACHE_EXPIRY_HOURS` | `24` | Docker proxy cache entry lifetime (hours) |
+| `PANTERA_COOLDOWN_METADATA_L1_SIZE` | `50000` | Maximum number of entries in the in-memory (L1) cooldown filtered-metadata cache when no YAML `cooldownMetadata` size is configured. |
+| `PANTERA_COOLDOWN_METADATA_L1_MAX_BYTES` | `1073741824` (1 GiB) | Maximum total size, in bytes, of the entries in the in-memory (L1) cooldown filtered-metadata cache. Applies on top of the entry-count limit: whichever is reached first evicts. |
 | `PANTERA_BODY_BUFFER_THRESHOLD` | `1048576` | Request body size threshold (bytes). Bodies smaller than this are buffered in memory; larger bodies are streamed from disk. |
 | `PANTERA_MAX_REQUEST_BODY_BYTES` | `10737418240` (10 GiB) | **Fallback tier only** (since 2.2.9): the primary source is the DB-backed `max_request_body_bytes` admin setting, editable in the admin UI's Settings page or at the matching `GET`/`PUT /api/v1/admin/...-settings` endpoint -- hot-reloaded, no restart, applied on every node (see [Configuration Reference](../configuration-reference.md#security-policy-settings-auth_settings-table)). This variable is consulted only while no row has been saved. Hard cap on a single request body, applied to every request regardless of per-repository `content-length-max`. A declared `Content-Length` above it is rejected with `413` before any byte is read; a chunked body is metered as it streams and rejected with `413` once it exceeds the cap. |
 
@@ -120,7 +122,7 @@ Group response-body drain concurrency is sized automatically per repository by t
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `JVM_ARGS` | (see Dockerfile defaults) | Complete JVM argument string. When set, replaces all default JVM flags. |
+| `JVM_ARGS` | (see Dockerfile defaults) | Complete JVM argument string. When set, replaces all default JVM flags. Keep `-XX:HeapDumpPath` on a directory that exists in the image (`/var/pantera/logs/dumps/`) and is backed by a volume with free space at least the size of the heap; otherwise an out-of-memory exit leaves no heap dump. |
 | `ULIMIT_NOFILE` | `1048576` | Target file descriptor soft limit. The container entrypoint raises the soft limit to this value or the hard limit, whichever is lower. |
 | `ULIMIT_NPROC` | `65536` | Target process/thread soft limit. |
 

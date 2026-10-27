@@ -294,9 +294,13 @@ public final class VertxSliceServer implements Closeable {
                     .setInitialWindowSize(16 * 1024 * 1024)
             )
             .setHttp2ConnectionWindowSize(128 * 1024 * 1024)
-            // HTTP Compression - matches JFrog/Nexus performance characteristics
-            .setCompressionSupported(true)  // Enable gzip/deflate compression
-            .setCompressionLevel(6),        // Balanced compression (1=fast, 9=best)
+            // HTTP compression for text metadata (binary artifacts opt out, see
+            // INCOMPRESSIBLE_TYPES). Level 1: on npm packuments it is ~1.7x
+            // faster than level 6 for ~20% larger output. Deflate runs on the
+            // event loop inside JNI critical sections that hold off GC, and
+            // packuments reach tens of MB.
+            .setCompressionSupported(true)
+            .setCompressionLevel(1),
             requestTimeout);
     }
 
@@ -1081,16 +1085,17 @@ public final class VertxSliceServer implements Closeable {
 
         final boolean isHead = "HEAD".equals(req.method().name());
 
-        // STREAMING: Convert Vert.x request stream to reactive Publisher without buffering
-        // req.toFlowable() returns Flowable<Buffer> which we map to ByteBuffer
-        final Flowable<ByteBuffer> bodyStream = req.toFlowable()
-            .map(buffer -> {
-                final ByteBuf netty = buffer.getByteBuf();
-                final ByteBuffer nio = ByteBuffer.allocate(netty.readableBytes());
-                netty.getBytes(netty.readerIndex(), nio);
-                nio.flip();
-                return nio;
-            });
+        // STREAMING: expose the request body as a reactive Publisher without buffering.
+        // Not req.toFlowable(): that forwards request(n) into fetch() on the
+        // subscriber's thread (a rio writer for file storage), and HTTP/2's fetch
+        // throws once the body ended — killing the writer and hanging the upload
+        // until the idle timeout. RequestBodyPublisher confines all stream access
+        // to the request context.
+        final io.vertx.core.Context reqContext = io.vertx.core.Vertx.currentContext();
+        final org.reactivestreams.Publisher<ByteBuffer> bodyStream = new RequestBodyPublisher(
+            req.getDelegate(),
+            reqContext != null ? reqContext : this.vertx.getDelegate().getOrCreateContext()
+        );
 
         // Create Content: with known size when Content-Length is present,
         // or without size for chunked transfers. Either way the ACTUAL bytes

@@ -11,11 +11,17 @@
 package com.auto1.pantera.npm.proxy.model;
 
 import io.vertx.core.json.JsonObject;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 
 /**
  * NPM Package.
+ *
+ * <p>The packument bytes are a {@link PackumentBody}: on the proxy ingest
+ * path a temp file (so a packument of tens of megabytes never sits in heap),
+ * in tests an in-memory document. {@link com.auto1.pantera.npm.proxy.NpmProxyStorage#save(NpmPackage)}
+ * releases the body once it is persisted.</p>
  * @since 0.1
  */
 public final class NpmPackage {
@@ -25,9 +31,9 @@ public final class NpmPackage {
     private final String name;
 
     /**
-     * JSON data.
+     * Packument bytes.
      */
-    private final String content;
+    private final PackumentBody body;
 
     /**
      * Package metadata.
@@ -65,14 +71,24 @@ public final class NpmPackage {
     }
 
     /**
-     * Ctor.
+     * Ctor with an in-memory document.
      * @param name Package name
      * @param content JSON data
      * @param metadata Package metadata
      */
     public NpmPackage(final String name, final String content, final Metadata metadata) {
+        this(name, new PackumentBody.Bytes(content.getBytes(StandardCharsets.UTF_8)), metadata);
+    }
+
+    /**
+     * Ctor.
+     * @param name Package name
+     * @param body Packument bytes
+     * @param metadata Package metadata
+     */
+    public NpmPackage(final String name, final PackumentBody body, final Metadata metadata) {
         this.name = name;
-        this.content = content;
+        this.body = body;
         this.metadata = metadata;
     }
 
@@ -85,11 +101,11 @@ public final class NpmPackage {
     }
 
     /**
-     * Get package JSON.
-     * @return Package JSON
+     * Get packument bytes.
+     * @return Packument body
      */
-    public String content() {
-        return this.content;
+    public PackumentBody body() {
+        return this.body;
     }
 
     /**
