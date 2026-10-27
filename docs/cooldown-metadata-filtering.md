@@ -137,7 +137,10 @@ Precedence (highest first): per-repo-name SNAPSHOT → per-repo-name (non-SNAPSH
   withheld, never served unevaluated), `dist-tags` is replaced by the
   filtered one, and relative tarball URLs are prefixed on the way through.
   The filtered body is compact JSON; its `ETag` derives from the stored
-  content hash and the filtered skeleton.
+  content hash and the filtered skeleton. A stored packument that cannot be
+  parsed for cooldown answers `502` instead of being served unfiltered; ingest
+  and serve parse with the same (unlimited) Jackson size and depth limits, so
+  a document that could be stored can always be evaluated.
 - **dist-tag shortcut (`GET /{pkg}/latest`):** served through the same filter
   path so unbounded `npm install foo` resolutions see only allowed versions.
 - Supports both the full packument and the abbreviated (`application/vnd.npm.install-v1+json`) variant.

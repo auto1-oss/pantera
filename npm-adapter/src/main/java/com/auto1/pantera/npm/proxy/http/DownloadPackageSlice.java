@@ -343,8 +343,11 @@ public final class DownloadPackageSlice implements Slice {
     }
 
     /**
-     * Cooldown could not decide: every version under cooldown answers 403,
-     * any other failure serves the document unfiltered (as before 2.2.11).
+     * Cooldown could not decide. Every version under cooldown answers 403. A
+     * stored packument that cannot be parsed answers 502 rather than being
+     * served unfiltered: its content comes from upstream, so an unparseable
+     * document must never be a way past cooldown. Any other failure (a
+     * cooldown backend error) serves the document unfiltered, as before 2.2.11.
      */
     private CompletableFuture<Response> filterFailed(
         final Stored stored,
@@ -368,6 +371,26 @@ public final class DownloadPackageSlice implements Slice {
                     .jsonBody(
                         String.format(
                             "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
+                            stored.name(), stored.name()
+                        )
+                    )
+                    .build()
+            );
+        } else if (DownloadPackageSlice.unparseable(error)) {
+            EcsLogger.warn("com.auto1.pantera.npm")
+                .message("Stored packument cannot be parsed for cooldown - refusing to serve it unfiltered")
+                .eventCategory("database")
+                .eventAction("filter_error")
+                .eventOutcome("failure")
+                .field("package.name", stored.name())
+                .error(error)
+                .field("log.source", "application")
+                .log();
+            result = CompletableFuture.completedFuture(
+                ResponseBuilder.from(RsStatus.byCode(502))
+                    .jsonBody(
+                        String.format(
+                            "{\"error\":\"Package metadata of '%s' could not be evaluated for cooldown\",\"package\":\"%s\"}",
                             stored.name(), stored.name()
                         )
                     )
@@ -512,6 +535,23 @@ public final class DownloadPackageSlice implements Slice {
             .header("Cache-Control", "public, max-age=300")
             .varyHeader(this.vary(headers))
             .build();
+    }
+
+    /**
+     * Whether a cooldown failure comes from parsing the stored document.
+     *
+     * @param error Failure
+     * @return True for a JSON parse or metadata parse failure
+     */
+    static boolean unparseable(final Throwable error) {
+        Throwable cause = error;
+        boolean found = false;
+        while (cause != null && !found) {
+            found = cause instanceof com.fasterxml.jackson.core.JsonProcessingException
+                || cause instanceof com.auto1.pantera.cooldown.metadata.MetadataParseException;
+            cause = cause.getCause();
+        }
+        return found;
     }
 
     private static boolean allBlocked(final Throwable error) {

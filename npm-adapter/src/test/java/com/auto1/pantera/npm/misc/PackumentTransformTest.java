@@ -33,7 +33,7 @@ import org.junit.jupiter.api.Test;
  */
 final class PackumentTransformTest {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = PackumentJson.MAPPER;
 
     private static final String DOC = String.join(
         "",
@@ -101,6 +101,31 @@ final class PackumentTransformTest {
         MatcherAssert.assertThat("blocked literal", decision.resolve("1.1.0"), new IsEqual<>(Optional.empty()));
         MatcherAssert.assertThat("re-pointed latest", decision.resolve("latest"), new IsEqual<>(Optional.of("1.0.0")));
         MatcherAssert.assertThat("dropped tag", decision.resolve("beta"), new IsEqual<>(Optional.empty()));
+    }
+
+    @Test
+    void handlesDocumentsBeyondJacksonsDefaultLimits() throws Exception {
+        final String huge = "x".repeat(21_000_000);
+        final String deep = "[".repeat(1500) + "]".repeat(1500);
+        final String doc = "{\"name\":\"big\",\"readme\":\"" + huge + "\","
+            + "\"dist-tags\":{\"latest\":\"1.0.0\",\"odd\":\"" + huge + "\"},"
+            + "\"versions\":{\"1.0.0\":{\"deep\":" + deep + "}},"
+            + "\"time\":{\"1.0.0\":\"2020-01-01T00:00:00.000Z\"}}";
+        final byte[] skeleton = new PackumentSkeleton(PackumentTransformTest.chunked(doc, 65_536)).bytes().join();
+        MatcherAssert.assertThat(
+            "cooldown parses the skeleton",
+            new NpmMetadataParser().getLatestVersion(new NpmMetadataParser().parse(skeleton)),
+            new IsEqual<>(Optional.of("1.0.0"))
+        );
+        MatcherAssert.assertThat(
+            "the filtered stream copies the document",
+            MAPPER.readTree(
+                PackumentTransformTest.collect(
+                    new PackumentDecision(skeleton).apply(PackumentTransformTest.chunked(doc, 65_536), "https://r")
+                )
+            ).get("readme").asText().length(),
+            new IsEqual<>(huge.length())
+        );
     }
 
     @Test
