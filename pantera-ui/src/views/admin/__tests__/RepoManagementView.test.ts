@@ -47,7 +47,6 @@ async function mountView(initial = '/admin/repositories') {
         AppLayout: { template: '<div><slot /></div>' },
         BulkAccessPolicyDialog: true,
         BulkDeleteReposDialog: true,
-        SetMeUpDrawer: true,
       },
     },
   })
@@ -119,10 +118,22 @@ describe('RepoManagementView', () => {
     expect(text).toContain('ayd')
   })
 
-  it('browseLinkEncodesSlashNames', async () => {
+  it('clicking a row cell opens its edit page', async () => {
+    const { wrapper, r } = await mountView()
+    await wrapper.findAll('tbody tr')[0].findAll('td')[2].trigger('click')
+    await flushPromises()
+    expect(r.currentRoute.value.path).toBe('/admin/repositories/maven-central/edit')
+  })
+
+  it('offers no per-row action menu', async () => {
+    const { wrapper } = await mountView()
+    expect(wrapper.find('[data-testid^="row-menu-"]').exists()).toBe(false)
+  })
+
+  it('nameLinkOpensTheEditPageWithEncodedSlashNames', async () => {
     const { wrapper } = await mountView()
     const hrefs = wrapper.findAll('a').map(a => a.attributes('href'))
-    expect(hrefs).toContain('/repositories/team%2Ffiles')
+    expect(hrefs).toContain('/admin/repositories/team%2Ffiles/edit')
   })
 
   it('shows an inline error with retry when the list fails', async () => {

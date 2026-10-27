@@ -14,9 +14,12 @@ import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import RepoConfigForm from '@/components/admin/RepoConfigForm.vue'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
+import DatePicker from 'primevue/datepicker'
 import Dialog from 'primevue/dialog'
 import InputSwitch from 'primevue/inputswitch'
 import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
+import Tag from 'primevue/tag'
 import type { RepoConfigEnvelope } from '@/types/repo'
 import type {
   CooldownConfig, CooldownRepoOverride, CooldownSnapshotPolicy,
@@ -129,6 +132,21 @@ function overrideJson(): string {
   return JSON.stringify(buildRepoOverride() ?? null)
 }
 
+// A window set in the repository's own config (`cooldown.duration`) is
+// applied over any override at every repository save, so a repository that
+// has one is edited through that key (enable + age only) and the override is
+// left alone; every other proxy edits the override.
+const windowFromConfig = ref(false)
+const configWindowEnabled = ref(false)
+const configWindow = ref('30d')
+const windowEnabled = computed(() => (windowFromConfig.value ? configWindowEnabled.value : overrideEnabled.value))
+
+const SNAPSHOT_OPTIONS = [
+  { label: 'Inherit', value: null },
+  { label: 'Cooldown on', value: true },
+  { label: 'Cooldown off', value: false },
+]
+
 // ---------------------------------------------------------------------------
 // Cooldown exemptions (proxy repositories; saved by the same Save button)
 // ---------------------------------------------------------------------------
@@ -143,6 +161,27 @@ interface EditableExemption {
 }
 
 const isProxy = computed(() => repoType.value.endsWith('-proxy'))
+
+/** Expiry picker value: local midnight of the stored day. */
+function expiryDate(day: string): Date | null {
+  if (!day) return null
+  const [y, m, d] = day.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+function expiryDay(value: Date | Date[] | (Date | null)[] | null | undefined): string {
+  if (!(value instanceof Date)) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`
+}
+
+// An expiry is 00:00 UTC of the chosen day and must be in the future.
+const firstExpiryDay = (() => {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  d.setHours(0, 0, 0, 0)
+  return d
+})()
 const exemptions = ref<EditableExemption[]>([])
 const exemptionsLoadError = ref('')
 const savedExemptions = ref('[]')
@@ -359,6 +398,7 @@ onMounted(async () => {
     const raw = await getRepo(props.name)
     const envelope = raw as RepoConfigEnvelope
     repoType.value = (envelope.repo?.type as string) ?? ''
+    windowFromConfig.value = !!envelope.repo?.cooldown
     awaitingBaseline.value = true
     initialConfig.value = envelope
     config.value = envelope
@@ -394,21 +434,36 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => { window.removeEventListener('beforeunload', onBeforeUnload) })
 
+// Back always lands on the management list: the list the operator came
+// from (filters and page kept) when there is one, else a fresh one.
+function goBack() {
+  const prev = (window.history.state as { back?: unknown } | null)?.back
+  if (typeof prev === 'string' && /^\/admin\/repositories\/?(\?|$)/.test(prev)) {
+    router.back()
+  } else {
+    router.push('/admin/repositories')
+  }
+}
+
 defineExpose({ dirty, save, reset, overrideEnabled, exemptionsValid })
 </script>
 
 <template>
   <AppLayout>
-    <div class="max-w-2xl space-y-5">
-      <div class="flex flex-wrap items-center gap-3">
-        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Edit: {{ name }}</h1>
-        <RepoTypeBadge v-if="repoType" :type="repoType" size="md" />
-        <span v-if="repoType" class="text-sm text-gray-500">
-          {{ repoModeLabel(undefined, repoType) }}<template v-if="storageLabel"> · {{ storageLabel }}</template>
-        </span>
-        <RouterLink :to="`/repositories/${encodeURIComponent(name)}`" class="ml-auto text-sm text-blue-600 hover:underline dark:text-blue-400">
-          <i class="pi pi-folder-open mr-1" />Browse
-        </RouterLink>
+    <div class="max-w-3xl space-y-5 pb-24">
+      <div class="space-y-1">
+        <nav class="text-sm" aria-label="Breadcrumb">
+          <a href="/admin/repositories" class="text-gray-500 hover:text-gray-900 hover:underline dark:hover:text-white" data-testid="back-btn" @click.prevent="goBack">
+            <i class="pi pi-arrow-left mr-1 text-xs" />Manage Repositories
+          </a>
+        </nav>
+        <div class="flex flex-wrap items-center gap-3">
+          <h1 class="text-2xl font-bold text-gray-900 dark:text-white">{{ name }}</h1>
+          <RepoTypeBadge v-if="repoType" :type="repoType" size="md" />
+          <span v-if="repoType" class="text-sm text-gray-500">
+            {{ repoModeLabel(undefined, repoType) }}<template v-if="storageLabel"> · {{ storageLabel }}</template>
+          </span>
+        </div>
       </div>
 
       <div v-if="loading" class="text-sm text-gray-500">Loading…</div>
@@ -420,81 +475,125 @@ defineExpose({ dirty, save, reset, overrideEnabled, exemptionsValid })
       <template v-else>
         <RepoConfigForm
           v-model:config="config"
+          v-model:cooldown-enabled="configWindowEnabled"
+          v-model:cooldown-window="configWindow"
           :initial-config="initialConfig"
           :read-only-type="true"
+          :hide-cooldown="true"
           @valid-change="isValid = $event"
         />
 
-        <!-- Per-repository cooldown override -->
-        <Card class="shadow-sm" data-testid="repo-cooldown-card">
+        <!-- Cooldown (proxy repositories only) -->
+        <Card v-if="isProxy" class="shadow-sm" data-testid="repo-cooldown-card">
           <template #title>Cooldown</template>
           <template #subtitle>
-            Override the global cooldown for this repository. Repository-specific
-            cooldown overrides type-level settings. SNAPSHOT policy further
-            overrides for SNAPSHOT artifacts (Maven/Gradle). Saved together with the repository.
+            Hold back newly published upstream versions until they reach a minimum age.
           </template>
           <template #content>
             <div v-if="cooldownLoadError" class="mb-3 text-sm text-red-700 dark:text-red-300" data-testid="repo-cooldown-load-error">
               {{ cooldownLoadError }}
             </div>
-            <div class="space-y-5">
-              <div class="flex items-center justify-between rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
-                <div>
-                  <div class="text-sm font-medium">Use repository-specific cooldown</div>
-                  <div class="text-xs text-gray-500">Off: inherit from per-type / global settings.</div>
+            <div class="space-y-6">
+              <!-- Window -->
+              <section class="space-y-3">
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <div class="text-sm font-medium">Repository-specific window</div>
+                    <div class="text-xs text-gray-500">
+                      <template v-if="windowEnabled && windowFromConfig">Stored in this repository's config.</template>
+                      <template v-else-if="windowEnabled">Overrides the global and per-format settings.</template>
+                      <template v-else>Off: the global settings apply (minimum age {{ globalAgePlaceholder }}).</template>
+                    </div>
+                  </div>
+                  <InputSwitch v-if="windowFromConfig" v-model="configWindowEnabled" :disabled="!canUpdate" data-testid="repo-cooldown-toggle" />
+                  <InputSwitch v-else v-model="overrideEnabled" :disabled="!canEditCooldown || !cooldownConfig" data-testid="repo-cooldown-toggle" />
                 </div>
-                <InputSwitch v-model="overrideEnabled" :disabled="!canEditCooldown || !cooldownConfig" data-testid="repo-cooldown-toggle" />
-              </div>
-              <div v-if="overrideEnabled" class="space-y-3 border-l-4 border-blue-200 pl-3 dark:border-blue-800" data-testid="repo-cooldown-fields">
-                <div class="flex items-center gap-3">
-                  <label class="w-44 text-sm text-gray-500">Enabled</label>
-                  <InputSwitch v-model="repoCooldownEnabled" :disabled="!canEditCooldown" data-testid="repo-cooldown-enabled" />
-                  <span class="text-xs text-gray-400">{{ repoCooldownEnabled ? 'Cooldown enforced for this repo' : 'Cooldown disabled for this repo' }}</span>
+
+                <div v-if="windowFromConfig && configWindowEnabled" class="grid gap-3 sm:grid-cols-2" data-testid="repo-cooldown-fields">
+                  <label class="space-y-1">
+                    <span class="block text-xs text-gray-500">Minimum allowed age</span>
+                    <InputText v-model="configWindow" fluid placeholder="30d" :disabled="!canUpdate" data-testid="repo-cooldown-age" />
+                    <span class="block text-xs text-gray-400">e.g. 7d, 24h, 30m</span>
+                  </label>
                 </div>
-                <div class="flex items-center gap-3">
-                  <label class="w-44 text-sm text-gray-500">Minimum allowed age</label>
-                  <InputText v-model="repoCooldownAge" class="w-32" :placeholder="globalAgePlaceholder" :disabled="!canEditCooldown" data-testid="repo-cooldown-age" />
-                  <span class="text-xs text-gray-400">e.g. 7d, 24h, 30m</span>
+
+                <div v-else-if="!windowFromConfig && overrideEnabled" class="grid gap-x-4 gap-y-3 sm:grid-cols-2" data-testid="repo-cooldown-fields">
+                  <div class="flex items-center justify-between gap-3 sm:col-span-2">
+                    <span class="text-sm">Enforce cooldown in this repository</span>
+                    <InputSwitch v-model="repoCooldownEnabled" :disabled="!canEditCooldown" data-testid="repo-cooldown-enabled" />
+                  </div>
+                  <label class="space-y-1">
+                    <span class="block text-xs text-gray-500">Minimum allowed age</span>
+                    <InputText v-model="repoCooldownAge" fluid :placeholder="globalAgePlaceholder" :disabled="!canEditCooldown" data-testid="repo-cooldown-age" />
+                    <span class="block text-xs text-gray-400">e.g. 7d, 24h, 30m</span>
+                  </label>
+                  <div />
+                  <label class="space-y-1">
+                    <span class="block text-xs text-gray-500">SNAPSHOT versions</span>
+                    <Select v-model="repoSnapshotEnabled" :options="SNAPSHOT_OPTIONS" option-label="label" option-value="value" fluid :disabled="!canEditCooldown" data-testid="repo-snapshot-enabled" />
+                  </label>
+                  <label class="space-y-1">
+                    <span class="block text-xs text-gray-500">SNAPSHOT minimum age</span>
+                    <InputText v-model="repoSnapshotAge" fluid :placeholder="globalSnapshotAgePlaceholder" :disabled="!canEditCooldown" data-testid="repo-snapshot-age" />
+                    <span class="block text-xs text-gray-400">Maven / Gradle only</span>
+                  </label>
                 </div>
-                <div class="flex items-center gap-3">
-                  <label class="w-44 text-sm text-gray-500">SNAPSHOT enabled (override)</label>
-                  <select v-model="repoSnapshotEnabled" class="rounded border px-2 py-1 text-sm dark:bg-gray-800" :disabled="!canEditCooldown" data-testid="repo-snapshot-enabled">
-                    <option :value="null">inherit</option>
-                    <option :value="true">true</option>
-                    <option :value="false">false</option>
-                  </select>
-                </div>
-                <div class="flex items-center gap-3">
-                  <label class="w-44 text-sm text-gray-500">SNAPSHOT minimum age</label>
-                  <InputText v-model="repoSnapshotAge" class="w-32" :placeholder="globalSnapshotAgePlaceholder" :disabled="!canEditCooldown" data-testid="repo-snapshot-age" />
-                  <span class="text-xs text-gray-400">e.g. 14d, 30d</span>
-                </div>
-              </div>
-              <div v-if="isProxy" class="space-y-2" data-testid="repo-exemptions">
+              </section>
+
+              <!-- Exemptions -->
+              <section class="space-y-3 border-t border-gray-200 pt-5 dark:border-gray-700" data-testid="repo-exemptions">
                 <div>
                   <div class="text-sm font-medium">Exemptions</div>
                   <div class="text-xs text-gray-500">
-                    Packages or images cooldown never blocks in this repository. Write the name as the
-                    Cooldown page lists it: an exact name, or a prefix ending in <code>*</code>
-                    (<code>@myorg/*</code>, <code>com.example.*</code>, <code>library/nginx*</code>).
-                    Saving releases matching blocks.
+                    Packages or images cooldown never blocks here: an exact name as the Cooldown page
+                    lists it, or a prefix ending in <code>*</code> (<code>@myorg/*</code>,
+                    <code>com.example.*</code>, <code>library/nginx*</code>). Leave the expiry empty for a
+                    permanent exemption. Saving releases matching blocks.
                   </div>
                 </div>
                 <div v-if="exemptionsLoadError" class="text-sm text-red-700 dark:text-red-300" data-testid="repo-exemptions-load-error">
                   {{ exemptionsLoadError }}
                 </div>
-                <div v-for="(ex, idx) in exemptions" :key="idx" class="flex flex-wrap items-start gap-2" data-testid="repo-exemption-row">
-                  <div class="flex flex-col">
-                    <InputText v-model="ex.pattern" class="w-56" placeholder="@myorg/*" :disabled="!canEditCooldown" :invalid="patternError(ex.pattern) !== ''" data-testid="repo-exemption-pattern" />
-                    <span v-if="ex.pattern && patternError(ex.pattern)" class="text-xs text-red-600">{{ patternError(ex.pattern) }}</span>
+                <div v-if="exemptions.length" class="space-y-2">
+                  <div class="hidden gap-2 text-xs font-medium text-gray-500 sm:grid sm:grid-cols-[minmax(0,1.3fr)_10.5rem_minmax(0,1fr)_2.25rem]" data-testid="repo-exemption-header">
+                    <span>Package or prefix</span>
+                    <span>Expires</span>
+                    <span>Reason</span>
+                    <span />
                   </div>
-                  <input v-model="ex.expiresOn" type="date" class="rounded border px-2 py-1 text-sm dark:bg-gray-800" title="Expires on (empty: never)" :disabled="!canEditCooldown" data-testid="repo-exemption-expiry" />
-                  <InputText v-model="ex.reason" class="w-48" placeholder="Reason (optional)" :disabled="!canEditCooldown" data-testid="repo-exemption-reason" />
-                  <span v-if="!ex.active" class="self-center text-xs text-amber-600" data-testid="repo-exemption-expired">expired</span>
-                  <Button v-if="canEditCooldown" icon="pi pi-trash" severity="secondary" text size="small" aria-label="Remove exemption" data-testid="repo-exemption-remove" @click="removeExemption(idx)" />
+                  <div
+                    v-for="(ex, idx) in exemptions"
+                    :key="idx"
+                    class="grid grid-cols-1 items-start gap-2 sm:grid-cols-[minmax(0,1.3fr)_10.5rem_minmax(0,1fr)_2.25rem]"
+                    data-testid="repo-exemption-row"
+                  >
+                    <div>
+                      <InputText v-model="ex.pattern" fluid placeholder="@myorg/*" aria-label="Package or prefix" :disabled="!canEditCooldown" :invalid="patternError(ex.pattern) !== ''" data-testid="repo-exemption-pattern" />
+                      <span v-if="ex.pattern && patternError(ex.pattern)" class="text-xs text-red-600">{{ patternError(ex.pattern) }}</span>
+                      <Tag v-if="!ex.active" value="expired" severity="warn" class="mt-1" data-testid="repo-exemption-expired" />
+                    </div>
+                    <DatePicker
+                      :model-value="expiryDate(ex.expiresOn)"
+                      fluid
+                      show-icon
+                      icon-display="input"
+                      show-clear
+                      date-format="yy-mm-dd"
+                      placeholder="Never"
+                      :min-date="firstExpiryDay"
+                      :manual-input="false"
+                      :disabled="!canEditCooldown"
+                      aria-label="Expires"
+                      data-testid="repo-exemption-expiry"
+                      @update:model-value="ex.expiresOn = expiryDay($event)"
+                    />
+                    <InputText v-model="ex.reason" fluid placeholder="Optional" aria-label="Reason" :disabled="!canEditCooldown" data-testid="repo-exemption-reason" />
+                    <Button v-if="canEditCooldown" icon="pi pi-trash" severity="secondary" text aria-label="Remove exemption" data-testid="repo-exemption-remove" @click="removeExemption(idx)" />
+                  </div>
                 </div>
                 <Button v-if="canEditCooldown" label="Add exemption" icon="pi pi-plus" severity="secondary" outlined size="small" data-testid="repo-exemption-add" @click="addExemption" />
-              </div>
+              </section>
+
               <div v-if="!canEditCooldown" class="text-xs text-gray-500" data-testid="repo-cooldown-readonly-note">
                 Read-only — you do not have permission to edit cooldown settings.
               </div>
@@ -504,21 +603,6 @@ defineExpose({ dirty, save, reset, overrideEnabled, exemptionsValid })
 
         <div v-if="saveError" data-testid="save-error" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
           {{ saveError }}
-        </div>
-
-        <div class="flex items-center gap-3 pt-2">
-          <Button
-            v-if="canUpdate"
-            label="Save"
-            icon="pi pi-check"
-            :loading="saving"
-            :disabled="!isValid || !exemptionsValid || saving || !dirty"
-            data-testid="save-btn"
-            @click="save"
-          />
-          <Button label="Reset" severity="secondary" text :disabled="!dirty || saving" data-testid="reset-btn" @click="reset" />
-          <span v-if="dirty" class="text-xs text-amber-600 dark:text-amber-400" data-testid="dirty-note">Unsaved changes</span>
-          <Button label="Back" severity="secondary" text class="ml-auto" @click="router.back()" />
         </div>
 
         <!-- Danger zone -->
@@ -531,6 +615,23 @@ defineExpose({ dirty, save, reset, overrideEnabled, exemptionsValid })
             </div>
           </template>
         </Card>
+        <div
+          v-if="canUpdate"
+          class="sticky bottom-0 z-10 -mx-4 flex items-center gap-3 border-t border-gray-200 bg-white/95 px-4 py-3 backdrop-blur dark:border-gray-700 dark:bg-gray-900/95"
+          data-testid="save-bar"
+        >
+          <span v-if="dirty" class="text-sm text-amber-600 dark:text-amber-400" data-testid="dirty-note">Unsaved changes</span>
+          <span v-else class="text-sm text-gray-500">All changes saved</span>
+          <Button label="Discard" severity="secondary" text class="ml-auto" :disabled="!dirty || saving" data-testid="reset-btn" @click="reset" />
+          <Button
+            label="Save"
+            icon="pi pi-check"
+            :loading="saving"
+            :disabled="!isValid || !exemptionsValid || saving || !dirty"
+            data-testid="save-btn"
+            @click="save"
+          />
+        </div>
       </template>
 
       <Dialog v-model:visible="moveVisible" header="Rename Repository" modal class="w-96">

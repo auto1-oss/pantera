@@ -80,6 +80,15 @@ describe('RepoEditView — Cooldown card', () => {
     })
   })
 
+  it('shows no Cooldown card for a hosted repository', async () => {
+    seedAuth({ api_cooldown_permissions: ['read', 'write'] })
+    getRepoMock.mockResolvedValue({ repo: { type: 'maven' } })
+    getCooldownMock.mockResolvedValue({ enabled: true, minimum_allowed_age: '7d', repo_names: {} })
+    const wrapper = mountView('libs')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="repo-cooldown-card"]').exists()).toBe(false)
+  })
+
   it('turning an existing override OFF and saving omits the repo_names entry', async () => {
     seedAuth({ api_cooldown_permissions: ['read', 'write'] })
     getCooldownMock.mockResolvedValue({

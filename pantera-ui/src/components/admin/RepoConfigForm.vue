@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { listStorages, putStorage } from '@/api/settings'
 import { useNotificationStore } from '@/stores/notifications'
 import { REPO_TYPE_CREATE_OPTIONS } from '@/utils/repoTypes'
+import { isoToShortDuration, shortToIsoDuration } from '@/utils/duration'
 import type { RepoConfigEnvelope } from '@/types/repo'
 import type { StorageAlias } from '@/types'
 import InputText from 'primevue/inputtext'
@@ -23,6 +24,9 @@ const props = defineProps<{
   initialConfig: RepoConfigEnvelope | null
   /** When true the Type dropdown is disabled (edit mode: type is immutable) */
   readOnlyType?: boolean
+  /** When true the Cooldown card is not rendered: the parent edits the window
+   *  through v-model:cooldown-enabled / v-model:cooldown-window instead. */
+  hideCooldown?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -240,9 +244,11 @@ function cancelCreateMember() {
   resetNewMemberFields()
 }
 
-// Cooldown
-const cooldownEnabled = ref(false)
-const cooldownDuration = ref('P30D')
+// Cooldown window stored in the repository config (`cooldown.duration`,
+// ISO-8601), edited in the short form (`30d`). A parent may own both values.
+const cooldownEnabled = defineModel<boolean>('cooldownEnabled', { default: false })
+const cooldownWindow = defineModel<string>('cooldownWindow', { default: '30d' })
+const cooldownDuration = computed(() => shortToIsoDuration(cooldownWindow.value) ?? '')
 
 // Anonymous access (per-repo flags — exposed as an "Access" card below).
 // Defaults are filled in from the repo type during decomposeConfig() when the
@@ -409,7 +415,7 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
 
   // Cooldown
   cooldownEnabled.value = !!repo.cooldown
-  cooldownDuration.value = repo.cooldown?.duration ?? 'P30D'
+  cooldownWindow.value = isoToShortDuration(repo.cooldown?.duration ?? 'P30D')
 }
 
 // Watch initialConfig and decompose whenever it arrives (handles async load).
@@ -930,7 +936,7 @@ defineExpose({
   </Card>
 
   <!-- Cooldown (proxy only) -->
-  <Card v-if="isProxy" class="shadow-sm">
+  <Card v-if="isProxy && !hideCooldown" class="shadow-sm">
     <template #title>Cooldown</template>
     <template #content>
       <div class="space-y-3">
@@ -939,9 +945,9 @@ defineExpose({
           <label for="cdEnabled" class="text-sm cursor-pointer">Enable cooldown period</label>
         </div>
         <div v-if="cooldownEnabled">
-          <label class="block text-xs text-gray-500 mb-1">Duration (ISO 8601)</label>
-          <InputText v-model="cooldownDuration" placeholder="P30D" class="w-48" />
-          <p class="text-xs text-gray-400 mt-1">e.g. P30D = 30 days, P7D = 7 days, PT12H = 12 hours</p>
+          <label for="cdWindow" class="block text-xs text-gray-500 mb-1">Minimum allowed age</label>
+          <InputText id="cdWindow" v-model="cooldownWindow" placeholder="30d" class="w-48" :invalid="!cooldownDuration" />
+          <p class="text-xs text-gray-400 mt-1">e.g. 7d, 24h, 30m</p>
         </div>
       </div>
     </template>
