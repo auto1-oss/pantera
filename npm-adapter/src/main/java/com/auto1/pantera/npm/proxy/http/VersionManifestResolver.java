@@ -205,9 +205,9 @@ public final class VersionManifestResolver {
                         );
                     } else if (ex != null && VersionManifestResolver.allBlocked(ex, pkg)) {
                         verdict = CompletableFuture.completedFuture(Optional.empty());
-                    } else if (ex != null && DownloadPackageSlice.unparseable(ex)) {
-                        // Never fall back to the unfiltered packument for a
-                        // document cooldown cannot parse: fail the request.
+                    } else if (ex != null && !DownloadPackageSlice.backendFailure(ex)) {
+                        // Only a cooldown backend failure may fall back to the
+                        // unfiltered packument; anything else fails the request.
                         verdict = CompletableFuture.failedFuture(ex);
                     } else {
                         if (ex != null) {

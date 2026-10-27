@@ -58,7 +58,7 @@ public final class NpmMetadataParser implements MetadataParser<JsonNode>, Releas
     /**
      * Shared ObjectMapper for JSON parsing (thread-safe).
      */
-    private static final ObjectMapper MAPPER = com.auto1.pantera.npm.misc.PackumentJson.MAPPER;
+    private static final ObjectMapper MAPPER = com.auto1.pantera.npm.misc.PackumentJson.SKELETON;
 
     /**
      * Content type for NPM metadata.

@@ -44,7 +44,10 @@ import org.reactivestreams.Subscriber;
  * ({@code "/pkg/-/pkg-1.0.0.tgz"}) can be prefixed on the way through.</p>
  *
  * <p>The output is compact JSON; formatting of the stored document is not
- * kept. Numbers are copied exactly.</p>
+ * kept. Numbers are copied exactly. A {@link Section#MEMBERS},
+ * {@link Section#STUBS} or {@link Section#STRINGS} member whose value is not
+ * an object is dropped, so the shape of what is kept never depends on the
+ * document.</p>
  *
  * @since 2.2.11
  */
@@ -106,6 +109,10 @@ public final class PackumentTransform implements Content {
          */
         SKIP,
         /**
+         * Keep the member only when its value is a string.
+         */
+        STRING,
+        /**
          * Keep the member, filtering its object's entries by key.
          */
         MEMBERS,
@@ -114,6 +121,11 @@ public final class PackumentTransform implements Content {
          * replacing each kept entry's value by an empty object.
          */
         STUBS,
+        /**
+         * Keep the member, filtering its object's entries by key and keeping
+         * only the entries whose value is a string.
+         */
+        STRINGS,
         /**
          * Replace the member's value by a given tree; the tree is appended
          * at the end of the document when the member is absent.
@@ -213,6 +225,17 @@ public final class PackumentTransform implements Content {
          */
         private boolean tarball;
 
+        /**
+         * Field name held back until its value shows whether it is kept.
+         */
+        private String held;
+
+        /**
+         * The held field is kept when its value is an object (true) or a
+         * string (false).
+         */
+        private boolean heldObject;
+
         Pump(final Rules rules) {
             this.rules = rules;
             this.out = new ByteArrayOutputStream();
@@ -275,6 +298,8 @@ public final class PackumentTransform implements Content {
                 if (token.isStructStart()) {
                     this.skipping = 1;
                 }
+            } else if (this.held != null) {
+                this.release(token);
             } else if (token == JsonToken.FIELD_NAME) {
                 this.field(this.parser.currentName());
             } else if (token.isStructStart()) {
@@ -294,8 +319,7 @@ public final class PackumentTransform implements Content {
         private void field(final String name) throws IOException {
             if (this.depth == 1) {
                 this.root(name);
-            } else if (this.depth == 2
-                && (this.section == Section.MEMBERS || this.section == Section.STUBS)) {
+            } else if (this.depth == 2 && this.keyed()) {
                 this.entry(name);
             } else {
                 this.tarball = this.rules.prefix().isPresent() && "tarball".equals(name);
@@ -311,8 +335,41 @@ public final class PackumentTransform implements Content {
             } else if (this.section == Section.REPLACE) {
                 this.writeReplacement(name);
                 this.pending = true;
+            } else if (this.section == Section.STRING) {
+                this.hold(name, false);
+            } else if (this.keyed()) {
+                this.hold(name, true);
             } else {
                 this.gen.writeFieldName(name);
+            }
+        }
+
+        private boolean keyed() {
+            return this.section == Section.MEMBERS || this.section == Section.STUBS
+                || this.section == Section.STRINGS;
+        }
+
+        private void hold(final String name, final boolean object) {
+            this.held = name;
+            this.heldObject = object;
+        }
+
+        /**
+         * Write the held field with its value when the value has the kept
+         * kind, drop both otherwise.
+         */
+        private void release(final JsonToken token) throws IOException {
+            final String name = this.held;
+            this.held = null;
+            if (this.heldObject && token == JsonToken.START_OBJECT) {
+                this.gen.writeFieldName(name);
+                ++this.depth;
+                this.gen.copyCurrentEvent(this.parser);
+            } else if (!this.heldObject && token == JsonToken.VALUE_STRING) {
+                this.gen.writeFieldName(name);
+                this.gen.writeString(this.parser.getText());
+            } else if (token.isStructStart()) {
+                this.skipping = 1;
             }
         }
 
@@ -320,6 +377,8 @@ public final class PackumentTransform implements Content {
             final Predicate<String> keep = this.rules.keep().get(this.member);
             if (keep != null && !keep.test(name)) {
                 this.pending = true;
+            } else if (this.section == Section.STRINGS) {
+                this.hold(name, false);
             } else {
                 this.gen.writeFieldName(name);
                 if (this.section == Section.STUBS) {

@@ -129,6 +129,46 @@ final class PackumentTransformTest {
     }
 
     @Test
+    void skeletonKeepsOnlyShallowStringValues() throws Exception {
+        final String deep = "[".repeat(5000) + "]".repeat(5000);
+        final String doc = "{\"name\":{\"evil\":" + deep + "},"
+            + "\"dist-tags\":{\"latest\":\"1.0.0\",\"evil\":" + deep + ",\"n\":1},"
+            + "\"time\":{\"1.0.0\":\"2020-01-01T00:00:00.000Z\",\"evil\":{\"a\":" + deep + "}},"
+            + "\"versions\":{\"1.0.0\":{\"deep\":" + deep + "}}}";
+        final byte[] skeleton = new PackumentSkeleton(PackumentTransformTest.chunked(doc, 97)).bytes().join();
+        MatcherAssert.assertThat(
+            "only shallow string values survive",
+            MAPPER.readTree(skeleton),
+            new IsEqual<>(
+                MAPPER.readTree(
+                    "{\"dist-tags\":{\"latest\":\"1.0.0\"},"
+                        + "\"time\":{\"1.0.0\":\"2020-01-01T00:00:00.000Z\"},\"versions\":{\"1.0.0\":{}}}"
+                )
+            )
+        );
+        final NpmMetadataFilter filter = new NpmMetadataFilter();
+        MatcherAssert.assertThat(
+            "cooldown parses, filters and rewrites it",
+            new com.auto1.pantera.npm.cooldown.NpmMetadataRewriter().rewrite(
+                filter.filter(new NpmMetadataParser().parse(skeleton), Set.of("1.0.0"))
+            ).length > 0,
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void nonObjectVersionsAreDropped() throws Exception {
+        MatcherAssert.assertThat(
+            MAPPER.readTree(
+                new PackumentSkeleton(
+                    PackumentTransformTest.chunked("{\"versions\":[[[1]]],\"time\":\"x\"}", 3)
+                ).bytes().join()
+            ),
+            new IsEqual<>(MAPPER.readTree("{}"))
+        );
+    }
+
+    @Test
     void extractsOneVersion() throws Exception {
         MatcherAssert.assertThat(
             new PackumentVersion(PackumentTransformTest.chunked(DOC, 4), "1.1.0").manifest().join(),
