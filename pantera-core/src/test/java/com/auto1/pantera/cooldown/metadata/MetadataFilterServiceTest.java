@@ -116,6 +116,37 @@ final class MetadataFilterServiceTest {
     }
 
     @Test
+    void exemptPackageIsNeverLoadedOrFiltered() throws Exception {
+        this.cooldownService.blockVersion("test-pkg", "3.0.0");
+        this.settings.setRepoExemptions(
+            "test-repo",
+            new com.auto1.pantera.cooldown.config.CooldownExemptions(java.util.List.of(
+                new com.auto1.pantera.cooldown.config.CooldownExemptions.Rule(
+                    "test-*", java.util.Optional.empty(), "", "tester", java.time.Instant.EPOCH
+                )
+            ))
+        );
+        final java.util.concurrent.atomic.AtomicInteger loads =
+            new java.util.concurrent.atomic.AtomicInteger();
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final java.util.Optional<byte[]> result = this.service.filterMetadataLazily(
+            "npm", "test-repo", "skeleton", "test-pkg",
+            () -> {
+                loads.incrementAndGet();
+                return CompletableFuture.completedFuture(
+                    "raw-metadata".getBytes(StandardCharsets.UTF_8)
+                );
+            },
+            new TestMetadataParser(Arrays.asList("1.0.0", "2.0.0", "3.0.0"), "3.0.0"),
+            filter, new TestMetadataRewriter(),
+            com.auto1.pantera.audit.AuditContext.NONE, "tester"
+        ).get();
+        assertThat("exempt package is served unfiltered", result.isPresent(), equalTo(false));
+        assertThat("raw metadata is never produced", loads.get(), equalTo(0));
+        assertThat("filter never runs", filter.lastBlockedVersions.isEmpty(), equalTo(true));
+    }
+
+    @Test
     void allowsAllVersionsWhenNoneBlocked() throws Exception {
         // No versions blocked
         final TestMetadataParser parser = new TestMetadataParser(

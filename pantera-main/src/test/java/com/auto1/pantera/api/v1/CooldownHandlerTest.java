@@ -83,6 +83,94 @@ public final class CooldownHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void exemptionsRoundTripAndValidate(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        CooldownHandlerTest.repo(client, this.port(), "exempt-npm-proxy", "npm-proxy");
+        CooldownHandlerTest.repo(client, this.port(), "exempt-npm-local", "npm");
+        final String url = "/api/v1/repositories/exempt-npm-proxy/cooldown/exemptions";
+        final HttpResponse<Buffer> saved = CooldownHandlerTest.putExemptions(
+            client, this.port(), url,
+            new JsonArray()
+                .add(new JsonObject().put("pattern", "@auto1/*").put("reason", "internal"))
+                .add(new JsonObject().put("pattern", "left-pad")
+                    .put("expires_at", "2099-01-01T00:00:00Z"))
+        );
+        Assertions.assertEquals(200, saved.statusCode(), "PUT status");
+        final JsonArray listed = client.get(this.port(), AsyncApiTestBase.HOST, url)
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS)
+            .bodyAsJsonObject().getJsonArray("exemptions");
+        Assertions.assertEquals(2, listed.size(), "both rules listed");
+        Assertions.assertEquals("@auto1/*", listed.getJsonObject(0).getString("pattern"), "first pattern");
+        Assertions.assertEquals("internal", listed.getJsonObject(0).getString("reason"), "reason kept");
+        Assertions.assertEquals(
+            "2099-01-01T00:00:00Z", listed.getJsonObject(1).getString("expires_at"), "expiry kept"
+        );
+        Assertions.assertEquals(
+            400,
+            CooldownHandlerTest.putExemptions(
+                client, this.port(), url, new JsonArray().add(new JsonObject().put("pattern", "a*b"))
+            ).statusCode(),
+            "inner '*' rejected"
+        );
+        Assertions.assertEquals(
+            400,
+            CooldownHandlerTest.putExemptions(
+                client, this.port(), url,
+                new JsonArray().add(
+                    new JsonObject().put("pattern", "x").put("expires_at", "2001-01-01T00:00:00Z")
+                )
+            ).statusCode(),
+            "past expiry rejected"
+        );
+        Assertions.assertEquals(
+            400,
+            CooldownHandlerTest.putExemptions(
+                client, this.port(), "/api/v1/repositories/exempt-npm-local/cooldown/exemptions",
+                new JsonArray().add(new JsonObject().put("pattern", "x"))
+            ).statusCode(),
+            "hosted repository rejected"
+        );
+        Assertions.assertEquals(
+            404,
+            CooldownHandlerTest.putExemptions(
+                client, this.port(), "/api/v1/repositories/no-such-repo/cooldown/exemptions",
+                new JsonArray()
+            ).statusCode(),
+            "unknown repository"
+        );
+        ctx.completeNow();
+    }
+
+    private static void repo(
+        final WebClient client, final int port, final String name, final String type
+    ) throws Exception {
+        final JsonObject repo = new JsonObject().put("type", type)
+            .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"));
+        if (type.endsWith("-proxy")) {
+            repo.put("remotes", new JsonArray().add(
+                new JsonObject().put("url", "https://registry.npmjs.org")));
+        }
+        client.put(port, AsyncApiTestBase.HOST, "/api/v1/repositories/" + name)
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put("repo", repo))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+    }
+
+    private static HttpResponse<Buffer> putExemptions(
+        final WebClient client, final int port, final String url, final JsonArray rules
+    ) throws Exception {
+        return client.put(port, AsyncApiTestBase.HOST, url)
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put("exemptions", rules))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+    }
+
+    @Test
     void bulkUnblockSucceedsForExistingRepository(final Vertx vertx,
         final VertxTestContext ctx) throws Exception {
         final WebClient client = WebClient.create(vertx);

@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { getRepo, putRepo, moveRepo, deleteRepo } from '@/api/repos'
 import { getCooldown, putCooldown } from '@/api/settings'
+import { getCooldownExemptions, putCooldownExemptions } from '@/api/cooldown'
+import type { CooldownExemption, CooldownExemptionInput } from '@/api/cooldown'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationStore } from '@/stores/notifications'
 import { useConfirmDelete } from '@/composables/useConfirmDelete'
@@ -128,6 +130,90 @@ function overrideJson(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Cooldown exemptions (proxy repositories; saved by the same Save button)
+// ---------------------------------------------------------------------------
+interface EditableExemption {
+  pattern: string
+  /** YYYY-MM-DD, empty for never. */
+  expiresOn: string
+  reason: string
+  /** Stored instant, kept as-is while the date is unchanged. */
+  storedExpiry: string | null
+  active: boolean
+}
+
+const isProxy = computed(() => repoType.value.endsWith('-proxy'))
+const exemptions = ref<EditableExemption[]>([])
+const exemptionsLoadError = ref('')
+const savedExemptions = ref('[]')
+/** Last loaded/saved list, restored by Reset. */
+const savedExemptionList = ref<CooldownExemption[]>([])
+
+function toEditable(list: CooldownExemption[]): EditableExemption[] {
+  return list.map((e) => ({
+    pattern: e.pattern,
+    expiresOn: e.expires_at ? e.expires_at.slice(0, 10) : '',
+    reason: e.reason ?? '',
+    storedExpiry: e.expires_at,
+    active: e.active ?? true,
+  }))
+}
+
+function exemptionInputs(): CooldownExemptionInput[] {
+  return exemptions.value.map((e) => {
+    let expires: string | null = null
+    if (e.expiresOn) {
+      expires = e.storedExpiry && e.storedExpiry.slice(0, 10) === e.expiresOn
+        ? e.storedExpiry
+        : `${e.expiresOn}T00:00:00Z`
+    }
+    return { pattern: e.pattern.trim(), expires_at: expires, reason: e.reason.trim() }
+  })
+}
+
+function exemptionsJson(): string {
+  return JSON.stringify(exemptionInputs())
+}
+
+/** Same rules the server enforces: non-empty, no spaces, '*' only last, not '*' alone. */
+function patternError(pattern: string): string {
+  const p = pattern.trim()
+  if (p.length === 0) return 'Pattern is required'
+  if (/\s/.test(p)) return 'No spaces allowed'
+  if (p === '*') return "'*' alone would exempt everything"
+  if (p.slice(0, -1).includes('*')) return "'*' only as the last character"
+  return ''
+}
+
+const exemptionsValid = computed(() => {
+  const seen = new Set<string>()
+  return exemptions.value.every((e) => {
+    const key = e.pattern.trim().toLowerCase()
+    const ok = patternError(e.pattern) === '' && !seen.has(key)
+    seen.add(key)
+    return ok
+  })
+})
+
+function addExemption() {
+  exemptions.value.push({ pattern: '', expiresOn: '', reason: '', storedExpiry: null, active: true })
+}
+
+function removeExemption(index: number) {
+  exemptions.value.splice(index, 1)
+}
+
+async function saveExemptions() {
+  const res = await putCooldownExemptions(props.name, exemptionInputs())
+  exemptions.value = toEditable(res.exemptions)
+  savedExemptionList.value = res.exemptions
+  savedExemptions.value = exemptionsJson()
+  if (res.released > 0) {
+    notify.info('Cooldown exemptions saved', `${res.released} blocked version(s) released`)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Dirty tracking, save, reset
 // ---------------------------------------------------------------------------
 const configDirty = computed(() => {
@@ -135,7 +221,8 @@ const configDirty = computed(() => {
   return !awaitingBaseline.value && changed
 })
 const cooldownDirty = computed(() => overrideJson() !== savedOverride.value)
-const dirty = computed(() => configDirty.value || cooldownDirty.value)
+const exemptionsDirty = computed(() => exemptionsJson() !== savedExemptions.value)
+const dirty = computed(() => configDirty.value || cooldownDirty.value || exemptionsDirty.value)
 
 async function save() {
   if (!config.value) return
@@ -159,6 +246,18 @@ async function save() {
       const msg = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
       saveError.value = `Repository saved; cooldown override failed: ${msg}`
       notify.warn('Repository saved', `Cooldown override failed: ${msg}`)
+      saving.value = false
+      return
+    }
+  }
+  if (exemptionsDirty.value && isProxy.value) {
+    try {
+      await saveExemptions()
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
+      const msg = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
+      saveError.value = `Repository saved; cooldown exemptions failed: ${msg}`
+      notify.warn('Repository saved', `Cooldown exemptions failed: ${msg}`)
       saving.value = false
       return
     }
@@ -191,6 +290,7 @@ function reset() {
     config.value = restored
   }
   applyOverride(cooldownConfig.value?.repo_names?.[props.name])
+  exemptions.value = toEditable(savedExemptionList.value)
   saveError.value = ''
 }
 
@@ -243,6 +343,7 @@ async function handleDelete() {
     // The repository is gone; nothing left to keep.
     savedConfig.value = stable(config.value)
     savedOverride.value = overrideJson()
+    savedExemptions.value = exemptionsJson()
     router.push('/admin/repositories')
   } catch {
     notify.error('Failed to delete repository')
@@ -280,10 +381,20 @@ onMounted(async () => {
     cooldownLoadError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Failed to load cooldown config'
   }
   savedOverride.value = overrideJson()
+  if (isProxy.value) {
+    try {
+      savedExemptionList.value = (await getCooldownExemptions(props.name)).exemptions
+      exemptions.value = toEditable(savedExemptionList.value)
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
+      exemptionsLoadError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Failed to load cooldown exemptions'
+    }
+    savedExemptions.value = exemptionsJson()
+  }
 })
 onBeforeUnmount(() => { window.removeEventListener('beforeunload', onBeforeUnload) })
 
-defineExpose({ dirty, save, reset, overrideEnabled })
+defineExpose({ dirty, save, reset, overrideEnabled, exemptionsValid })
 </script>
 
 <template>
@@ -359,6 +470,31 @@ defineExpose({ dirty, save, reset, overrideEnabled })
                   <span class="text-xs text-gray-400">e.g. 14d, 30d</span>
                 </div>
               </div>
+              <div v-if="isProxy" class="space-y-2" data-testid="repo-exemptions">
+                <div>
+                  <div class="text-sm font-medium">Exemptions</div>
+                  <div class="text-xs text-gray-500">
+                    Packages or images cooldown never blocks in this repository. Write the name as the
+                    Cooldown page lists it: an exact name, or a prefix ending in <code>*</code>
+                    (<code>@myorg/*</code>, <code>com.example.*</code>, <code>library/nginx*</code>).
+                    Saving releases matching blocks.
+                  </div>
+                </div>
+                <div v-if="exemptionsLoadError" class="text-sm text-red-700 dark:text-red-300" data-testid="repo-exemptions-load-error">
+                  {{ exemptionsLoadError }}
+                </div>
+                <div v-for="(ex, idx) in exemptions" :key="idx" class="flex flex-wrap items-start gap-2" data-testid="repo-exemption-row">
+                  <div class="flex flex-col">
+                    <InputText v-model="ex.pattern" class="w-56" placeholder="@myorg/*" :disabled="!canEditCooldown" :invalid="patternError(ex.pattern) !== ''" data-testid="repo-exemption-pattern" />
+                    <span v-if="ex.pattern && patternError(ex.pattern)" class="text-xs text-red-600">{{ patternError(ex.pattern) }}</span>
+                  </div>
+                  <input v-model="ex.expiresOn" type="date" class="rounded border px-2 py-1 text-sm dark:bg-gray-800" title="Expires on (empty: never)" :disabled="!canEditCooldown" data-testid="repo-exemption-expiry" />
+                  <InputText v-model="ex.reason" class="w-48" placeholder="Reason (optional)" :disabled="!canEditCooldown" data-testid="repo-exemption-reason" />
+                  <span v-if="!ex.active" class="self-center text-xs text-amber-600" data-testid="repo-exemption-expired">expired</span>
+                  <Button v-if="canEditCooldown" icon="pi pi-trash" severity="secondary" text size="small" aria-label="Remove exemption" data-testid="repo-exemption-remove" @click="removeExemption(idx)" />
+                </div>
+                <Button v-if="canEditCooldown" label="Add exemption" icon="pi pi-plus" severity="secondary" outlined size="small" data-testid="repo-exemption-add" @click="addExemption" />
+              </div>
               <div v-if="!canEditCooldown" class="text-xs text-gray-500" data-testid="repo-cooldown-readonly-note">
                 Read-only — you do not have permission to edit cooldown settings.
               </div>
@@ -376,7 +512,7 @@ defineExpose({ dirty, save, reset, overrideEnabled })
             label="Save"
             icon="pi pi-check"
             :loading="saving"
-            :disabled="!isValid || saving || !dirty"
+            :disabled="!isValid || !exemptionsValid || saving || !dirty"
             data-testid="save-btn"
             @click="save"
           />

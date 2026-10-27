@@ -13,6 +13,11 @@ const putCooldownMock = vi.fn()
 type Guard = (to: unknown, from: unknown, next: (v?: boolean) => void) => void
 let leaveGuard: Guard | null = null
 
+vi.mock('@/api/cooldown', () => ({
+  getCooldownExemptions: vi.fn().mockResolvedValue({ repository: 'r', exemptions: [], released: 0 }),
+  putCooldownExemptions: vi.fn().mockResolvedValue({ repository: 'r', exemptions: [], released: 0 }),
+}))
+
 vi.mock('@/api/repos', () => ({
   getRepo: (...a: unknown[]) => getRepoMock(...a),
   putRepo: (...a: unknown[]) => putRepoMock(...a),

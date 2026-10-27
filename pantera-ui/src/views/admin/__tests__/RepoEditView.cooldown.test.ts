@@ -18,6 +18,11 @@ vi.mock('@/api/settings', () => ({
   putCooldown: (...args: unknown[]) => putCooldownMock(...args),
 }))
 
+vi.mock('@/api/cooldown', () => ({
+  getCooldownExemptions: vi.fn().mockResolvedValue({ repository: 'r', exemptions: [], released: 0 }),
+  putCooldownExemptions: vi.fn().mockResolvedValue({ repository: 'r', exemptions: [], released: 0 }),
+}))
+
 vi.mock('@/api/repos', () => ({
   getRepo: (...args: unknown[]) => getRepoMock(...args),
   putRepo: vi.fn().mockResolvedValue(undefined),

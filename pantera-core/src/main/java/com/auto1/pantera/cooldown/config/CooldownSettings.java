@@ -54,6 +54,11 @@ public final class CooldownSettings {
     private volatile Map<String, RepoTypeConfig> repoNameOverrides;
 
     /**
+     * Per-repo-name exemptions; replaced atomically, never mutated.
+     */
+    private volatile Map<String, CooldownExemptions> exemptions = new HashMap<>();
+
+    /**
      * How many days of cooldown history to retain before the background
      * purge deletes it. Read live by {@code CooldownCleanupFallback} every
      * tick so admin-UI changes take effect without a restart.
@@ -272,6 +277,78 @@ public final class CooldownSettings {
         final Map<String, RepoTypeConfig> copy = new HashMap<>(this.repoNameOverrides);
         copy.remove(repoName);
         this.repoNameOverrides = copy;
+    }
+
+    /**
+     * Whether cooldown exempts a package of a repository: an unexpired
+     * {@link CooldownExemptions} rule of that repository matches it. Costs one
+     * map lookup when the repository has no exemptions.
+     *
+     * @param repoName Repository name
+     * @param artifact Package name as the adapter reports it
+     * @return True when the package is exempt
+     */
+    public boolean exempt(final String repoName, final String artifact) {
+        if (repoName == null) {
+            return false;
+        }
+        final CooldownExemptions found = this.exemptions.get(repoName);
+        return found != null && found.exempts(artifact);
+    }
+
+    /**
+     * Exemptions of a repository.
+     *
+     * @param repoName Repository name
+     * @return Exemptions, {@link CooldownExemptions#NONE} when there are none
+     */
+    public CooldownExemptions repoExemptions(final String repoName) {
+        return this.exemptions.getOrDefault(repoName, CooldownExemptions.NONE);
+    }
+
+    /**
+     * Exemptions of every repository that has any.
+     *
+     * @return Copy of the map, repository name to exemptions
+     */
+    public Map<String, CooldownExemptions> exemptions() {
+        return new HashMap<>(this.exemptions);
+    }
+
+    /**
+     * Replace the exemptions of every repository at once; a repository
+     * absent from {@code all} has none afterwards.
+     *
+     * @param all Repository name to exemptions
+     */
+    public void replaceExemptions(final Map<String, CooldownExemptions> all) {
+        final Map<String, CooldownExemptions> copy = new HashMap<>();
+        all.forEach(
+            (repo, found) -> {
+                if (!found.isEmpty()) {
+                    copy.put(repo, found);
+                }
+            }
+        );
+        this.exemptions = copy;
+    }
+
+    /**
+     * Replace the exemptions of a repository. Thread-safe: replaces the
+     * internal map atomically.
+     *
+     * @param repoName Repository name (never null)
+     * @param repoExemptions Exemptions; empty removes them
+     */
+    public void setRepoExemptions(final String repoName, final CooldownExemptions repoExemptions) {
+        Objects.requireNonNull(repoName, "repoName");
+        final Map<String, CooldownExemptions> copy = new HashMap<>(this.exemptions);
+        if (repoExemptions == null || repoExemptions.isEmpty()) {
+            copy.remove(repoName);
+        } else {
+            copy.put(repoName, repoExemptions);
+        }
+        this.exemptions = copy;
     }
 
     /**

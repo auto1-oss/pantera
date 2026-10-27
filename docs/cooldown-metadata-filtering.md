@@ -42,6 +42,8 @@ and any unbounded-latest resolution endpoint the client can query.
 | php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json` (per-package version filtering); `/packages.json`, `/repo.json` (the proxy serves its own root, whose `metadata-url` points at its `/p2/` endpoint, so versions are filtered per package; the upstream root is not fetched). |
 | file-proxy         | **No metadata filtering.** File / raw proxies have no version-resolution semantics -- no tags, no version lists, no packument. Cooldown applies only at the artifact-fetch layer, based on the file's cached-at / remote-modified timestamp relative to the cooldown window. See the dedicated section below. |
 
+Packages exempted from cooldown on a proxy repository (2.2.11, see [Cooldown: Exempt Packages](admin-guide/cooldown.md#exempt-packages-from-cooldown)) skip this filtering entirely: `MetadataFilterService` returns before the metadata is produced, parsed or cached, and `JdbcCooldownService.evaluate` allows their downloads before any cache or database lookup.
+
 ### Hosted-only adapters (out of scope)
 
 `gem`, `helm`, `rpm`, `conan`, `conda`, `hexpm`, `nuget`, and `deb` have no `-proxy`

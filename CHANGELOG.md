@@ -2,6 +2,10 @@
 
 ## Version 2.2.11
 
+### 🌟 New features
+
+- **Cooldown exemptions per proxy repository.** List packages or Docker images that cooldown never blocks in a repository: an exact name or a prefix ending in `*` (`@myorg/*`, `com.example.*`, `library/nginx*`), each with an optional expiry and reason. Edit them in the repository's **Cooldown** card or with `GET`/`PUT /api/v1/repositories/:name/cooldown/exemptions`. Saving releases the package's current blocks and applies on every node. The check runs in memory before any cooldown lookup, so it adds no work to other packages. ([@aydasraf](https://github.com/aydasraf))
+
 ### ⚡ Performance
 
 - **npm packuments are streamed, never held in memory.** A packument of tens of MB (`@prisma/client`, `renovate`, `next`) used to be read whole and parsed several times per request. Now cooldown decides on a small skeleton of the document (`name`, `dist-tags`, `time`, version keys), the filtered-metadata cache stores that verdict instead of the whole filtered document, and the response is streamed from storage through it, for full, abbreviated and single-version (`GET /<pkg>/<version>`) requests. A filtered packument is now compact JSON with an `ETag` derived from the stored content hash and the verdict, so clients revalidate once after upgrading. ([@aydasraf](https://github.com/aydasraf))

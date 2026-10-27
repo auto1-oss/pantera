@@ -11,6 +11,11 @@ import RepoEditView from '../RepoEditView.vue'
 // not count as an edit.
 const getRepoMock = vi.fn()
 const getCooldownMock = vi.fn()
+vi.mock('@/api/cooldown', () => ({
+  getCooldownExemptions: vi.fn().mockResolvedValue({ repository: 'r', exemptions: [], released: 0 }),
+  putCooldownExemptions: vi.fn().mockResolvedValue({ repository: 'r', exemptions: [], released: 0 }),
+}))
+
 vi.mock('@/api/repos', () => ({
   getRepo: (...a: unknown[]) => getRepoMock(...a),
   putRepo: vi.fn().mockResolvedValue(undefined),
