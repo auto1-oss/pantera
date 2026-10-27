@@ -267,7 +267,11 @@ Fixtures that hold secrets are not committed (2.2.9):
 - **TLS**: nginx generates a self-signed key pair into `nginx/ssl/` at
   container start (`10-selfsigned.sh`) when none is present; the directory
   ignores `nginx.key`/`nginx.crt`. Drop your own pair there to use a real
-  certificate.
+  certificate. Clients that verify the certificate (the `go` command always
+  does) need the generated certificate trusted once per generated pair; on
+  macOS, from `pantera-main/docker-compose/`:
+  `sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain nginx/ssl/nginx.crt`.
+  To regenerate it, delete both files and restart the `nginx` container.
 - **Keycloak realm**: `keycloak-export/pantera-realm.json` reads the client
   secret from `KEYCLOAK_CLIENT_SECRET` and the sample user's password from
   `PANTERA_DEV_SSO_USER_PASSWORD` (both required in `.env`; the password is
