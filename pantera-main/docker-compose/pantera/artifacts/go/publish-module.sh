@@ -101,8 +101,11 @@ go mod init test-module
 # GOMODCACHE points at a brand-new directory so this run does NOT inherit
 # stale module artifacts from earlier failed publishes.
 # The go command sends credentials over https only and always verifies the
-# registry's certificate (GOINSECURE does not apply to GOPROXY): trust the
-# local nginx CA in the OS trust store, or on Linux point SSL_CERT_FILE at it.
+# registry's certificate (GOINSECURE does not apply to GOPROXY). Trust the dev
+# nginx certificate once per generated cert (from pantera-main/docker-compose):
+#   macOS: sudo security add-trusted-cert -d -r trustRoot -p ssl \
+#            -k /Library/Keychains/System.keychain nginx/ssl/nginx.crt
+#   Linux: export SSL_CERT_FILE=$PWD/nginx/ssl/nginx.crt
 export GOPROXY="https://$PANTERA_USER:$PANTERA_PASS@localhost:8443/test_prefix/api/go/go_group"
 export GONOSUMDB="$MODULE_PATH"
 export GOMODCACHE="$TEST_MOD_CACHE"

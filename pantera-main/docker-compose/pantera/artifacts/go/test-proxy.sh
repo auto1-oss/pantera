@@ -29,8 +29,11 @@ echo "✓ Created test project"
 echo ""
 echo "2. Setting GOPROXY to use go_group..."
 # The go command sends credentials over https only and always verifies the
-# registry's certificate (GOINSECURE does not apply to GOPROXY): trust the
-# local nginx CA in the OS trust store, or on Linux point SSL_CERT_FILE at it.
+# registry's certificate (GOINSECURE does not apply to GOPROXY). Trust the dev
+# nginx certificate once per generated cert (from pantera-main/docker-compose):
+#   macOS: sudo security add-trusted-cert -d -r trustRoot -p ssl \
+#            -k /Library/Keychains/System.keychain nginx/ssl/nginx.crt
+#   Linux: export SSL_CERT_FILE=$PWD/nginx/ssl/nginx.crt
 export GOPROXY="https://ayd:ayd@localhost:8443/test_prefix/api/go/go_group"
 export GONOSUMDB="*"
 echo "   GOPROXY=$GOPROXY (with credentials)"
