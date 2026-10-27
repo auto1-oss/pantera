@@ -193,6 +193,39 @@ final class DownloadPackageSliceCooldownEtagTest {
         }
     }
 
+    @Test
+    void unparseablePackumentFailsClosedInsteadOfServingUnfiltered() {
+        final Storage storage = new InMemoryStorage();
+        this.saveFilesToStorage(storage);
+        try (
+            VertxSliceServer server = new VertxSliceServer(
+                DownloadPackageSliceCooldownEtagTest.VERTX,
+                new DownloadPackageSlice(
+                    new NpmProxy(
+                        storage,
+                        new SliceSimple(ResponseBuilder.notFound().build())
+                    ),
+                    new PackagePath("ctx"),
+                    Optional.empty(),
+                    new ParseFailingFilterService(),
+                    "npm",
+                    "npm-proxy"
+                ),
+                this.port
+            )
+        ) {
+            this.port = server.start();
+            final HttpResponse<Buffer> response = WebClient
+                .create(DownloadPackageSliceCooldownEtagTest.VERTX)
+                .getAbs(String.format("http://127.0.0.1:%d/ctx/%s", this.port, PKG))
+                .rxSend().blockingGet();
+            MatcherAssert.assertThat(
+                "a packument cooldown cannot parse is not served",
+                response.statusCode(), new IsEqual<>(502)
+            );
+        }
+    }
+
     /**
      * Minimal but valid packument body for the fixture package.
      *
@@ -272,6 +305,50 @@ final class DownloadPackageSliceCooldownEtagTest {
         @Override
         public String stats() {
             return "AllBlockedFilterService";
+        }
+    }
+
+    /**
+     * Cooldown service whose parser rejects the document, as Jackson does for
+     * a document beyond its limits.
+     */
+    private static final class ParseFailingFilterService implements CooldownMetadataService {
+
+        @Override
+        public <T> CompletableFuture<byte[]> filterMetadata(
+            final String repoType,
+            final String repoName,
+            final String packageName,
+            final byte[] rawMetadata,
+            final MetadataParser<T> parser,
+            final MetadataFilter<T> filter,
+            final MetadataRewriter<T> rewriter
+        ) {
+            return CompletableFuture.failedFuture(
+                new com.auto1.pantera.cooldown.metadata.MetadataParseException(
+                    "Failed to parse NPM metadata JSON", new java.io.IOException("too deep")
+                )
+            );
+        }
+
+        @Override
+        public void invalidate(final String repoType, final String repoName, final String packageName) {
+            // no-op stub
+        }
+
+        @Override
+        public void invalidateAll(final String repoType, final String repoName) {
+            // no-op stub
+        }
+
+        @Override
+        public void clearAll() {
+            // no-op stub
+        }
+
+        @Override
+        public String stats() {
+            return "ParseFailingFilterService";
         }
     }
 

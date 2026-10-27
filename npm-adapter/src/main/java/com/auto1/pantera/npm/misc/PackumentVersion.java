@@ -28,7 +28,7 @@ public final class PackumentVersion {
     /**
      * Mapper.
      */
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = PackumentJson.MAPPER;
 
     /**
      * Stored packument.

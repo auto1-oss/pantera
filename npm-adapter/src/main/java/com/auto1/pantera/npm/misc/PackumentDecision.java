@@ -36,7 +36,7 @@ public final class PackumentDecision {
     /**
      * Mapper.
      */
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = PackumentJson.MAPPER;
 
     /**
      * Filtered skeleton.

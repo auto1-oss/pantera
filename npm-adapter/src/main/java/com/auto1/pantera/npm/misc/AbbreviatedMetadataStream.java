@@ -15,8 +15,6 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.core.StreamReadConstraints;
-import com.fasterxml.jackson.core.StreamWriteConstraints;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -55,23 +53,9 @@ import java.util.concurrent.Callable;
 public final class AbbreviatedMetadataStream {
 
     /**
-     * Parser/generator factory without Jackson's default size and depth
-     * guards: the DOM implementation had none, and an upstream packument
-     * that parsed before must still parse.
+     * Parser/generator factory shared with the serve path, see {@link PackumentJson}.
      */
-    private static final JsonFactory FACTORY = JsonFactory.builder()
-        .streamReadConstraints(
-            StreamReadConstraints.builder()
-                .maxStringLength(Integer.MAX_VALUE)
-                .maxNumberLength(Integer.MAX_VALUE)
-                .maxNameLength(Integer.MAX_VALUE)
-                .maxNestingDepth(Integer.MAX_VALUE)
-                .build()
-        )
-        .streamWriteConstraints(
-            StreamWriteConstraints.builder().maxNestingDepth(Integer.MAX_VALUE).build()
-        )
-        .build();
+    private static final JsonFactory FACTORY = PackumentJson.FACTORY;
 
     /**
      * Version fields kept, for membership tests.

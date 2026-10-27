@@ -62,6 +62,10 @@
 - **The cooldown filtered-metadata cache is bounded by size.** It was bounded only by entry count, so large packuments could take gigabytes of heap. It now also holds at most 1 GiB of entries (`PANTERA_COOLDOWN_METADATA_L1_MAX_BYTES`). ([@aydasraf](https://github.com/aydasraf))
 - **The "In-flight HTTP requests" panel shows real values.** It charted `pantera_http_active_requests`, a gauge nothing updated, so it always read 0. The panel now charts Vert.x's `vertx_http_server_active_requests` and the unused gauge is removed. ([@aydasraf](https://github.com/aydasraf))
 
+### 🔒 Security
+
+- **npm cooldown fails closed on a packument it cannot parse.** A cooldown-filtered npm proxy answers `502` for such a document instead of serving it unfiltered. ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.10
 
 ### ⚠️ Breaking changes

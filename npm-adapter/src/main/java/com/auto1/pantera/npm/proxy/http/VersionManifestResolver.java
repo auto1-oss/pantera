@@ -205,6 +205,10 @@ public final class VersionManifestResolver {
                         );
                     } else if (ex != null && VersionManifestResolver.allBlocked(ex, pkg)) {
                         verdict = CompletableFuture.completedFuture(Optional.empty());
+                    } else if (ex != null && DownloadPackageSlice.unparseable(ex)) {
+                        // Never fall back to the unfiltered packument for a
+                        // document cooldown cannot parse: fail the request.
+                        verdict = CompletableFuture.failedFuture(ex);
                     } else {
                         if (ex != null) {
                             EcsLogger.warn("com.auto1.pantera.npm")
@@ -301,7 +305,7 @@ public final class VersionManifestResolver {
         final String tarballPrefix, final String vary, final Optional<String> clientETag
     ) {
         try {
-            final ObjectMapper mapper = new ObjectMapper();
+            final ObjectMapper mapper = com.auto1.pantera.npm.misc.PackumentJson.MAPPER;
             final JsonNode dist = manifest.get("dist");
             if (dist != null && dist.isObject() && dist.has("tarball")) {
                 ((ObjectNode) dist).put(

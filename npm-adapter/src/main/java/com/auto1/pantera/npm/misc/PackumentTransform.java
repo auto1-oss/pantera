@@ -53,7 +53,7 @@ public final class PackumentTransform implements Content {
     /**
      * Mapper providing the parser factory and the codec for replacement trees.
      */
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = PackumentJson.MAPPER;
 
     /**
      * Stored packument.
