@@ -20,6 +20,11 @@ import java.util.concurrent.CompletableFuture;
  * {@code dist-tags}, {@code time} and the keys of {@code versions} (each
  * version's object replaced by {@code {}}).
  *
+ * <p>Only string values are kept ({@code name}, each dist-tag, each
+ * {@code time} entry) and only object-valued sections, so the skeleton is at
+ * most three levels deep whatever the document holds: nothing deep reaches
+ * the cooldown parser and rewriter.</p>
+ *
  * <p>Extracted by streaming the stored document through
  * {@link PackumentTransform}; the skeleton itself is small (well under 1 MB
  * for a package with ten thousand versions), so the whole cooldown pipeline
@@ -54,9 +59,9 @@ public final class PackumentSkeleton {
             this.packument,
             new PackumentTransform.Rules(
                 Map.of(
-                    "name", PackumentTransform.Section.COPY,
-                    "dist-tags", PackumentTransform.Section.COPY,
-                    "time", PackumentTransform.Section.COPY,
+                    "name", PackumentTransform.Section.STRING,
+                    "dist-tags", PackumentTransform.Section.STRINGS,
+                    "time", PackumentTransform.Section.STRINGS,
                     "versions", PackumentTransform.Section.STUBS
                 ),
                 PackumentTransform.Section.SKIP,

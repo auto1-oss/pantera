@@ -27,7 +27,7 @@ public final class NpmMetadataRewriter implements MetadataRewriter<JsonNode> {
     /**
      * Shared ObjectMapper for JSON serialization (thread-safe).
      */
-    private static final ObjectMapper MAPPER = com.auto1.pantera.npm.misc.PackumentJson.MAPPER;
+    private static final ObjectMapper MAPPER = com.auto1.pantera.npm.misc.PackumentJson.SKELETON;
 
     /**
      * Content type for NPM metadata.

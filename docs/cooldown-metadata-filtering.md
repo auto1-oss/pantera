@@ -137,10 +137,13 @@ Precedence (highest first): per-repo-name SNAPSHOT → per-repo-name (non-SNAPSH
   withheld, never served unevaluated), `dist-tags` is replaced by the
   filtered one, and relative tarball URLs are prefixed on the way through.
   The filtered body is compact JSON; its `ETag` derives from the stored
-  content hash and the filtered skeleton. A stored packument that cannot be
-  parsed for cooldown answers `502` instead of being served unfiltered; ingest
-  and serve parse with the same (unlimited) Jackson size and depth limits, so
-  a document that could be stored can always be evaluated.
+  content hash and the filtered skeleton. When cooldown cannot evaluate a
+  stored packument, the request answers `502` instead of serving it
+  unfiltered; only a cooldown backend failure (database error, timeout) still
+  falls back to the unfiltered document, so an outage of the cooldown store
+  does not break installs. Ingest and serve parse with the same Jackson size
+  limits, and the skeleton keeps only shallow string values, so nothing deep
+  reaches the cooldown parser.
 - **dist-tag shortcut (`GET /{pkg}/latest`):** served through the same filter
   path so unbounded `npm install foo` resolutions see only allowed versions.
 - Supports both the full packument and the abbreviated (`application/vnd.npm.install-v1+json`) variant.

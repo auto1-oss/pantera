@@ -195,6 +195,38 @@ final class DownloadPackageSliceCooldownEtagTest {
 
     @Test
     void unparseablePackumentFailsClosedInsteadOfServingUnfiltered() {
+        MatcherAssert.assertThat(
+            "a packument cooldown cannot parse is not served",
+            this.statusWhenFilterFails(
+                new com.auto1.pantera.cooldown.metadata.MetadataParseException(
+                    "Failed to parse NPM metadata JSON", new java.io.IOException("too deep")
+                )
+            ),
+            new IsEqual<>(502)
+        );
+    }
+
+    @Test
+    void unexpectedFailureFailsClosed() {
+        MatcherAssert.assertThat(
+            "an Error while evaluating is not a reason to serve unfiltered",
+            this.statusWhenFilterFails(new StackOverflowError()),
+            new IsEqual<>(502)
+        );
+    }
+
+    @Test
+    void cooldownBackendFailureStillServesUnfiltered() {
+        MatcherAssert.assertThat(
+            "a database outage does not break installs",
+            this.statusWhenFilterFails(
+                new IllegalStateException("db down", new java.sql.SQLException("connection refused"))
+            ),
+            new IsEqual<>(200)
+        );
+    }
+
+    private int statusWhenFilterFails(final Throwable failure) {
         final Storage storage = new InMemoryStorage();
         this.saveFilesToStorage(storage);
         try (
@@ -207,22 +239,18 @@ final class DownloadPackageSliceCooldownEtagTest {
                     ),
                     new PackagePath("ctx"),
                     Optional.empty(),
-                    new ParseFailingFilterService(),
+                    new FailingFilterService(failure),
                     "npm",
                     "npm-proxy"
                 ),
-                this.port
+                0
             )
         ) {
-            this.port = server.start();
-            final HttpResponse<Buffer> response = WebClient
+            final int bound = server.start();
+            return WebClient
                 .create(DownloadPackageSliceCooldownEtagTest.VERTX)
-                .getAbs(String.format("http://127.0.0.1:%d/ctx/%s", this.port, PKG))
-                .rxSend().blockingGet();
-            MatcherAssert.assertThat(
-                "a packument cooldown cannot parse is not served",
-                response.statusCode(), new IsEqual<>(502)
-            );
+                .getAbs(String.format("http://127.0.0.1:%d/ctx/%s", bound, PKG))
+                .rxSend().blockingGet().statusCode();
         }
     }
 
@@ -309,10 +337,15 @@ final class DownloadPackageSliceCooldownEtagTest {
     }
 
     /**
-     * Cooldown service whose parser rejects the document, as Jackson does for
-     * a document beyond its limits.
+     * Cooldown service failing every evaluation with a given failure.
      */
-    private static final class ParseFailingFilterService implements CooldownMetadataService {
+    private static final class FailingFilterService implements CooldownMetadataService {
+
+        private final Throwable failure;
+
+        FailingFilterService(final Throwable failure) {
+            this.failure = failure;
+        }
 
         @Override
         public <T> CompletableFuture<byte[]> filterMetadata(
@@ -324,11 +357,7 @@ final class DownloadPackageSliceCooldownEtagTest {
             final MetadataFilter<T> filter,
             final MetadataRewriter<T> rewriter
         ) {
-            return CompletableFuture.failedFuture(
-                new com.auto1.pantera.cooldown.metadata.MetadataParseException(
-                    "Failed to parse NPM metadata JSON", new java.io.IOException("too deep")
-                )
-            );
+            return CompletableFuture.failedFuture(this.failure);
         }
 
         @Override
@@ -348,7 +377,7 @@ final class DownloadPackageSliceCooldownEtagTest {
 
         @Override
         public String stats() {
-            return "ParseFailingFilterService";
+            return "FailingFilterService";
         }
     }
 

@@ -344,10 +344,11 @@ public final class DownloadPackageSlice implements Slice {
 
     /**
      * Cooldown could not decide. Every version under cooldown answers 403. A
-     * stored packument that cannot be parsed answers 502 rather than being
-     * served unfiltered: its content comes from upstream, so an unparseable
-     * document must never be a way past cooldown. Any other failure (a
-     * cooldown backend error) serves the document unfiltered, as before 2.2.11.
+     * cooldown backend failure (database error, timeout) serves the document
+     * unfiltered, as before 2.2.11, so an outage of the cooldown store does not
+     * break installs. Anything else answers 502: it came from evaluating the
+     * stored document, whose content comes from upstream, and must never be a
+     * way past cooldown.
      */
     private CompletableFuture<Response> filterFailed(
         final Stored stored,
@@ -376,9 +377,9 @@ public final class DownloadPackageSlice implements Slice {
                     )
                     .build()
             );
-        } else if (DownloadPackageSlice.unparseable(error)) {
+        } else if (!DownloadPackageSlice.backendFailure(error)) {
             EcsLogger.warn("com.auto1.pantera.npm")
-                .message("Stored packument cannot be parsed for cooldown - refusing to serve it unfiltered")
+                .message("Stored packument cannot be evaluated for cooldown - refusing to serve it unfiltered")
                 .eventCategory("database")
                 .eventAction("filter_error")
                 .eventOutcome("failure")
@@ -538,20 +539,31 @@ public final class DownloadPackageSlice implements Slice {
     }
 
     /**
-     * Whether a cooldown failure comes from parsing the stored document.
+     * Whether a cooldown failure is a backend failure (the cooldown database
+     * or a timeout), the only failures that may serve a packument unfiltered.
+     * A parse failure, a JVM {@link Error} or anything unrecognised is not.
      *
      * @param error Failure
-     * @return True for a JSON parse or metadata parse failure
+     * @return True when the cause chain holds a backend failure and no parse
+     *  failure or {@link Error}
      */
-    static boolean unparseable(final Throwable error) {
+    static boolean backendFailure(final Throwable error) {
         Throwable cause = error;
-        boolean found = false;
-        while (cause != null && !found) {
-            found = cause instanceof com.fasterxml.jackson.core.JsonProcessingException
-                || cause instanceof com.auto1.pantera.cooldown.metadata.MetadataParseException;
+        boolean backend = false;
+        boolean disqualified = false;
+        while (cause != null) {
+            if (cause instanceof Error
+                || cause instanceof com.fasterxml.jackson.core.JsonProcessingException
+                || cause instanceof com.auto1.pantera.cooldown.metadata.MetadataParseException) {
+                disqualified = true;
+            }
+            if (cause instanceof java.sql.SQLException
+                || cause instanceof java.util.concurrent.TimeoutException) {
+                backend = true;
+            }
             cause = cause.getCause();
         }
-        return found;
+        return backend && !disqualified;
     }
 
     private static boolean allBlocked(final Throwable error) {

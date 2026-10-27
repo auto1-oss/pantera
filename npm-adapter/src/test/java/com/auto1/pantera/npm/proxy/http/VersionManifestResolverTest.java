@@ -27,6 +27,7 @@ import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import io.reactivex.Maybe;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.io.StringReader;
@@ -386,13 +387,36 @@ final class VersionManifestResolverTest {
     }
 
     @Test
-    void resolveFallsBackToRawEmitOnGenericFilterError() throws Exception {
-        // A non-AllVersionsBlockedException filter failure must fall back to
+    void resolveFailsClosedOnAnUnrecognisedFilterError() {
+        // Only a cooldown backend failure may fall back to the unfiltered
+        // packument; any other failure must not become a way past cooldown.
+        final CompletableFuture<byte[]> failed = new CompletableFuture<>();
+        failed.completeExceptionally(new IllegalStateException("unexpected"));
+        final VersionManifestResolver resolver = new VersionManifestResolver(
+            new FakeNpmProxy(RAW_PACKUMENT),
+            new StubCooldownMetadataService(failed),
+            "npm", "npm-proxy"
+        );
+        Assertions.assertThrows(
+            java.util.concurrent.ExecutionException.class,
+            () -> resolver.resolve(
+                "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", "Host", Optional.empty(),
+                AuditContext.NONE, "owner"
+            ).get(),
+            "the request fails (502 at the slice) instead of serving the raw packument"
+        );
+    }
+
+    @Test
+    void resolveFallsBackToRawEmitOnCooldownBackendFailure() throws Exception {
+        // A cooldown backend failure (here: a database error) falls back to
         // the RAW bytes -- 200 with version 11.5.1 is only reachable if the
         // fallback really emitted from raw (the filtered fixture would have
         // 404'd, same as the success-path test above).
         final CompletableFuture<byte[]> failed = new CompletableFuture<>();
-        failed.completeExceptionally(new IllegalStateException("cooldown backend unavailable"));
+        failed.completeExceptionally(
+            new IllegalStateException("cooldown backend unavailable", new java.sql.SQLException("down"))
+        );
         final VersionManifestResolver resolver = new VersionManifestResolver(
             new FakeNpmProxy(RAW_PACKUMENT),
             new StubCooldownMetadataService(failed),
@@ -403,7 +427,7 @@ final class VersionManifestResolverTest {
             AuditContext.NONE, "owner"
         ).get();
         MatcherAssert.assertThat(
-            "generic filter error falls back to serving the raw packument",
+            "backend failure falls back to serving the raw packument",
             response.status(),
             new IsEqual<>(RsStatus.OK)
         );

@@ -34,6 +34,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public final class PackumentJson {
 
     /**
+     * Nesting depth allowed in a skeleton.
+     */
+    private static final int SKELETON_DEPTH = 64;
+
+    /**
      * Parser/generator factory.
      */
     public static final JsonFactory FACTORY = JsonFactory.builder()
@@ -54,6 +59,30 @@ public final class PackumentJson {
      * Mapper over {@link #FACTORY}.
      */
     public static final ObjectMapper MAPPER = new ObjectMapper(PackumentJson.FACTORY);
+
+    /**
+     * Mapper for a {@link PackumentSkeleton} (cooldown parsing and
+     * rewriting): string and name sizes as unlimited as {@link #FACTORY}, but
+     * a finite nesting depth. A skeleton is at most three levels deep by
+     * construction, so the limit never rejects a real one, and anything
+     * deeper fails as a Jackson exception (which fails the request closed)
+     * instead of overflowing the stack in tree serialisation.
+     */
+    public static final ObjectMapper SKELETON = new ObjectMapper(
+        JsonFactory.builder()
+            .streamReadConstraints(
+                StreamReadConstraints.builder()
+                    .maxStringLength(Integer.MAX_VALUE)
+                    .maxNumberLength(Integer.MAX_VALUE)
+                    .maxNameLength(Integer.MAX_VALUE)
+                    .maxNestingDepth(PackumentJson.SKELETON_DEPTH)
+                    .build()
+            )
+            .streamWriteConstraints(
+                StreamWriteConstraints.builder().maxNestingDepth(PackumentJson.SKELETON_DEPTH).build()
+            )
+            .build()
+    );
 
     private PackumentJson() {
     }

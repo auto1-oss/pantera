@@ -23,7 +23,7 @@
 
 ### 🔒 Security
 
-- **npm cooldown fails closed on a packument it cannot parse.** A cooldown-filtered npm proxy answers `502` for such a document instead of serving it unfiltered. ([@aydasraf](https://github.com/aydasraf))
+- **npm cooldown fails closed when it cannot evaluate a packument.** A cooldown-filtered npm proxy answers `502` instead of serving the packument unfiltered; only a cooldown database failure or timeout still falls back to the unfiltered document. ([@aydasraf](https://github.com/aydasraf))
 
 ## Version 2.2.10
 
