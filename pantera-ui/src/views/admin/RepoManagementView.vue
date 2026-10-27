@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { listRepos, deleteRepo, moveRepo } from '@/api/repos'
+import { listRepos } from '@/api/repos'
 import type { BulkAccessPolicyResult, RepoSortField } from '@/api/repos'
 import type { RepoListItem, RepoMode } from '@/types'
 import { REPO_TYPE_FILTERS, REPO_MODE_FILTERS, repoModeLabel } from '@/utils/repoTypes'
 import { relativeTime } from '@/utils/relativeTime'
-import { techForRepoType } from '@/utils/techSetup'
 import { useDebouncedSearch } from '@/composables/useDebouncedSearch'
-import { useConfirmDelete } from '@/composables/useConfirmDelete'
 import { useNotificationStore } from '@/stores/notifications'
 import { useAuthStore } from '@/stores/auth'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -22,19 +20,13 @@ import Column from 'primevue/column'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
-import Dialog from 'primevue/dialog'
-import Menu from 'primevue/menu'
 import Paginator from 'primevue/paginator'
 import Tag from 'primevue/tag'
-import type { MenuItem } from 'primevue/menuitem'
-
-const SetMeUpDrawer = defineAsyncComponent(() => import('@/components/setup/SetMeUpDrawer.vue'))
 
 const router = useRouter()
 const route = useRoute()
 const notify = useNotificationStore()
 const auth = useAuthStore()
-const { visible: deleteVisible, targetName, confirm: confirmDel, accept: acceptDel, reject: rejectDel } = useConfirmDelete()
 
 const can = (action: string) => auth.hasAction('api_repository_permissions', action)
 
@@ -136,87 +128,17 @@ function onPage(e: { page: number; rows: number }) {
   void search.run()
 }
 
-// ---------------------------------------------------------------------------
-// Row actions (one shared popup menu)
-// ---------------------------------------------------------------------------
-const menu = ref<InstanceType<typeof Menu> | null>(null)
-const menuRepo = ref<RepoListItem | null>(null)
-
-function browsePath(name: string): string {
-  return `/repositories/${encodeURIComponent(name)}`
+// A repository's name opens its edit page; rename and delete live there,
+// delete also as a bulk action.
+function editPath(name: string): string {
+  return `/admin/repositories/${encodeURIComponent(name)}/edit`
 }
 
-const menuItems = computed<MenuItem[]>(() => {
-  const r = menuRepo.value
-  if (!r) return []
-  const items: MenuItem[] = [
-    { label: 'Browse', icon: 'pi pi-folder-open', command: () => { router.push(browsePath(r.name)) } },
-  ]
-  if (can('update')) {
-    items.push({ label: 'Edit', icon: 'pi pi-pencil', command: () => { router.push(`/admin/repositories/${encodeURIComponent(r.name)}/edit`) } })
-  }
-  if (techForRepoType(r.type)) {
-    items.push({ label: 'Set Me Up', icon: 'pi pi-bolt', command: () => openSetup(r) })
-  }
-  if (can('move')) {
-    items.push({ label: 'Rename…', icon: 'pi pi-arrows-h', command: () => openMove(r.name) })
-  }
-  if (can('delete')) {
-    items.push({ separator: true }, { label: 'Delete…', icon: 'pi pi-trash', class: 'text-red-600', command: () => { void handleDelete(r.name) } })
-  }
-  return items
-})
-
-function openMenu(event: Event, r: RepoListItem) {
-  menuRepo.value = r
-  menu.value?.toggle(event)
-}
-
-// Set Me Up drawer
-const setupOpen = ref(false)
-const setupRepo = ref<{ name: string; tech: string } | null>(null)
-function openSetup(repo: RepoListItem) {
-  const tech = techForRepoType(repo.type)
-  if (!tech) return
-  setupRepo.value = { name: repo.name, tech: tech.key }
-  setupOpen.value = true
-}
-
-// Rename
-const moveVisible = ref(false)
-const moveSource = ref('')
-const moveTarget = ref('')
-function openMove(name: string) {
-  moveSource.value = name
-  moveTarget.value = ''
-  moveVisible.value = true
-}
-async function handleMove() {
-  try {
-    await moveRepo(moveSource.value, moveTarget.value)
-    notify.success('Repository renamed', `${moveSource.value} → ${moveTarget.value}`)
-    moveVisible.value = false
-    void search.run()
-  } catch {
-    notify.error('Failed to rename repository')
-  }
-}
-
-// Delete (single)
-async function handleDelete(name: string) {
-  const confirmed = await confirmDel(name)
-  if (!confirmed) return
-  try {
-    const result = await deleteRepo(name)
-    if (result === 'deleting') {
-      notify.info('Repository is being deleted', `${name} disappears from the list when its data has been removed`)
-    } else {
-      notify.success('Repository deleted', name)
-    }
-    void search.run()
-  } catch {
-    notify.error('Failed to delete repository')
-  }
+// Anywhere on a row opens it, except the selection checkbox and the name link.
+function onRowClick(e: { originalEvent: Event; data: RepoListItem }) {
+  const target = e.originalEvent.target as HTMLElement | null
+  if (target?.closest('a, button, input, .p-checkbox, .p-datatable-column-selection')) return
+  void router.push(editPath(e.data.name))
 }
 
 // ---------------------------------------------------------------------------
@@ -250,7 +172,7 @@ function onBulkDeleted(result: BulkDeleteResult) {
 }
 
 function rowClass(r: RepoListItem): string {
-  return r.name === highlight.value ? 'bg-yellow-50 dark:bg-yellow-900/20' : ''
+  return r.name === highlight.value ? 'cursor-pointer bg-yellow-50 dark:bg-yellow-900/20' : 'cursor-pointer'
 }
 
 onMounted(() => { void search.run() })
@@ -352,12 +274,14 @@ defineExpose({ selected, typeFilter, modeFilter, sortField, sortOrder, rows, err
         :sort-order="sortOrder"
         :row-class="rowClass"
         class="shadow-sm"
+        row-hover
         @sort="onSort"
+        @row-click="onRowClick"
       >
         <Column selection-mode="multiple" header-style="width: 3rem" />
         <Column field="name" header="Name" sortable>
           <template #body="{ data }">
-            <RouterLink :to="browsePath(data.name)" class="font-medium text-blue-600 hover:underline dark:text-blue-400">
+            <RouterLink :to="editPath(data.name)" class="font-medium text-blue-600 hover:underline dark:text-blue-400">
               {{ data.name }}
             </RouterLink>
           </template>
@@ -395,19 +319,6 @@ defineExpose({ selected, typeFilter, modeFilter, sortField, sortOrder, rows, err
             <span v-else class="text-gray-400">&mdash;</span>
           </template>
         </Column>
-        <Column header-style="width: 3rem">
-          <template #body="{ data }">
-            <Button
-              icon="pi pi-ellipsis-v"
-              text
-              size="small"
-              severity="secondary"
-              :aria-label="`Actions for ${data.name}`"
-              :data-testid="`row-menu-${data.name}`"
-              @click="openMenu($event, data)"
-            />
-          </template>
-        </Column>
         <template #empty>
           <div class="py-10 text-center text-gray-500">
             <template v-if="hasFilters">
@@ -427,7 +338,6 @@ defineExpose({ selected, typeFilter, modeFilter, sortField, sortOrder, rows, err
           </div>
         </template>
       </DataTable>
-      <Menu ref="menu" :model="menuItems" popup />
 
       <Paginator
         v-if="total > size"
@@ -437,25 +347,6 @@ defineExpose({ selected, typeFilter, modeFilter, sortField, sortOrder, rows, err
         :rows-per-page-options="[10, 20, 50]"
         @page="onPage"
       />
-
-      <!-- Delete confirmation (single) -->
-      <Dialog v-model:visible="deleteVisible" header="Confirm Delete" modal class="w-96">
-        <p>Delete repository <strong>{{ targetName }}</strong>? This cannot be undone.</p>
-        <template #footer>
-          <Button label="Cancel" severity="secondary" text @click="rejectDel" />
-          <Button label="Delete" severity="danger" @click="acceptDel" />
-        </template>
-      </Dialog>
-
-      <!-- Rename -->
-      <Dialog v-model:visible="moveVisible" header="Rename Repository" modal class="w-96">
-        <p class="mb-3">Rename <strong>{{ moveSource }}</strong> to:</p>
-        <InputText v-model="moveTarget" placeholder="New name" class="w-full" />
-        <template #footer>
-          <Button label="Cancel" severity="secondary" text @click="moveVisible = false" />
-          <Button label="Rename" :disabled="!moveTarget" @click="handleMove" />
-        </template>
-      </Dialog>
 
       <BulkAccessPolicyDialog
         v-model:visible="bulkPolicyVisible"
@@ -470,11 +361,5 @@ defineExpose({ selected, typeFilter, modeFilter, sortField, sortOrder, rows, err
         @deleted="onBulkDeleted"
       />
     </div>
-    <SetMeUpDrawer
-      v-if="setupRepo"
-      v-model:visible="setupOpen"
-      :tech="setupRepo.tech"
-      :repo="setupRepo.name"
-    />
   </AppLayout>
 </template>

@@ -61,6 +61,7 @@
 - **One `artifact_access` audit record per download.** A `maven` proxy with several remotes wrote one record per remote for each cached download. ([@aydasraf](https://github.com/aydasraf))
 - **The cooldown filtered-metadata cache is bounded by size.** It was bounded only by entry count, so large packuments could take gigabytes of heap. It now also holds at most 1 GiB of entries (`PANTERA_COOLDOWN_METADATA_L1_MAX_BYTES`). ([@aydasraf](https://github.com/aydasraf))
 - **The "In-flight HTTP requests" panel shows real values.** It charted `pantera_http_active_requests`, a gauge nothing updated, so it always read 0. The panel now charts Vert.x's `vertx_http_server_active_requests` and the unused gauge is removed. ([@aydasraf](https://github.com/aydasraf))
+- **Manage Repositories stays in repository management.** A row opens the repository's edit page instead of the browse view; the per-row menu is gone (rename and delete are on the edit page, delete also as a bulk action; browsing and Set Me Up stay under **Repositories**). The edit page has one **Cooldown** card, shown for proxy repositories only, instead of two that could overwrite each other, a save bar that stays in view, and a link back to the list that keeps its filters. The repository cooldown window is written as `30d` instead of `P30D`. ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 

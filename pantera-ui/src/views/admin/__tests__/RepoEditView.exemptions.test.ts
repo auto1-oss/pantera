@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import PrimeVue from 'primevue/config'
 import Aura from '@primeuix/themes/aura'
 import { useAuthStore } from '@/stores/auth'
+import DatePicker from 'primevue/datepicker'
 import RepoEditView from '../RepoEditView.vue'
 
 const getExemptionsMock = vi.fn()
@@ -102,7 +103,7 @@ describe('RepoEditView — cooldown exemptions', () => {
     await wrapper.find('[data-testid="repo-exemption-add"]').trigger('click')
     const patterns = wrapper.findAll('[data-testid="repo-exemption-pattern"]')
     await patterns[2].setValue('com.example.*')
-    await wrapper.findAll('[data-testid="repo-exemption-expiry"]')[2].setValue('2099-01-01')
+    wrapper.findAllComponents(DatePicker)[2].vm.$emit('update:modelValue', new Date(2099, 0, 1))
     const vm = wrapper.vm as unknown as { dirty: boolean; save: () => Promise<void> }
     expect(vm.dirty).toBe(true)
     await vm.save()

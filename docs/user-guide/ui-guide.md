@@ -242,8 +242,8 @@ If you do not see the Administration section, you have read-only access. Contact
 The **Manage Repositories** page lists every repository you may read, with the controls an operator needs day to day:
 
 - **Toolbar**: search as you type (the list updates without pressing Enter), a **Format** filter and a **Mode** filter (Hosted, Proxy, Group). The filters, sort and page are kept in the URL, so a reload or the browser's back button returns to the same view.
-- **Columns**: Name (links to the repository browser), Format, Mode, Storage (`fs`, `s3` or the storage alias), Anonymous (`read` / `write` chips when anonymous access is allowed) and Updated (when and by whom). Name, Format and Updated are sortable.
-- **Row menu** (the `⋮` button): Browse, Edit, Set Me Up, Rename…, Delete…. Entries you lack permission for are hidden.
+- **Columns**: Name, Format, Mode, Storage (`fs`, `s3` or the storage alias), Anonymous (`read` / `write` chips when anonymous access is allowed) and Updated (when and by whom). Name, Format and Updated are sortable.
+- **Opening a repository**: click its row to open its edit page. Browsing contents and Set Me Up live under **Repositories**.
 - **Selection bar**: tick rows and a bar appears with **Anonymous access…** (set anonymous download and upload for all selected repositories at once) and **Delete…** (type `delete` to confirm; the result reports how many were deleted, how many are being removed in the background, and which failed).
 
 ### Creating Repositories
@@ -256,7 +256,7 @@ Each format supports Hosted, Proxy, and/or Group variants where applicable. For 
 
 ### Editing Repositories
 
-**Edit** opens the repository's configuration form and its per-repository cooldown override on one page. One **Save** writes both (the cooldown override only when it changed) and keeps you on the page; **Reset** returns the form to the last saved state, and leaving the page with unsaved changes asks for confirmation. **Rename…** and **Delete repository…** live in the **Danger zone** card at the bottom.
+The edit page holds the repository's configuration and, for proxy repositories, a **Cooldown** card with the repository-specific window and the cooldown **Exemptions**. The save bar stays at the bottom of the window: one **Save** writes everything that changed and keeps you on the page, **Discard** returns to the last saved state, and leaving with unsaved changes asks for confirmation. **Manage Repositories** at the top returns to the list, with its filters kept when you came from it. **Rename…** and **Delete repository…** live in the **Danger zone** card.
 
 For local repositories of every format except Docker, the form has a **Publishing** card with an **Immutable artifacts** checkbox (the repository's `immutable` setting). It is checked for a new repository: a stored artifact can then never be overwritten, and a re-upload is refused (usually with `409 Conflict`). Uncheck it to let users with `write` permission overwrite. Users with `delete` permission can delete artifacts either way. Editing a repository shows its current value, and saving writes the choice explicitly. Proxy, group and Docker repositories do not show the card (Docker tag moves are controlled by the `overwrite` permission). See [Overwrite rules](getting-started.md#overwrite-rules-immutable).
 

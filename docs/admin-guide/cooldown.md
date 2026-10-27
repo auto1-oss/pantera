@@ -89,9 +89,9 @@ meta:
 
 ### Per-repository window
 
-A proxy repository can carry its own window in its config (the admin UI's
-repository cooldown setting), which takes precedence over the type and global
-windows:
+A proxy repository can carry its own window in its config (set by the
+**Cooldown** card when the repository is created in the UI), which takes
+precedence over the type and global windows:
 
 ```yaml
 repo:
@@ -101,7 +101,11 @@ repo:
 ```
 
 It applies as soon as the repository is created or edited through the REST
-API or the UI, without a restart; removing it (or deleting
+API or the UI, without a restart. On the edit page of a repository whose config
+has this key, the **Cooldown** card edits it (on/off and minimum age, written
+as `30d`, `12h` or `30m`); for every other proxy the card edits the
+repository's override in the global cooldown settings, which also carries a
+SNAPSHOT policy. Removing it (or deleting
 the repository) falls back to the type and global windows. Cached cooldown
 decisions and the repository's filtered metadata are dropped when the
 window changes.
