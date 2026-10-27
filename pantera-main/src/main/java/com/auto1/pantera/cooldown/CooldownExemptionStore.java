@@ -31,7 +31,14 @@ import javax.sql.DataSource;
  * Persists per-repository cooldown exemptions ({@code cooldown_exemptions},
  * V147) and keeps {@link CooldownSettings} in step with the table. Requests
  * only ever read the in-memory copy; this class runs at startup, on an admin
- * change, and when another node announces a change.
+ * change, when another node announces a change, and once a minute.
+ *
+ * <p>Every read-then-swap of the in-memory copy runs while holding the shared
+ * {@link CooldownSettings} monitor, together with its database read or write.
+ * Store instances (the boot loader, each API verticle) share that object, so
+ * a periodic refresh can never swap in a table snapshot that an admin change
+ * on this node committed past in the meantime. Requests never take the
+ * lock.</p>
  *
  * @since 2.2.11
  */
@@ -96,6 +103,12 @@ public final class CooldownExemptionStore {
      * @return True when the in-memory exemptions changed
      */
     public boolean refresh() {
+        synchronized (this.settings) {
+            return this.refreshLocked();
+        }
+    }
+
+    private boolean refreshLocked() {
         final Map<String, List<CooldownExemptions.Rule>> byRepo = new HashMap<>();
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(
@@ -137,9 +150,11 @@ public final class CooldownExemptionStore {
      * @return The repository's exemptions now in effect
      */
     public CooldownExemptions reload(final String repoName) {
-        final CooldownExemptions loaded = new CooldownExemptions(this.read(repoName));
-        this.settings.setRepoExemptions(repoName, loaded);
-        return loaded;
+        synchronized (this.settings) {
+            final CooldownExemptions loaded = new CooldownExemptions(this.read(repoName));
+            this.settings.setRepoExemptions(repoName, loaded);
+            return loaded;
+        }
     }
 
     /**
@@ -150,6 +165,14 @@ public final class CooldownExemptionStore {
      * @return The repository's exemptions now in effect
      */
     public CooldownExemptions replace(final String repoName, final List<CooldownExemptions.Rule> rules) {
+        synchronized (this.settings) {
+            return this.replaceLocked(repoName, rules);
+        }
+    }
+
+    private CooldownExemptions replaceLocked(
+        final String repoName, final List<CooldownExemptions.Rule> rules
+    ) {
         try (Connection conn = this.dataSource.getConnection()) {
             conn.setAutoCommit(false);
             try {
@@ -180,7 +203,8 @@ public final class CooldownExemptionStore {
                 "Failed to replace cooldown exemptions of " + repoName, err
             );
         }
-        final CooldownExemptions applied = new CooldownExemptions(rules);
+        // What is in effect is what was committed: re-read it.
+        final CooldownExemptions applied = new CooldownExemptions(this.read(repoName));
         this.settings.setRepoExemptions(repoName, applied);
         return applied;
     }
