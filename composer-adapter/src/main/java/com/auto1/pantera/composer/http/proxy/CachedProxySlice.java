@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
