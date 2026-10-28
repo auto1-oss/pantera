@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
@@ -28,6 +29,7 @@ import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
@@ -268,7 +270,7 @@ final class CachedProxySlice implements Slice {
             // primary dist archive (.zip / .tar / .phar). Metadata JSON
             // paths fall through to the existing flow unchanged.
             if (this.cacheWriter != null && isPrimaryArtifact(path)) {
-                return this.verifyAndServePrimary(line, path);
+                return this.verifyAndServePrimary(line, rqheaders, path);
             }
 
             // Keep ~dev suffix in cache key to avoid collision between stable and dev metadata
@@ -1080,7 +1082,7 @@ final class CachedProxySlice implements Slice {
      * Maven primary-path decision.
      */
     private CompletableFuture<Response> verifyAndServePrimary(
-        final RequestLine line, final String path
+        final RequestLine line, final Headers headers, final String path
     ) {
         final Storage storage = this.repo.storage();
         final Key key = new Key.From(path.startsWith("/") ? path.substring(1) : path);
@@ -1101,21 +1103,17 @@ final class CachedProxySlice implements Slice {
                 }
             );
             if (isLeader[0]) {
-                return this.streamPrimary(line, key, path, leaderGate);
+                return this.streamPrimary(line, headers, key, path, leaderGate);
             }
             return gate.exceptionally(err -> null)
-                .thenCompose(ignored -> this.verifyAndServePrimary(line, path));
+                .thenCompose(ignored -> this.verifyAndServePrimary(line, headers, path));
         }).exceptionally(err -> {
-            EcsLogger.warn("com.auto1.pantera.composer")
-                .message("Composer primary-artifact verify-and-serve failed; returning 502")
-                .eventCategory("web")
-                .eventAction("cache_write")
-                .eventOutcome("failure")
-                .field("repository.name", this.rname)
-                .field("url.path", path)
-                .error(err)
-                .field("log.source", "application")
-                .log();
+            new ServerErrorLog("com.auto1.pantera.composer", "cache_write", headers)
+                .repository(this.rname)
+                .path(path)
+                .status(RsStatus.BAD_GATEWAY.code())
+                .failure(err)
+                .warnUnlessExpected("Composer primary-artifact verify-and-serve failed");
             return ResponseBuilder.badGateway().build();
         }).toCompletableFuture();
     }
@@ -1132,13 +1130,14 @@ final class CachedProxySlice implements Slice {
      */
     private CompletableFuture<Response> streamPrimary(
         final RequestLine line,
+        final Headers headers,
         final Key key,
         final String path,
         final CompletableFuture<Void> leaderGate
     ) {
         final String upstream = this.upstreamUrl + path;
         final RequestContext ctx = new RequestContext(
-            org.apache.logging.log4j.ThreadContext.get("trace.id"),
+            new com.auto1.pantera.audit.AuditContext(headers).traceId(),
             null,
             this.rname,
             path
@@ -1160,6 +1159,16 @@ final class CachedProxySlice implements Slice {
                             ResponseBuilder.notFound().build()
                         );
                     }
+                    new ServerErrorLog("com.auto1.pantera.composer", "proxy_upstream", headers)
+                        .repository(this.rname)
+                        .path(path)
+                        .upstream(upstream)
+                        .status(RsStatus.BAD_GATEWAY.code())
+                        .reason(
+                            resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()
+                                ? "upstream_status_" + status : "circuit_open"
+                        )
+                        .warnUnlessExpected("Upstream answered " + status + " for dist archive");
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.badGateway()
                             .textBody("Upstream temporarily unavailable")
@@ -1213,16 +1222,13 @@ final class CachedProxySlice implements Slice {
                 if (!leaderGate.isDone()) {
                     leaderGate.complete(null);
                 }
-                EcsLogger.warn("com.auto1.pantera.composer")
-                    .message("Composer stream-through primary fetch failed; returning 502")
-                    .eventCategory("web")
-                    .eventAction("cache_write")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.rname)
-                    .field("url.path", path)
-                    .error(err)
-                    .field("log.source", "application")
-                    .log();
+                new ServerErrorLog("com.auto1.pantera.composer", "proxy_upstream", headers)
+                    .repository(this.rname)
+                    .path(path)
+                    .upstream(upstream)
+                    .status(RsStatus.BAD_GATEWAY.code())
+                    .failure(err)
+                    .warnUnlessExpected("Composer stream-through primary fetch failed");
                 return ResponseBuilder.badGateway()
                     .textBody("Upstream temporarily unavailable")
                     .build();

@@ -209,7 +209,7 @@ public final class SecurityPolicySettingsHandler {
         CompletableFuture.supplyAsync(section::current, HandlerExecutor.get())
             .whenComplete((settings, err) -> {
                 if (err != null) {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 } else {
                     ctx.response().setStatusCode(200)
                         .putHeader("Content-Type", "application/json")
@@ -253,7 +253,7 @@ public final class SecurityPolicySettingsHandler {
             this.sync.broadcast(section.eventPrefix());
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 EcsLogger.info(LOGGER)
                     .message("Admin updated " + section.name() + " settings (keys="

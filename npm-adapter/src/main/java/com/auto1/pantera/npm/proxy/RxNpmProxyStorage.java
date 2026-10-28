@@ -14,20 +14,26 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.rx.RxFuture;
 import com.auto1.pantera.asto.rx.RxStorage;
+import com.auto1.pantera.http.PanteraHttpException;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.npm.misc.AbbreviatedMetadata;
+import com.auto1.pantera.http.misc.StorageExecutors;
+import com.auto1.pantera.npm.misc.AbbreviatedMetadataStream;
 import com.auto1.pantera.npm.proxy.model.NpmAsset;
 import com.auto1.pantera.npm.proxy.model.NpmPackage;
+import com.auto1.pantera.npm.proxy.model.PackumentBody;
+import com.auto1.pantera.npm.proxy.model.PackumentSink;
+import com.fasterxml.jackson.core.JsonParseException;
 import io.reactivex.Completable;
 import io.reactivex.Maybe;
+import io.reactivex.Scheduler;
 import io.reactivex.Single;
+import io.reactivex.schedulers.Schedulers;
 import io.vertx.core.json.JsonObject;
-
-import com.auto1.pantera.npm.misc.MetadataETag;
-import javax.json.Json;
-import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
-import java.time.OffsetDateTime;
+import java.nio.file.Path;
+import java.util.concurrent.Executor;
 import java.util.function.BiConsumer;
 
 /**
@@ -49,6 +55,22 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
     private final BiConsumer<String, Long> phaseRecorder;
 
     /**
+     * Executor for the blocking parts of a packument save (abbreviated
+     * generation, temp-file reads and deletes).
+     */
+    private final Executor executor;
+
+    /**
+     * {@link #executor} as a scheduler.
+     */
+    private final Scheduler blocking;
+
+    /**
+     * Directory for abbreviated-packument temp files.
+     */
+    private final Path tmp;
+
+    /**
      * Ctor.
      * @param storage Underlying storage
      */
@@ -66,8 +88,33 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
         final RxStorage storage,
         final BiConsumer<String, Long> phaseRecorder
     ) {
+        this(
+            storage,
+            phaseRecorder,
+            ContextualExecutor.contextualize(StorageExecutors.WRITE),
+            Path.of(System.getProperty("java.io.tmpdir"))
+        );
+    }
+
+    /**
+     * Ctor with explicit blocking executor and temp directory.
+     *
+     * @param storage Underlying storage
+     * @param phaseRecorder (phase, durationNs) recorder; null treated as no-op
+     * @param executor Executor for blocking packument-save work
+     * @param tmp Directory for abbreviated-packument temp files
+     */
+    RxNpmProxyStorage(
+        final RxStorage storage,
+        final BiConsumer<String, Long> phaseRecorder,
+        final Executor executor,
+        final Path tmp
+    ) {
         this.storage = storage;
         this.phaseRecorder = phaseRecorder == null ? (phase, ns) -> { } : phaseRecorder;
+        this.executor = executor;
+        this.blocking = Schedulers.from(executor);
+        this.tmp = tmp;
     }
 
     /**
@@ -95,71 +142,78 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
         final Key key = new Key.From(pkg.name(), "meta.json");
         final Key metaKey = new Key.From(pkg.name(), "meta.meta");
         final Key abbreviatedKey = new Key.From(pkg.name(), "meta.abbreviated.json");
-        // Save metadata FIRST, then data. This ensures readers always see
-        // metadata when data exists (they check metadata to validate).
-        // Sequential saves are safer than parallel - parallel can still leave
-        // partial state visible to readers.
-        //
-        // MEMORY OPTIMIZATION: Pre-compute and save abbreviated metadata
-        // This allows serving abbreviated requests without loading full metadata
-        final byte[] fullContent = pkg.content().getBytes(StandardCharsets.UTF_8);
-        final byte[] abbreviatedContent = this.generateAbbreviated(pkg.name(), pkg.content());
-        // PERF: Pre-compute content hashes at write time (Fix 2.1)
-        // At read time, derive ETag from stored hash + tarball prefix (~100 bytes)
-        // instead of SHA-256 of 3-5MB transformed content
-        final String fullHash = new MetadataETag(fullContent).calculate();
-        final String abbrevHash = abbreviatedContent.length > 0
-            ? new MetadataETag(abbreviatedContent).calculate() : null;
-        // WS6.1: thread the upstream ETag through so NpmProxy.conditionalRefresh
-        // (gated on metadata.upstreamEtag().isPresent()) actually has something
-        // to send as If-None-Match. Before this fix the 4-arg Metadata ctor
-        // below dropped it on every save, so the conditional-request path was
-        // permanently dead — every 12h TTL boundary re-downloaded and
-        // re-parsed the full packument even when upstream hadn't changed it.
-        final NpmPackage.Metadata enrichedMeta = new NpmPackage.Metadata(
-            pkg.meta().lastModified(),
-            pkg.meta().lastRefreshed(),
-            fullHash,
-            abbrevHash,
-            pkg.meta().upstreamEtag().orElse(null)
-        );
-        return Completable.concatArray(
-            this.storage.save(
-                metaKey,
-                new Content.From(
-                    enrichedMeta.json().encode().getBytes(StandardCharsets.UTF_8)
-                )
-            ),
-            this.storage.save(
-                key,
-                new Content.From(fullContent)
-            ),
-            this.storage.save(
-                abbreviatedKey,
-                new Content.From(abbreviatedContent)
-            )
-        );
+        final PackumentBody full = pkg.body();
+        // MEMORY: the packument is never materialised. The full document is
+        // a temp file (proxy ingest) streamed into storage with a known size;
+        // the abbreviated document is generated by streaming over it into a
+        // second temp file, then streamed into storage the same way. Both
+        // temp files are released when the save terminates (success, error
+        // or dispose). The generation and the hashing are blocking, so the
+        // whole save is subscribed on the blocking executor, never on the
+        // caller's (possibly event-loop) thread.
+        return Completable.using(
+            () -> this.generateAbbreviated(pkg.name(), full),
+            abbreviated -> {
+                // PERF: Pre-compute content hashes at write time (Fix 2.1).
+                // At read time, derive ETag from stored hash + tarball prefix
+                // (~100 bytes) instead of SHA-256 of the transformed content.
+                // WS6.1: thread the upstream ETag through so
+                // NpmProxy.conditionalRefresh (gated on
+                // metadata.upstreamEtag().isPresent()) has something to send
+                // as If-None-Match.
+                final NpmPackage.Metadata enrichedMeta = new NpmPackage.Metadata(
+                    pkg.meta().lastModified(),
+                    pkg.meta().lastRefreshed(),
+                    full.sha256(),
+                    abbreviated.size() > 0 ? abbreviated.sha256() : null,
+                    pkg.meta().upstreamEtag().orElse(null)
+                );
+                // Save metadata FIRST, then data. This ensures readers always
+                // see metadata when data exists (they check metadata to
+                // validate). Sequential saves are safer than parallel -
+                // parallel can still leave partial state visible to readers.
+                return Completable.concatArray(
+                    this.storage.save(
+                        metaKey,
+                        new Content.From(
+                            enrichedMeta.json().encode().getBytes(StandardCharsets.UTF_8)
+                        )
+                    ),
+                    this.storage.save(key, full.content()),
+                    this.storage.save(abbreviatedKey, abbreviated.content())
+                );
+            },
+            PackumentBody::release
+        ).subscribeOn(this.blocking).doFinally(full::release);
     }
 
     /**
-     * Generate abbreviated metadata from full content.
-     * Includes time field for pnpm compatibility.
+     * Generate abbreviated metadata from the full content, streaming.
+     * Includes time field for pnpm compatibility. A well-formed packument
+     * that cannot be abbreviated (a shape npm metadata does not have, such as
+     * a non-object {@code versions}) yields an empty body (stored as an empty
+     * {@code meta.abbreviated.json} without hash, as before).
+     *
+     * <p>A document that is not one JSON object (an upstream 200 with a
+     * truncated or otherwise invalid body) is refused as an upstream failure
+     * before anything is written: the save fails with a 502
+     * {@link PanteraHttpException}, so a first fetch answers as for an
+     * unreachable upstream and a refresh keeps the cached copy.</p>
+     *
      * @param packageName Package name for logging context
-     * @param fullContent Full package JSON content
-     * @return Abbreviated JSON bytes
+     * @param full Full package JSON content
+     * @return Abbreviated JSON body, owned by the caller
+     * @throws PanteraHttpException When the document is not one JSON object
      */
-    private byte[] generateAbbreviated(final String packageName, final String fullContent) {
-        try {
-            final javax.json.JsonObject fullJson = Json.createReader(
-                new StringReader(fullContent)
-            ).readObject();
-            final javax.json.JsonObject abbreviated = new AbbreviatedMetadata(fullJson).generate();
-            final byte[] result = abbreviated.toString().getBytes(StandardCharsets.UTF_8);
+    private PackumentBody generateAbbreviated(final String packageName, final PackumentBody full) {
+        try (PackumentSink sink = new PackumentSink(this.tmp, this.executor)) {
+            new AbbreviatedMetadataStream(full::open).writeTo(sink);
+            final PackumentBody result = sink.commit();
             // Note: Release dates are included in abbreviated metadata via the "time" field
             // (added for pnpm compatibility). No separate cache needed - cooldown filtering
             // parses dates directly from abbreviated metadata.
             EcsLogger.debug("com.auto1.pantera.npm")
-                .message(String.format("Generated abbreviated metadata: abbreviated=%d bytes, full=%d bytes", result.length, fullContent.length()))
+                .message(String.format("Generated abbreviated metadata: abbreviated=%d bytes, full=%d bytes", result.size(), full.size()))
                 .eventCategory("database")
                 .eventAction("generate_abbreviated")
                 .eventOutcome("success")
@@ -167,9 +221,27 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 .field("log.source", "application")
                 .log();
             return result;
+        } catch (final JsonParseException invalid) {
+            EcsLogger.warn("com.auto1.pantera.npm")
+                .message(
+                    String.format(
+                        "Upstream packument is not a valid JSON object, not caching it: %d bytes", full.size()
+                    )
+                )
+                .eventCategory("web")
+                .eventAction("get_package")
+                .eventOutcome("failure")
+                .field("event.reason", "invalid_upstream_document")
+                .field("package.name", packageName)
+                .error(invalid)
+                .field("log.source", "application")
+                .log();
+            throw new PanteraHttpException(
+                RsStatus.BAD_GATEWAY, "Upstream packument is not valid JSON", invalid
+            );
         } catch (final Exception e) {
             EcsLogger.error("com.auto1.pantera.npm")
-                .message(String.format("Failed to generate abbreviated metadata: full=%d bytes", fullContent.length()))
+                .message(String.format("Failed to generate abbreviated metadata: full=%d bytes", full.size()))
                 .eventCategory("database")
                 .eventAction("generate_abbreviated")
                 .eventOutcome("failure")
@@ -177,7 +249,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 .error(e)
                 .field("log.source", "application")
                 .log();
-            return new byte[0];
+            return new PackumentBody.Bytes(new byte[0]);
         }
     }
 
@@ -475,7 +547,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 (content, metadata) ->
                     new NpmPackage(
                         name,
-                        new String(content, StandardCharsets.UTF_8),
+                        new PackumentBody.Bytes(content),
                         new NpmPackage.Metadata(metadata)
                     )
                 );

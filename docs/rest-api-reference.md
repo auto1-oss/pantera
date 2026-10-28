@@ -2242,6 +2242,80 @@ curl -X POST http://localhost:8086/api/v1/repositories/maven-central/cooldown/un
 
 ---
 
+### GET /api/v1/repositories/:name/cooldown/exemptions
+
+List the cooldown exemptions of a proxy repository.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_cooldown_permissions:read`, plus the repository's `read` permission.
+
+**Response (200):**
+
+```json
+{
+  "repository": "npm-proxy",
+  "exemptions": [
+    {
+      "pattern": "@myorg/*",
+      "expires_at": null,
+      "reason": "our own packages",
+      "created_by": "admin",
+      "created_at": "2026-10-27T13:00:00Z",
+      "active": true
+    }
+  ],
+  "released": 0
+}
+```
+
+`active` is `false` once `expires_at` has passed. A repository that does not
+exist answers `404`; one that is not a proxy answers `400`.
+
+---
+
+### PUT /api/v1/repositories/:name/cooldown/exemptions
+
+Replace the cooldown exemptions of a proxy repository. Packages matching an
+unexpired rule are never blocked and never filtered out of metadata. Saving
+releases their active blocks (archived as `MANUAL_UNBLOCK`), drops the
+repository's cooldown decision and filtered-metadata caches, reloads the list
+on every node, and is audited as `COOLDOWN_EXEMPTIONS_UPDATE`.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_cooldown_permissions:write`, plus the repository's `write` permission.
+
+**Request Body:** up to 500 rules; an empty array removes every exemption.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pattern` | string | Yes | Exact package name, or a prefix ending in a single `*`. Case-insensitive. No whitespace; `*` only as the last character; `*` alone is rejected. Maven/Gradle `groupId:artifactId` is stored as `groupId.artifactId`; PyPI names are PEP 503-normalised. |
+| `expires_at` | string \| null | No | ISO-8601 instant in the future; `null` or absent for never. |
+| `reason` | string | No | Free text. |
+
+```json
+{
+  "exemptions": [
+    { "pattern": "@myorg/*", "reason": "our own packages" },
+    { "pattern": "left-pad", "expires_at": "2026-12-31T00:00:00Z" }
+  ]
+}
+```
+
+**Response (200):** the stored list, in the `GET` shape, with `released` set
+to the number of active blocks the save released. An invalid rule answers
+`400` and nothing is changed.
+
+**curl example:**
+
+```bash
+curl -X PUT http://localhost:8086/api/v1/repositories/npm-proxy/cooldown/exemptions \
+  -H "Authorization: Bearer eyJhbGciOi..." \
+  -H "Content-Type: application/json" \
+  -d '{"exemptions":[{"pattern":"@myorg/*"}]}'
+```
+
+---
+
 ### POST /api/v1/cooldown/unblock
 
 Unblock several artifact versions, across repositories, in one request. Each
@@ -3472,6 +3546,8 @@ All API errors follow a consistent JSON format:
 | `INTERNAL_ERROR`  | 500         | Server-side error                    |
 | `NOT_IMPLEMENTED` | 501         | Feature not available                |
 | `UNAVAILABLE`     | 503         | Dependency unavailable (e.g., no DB) |
+
+A `500` caused by an exception answers `message: "Internal server error"`; the exception is logged (`event.action: api_request`, with `error.*` and the request's `trace.id`), never returned.
 
 ---
 

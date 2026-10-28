@@ -294,9 +294,13 @@ public final class VertxSliceServer implements Closeable {
                     .setInitialWindowSize(16 * 1024 * 1024)
             )
             .setHttp2ConnectionWindowSize(128 * 1024 * 1024)
-            // HTTP Compression - matches JFrog/Nexus performance characteristics
-            .setCompressionSupported(true)  // Enable gzip/deflate compression
-            .setCompressionLevel(6),        // Balanced compression (1=fast, 9=best)
+            // HTTP compression for text metadata (binary artifacts opt out, see
+            // INCOMPRESSIBLE_TYPES). Level 1: on npm packuments it is ~1.7x
+            // faster than level 6 for ~20% larger output. Deflate runs on the
+            // event loop inside JNI critical sections that hold off GC, and
+            // packuments reach tens of MB.
+            .setCompressionSupported(true)
+            .setCompressionLevel(1),
             requestTimeout);
     }
 
@@ -1081,16 +1085,17 @@ public final class VertxSliceServer implements Closeable {
 
         final boolean isHead = "HEAD".equals(req.method().name());
 
-        // STREAMING: Convert Vert.x request stream to reactive Publisher without buffering
-        // req.toFlowable() returns Flowable<Buffer> which we map to ByteBuffer
-        final Flowable<ByteBuffer> bodyStream = req.toFlowable()
-            .map(buffer -> {
-                final ByteBuf netty = buffer.getByteBuf();
-                final ByteBuffer nio = ByteBuffer.allocate(netty.readableBytes());
-                netty.getBytes(netty.readerIndex(), nio);
-                nio.flip();
-                return nio;
-            });
+        // STREAMING: expose the request body as a reactive Publisher without buffering.
+        // Not req.toFlowable(): that forwards request(n) into fetch() on the
+        // subscriber's thread (a rio writer for file storage), and HTTP/2's fetch
+        // throws once the body ended — killing the writer and hanging the upload
+        // until the idle timeout. RequestBodyPublisher confines all stream access
+        // to the request context.
+        final io.vertx.core.Context reqContext = io.vertx.core.Vertx.currentContext();
+        final org.reactivestreams.Publisher<ByteBuffer> bodyStream = new RequestBodyPublisher(
+            req.getDelegate(),
+            reqContext != null ? reqContext : this.vertx.getDelegate().getOrCreateContext()
+        );
 
         // Create Content: with known size when Content-Length is present,
         // or without size for chunked transfers. Either way the ACTUAL bytes
@@ -1551,7 +1556,9 @@ public final class VertxSliceServer implements Closeable {
             }
         }
 
-        final ResponseTerminator terminator = new ResponseTerminator(response, promise, guardedResponse);
+        final ResponseTerminator terminator = new ResponseTerminator(
+            response, promise, guardedResponse, headers
+        );
 
         if (body == null || (body.size().isPresent() && body.size().get() == 0L)) {
             terminator.end();
@@ -1860,14 +1867,23 @@ public final class VertxSliceServer implements Closeable {
         private final AtomicBoolean finished = new AtomicBoolean(false);
         private final GuardedHttpServerResponse guardedResponse;
 
+        /**
+         * Response headers; on the failure path the request's trace id is
+         * read from Pantera's {@code traceparent} among them (the failure
+         * record is emitted after the request's MDC was cleared).
+         */
+        private final Headers headers;
+
         ResponseTerminator(
             final HttpServerResponse response,
             final CompletableFuture<Void> promise,
-            final GuardedHttpServerResponse guardedResponse
+            final GuardedHttpServerResponse guardedResponse,
+            final Headers headers
         ) {
             this.response = response;
             this.promise = promise;
             this.guardedResponse = guardedResponse;
+            this.headers = headers;
         }
 
         void end() {
@@ -1906,11 +1922,28 @@ public final class VertxSliceServer implements Closeable {
 
         void fail(final Throwable error) {
             if (this.finished.compareAndSet(false, true)) {
+                // Status the client actually gets: a fresh 502/500 when the
+                // head is not written yet, else the already-sent status with
+                // a truncated body.
+                final boolean head = this.response.headWritten();
+                final int answered;
+                if (head) {
+                    answered = this.response.getStatusCode();
+                } else if (isUpstreamTransient(error)) {
+                    answered = HttpURLConnection.HTTP_BAD_GATEWAY;
+                } else {
+                    answered = HttpURLConnection.HTTP_INTERNAL_ERROR;
+                }
+                final String reason = new com.auto1.pantera.http.log.FailureCause(error).reason();
                 EcsLogger.error("com.auto1.pantera.vertx")
-                    .message("Error streaming response")
+                    .message("Error streaming response (cause: " + reason
+                        + (head ? "; body truncated after headers" : "") + ")")
                     .eventCategory("web")
                     .eventAction("response_stream")
                     .eventOutcome("failure")
+                    .field("event.reason", reason)
+                    .field("http.response.status_code", answered)
+                    .traceContext(VertxSliceServer.traceId(this.headers), null)
                     .error(error)
                     .field("log.source", "application")
                     .log();
@@ -2012,6 +2045,27 @@ public final class VertxSliceServer implements Closeable {
             hops += 1;
         }
         return false;
+    }
+
+    /**
+     * Trace id carried by the W3C {@code traceparent} header
+     * ({@code 00-<trace-id>-<span-id>-<flags>}) that EcsLoggingSlice stamps
+     * on every response, or null. EcsLoggingSlice appends its own header
+     * AFTER any relayed upstream headers, so a relayed upstream
+     * {@code traceparent} comes first: the LAST well-formed one is Pantera's.
+     *
+     * @param headers Response headers
+     * @return Trace id, or null
+     */
+    private static String traceId(final Headers headers) {
+        String found = null;
+        for (final Header header : headers.find("traceparent")) {
+            final String[] parts = header.getValue().split("-");
+            if (parts.length >= 3 && !parts[1].isEmpty()) {
+                found = parts[1];
+            }
+        }
+        return found;
     }
 
     /**

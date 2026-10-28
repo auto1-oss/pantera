@@ -499,7 +499,22 @@ final class JdbcCooldownService implements CooldownService {
                 .log();
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
-        
+
+        // Exempt package: no cache, DB or inspector work at all
+        if (this.settings.exempt(request.repoName(), request.artifact())) {
+            EcsLogger.debug("com.auto1.pantera.cooldown")
+                .message("Package exempt from cooldown - allowing")
+                .eventCategory("database")
+                .eventAction("allowed")
+                .eventOutcome("success")
+                .field("repository.name", request.repoName())
+                .field("package.name", request.artifact())
+                .field("package.version", request.version())
+                .field("log.source", "application")
+                .log();
+            return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+
         // Circuit breaker: Auto-allow if service is degraded
         if (!this.circuitBreaker.shouldEvaluate()) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
@@ -536,7 +551,8 @@ final class JdbcCooldownService implements CooldownService {
         final CooldownRequest request,
         final Optional<Instant> knownReleaseDate
     ) {
-        if (!this.effectiveEnabled(request)) {
+        if (!this.effectiveEnabled(request)
+            || this.settings.exempt(request.repoName(), request.artifact())) {
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
         if (!this.circuitBreaker.shouldEvaluate()) {

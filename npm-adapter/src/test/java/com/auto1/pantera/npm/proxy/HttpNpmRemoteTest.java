@@ -71,7 +71,7 @@ public final class HttpNpmRemoteTest {
         );
         JSONAssert.assertEquals(
             IOUtils.resourceToString("/json/cached.json", StandardCharsets.UTF_8),
-            pkg.content(),
+            new String(pkg.body().content().asBytesFuture().join(), StandardCharsets.UTF_8),
             true
         );
         MatcherAssert.assertThat(
@@ -90,6 +90,7 @@ public final class HttpNpmRemoteTest {
             pkg.meta().lastRefreshed().isAfter(started)
                 && !pkg.meta().lastRefreshed().isAfter(checked)
         );
+        pkg.body().release();
     }
 
     @Test

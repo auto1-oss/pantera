@@ -22,6 +22,7 @@ import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.BaseCachedProxySlice;
 import com.auto1.pantera.http.cache.DigestComputer;
@@ -34,6 +35,7 @@ import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
 import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.maven.cooldown.MavenMetadataFilter;
 import com.auto1.pantera.maven.cooldown.MavenMetadataParser;
@@ -83,6 +85,11 @@ import org.reactivestreams.Publisher;
  * @since 1.20.13
  */
 public final class CachedProxySlice extends BaseCachedProxySlice {
+
+    /**
+     * Logger name of the proxy's application records.
+     */
+    private static final String LOGGER = "com.auto1.pantera.maven.http";
 
     /**
      * Maven metadata file name.
@@ -984,16 +991,12 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             // the uncategorised exception path (storage faults, cooldown
             // service errors, single-flight gate aborts, H2 read idle
             // timeouts after the abort) which M5 missed.
-            EcsLogger.warn("com.auto1.pantera.maven.http")
-                .message("Primary-artifact verify-and-serve failed; surfacing 502 so group does not poison the negative cache")
-                .eventCategory("web")
-                .eventAction("cache_write")
-                .eventOutcome("failure")
-                .field("repository.name", this.repoName())
-                .field("url.path", path)
-                .error(err)
-                .field("log.source", "application")
-                .log();
+            new ServerErrorLog(CachedProxySlice.LOGGER, "cache_write", headers)
+                .repository(this.repoName())
+                .path(path)
+                .status(RsStatus.BAD_GATEWAY.code())
+                .failure(err)
+                .warnUnlessExpected("Primary-artifact verify-and-serve failed; surfacing 502 so group does not poison the negative cache");
             return ResponseBuilder.badGateway()
                 .textBody("Upstream temporarily unavailable")
                 .build();
@@ -1030,8 +1033,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     ) {
         this.rawStorage.orElseThrow(); // guard: storage must be configured
         final String upstreamUri = this.upstreamUrl() + path;
+        // trace.id from the request's captured context, not this thread's
+        // MDC: this runs after async hops on a pooled thread whose MDC may
+        // still hold another request's id.
         final RequestContext ctx = new RequestContext(
-            org.apache.logging.log4j.ThreadContext.get("trace.id"),
+            auditCtx.traceId(),
             null,
             this.repoName(),
             path
@@ -1149,9 +1155,17 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         ).exceptionally(err -> {
             final Throwable cause = unwrap(err);
             if (cause instanceof UpstreamHttpException upstreamErr) {
-                return mapUpstreamStatus(upstreamErr);
+                return this.mapUpstreamStatus(upstreamErr, inboundHeaders, path, upstreamUri);
             }
-            // Connection / timeout / SSL → transient infrastructure.
+            // Connection / timeout / SSL → transient infrastructure. The
+            // cause goes to the log, never into the client body.
+            new ServerErrorLog(CachedProxySlice.LOGGER, "proxy_upstream", inboundHeaders)
+                .repository(this.repoName())
+                .path(path)
+                .upstream(upstreamUri)
+                .status(RsStatus.BAD_GATEWAY.code())
+                .failure(err)
+                .warnUnlessExpected("Upstream fetch of primary artifact failed");
             return ResponseBuilder.badGateway()
                 .textBody("Upstream temporarily unavailable")
                 .build();
@@ -1253,6 +1267,49 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 // body fully consumed
             }
         });
+    }
+
+    /**
+     * Map an upstream non-2xx (see the static {@link #mapUpstreamStatus(UpstreamHttpException)}
+     * for the W6 fidelity rules) and log the cause of any 5xx it yields: a
+     * plain upstream answer at WARN with {@code event.reason}
+     * {@code upstream_status_<code>} and no stack trace; the outbound
+     * breaker's fast-fail at DEBUG ({@code circuit_open} — the breaker logs
+     * its own trip / probe / recovery transitions).
+     *
+     * @param err Upstream status carrier
+     * @param inboundHeaders Client request headers (correlation context)
+     * @param path Request path
+     * @param upstreamUri Upstream URL of the fetch
+     * @return Response for the client
+     */
+    private Response mapUpstreamStatus(
+        final UpstreamHttpException err, final Headers inboundHeaders,
+        final String path, final String upstreamUri
+    ) {
+        final Response response = CachedProxySlice.mapUpstreamStatus(err);
+        if (response.status().serverError()) {
+            // Plain upstream answer, no throwable: event.reason carries the
+            // upstream status (or circuit_open for the breaker's fast-fail),
+            // no stack trace.
+            final ServerErrorLog log = new ServerErrorLog(
+                CachedProxySlice.LOGGER, "proxy_upstream", inboundHeaders
+            )
+                .repository(this.repoName())
+                .path(path)
+                .upstream(upstreamUri)
+                .status(response.status().code());
+            if (err.circuitOpen()) {
+                log.reason("circuit_open").debug(
+                    "Upstream circuit breaker is open; primary artifact not fetched"
+                );
+            } else {
+                log.upstreamStatus(err.status()).warn(
+                    "Upstream answered " + err.status() + " for primary artifact"
+                );
+            }
+        }
+        return response;
     }
 
     /**

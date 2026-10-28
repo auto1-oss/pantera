@@ -127,7 +127,7 @@ public final class RxNpmProxyStorageTest {
         );
         MatcherAssert.assertThat(
             "Content of package is correct",
-            pkg.content(),
+            new String(pkg.body().content().asBytesFuture().join(), StandardCharsets.UTF_8),
             new IsEqual<>(RxNpmProxyStorageTest.readContent())
         );
         MatcherAssert.assertThat(

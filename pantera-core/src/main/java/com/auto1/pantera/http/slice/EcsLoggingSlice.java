@@ -253,6 +253,14 @@ public final class EcsLoggingSlice implements Slice {
             })
             .exceptionally(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
+                // This continuation may run on whichever pooled thread failed
+                // the chain: re-bind this request's correlation so the record
+                // (the only one of this 500) carries its trace.id. The MDC is
+                // cleared again by whenComplete below.
+                MDC.put(EcsMdc.TRACE_ID, span.traceId());
+                if (clientIp != null && !clientIp.isEmpty() && !"unknown".equals(clientIp)) {
+                    MDC.put(EcsMdc.CLIENT_IP, clientIp);
+                }
 
                 // Log error with ECS fields
                 // NOTE: client.ip, user.name, trace.id are in MDC — not added here

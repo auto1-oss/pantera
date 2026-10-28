@@ -274,6 +274,70 @@ public final class CooldownRepository {
     }
 
     /**
+     * Archive and release the active blocks of a repository whose artifact
+     * matches an exemption, the same way {@link #archiveAndReleaseByRepo}
+     * releases a whole repository. Matching is case-insensitive, as in
+     * {@link com.auto1.pantera.cooldown.config.CooldownExemptions}.
+     * @param repoName Repository name.
+     * @param exact Lower-case exact artifact names.
+     * @param prefixes Lower-case artifact name prefixes.
+     * @param reason Archive reason written to each history row.
+     * @param actor Username performing the action.
+     * @return Number of rows released.
+     */
+    public int archiveAndReleaseMatching(final String repoName, final List<String> exact,
+        final List<String> prefixes, final ArchiveReason reason, final String actor) {
+        if (exact.isEmpty() && prefixes.isEmpty()) {
+            return 0;
+        }
+        final String sql = "WITH victims AS ("
+            + "SELECT id FROM artifact_cooldowns"
+            + " WHERE repo_name = ? AND status = 'ACTIVE'"
+            + " AND (lower(artifact) = ANY(?) OR lower(artifact) LIKE ANY(?))"
+            + " FOR UPDATE SKIP LOCKED"
+            + "), archived AS ("
+            + "INSERT INTO artifact_cooldowns_history ("
+            + "original_id, repo_type, repo_name, artifact, version, "
+            + "reason, blocked_by, blocked_at, blocked_until, "
+            + "installed_by, release_date, archived_at, archive_reason, archived_by"
+            + ") SELECT c.id, c.repo_type, c.repo_name, c.artifact, c.version, "
+            + "c.reason, c.blocked_by, c.blocked_at, c.blocked_until, "
+            + "c.installed_by, c.release_date, ?, ?, ? "
+            + "FROM artifact_cooldowns c JOIN victims v ON v.id = c.id "
+            + "RETURNING original_id) "
+            + "UPDATE artifact_cooldowns c SET status = 'INACTIVE', "
+            + "unblocked_at = ?, unblocked_by = ? "
+            + "FROM archived a WHERE c.id = a.original_id";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            final long now = Instant.now().toEpochMilli();
+            stmt.setString(1, repoName);
+            stmt.setArray(2, conn.createArrayOf("text", exact.toArray()));
+            stmt.setArray(
+                3,
+                conn.createArrayOf(
+                    "text",
+                    prefixes.stream()
+                        .map(
+                            pre -> pre.replace("\\", "\\\\").replace("%", "\\%")
+                                .replace("_", "\\_") + "%"
+                        )
+                        .toArray()
+                )
+            );
+            stmt.setLong(4, now);
+            stmt.setString(5, reason.name());
+            stmt.setString(6, actor);
+            stmt.setLong(7, now);
+            stmt.setString(8, actor);
+            return stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException(
+                "Failed to archive+release exempt blocks for repo", err);
+        }
+    }
+
+    /**
      * Archive all active blocks for a given repo type into history and delete
      * them from the live table. Used when a repo-type cooldown override is
      * disabled via config.

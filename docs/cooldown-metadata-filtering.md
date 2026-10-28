@@ -42,6 +42,8 @@ and any unbounded-latest resolution endpoint the client can query.
 | php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json` (per-package version filtering); `/packages.json`, `/repo.json` (the proxy serves its own root, whose `metadata-url` points at its `/p2/` endpoint, so versions are filtered per package; the upstream root is not fetched). |
 | file-proxy         | **No metadata filtering.** File / raw proxies have no version-resolution semantics -- no tags, no version lists, no packument. Cooldown applies only at the artifact-fetch layer, based on the file's cached-at / remote-modified timestamp relative to the cooldown window. See the dedicated section below. |
 
+Packages exempted from cooldown on a proxy repository (2.2.11, see [Cooldown: Exempt Packages](admin-guide/cooldown.md#exempt-packages-from-cooldown)) skip this filtering entirely: `MetadataFilterService` returns before the metadata is produced, parsed or cached, and `JdbcCooldownService.evaluate` allows their downloads before any cache or database lookup.
+
 ### Hosted-only adapters (out of scope)
 
 `gem`, `helm`, `rpm`, `conan`, `conda`, `hexpm`, `nuget`, and `deb` have no `-proxy`
@@ -121,10 +123,40 @@ Precedence (highest first): per-repo-name SNAPSHOT → per-repo-name (non-SNAPSH
 
 ### npm
 
-- **Packument endpoint (`GET /{pkg}`):** Jackson parses the JSON packument; blocked
-  version keys are removed from `versions`, `time`, and `dist-tags`.
-  `dist-tags.latest` is rewritten to the highest non-blocked version; other
-  dist-tags pointing to blocked versions are dropped.
+- **Packument endpoint (`GET /{pkg}`):** blocked version keys are removed from
+  `versions`, `time`, and `dist-tags`. `dist-tags.latest` is rewritten to the
+  highest non-blocked version; other dist-tags pointing to blocked versions
+  are dropped.
+- **Streaming (2.2.11):** the packument is never held in memory. Cooldown
+  decides on the packument's *skeleton* (`name`, `dist-tags`, `time` and the
+  version keys, well under 1 MB even for ten thousand versions), extracted by
+  streaming the stored document on an envelope miss; the envelope caches the
+  filtered skeleton, not the document. The response is streamed from storage
+  through the verdict: only versions and `time` entries present in the
+  filtered skeleton are emitted (a version the cached verdict has not seen is
+  withheld, never served unevaluated), `dist-tags` is replaced by the
+  filtered one, and relative tarball URLs (every `tarball` string, at any
+  depth, as on the unfiltered path) are prefixed on the way through.
+  Kept `time` entries are served with their stored value, including
+  non-string ones such as `time.unpublished`. Only the first JSON value of
+  the stored document is read. The filtered body is compact JSON; its `ETag`
+  derives from the stored content hash and the filtered skeleton with its
+  members sorted by key, so it does not depend on whether a full or an
+  abbreviated request filled the verdict cache. When cooldown cannot evaluate a
+  stored packument, the request answers `502` instead of serving it
+  unfiltered; only a cooldown backend failure (database error, timeout) still
+  falls back to the unfiltered document, so an outage of the cooldown store
+  does not break installs. Ingest and serve parse with the same Jackson size
+  limits, and the skeleton keeps only shallow string values (a non-string
+  `time` entry keeps its key with an empty-object stub, a non-string
+  dist-tag is dropped), so nothing deep reaches the cooldown parser. A
+  single-version manifest (`GET /{pkg}/{version}`) is copied token by token
+  out of the stored packument, never built as a tree, so a deeply nested
+  version is served like any other; when the version key occurs more than
+  once, the last occurrence is served, as a client parsing the packument
+  sees it. Verdict envelopes cached by an earlier 2.2.11 build lack the
+  `time` stubs and keep dropping `time.unpublished` until their TTL expires
+  or the package is refreshed.
 - **dist-tag shortcut (`GET /{pkg}/latest`):** served through the same filter
   path so unbounded `npm install foo` resolutions see only allowed versions.
 - Supports both the full packument and the abbreviated (`application/vnd.npm.install-v1+json`) variant.
@@ -257,7 +289,7 @@ When a cached metadata entry expires, the stale bytes are returned immediately t
 
 ### H4: L1 Cache Capacity (50K entries)
 
-The `FilteredMetadataCache` L1 (Caffeine) defaults to 50,000 entries. Configurable via the `PANTERA_COOLDOWN_METADATA_L1_SIZE` environment variable.
+The `FilteredMetadataCache` L1 (Caffeine) defaults to 50,000 entries, configurable via the `PANTERA_COOLDOWN_METADATA_L1_SIZE` environment variable. It is also capped at 1 GiB of cached bytes (`PANTERA_COOLDOWN_METADATA_L1_MAX_BYTES`); whichever limit is reached first evicts.
 
 ### H5: Inflight-Map Memory Leak Fix
 
@@ -360,7 +392,7 @@ On unblock:
   `blocked_until` has passed (see *Cleanup execution modes*).
 - `CooldownCache` L1 + L2 are set to "allowed" for the version.
 - `FilteredMetadataCache` L1 + L2 are invalidated for the package (every
-  variant, e.g. npm `full` and `abbreviated`).
+  variant, e.g. npm `skeleton`).
 - All invalidations complete before the `204` response.
 - The REST API and the repository slices share one cooldown service and one
   metadata service per process, so the unblock clears the caches clients are
@@ -401,10 +433,11 @@ so peer nodes drop their L1 too. Outcomes are logged as
 ### Envelope Key Shape and L2 Transport (2.2.7)
 
 Envelope keys are `metadata:{repoType}:{repoName}:{variant}:{packageName}`.
-The **variant** names the body shape being cached — the npm proxy uses
-`full` and `abbreviated` (before the variant existed, both shapes shared
-one key and whichever was filtered first was served to both kinds of
-request); callers with a single shape use `default`. The package name is
+The **variant** names the body shape being cached. Since 2.2.11 the npm
+proxy caches one `skeleton` envelope per package (the cooldown verdict on
+the packument's skeleton), shared by full, abbreviated and single-version
+requests; 2.2.7–2.2.10 cached whole filtered documents under `full` and
+`abbreviated`. Callers with a single shape use `default`. The package name is
 always the **last** segment: both by-package invalidation paths match on
 that suffix, so any key change must preserve its position. Block-state
 invalidation (`invalidate(type, name, pkg)`) drops **every** variant of the
@@ -543,7 +576,8 @@ meta:
 
 Environment variable:
 ```bash
-export PANTERA_COOLDOWN_METADATA_L1_SIZE=50000   # default
+export PANTERA_COOLDOWN_METADATA_L1_SIZE=50000          # default, entries
+export PANTERA_COOLDOWN_METADATA_L1_MAX_BYTES=1073741824 # default, bytes (1 GiB)
 ```
 
 ### FilteredMetadataCache (YAML)

@@ -15,6 +15,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.function.UnaryOperator;
@@ -40,6 +41,11 @@ final class JsonStringScanner {
      * so an element is only ever addressed through the wildcard.
      */
     private static final String ANY = "*";
+
+    /**
+     * Leading rule segment matching any key path prefix, including none.
+     */
+    private static final String DEEP = "**";
 
     /**
      * Rules in declaration order.
@@ -244,7 +250,7 @@ final class JsonStringScanner {
     private UnaryOperator<String> match() {
         UnaryOperator<String> found = null;
         for (final Rule rule : this.rules) {
-            if (this.at(rule.path)) {
+            if (this.at(rule)) {
                 found = rule.fn;
                 break;
             }
@@ -253,24 +259,38 @@ final class JsonStringScanner {
     }
 
     /**
-     * Whether the current value path equals a rule path.
+     * Whether the current value path is selected by a rule path: equal to it
+     * or, for a rule with a leading {@code **}, ending in it.
      *
-     * @param path Rule path
-     * @return True when every segment matches
+     * @param rule Rule
+     * @return True when every rule segment matches
      */
-    private boolean at(final String... path) {
+    private boolean at(final Rule rule) {
         final int depth = this.frames.size();
-        boolean same = depth > 0 && path.length == depth;
-        for (int idx = 1; same && idx < depth; idx += 1) {
-            same = JsonStringScanner.segmentMatches(path[idx - 1], this.frames.get(idx).segment);
-        }
-        if (same) {
-            final Frame top = this.top();
-            same = JsonStringScanner.segmentMatches(
-                path[depth - 1], top.array ? JsonStringScanner.ANY : top.key
-            );
+        final int offset = depth - rule.path.length;
+        boolean same = depth > 0 && (offset == 0 || rule.deep && offset > 0);
+        for (int idx = 0; same && idx < rule.path.length; idx += 1) {
+            same = JsonStringScanner.segmentMatches(rule.path[idx], this.valueSegment(offset + idx));
         }
         return same;
+    }
+
+    /**
+     * One segment of the key path of the value about to be read.
+     *
+     * @param idx Index, 0 for the member of the root container
+     * @return Segment, possibly null for a malformed document
+     */
+    private String valueSegment(final int idx) {
+        final String result;
+        if (idx < this.frames.size() - 1) {
+            result = this.frames.get(idx + 1).segment;
+        } else if (this.top().array) {
+            result = JsonStringScanner.ANY;
+        } else {
+            result = this.top().key;
+        }
+        return result;
     }
 
     /**
@@ -484,9 +504,15 @@ final class JsonStringScanner {
     private static final class Rule {
 
         /**
-         * Key path.
+         * Key path, without a leading {@code **}.
          */
         private final String[] path;
+
+        /**
+         * Whether the rule had a leading {@code **}: it then selects every
+         * value whose key path ends in {@link #path}.
+         */
+        private final boolean deep;
 
         /**
          * Rewrite function.
@@ -496,11 +522,16 @@ final class JsonStringScanner {
         /**
          * Ctor.
          *
-         * @param path Key path
+         * @param path Key path as declared
          * @param fn Rewrite function
          */
         Rule(final String[] path, final UnaryOperator<String> fn) {
-            this.path = path.clone();
+            this.deep = path.length > 0 && JsonStringScanner.DEEP.equals(path[0]);
+            if (this.deep) {
+                this.path = Arrays.copyOfRange(path, 1, path.length);
+            } else {
+                this.path = path.clone();
+            }
             this.fn = fn;
         }
     }

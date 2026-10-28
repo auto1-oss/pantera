@@ -644,13 +644,13 @@ public final class GroupResolver implements Slice {
                 this.memberPin.invalidate(pinKey);
                 drainBody(resp.body());
                 final PinnedMiss miss = PinnedMiss.of(resp);
-                this.logPinDropped(pinned, line, pinKey, resp.status(), miss);
+                this.logPinDropped(pinned, line, headers, pinKey, resp.status(), miss);
                 return indexLookup(
                     idx, line, headers, new Content.From(bytes), artifactName,
                     miss == PinnedMiss.NOT_FOUND ? negCacheKey : null, pinKey,
                     Set.of(pinned.name())
                 ).thenApply(next -> this.afterPinnedMiss(
-                    pinned, line, miss, parseRetryAfterSeconds(resp), next
+                    pinned, line, headers, miss, parseRetryAfterSeconds(resp), next
                 ));
             })
         );
@@ -664,6 +664,7 @@ public final class GroupResolver implements Slice {
     private void logPinDropped(
         final MemberSlice pinned,
         final RequestLine line,
+        final Headers headers,
         final String pinKey,
         final RsStatus status,
         final PinnedMiss miss
@@ -687,9 +688,11 @@ public final class GroupResolver implements Slice {
                 .eventCategory("web")
                 .eventAction("group_sibling_pin_failed")
                 .eventOutcome("failure")
+                .field("event.reason", GroupResolver.memberReason(status, miss))
                 .field("repository.name", this.group)
                 .field("url.path", line.uri().getPath())
                 .field("http.response.status_code", status.code())
+                .requestContext(headers)
                 .field("log.source", "application")
                 .log();
         }
@@ -704,6 +707,7 @@ public final class GroupResolver implements Slice {
     private Response afterPinnedMiss(
         final MemberSlice pinned,
         final RequestLine line,
+        final Headers headers,
         final PinnedMiss miss,
         final long retryAfter,
         final Response next
@@ -722,7 +726,7 @@ public final class GroupResolver implements Slice {
             final WalkState walk = new WalkState();
             walk.skippedOpen.set(true);
             walk.noteRetryAfter(retryAfter);
-            return this.circuitSkippedTerminal(walk, line);
+            return this.circuitSkippedTerminal(walk, line, headers);
         }
         final Fault fault;
         if (pinned.isProxy()) {
@@ -733,6 +737,16 @@ public final class GroupResolver implements Slice {
             fault = new Fault.StorageUnavailable(null, line.uri().getPath());
         }
         return FaultTranslator.translate(fault, null);
+    }
+
+    /**
+     * {@code event.reason} of a dropped pin that is logged as a failure.
+     */
+    private static String memberReason(final RsStatus status, final PinnedMiss miss) {
+        if (miss == PinnedMiss.SKIPPED) {
+            return "circuit_open";
+        }
+        return "member_status_" + status.code();
     }
 
     /**
@@ -845,14 +859,21 @@ public final class GroupResolver implements Slice {
                 line, headers, body, artifactName, negCacheKey, pinKey, excluded, excluded
             );
             case IndexOutcome.Timeout t -> {
-                EcsLogger.warn("com.auto1.pantera.group")
+                final EcsLogger log = EcsLogger.warn("com.auto1.pantera.group")
                     .message("Index query timed out, returning 500")
                     .eventCategory("database")
                     .eventAction("group_index_timeout")
                     .eventOutcome("failure")
+                    .field("event.reason", "index_timeout")
+                    .field("repository.name", this.group)
                     .field("url.path", path)
-                    .field("log.source", "application")
-                    .log();
+                    .field("http.response.status_code", RsStatus.INTERNAL_ERROR.code())
+                    .requestContext(headers)
+                    .field("log.source", "application");
+                if (t.cause() != null) {
+                    log.error(t.cause());
+                }
+                log.log();
                 yield CompletableFuture.completedFuture(
                     FaultTranslator.translate(
                         new Fault.IndexUnavailable(t.cause(), "locateByName:" + artifactName),
@@ -861,14 +882,21 @@ public final class GroupResolver implements Slice {
                 );
             }
             case IndexOutcome.DBFailure db -> {
-                EcsLogger.warn("com.auto1.pantera.group")
+                final EcsLogger log = EcsLogger.warn("com.auto1.pantera.group")
                     .message("Index DB error, returning 500")
                     .eventCategory("database")
                     .eventAction("group_index_error")
                     .eventOutcome("failure")
+                    .field("event.reason", "index_unavailable")
+                    .field("repository.name", this.group)
                     .field("url.path", path)
-                    .field("log.source", "application")
-                    .log();
+                    .field("http.response.status_code", RsStatus.INTERNAL_ERROR.code())
+                    .requestContext(headers)
+                    .field("log.source", "application");
+                if (db.cause() != null) {
+                    log.error(db.cause());
+                }
+                log.log();
                 yield CompletableFuture.completedFuture(
                     FaultTranslator.translate(
                         new Fault.IndexUnavailable(db.cause(), db.query()),
@@ -984,7 +1012,7 @@ public final class GroupResolver implements Slice {
                 }
                 if (resp.status().serverError()) {
                     return CompletableFuture.completedFuture(
-                        this.targetedReadFailure(resp, walk, line)
+                        this.targetedReadFailure(resp, walk, line, headers)
                     );
                 }
                 return CompletableFuture.completedFuture(resp);
@@ -1004,7 +1032,8 @@ public final class GroupResolver implements Slice {
      * @return Response
      */
     private Response targetedReadFailure(
-        final Response resp, final WalkState walk, final RequestLine line
+        final Response resp, final WalkState walk, final RequestLine line,
+        final Headers headers
     ) {
         if (!resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
             return resp;
@@ -1027,9 +1056,11 @@ public final class GroupResolver implements Slice {
             .eventCategory("web")
             .eventAction("group_targeted_read_failed")
             .eventOutcome("failure")
+            .field("event.reason", "member_status_" + resp.status().code())
             .field("repository.name", this.group)
             .field("url.path", line.uri().getPath())
             .field("http.response.status_code", resp.status().code())
+            .requestContext(headers)
             .field("log.source", "application")
             .log();
         return FaultTranslator.translate(fault, null);
@@ -1370,7 +1401,7 @@ public final class GroupResolver implements Slice {
                 // honest answer. Returning 404 here poisoned the negative
                 // cache with "does not exist" for artifacts that were merely
                 // unreachable (2.2.0 breaker-cascade RCA).
-                result.complete(this.circuitSkippedTerminal(walk, line));
+                result.complete(this.circuitSkippedTerminal(walk, line, headers));
             } else if (walk.anyUnverified.get()) {
                 // Fix 2: every member 404'd but at least one 404 was a laundered
                 // upstream throttle, not an authoritative absence. Return 404 but
@@ -1437,6 +1468,24 @@ public final class GroupResolver implements Slice {
                     member.recordFailure();
                     walk.noteFailure(member);
                     recordMemberOutcome(member, "error", memberLatency);
+                    // A member whose slice failed exceptionally used to fall
+                    // through with no record at all: this is the only place
+                    // its throwable is seen.
+                    final String reason =
+                        new com.auto1.pantera.http.log.FailureCause(err).reason();
+                    EcsLogger.warn("com.auto1.pantera.group")
+                        .message("Group member " + member.name()
+                            + " failed with an exception (cause: " + reason + "), trying next")
+                        .eventCategory("web")
+                        .eventAction("group_member_fallthrough")
+                        .eventOutcome("failure")
+                        .field("event.reason", reason)
+                        .field("repository.name", this.group)
+                        .field("url.path", line.uri().getPath())
+                        .requestContext(headers)
+                        .error(err)
+                        .field("log.source", "application")
+                        .log();
                 }
                 tryNextSequentialMember(iter, line, headers, requestBytes,
                     isTargetedLocalRead, walk, result, pinArtifactName);
@@ -1562,14 +1611,16 @@ public final class GroupResolver implements Slice {
             walk.noteFailure(member);
             recordMemberOutcome(member, "error", memberLatency);
             EcsLogger.warn("com.auto1.pantera.group")
-                .message("Group member returned non-2xx, trying next")
+                .message("Group member returned " + status.code() + ", trying next")
                 .eventCategory("web")
                 .eventAction("group_member_fallthrough")
                 .eventOutcome("failure")
+                .field("event.reason", "member_status_" + status.code())
                 .field("repository.name", this.group)
                 .field("member.name", member.name())
                 .field("http.response.status_code", status.code())
                 .field("url.path", line.uri().getPath())
+                .requestContext(headers)
                 .field("log.source", "application")
                 .log();
             tryNextSequentialMember(iter, line, headers, requestBytes,
@@ -1609,10 +1660,12 @@ public final class GroupResolver implements Slice {
      * circuit-open marker. Deliberately NOT 404 — 404 asserts absence
      * and gets negative-cached, outliving the outage.
      */
-    private Response circuitSkippedTerminal(final WalkState walk, final RequestLine line) {
+    private Response circuitSkippedTerminal(
+        final WalkState walk, final RequestLine line, final Headers headers
+    ) {
         final long retry = Math.max(5L, walk.retryAfterHint.get());
         if (!walk.partial) {
-            this.logAllMembersCircuitOpen(retry, line);
+            this.logAllMembersCircuitOpen(retry, line, headers);
         }
         return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
             .header("Retry-After", Long.toString(retry))
@@ -1621,7 +1674,9 @@ public final class GroupResolver implements Slice {
             .build();
     }
 
-    private void logAllMembersCircuitOpen(final long retry, final RequestLine line) {
+    private void logAllMembersCircuitOpen(
+        final long retry, final RequestLine line, final Headers headers
+    ) {
         EcsLogger.warn("com.auto1.pantera.group")
             .message(
                 "All remaining group members circuit-open — returning 503, Retry-After "
@@ -1630,8 +1685,11 @@ public final class GroupResolver implements Slice {
             .eventCategory("network")
             .eventAction("group_all_members_circuit_open")
             .eventOutcome("failure")
+            .field("event.reason", "circuit_open")
             .field("repository.name", this.group)
             .field("url.path", line.uri().getPath())
+            .field("http.response.status_code", RsStatus.SERVICE_UNAVAILABLE.code())
+            .requestContext(headers)
             .field("log.source", "application")
             .log();
     }

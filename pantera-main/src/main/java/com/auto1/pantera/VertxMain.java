@@ -689,6 +689,54 @@ public final class VertxMain {
                     .field("log.source", "application")
                     .log();
             }
+            // Cooldown exemptions: load into the shared CooldownSettings and
+            // reload a repository's list when another node announces a change.
+            final com.auto1.pantera.cooldown.CooldownExemptionStore exemptions =
+                new com.auto1.pantera.cooldown.CooldownExemptionStore(ds, settings.cooldown());
+            exemptions.loadAll();
+            this.vertx.getDelegate().setPeriodic(
+                java.time.Duration.ofMinutes(1).toMillis(),
+                id -> java.util.concurrent.CompletableFuture
+                    .supplyAsync(exemptions::refresh)
+                    .whenComplete((changed, err) -> {
+                        if (err != null) {
+                            EcsLogger.warn("com.auto1.pantera.cooldown")
+                                .message("Periodic cooldown exemption refresh failed")
+                                .eventCategory("configuration")
+                                .eventAction("cooldown_exemptions_load")
+                                .eventOutcome("failure")
+                                .error(err)
+                                .field("log.source", "application")
+                                .log();
+                        } else if (changed) {
+                            EcsLogger.info("com.auto1.pantera.cooldown")
+                                .message("Cooldown exemptions changed in the database; reloaded")
+                                .eventCategory("configuration")
+                                .eventAction("cooldown_exemptions_load")
+                                .eventOutcome("success")
+                                .field("log.source", "application")
+                                .log();
+                        }
+                    })
+            );
+            settings.cacheInvalidationPubSub().ifPresent(bus -> bus.subscribe(
+                com.auto1.pantera.cooldown.CooldownExemptionStore.CHANNEL,
+                repo -> java.util.concurrent.CompletableFuture
+                    .runAsync(() -> exemptions.reload(repo))
+                    .whenComplete((ignored, err) -> {
+                        if (err != null) {
+                            EcsLogger.warn("com.auto1.pantera.cooldown")
+                                .message("Failed to reload cooldown exemptions announced by another node")
+                                .eventCategory("configuration")
+                                .eventAction("cooldown_exemptions_load")
+                                .eventOutcome("failure")
+                                .field("repository.name", repo)
+                                .error(err)
+                                .field("log.source", "application")
+                                .log();
+                        }
+                    })
+            ));
         }
         if (settings.metrics().http()) {
             try {
@@ -1546,7 +1594,8 @@ public final class VertxMain {
             )
             .setHttp2ConnectionWindowSize(128 * 1024 * 1024)
             .setCompressionSupported(true)
-            .setCompressionLevel(6);
+            // Level 1, as in VertxSliceServer: deflate holds off GC while it runs.
+            .setCompressionLevel(1);
         if (useProxyProtocol) {
             opts.setUseProxyProtocol(true);
             EcsLogger.info("com.auto1.pantera")

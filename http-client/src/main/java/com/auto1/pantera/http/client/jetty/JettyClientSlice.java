@@ -114,6 +114,11 @@ final class JettyClientSlice implements Slice {
         final String repoName = nullToDefault(
             ThreadContext.get("repository.name"), "unknown"
         );
+        // Same rationale for the request's trace.id / client.ip: the failure
+        // record below is emitted on a Jetty thread, so it is correlated
+        // from this snapshot instead of that thread's MDC.
+        final String traceId = ThreadContext.get("trace.id");
+        final String clientIp = ThreadContext.get("client.ip");
         final long requestStartNanos = System.nanoTime();
         // Response-body publisher is constructed inside the
         // onResponseContentSource callback below — Jetty owns the
@@ -329,12 +334,22 @@ final class JettyClientSlice implements Slice {
                                 .field("log.source", "application")
                                 .log();
                         } else {
-                            EcsLogger.error("com.auto1.pantera.http.client")
-                                .message("HTTP request failed")
-                                .eventCategory("web")
+                            final String reason =
+                                new com.auto1.pantera.http.log.FailureCause(failure).reason();
+                            // One line, no stack trace: the slice that turns
+                            // this failure into the client's answer logs it
+                            // with its stack (one stack per failure).
+                            EcsLogger.warn("com.auto1.pantera.http.client")
+                                .message("HTTP request to upstream failed (cause: " + reason + ")")
+                                .eventCategory("network")
                                 .eventAction("http_request_send")
                                 .eventOutcome("failure")
-                                .error(failure)
+                                .field("event.reason", reason)
+                                .field("http.request.method", request.getMethod())
+                                .field("url.full", request.getURI().toString())
+                                .field("destination.address", request.getHost())
+                                .traceContext(traceId, clientIp)
+                                .errorSummary(failure)
                                 .field("log.source", "application")
                                 .log();
                         }

@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.http.log;
 
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.ThreadContext;
 import org.apache.logging.log4j.message.MapMessage;
@@ -76,6 +77,13 @@ public final class EcsLogger {
     private final LogLevel level;
     private String message;
     private final Map<String, Object> fields = new HashMap<>();
+
+    /**
+     * Request correlation bound by {@link #requestContext(com.auto1.pantera.http.Headers)}:
+     * MDC-owned key to value, applied to {@link ThreadContext} for the duration
+     * of {@link #log()} only. Empty when the record relies on the thread's MDC.
+     */
+    private final Map<String, String> context = new HashMap<>(2);
 
     /**
      * Log levels matching ECS and user requirements.
@@ -175,14 +183,40 @@ public final class EcsLogger {
      * @return this
      */
     public EcsLogger error(final Throwable error) {
+        // error.type / error.message describe the real cause: CompletableFuture
+        // wraps every async failure in a CompletionException (ExecutionException
+        // for get()), whose type says nothing. The stack trace is rendered from
+        // the original throwable, so the wrapper chain stays visible there.
+        final Throwable cause = new FailureCause(error).root();
         this.fields.put(
             "error.message",
             LogSanitizer.sanitizeText(
-                error.getMessage() != null ? error.getMessage() : error.toString()
+                cause.getMessage() != null ? cause.getMessage() : cause.toString()
             )
         );
-        this.fields.put("error.type", error.getClass().getName());
+        this.fields.put("error.type", cause.getClass().getName());
         this.fields.put("error.stack_trace", LogSanitizer.sanitizeText(getStackTrace(error)));
+        this.fields.put("event.outcome", "failure");
+        return this;
+    }
+
+    /**
+     * Add {@code error.type} / {@code error.message} of the real cause
+     * (wrappers stripped as in {@link #error(Throwable)}) WITHOUT
+     * {@code error.stack_trace}: for a record whose throwable is logged with
+     * its stack by another, more specific record of the same failure.
+     * @param error Error/Exception
+     * @return this
+     */
+    public EcsLogger errorSummary(final Throwable error) {
+        final Throwable cause = new FailureCause(error).root();
+        this.fields.put(
+            "error.message",
+            LogSanitizer.sanitizeText(
+                cause.getMessage() != null ? cause.getMessage() : cause.toString()
+            )
+        );
+        this.fields.put("error.type", cause.getClass().getName());
         this.fields.put("event.outcome", "failure");
         return this;
     }
@@ -225,6 +259,53 @@ public final class EcsLogger {
      */
     public EcsLogger duration(final long durationMs) {
         this.fields.put("event.duration", durationMs);
+        return this;
+    }
+
+    /**
+     * Correlate this record with the request described by {@code headers}:
+     * the {@code trace.id} / {@code client.ip} carried by the internal
+     * {@code X-Pantera-Ctx-*} headers (stamped by {@code EcsLoggingSlice} on
+     * every inbound request) are put into {@link ThreadContext} while this
+     * record is emitted and restored right after.
+     *
+     * <p>Use it on async continuations: they run on pooled threads whose MDC
+     * is empty or, worse, still holds an earlier request's values, so a record
+     * relying on the thread's MDC is either uncorrelated or attributed to the
+     * wrong request. Unlike {@link RequestContextHeaders#bindToMdc}, nothing
+     * leaks into the thread's MDC after {@link #log()} returns. Headers
+     * without the context fields leave the thread's MDC in charge.</p>
+     *
+     * @param headers Request headers carrying the internal context fields
+     * @return this
+     */
+    public EcsLogger requestContext(final com.auto1.pantera.http.Headers headers) {
+        if (headers != null) {
+            this.traceContext(
+                EcsLogger.first(headers, EcsLoggingSlice.CTX_TRACE_ID_HEADER),
+                EcsLogger.first(headers, EcsLoggingSlice.CTX_CLIENT_IP_HEADER)
+            );
+        }
+        return this;
+    }
+
+    /**
+     * Correlate this record with an explicit request trace id and client IP,
+     * for call sites that captured them before an async hop (see
+     * {@link #requestContext(com.auto1.pantera.http.Headers)}). Null or empty
+     * values are ignored.
+     *
+     * @param traceId ECS {@code trace.id}
+     * @param clientIp ECS {@code client.ip}
+     * @return this
+     */
+    public EcsLogger traceContext(final String traceId, final String clientIp) {
+        if (traceId != null && !traceId.isEmpty()) {
+            this.context.put(EcsMdc.TRACE_ID, traceId);
+        }
+        if (clientIp != null && !clientIp.isEmpty()) {
+            this.context.put(EcsMdc.CLIENT_IP, clientIp);
+        }
         return this;
     }
 
@@ -277,6 +358,34 @@ public final class EcsLogger {
      * (async continuations, CLI tools), the field() value is preserved.
      */
     public void log() {
+        if (this.context.isEmpty()) {
+            this.emit();
+            return;
+        }
+        // Bind the request's correlation for this one record, then restore
+        // whatever the (pooled) thread held before.
+        final Map<String, String> previous = new HashMap<>(this.context.size());
+        for (final Map.Entry<String, String> entry : this.context.entrySet()) {
+            previous.put(entry.getKey(), ThreadContext.get(entry.getKey()));
+            ThreadContext.put(entry.getKey(), entry.getValue());
+        }
+        try {
+            this.emit();
+        } finally {
+            for (final Map.Entry<String, String> entry : previous.entrySet()) {
+                if (entry.getValue() == null) {
+                    ThreadContext.remove(entry.getKey());
+                } else {
+                    ThreadContext.put(entry.getKey(), entry.getValue());
+                }
+            }
+        }
+    }
+
+    /**
+     * Build and emit the record against the current {@link ThreadContext}.
+     */
+    private void emit() {
         final String logMessage = this.message != null
             ? LogSanitizer.sanitizeText(this.message) : "Application event";
 
@@ -387,6 +496,13 @@ public final class EcsLogger {
         // Throwable handling should extend this class or use field("error.throwable", t).
         final Object maybe = this.fields.get("error.throwable");
         return maybe instanceof Throwable throwable ? throwable : null;
+    }
+
+    /**
+     * First value of a header, or null.
+     */
+    private static String first(final com.auto1.pantera.http.Headers headers, final String name) {
+        return headers.find(name).stream().findFirst().map(h -> h.getValue()).orElse(null);
     }
 
     /**

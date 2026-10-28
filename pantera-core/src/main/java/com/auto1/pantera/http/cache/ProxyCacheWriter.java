@@ -47,6 +47,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -255,6 +256,19 @@ public final class ProxyCacheWriter {
         try {
             tempFile = Files.createTempFile("pantera-proxy-", ".tmp");
         } catch (final IOException ex) {
+            EcsLogger.error("com.auto1.pantera.http.cache")
+                .message("Proxy cache temp file could not be created; artifact not served"
+                    + " (cause: storage_unavailable)")
+                .eventCategory("file")
+                .eventAction("cache_write")
+                .eventOutcome("failure")
+                .field("event.reason", "storage_unavailable")
+                .field("repository.name", this.repoName)
+                .field("url.path", primaryKey.string())
+                .traceContext(traceId(ctx), null)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
             return CompletableFuture.completedFuture(
                 Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
             );
@@ -449,8 +463,9 @@ public final class ProxyCacheWriter {
      * @param ctx             Request context (trace id), may be null.
      * @return Stage that completes synchronously with a {@link StreamedArtifact}
      *         except in the narrow case where temp file creation itself fails;
-     *         in that case the caller receives Err(StorageUnavailable) and the
-     *         upstream body is left unsubscribed for the caller to drain.
+     *         in that case the failure is logged here, the upstream body is
+     *         drained here (the caller must not subscribe it) and the caller
+     *         receives Err(StorageUnavailable).
      */
     public CompletionStage<Result<StreamedArtifact>> streamThroughAndCommit(
         final Key primaryKey,
@@ -471,9 +486,7 @@ public final class ProxyCacheWriter {
         try {
             tempFile = Files.createTempFile("pantera-proxy-", ".tmp");
         } catch (final IOException ex) {
-            return CompletableFuture.completedFuture(
-                Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
-            );
+            return this.tempFileFailed(ex, primaryKey, upstreamBody, ctx);
         }
         final FileChannel channel; // NOPMD CloseResource - closed asynchronously inside doOnComplete/doOnError/doOnCancel terminal callbacks; try-with-resources would close it before any tee chunk could be written
         try {
@@ -484,9 +497,7 @@ public final class ProxyCacheWriter {
             );
         } catch (final IOException ex) {
             deleteQuietly(tempFile);
-            return CompletableFuture.completedFuture(
-                Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
-            );
+            return this.tempFileFailed(ex, primaryKey, upstreamBody, ctx);
         }
         // Phase 7.5 parallel-prefetch trick (same as writeAndVerify): fire
         // every blocking sidecar fetch BEFORE we start consuming the primary
@@ -663,10 +674,11 @@ public final class ProxyCacheWriter {
 
     /**
      * Commit a stream-through artifact: sidecars first, primary last (Track 3
-     * atomic commit order). The bytes are read from the temp file into memory
-     * exactly once and re-used for both the primary save and the {@code onWrite}
-     * callback (Track 4 +sibling-prefetch). Temp file is deleted on success
-     * and on any failure.
+     * atomic commit order). The primary is streamed from the temp file in
+     * {@link #CHUNK_SIZE} chunks, never read into memory whole, and the same
+     * file then feeds the {@code onWrite} callback (Track 4 +sibling-prefetch).
+     * Temp file is deleted on success and on any failure, only after the
+     * save has finished reading it.
      */
     private void commitStreamed(
         final Key primaryKey,
@@ -676,21 +688,11 @@ public final class ProxyCacheWriter {
         final RequestContext ctx,
         final CompletableFuture<Result<Void>> outcome
     ) {
-        final byte[] bytes;
-        try {
-            bytes = Files.readAllBytes(tempFile);
-        } catch (final IOException ex) {
-            deleteQuietly(tempFile);
-            outcome.complete(Result.err(new Fault.StorageUnavailable(
-                ex, primaryKey.string()
-            )));
-            return;
-        }
         final boolean hasCallback = this.onWrite != NO_OP_ON_WRITE
             && !CacheWriteCallbackRegistry.instance().isNoOp(this.onWrite);
         this.saveSidecars(primaryKey, sidecars)
             .thenCompose(ignored ->
-                this.cache.save(primaryKey, new Content.From(bytes))
+                this.cache.save(primaryKey, contentFromFile(tempFile, size))
             )
             .whenComplete((ignored, err) -> {
                 if (err == null) {
@@ -997,43 +999,29 @@ public final class ProxyCacheWriter {
     }
 
     /**
-     * Commit a previously verified artifact to storage. Reads the temp file
-     * eagerly so the response Flowable (which also reads the temp file) is
-     * not racing with temp-file deletion.
+     * Commit a previously verified artifact to storage. The response Flowable
+     * also reads {@code artifact.tempFile()} and deletes it when disposed, so
+     * the commit first takes its own name for the same bytes (a hard link, or
+     * a disk copy where links are unsupported) and streams the primary from
+     * that file. Nothing is read into memory whole.
      *
-     * <p>When a callback is installed (per-instance or via
-     * {@link CacheWriteCallbackRegistry}) we materialise a dedicated
-     * callback-owned temp file from the in-memory byte buffer before firing
-     * {@link #fireOnWrite}; the original {@code artifact.tempFile()} is
-     * owned by the response Flowable's disposer and may be deleted before
-     * the onWrite consumer schedules its read. The callback temp file is
-     * deleted right after the consumer returns.</p>
-     *
-     * <p><b>Fast path:</b> when both the per-instance callback AND the
-     * registry's shared callback are no-ops, the materialise step is
-     * skipped entirely &mdash; no {@code Files.createTempFile + write +
-     * deleteQuietly} on the proxy hot path.</p>
+     * <p>The commit-owned file also feeds {@link #fireOnWrite} when a callback
+     * is installed (per-instance or via {@link CacheWriteCallbackRegistry}),
+     * so the consumer sees a stable file regardless of when the response
+     * Flowable disposer runs. It is deleted right after the consumer returns,
+     * or after a failed save.</p>
      */
     CompletionStage<Result<Void>> commitVerified(final VerifiedArtifact artifact) {
-        final byte[] bytes;
+        final Path owned;
         try {
-            bytes = Files.readAllBytes(artifact.tempFile());
+            owned = commitOwnedFile(artifact.tempFile());
         } catch (final IOException ex) {
             return CompletableFuture.completedFuture(
                 Result.err(new Fault.StorageUnavailable(ex, artifact.primaryKey().string()))
             );
         }
-        // Fast path: when no callback is installed (per-instance or
-        // shared), skip the synchronous temp-file materialisation that
-        // would otherwise hit the disk for nothing on every cache write.
         final boolean hasCallback = this.onWrite != NO_OP_ON_WRITE
             && !CacheWriteCallbackRegistry.instance().isNoOp(this.onWrite);
-        // Write a callback-owned copy so the consumer sees a stable file
-        // regardless of when the response Flowable disposer runs. Skipped
-        // when no callback would observe it.
-        final Path callbackFile = hasCallback
-            ? materialiseCallbackTempFile(bytes, artifact.primaryKey())
-            : null;
         // Track 3 atomic commit: sidecars FIRST, primary LAST. By writing
         // sidecars before the primary, any reader that observes the primary
         // on disk is guaranteed to find every matching sidecar — the
@@ -1044,29 +1032,19 @@ public final class ProxyCacheWriter {
         // ProxyCacheWriter run overwrites the orphans with consistent
         // values. Orphans are therefore harmless and self-healing.
         return this.saveSidecars(artifact.primaryKey(), artifact.sidecars())
-            .thenCompose(ignored -> this.cache.save(artifact.primaryKey(), new Content.From(bytes)))
+            .thenCompose(ignored -> this.cache.save(
+                artifact.primaryKey(), contentFromFile(owned, artifact.size())
+            ))
             .handle((ignored, err) -> {
                 if (err == null) {
                     if (hasCallback) {
-                        // Use the callback-owned file (still on disk)
-                        // instead of the response Flowable's temp file
-                        // (which may have been disposed by the time we
-                        // land here).
-                        this.fireOnWrite(
-                            artifact.primaryKey(),
-                            callbackFile == null ? artifact.tempFile() : callbackFile,
-                            artifact.size()
-                        );
-                        if (callbackFile != null) {
-                            deleteQuietly(callbackFile);
-                        }
+                        this.fireOnWrite(artifact.primaryKey(), owned, artifact.size());
                     }
+                    deleteQuietly(owned);
                     this.logSuccess(artifact.primaryKey(), artifact.sidecars().keySet(), artifact.ctx());
                     return Result.<Void>ok(null);
                 }
-                if (callbackFile != null) {
-                    deleteQuietly(callbackFile);
-                }
+                deleteQuietly(owned);
                 this.rollbackAfterPartialFailure(
                     artifact.primaryKey(), artifact.sidecars().keySet(), err, artifact.ctx()
                 );
@@ -1077,25 +1055,21 @@ public final class ProxyCacheWriter {
     }
 
     /**
-     * Write the in-memory bytes to a fresh temp file dedicated to the
-     * onCacheWrite consumer. Returns {@code null} on IO failure (callback
-     * falls back to the response Flowable's path with the existing
-     * best-effort lifetime contract).
+     * Give the commit its own name for the temp file's bytes, next to it on
+     * the same file system: a hard link (no data copied), or a disk-to-disk
+     * copy where hard links are unsupported. The response Flowable may delete
+     * the original at any time; the returned file is the commit's to delete.
      */
-    private static Path materialiseCallbackTempFile(final byte[] bytes, final Key key) {
+    private static Path commitOwnedFile(final Path tempFile) throws IOException {
+        final Path owned = tempFile.resolveSibling(
+            tempFile.getFileName() + ".commit-" + UUID.randomUUID()
+        );
         try {
-            final Path tmp = Files.createTempFile("pantera-prefetch-", ".bin");
-            Files.write(tmp, bytes);
-            return tmp;
-        } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.http.cache")
-                .message("Failed to materialise onCacheWrite temp file; using response Flowable path")
-                .field("url.path", key.string())
-                .error(ex)
-                .field("log.source", "application")
-                .log();
-            return null;
+            Files.createLink(owned, tempFile);
+        } catch (final UnsupportedOperationException | IOException ex) {
+            Files.copy(tempFile, owned);
         }
+        return owned;
     }
 
     /**
@@ -1316,10 +1290,23 @@ public final class ProxyCacheWriter {
      * Content owns the temp file lifecycle.
      */
     static Content contentFromTempFile(final Path tempFile, final long size) {
+        return fileContent(tempFile, size, true);
+    }
+
+    /**
+     * Create a {@link Content} that streams {@code file} in
+     * {@link #CHUNK_SIZE} chunks and leaves it on disk; the caller owns the
+     * file's lifecycle.
+     */
+    private static Content contentFromFile(final Path file, final long size) {
+        return fileContent(file, size, false);
+    }
+
+    private static Content fileContent(final Path file, final long size, final boolean delete) {
         return new Content.From(
             Optional.of(size),
             io.reactivex.Flowable.using(
-                () -> FileChannel.open(tempFile, StandardOpenOption.READ),
+                () -> FileChannel.open(file, StandardOpenOption.READ),
                 chan -> io.reactivex.Flowable.generate(emitter -> {
                     final ByteBuffer buf = ByteBuffer.allocate(CHUNK_SIZE);
                     final int read = chan.read(buf);
@@ -1332,7 +1319,9 @@ public final class ProxyCacheWriter {
                 }),
                 chan -> {
                     chan.close();
-                    deleteQuietly(tempFile);
+                    if (delete) {
+                        deleteQuietly(file);
+                    }
                 }
             )
         );
@@ -1456,6 +1445,42 @@ public final class ProxyCacheWriter {
         Content body,
         CompletionStage<Result<Void>> verificationOutcome
     ) {
+    }
+
+    /**
+     * The stream-through temp file could not be created: the tee is never
+     * built, so the upstream body is drained here and the caller answers 5xx (every proxy maps this
+     * {@code Err} to 502). This is the innermost site that knows the cause,
+     * so it logs it, once, with the throwable.
+     *
+     * @param err I/O failure
+     * @param primaryKey Artifact key
+     * @param upstreamBody Unsubscribed upstream body, drained here
+     * @param ctx Request context (trace.id)
+     * @return Err(StorageUnavailable)
+     */
+    private CompletableFuture<Result<StreamedArtifact>> tempFileFailed(
+        final IOException err, final Key primaryKey,
+        final Publisher<ByteBuffer> upstreamBody, final RequestContext ctx
+    ) {
+        EcsLogger.error("com.auto1.pantera.http.cache")
+            .message("Stream-through temp file could not be created; artifact not served"
+                + " (cause: storage_unavailable)")
+            .eventCategory("file")
+            .eventAction("cache_write")
+            .eventOutcome("failure")
+            .field("event.reason", "storage_unavailable")
+            .field("repository.name", this.repoName)
+            .field("url.path", primaryKey.string())
+            .traceContext(traceId(ctx), null)
+            .error(err)
+            .field("log.source", "application")
+            .log();
+        // Release the upstream connection: nobody will subscribe now.
+        Flowable.fromPublisher(upstreamBody).subscribe(buf -> { }, ignored -> { });
+        return CompletableFuture.completedFuture(
+            Result.err(new Fault.StorageUnavailable(err, primaryKey.string()))
+        );
     }
 
     /** A verified-but-not-yet-committed artifact that can be served immediately. */

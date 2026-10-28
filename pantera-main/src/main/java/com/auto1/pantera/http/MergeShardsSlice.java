@@ -350,6 +350,8 @@ public final class MergeShardsSlice implements Slice {
                 .eventAction("metadata_merge")
                 .eventOutcome("failure")
                 .field("repository.name", repoName)
+                .field("http.response.status_code", 500)
+                .requestContext(headers)
                 .error(error)
                 .field("log.source", "application")
                 .log();
@@ -365,13 +367,11 @@ public final class MergeShardsSlice implements Slice {
                     .log();
                 return null;
             });
-            final String errorMsg = String.format(
-                "{\"error\": \"%s\"}",
-                error.getMessage().replace("\"", "\\\"")
-            );
+            // The cause is on the ERROR record above; the body names none
+            // (exception text can carry storage paths).
             return ResponseBuilder.internalError()
                 .header(ContentType.NAME, "application/json")
-                .textBody(errorMsg)
+                .textBody("{\"error\": \"Metadata merge failed\"}")
                 .build();
         }).toCompletableFuture();
     }

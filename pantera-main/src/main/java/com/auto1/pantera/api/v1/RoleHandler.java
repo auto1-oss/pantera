@@ -153,7 +153,7 @@ public final class RoleHandler {
             HandlerExecutor.get()
         ).whenComplete((result, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 final JsonArray items = new JsonArray();
                 for (final JsonObject obj : result.items()) {
@@ -178,7 +178,7 @@ public final class RoleHandler {
             HandlerExecutor.get()
         ).whenComplete((opt, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else if (opt.isPresent()) {
                 ctx.response()
                     .setStatusCode(200)
@@ -241,7 +241,7 @@ public final class RoleHandler {
                 HandlerExecutor.get()
             ).whenComplete((ignored, err) -> {
                 if (err != null) {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 } else {
                     this.policyCache.invalidate(rname);
                     ctx.response().setStatusCode(201).end();
@@ -338,7 +338,7 @@ public final class RoleHandler {
                         String.format("Role '%s' not found", rname)
                     );
                 } else {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
             }
         });
@@ -365,7 +365,7 @@ public final class RoleHandler {
                         String.format("Role '%s' not found", rname)
                     );
                 } else {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
             }
         });
@@ -402,7 +402,7 @@ public final class RoleHandler {
                         String.format("Role '%s' not found", rname)
                     );
                 } else {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
             }
         });

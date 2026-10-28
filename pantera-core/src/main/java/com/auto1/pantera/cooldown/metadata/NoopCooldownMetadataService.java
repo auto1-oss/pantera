@@ -10,7 +10,10 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
+import com.auto1.pantera.audit.AuditContext;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 /**
  * No-op implementation of {@link CooldownMetadataService}.
@@ -43,6 +46,23 @@ public final class NoopCooldownMetadataService implements CooldownMetadataServic
     ) {
         // Return raw metadata unchanged
         return CompletableFuture.completedFuture(rawMetadata);
+    }
+
+    @Override
+    public <T> CompletableFuture<Optional<byte[]>> filterMetadataLazily(
+        final String repoType,
+        final String repoName,
+        final String variant,
+        final String packageName,
+        final Supplier<CompletableFuture<byte[]>> rawMetadata,
+        final MetadataParser<T> parser,
+        final MetadataFilter<T> filter,
+        final MetadataRewriter<T> rewriter,
+        final AuditContext ctx,
+        final String owner
+    ) {
+        // Nothing is filtered: the caller serves its metadata as stored
+        return CompletableFuture.completedFuture(Optional.empty());
     }
 
     @Override

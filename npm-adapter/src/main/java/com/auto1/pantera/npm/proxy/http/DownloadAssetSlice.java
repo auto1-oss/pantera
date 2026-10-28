@@ -120,64 +120,13 @@ public final class DownloadAssetSlice implements Slice {
             // This ensures offline mode works - serve cached content even when upstream is down
             return this.checkCacheFirst(tgz, rqheaders, ctx);
         }).whenComplete((r, e) -> recordPhase("asset_total", entryNs))
-        .exceptionally(error -> {
+        .exceptionally(error -> new FailureResponse("get_asset", this.repoName)
             // CRITICAL: Convert exceptions to proper HTTP responses to prevent
-            // "Parse Error: Expected HTTP/" errors in npm client.
-            final Throwable cause = unwrapException(error);
-            EcsLogger.error("com.auto1.pantera.npm")
-                .message("Error processing asset request")
-                .eventCategory("web")
-                .eventAction("get_asset")
-                .eventOutcome("failure")
-                .field("url.path", line.uri().getPath())
-                .error(cause)
-                .field("log.source", "application")
-                .log();
-            
-            // A breaker fast-fail keeps its marker so the group resolver
-            // can skip this member without convicting it.
-            if (cause instanceof com.auto1.pantera.http.UpstreamCircuitOpenException circuit) {
-                final ResponseBuilder rb = ResponseBuilder
-                    .from(com.auto1.pantera.http.RsStatus.byCode(502))
-                    .header(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true")
-                    .jsonBody("{\"error\":\"Upstream circuit breaker is open\"}");
-                if (circuit.retryAfterSeconds() > 0) {
-                    rb.header("Retry-After", Long.toString(circuit.retryAfterSeconds()));
-                }
-                return rb.build();
-            }
-            // Check if it's an HTTP exception with a specific status
-            if (cause instanceof com.auto1.pantera.http.PanteraHttpException) {
-                final com.auto1.pantera.http.PanteraHttpException httpEx = 
-                    (com.auto1.pantera.http.PanteraHttpException) cause;
-                return ResponseBuilder.from(httpEx.status())
-                    .jsonBody(String.format(
-                        "{\"error\":\"%s\"}",
-                        httpEx.getMessage() != null ? httpEx.getMessage() : "Upstream error"
-                    ))
-                    .build();
-            }
-            
-            // Generic 502 Bad Gateway for upstream errors
-            return ResponseBuilder.from(com.auto1.pantera.http.RsStatus.byCode(502))
-                .jsonBody(String.format(
-                    "{\"error\":\"Upstream error: %s\"}",
-                    cause.getMessage() != null ? cause.getMessage() : "Unknown error"
-                ))
-                .build();
-        });
+            // "Parse Error: Expected HTTP/" errors in npm client. The cause is
+            // logged; the body never carries exception text.
+            .answer(error, rqheaders, line.uri().getPath()));
     }
     
-    /**
-     * Unwrap CompletionException to get the root cause.
-     */
-    private static Throwable unwrapException(final Throwable error) {
-        Throwable cause = error;
-        while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
-            cause = cause.getCause();
-        }
-        return cause;
-    }
 
     /**
      * Check storage cache first before evaluating cooldown. This ensures offline mode works -

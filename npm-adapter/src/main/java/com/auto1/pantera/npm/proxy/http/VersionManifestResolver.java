@@ -10,8 +10,7 @@
  */
 package com.auto1.pantera.npm.proxy.http;
 
-import com.auto1.pantera.asto.Concatenation;
-import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.metadata.AllVersionsBlockedException;
@@ -20,18 +19,16 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.npm.Tarballs;
-import com.auto1.pantera.npm.cooldown.NpmMetadataFilter;
 import com.auto1.pantera.npm.cooldown.NpmMetadataParser;
 import com.auto1.pantera.npm.cooldown.NpmMetadataRewriter;
+import com.auto1.pantera.npm.cooldown.NpmMetadataFilter;
 import com.auto1.pantera.npm.misc.MetadataETag;
+import com.auto1.pantera.npm.misc.PackumentDecision;
+import com.auto1.pantera.npm.misc.PackumentSkeleton;
+import com.auto1.pantera.npm.misc.PackumentVersion;
 import com.auto1.pantera.npm.proxy.NpmProxy;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 
-import java.io.IOException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -147,102 +144,106 @@ public final class VersionManifestResolver {
     }
 
     /**
-     * Resolve one version-or-tag reference against the (cooldown-filtered)
-     * packument and emit its manifest.
-     *
-     * <p>Resolution goes through the packument rather than proxying
-     * {@code /<pkg>/<version>} upstream verbatim, because a passthrough would
-     * bypass cooldown filtering entirely — a blocked version must 404 here.</p>
-     *
-     * @param pkg Package name
-     * @param ref Version string or dist-tag name
-     * @param tarballPrefix Client-facing base for the tarball URL
-     * @param vary {@code Vary} header value for the response (see
-     *  {@code com.auto1.pantera.http.headers.ClientBaseUrl#varyHeaderValue()})
-     * @param clientETag Client's If-None-Match value, if any
-     * @param auditCtx Audit context captured before the async hop
-     * @param owner Request owner
-     * @return Response
-     * @checkstyle ParameterNumberCheck (5 lines)
+     * Resolve {@code pkg@ref} to one version manifest. The verdict (which
+     * versions survive cooldown, where each dist-tag points) comes from the
+     * packument's skeleton, shared with packument serves through the
+     * filtered-metadata envelope; the manifest itself is streamed out of the
+     * stored packument. Neither step holds the packument in memory.
      */
     CompletableFuture<Response> resolve(
         final String pkg, final String ref, final String tarballPrefix, final String vary,
         final Optional<String> clientETag, final AuditContext auditCtx, final String owner
     ) {
-        return this.packumentBytes(pkg).thenCompose(raw -> {
-            final CompletableFuture<Response> result;
-            if (raw.length == 0) {
-                result = CompletableFuture.completedFuture(
-                    VersionManifestResolver.notFound(pkg, ref)
-                );
-            } else if (this.cooldownMetadata == null || this.repoType == null) {
-                AuditLogger.resolution(auditCtx, this.repoType, this.repoName, pkg, owner, List.of());
-                result = CompletableFuture.completedFuture(
-                    this.emit(raw, pkg, ref, tarballPrefix, vary, clientETag)
-                );
-            } else {
-                result = this.cooldownMetadata.filterMetadata(
-                    this.repoType, this.repoName, "full", pkg, raw,
-                    new NpmMetadataParser(), new NpmMetadataFilter(), new NpmMetadataRewriter(),
-                    auditCtx, owner
-                ).handle((filtered, ex) -> {
-                    final Response response;
-                    if (ex == null) {
-                        response = this.emit(filtered, pkg, ref, tarballPrefix, vary, clientETag);
-                    } else if (VersionManifestResolver.allBlocked(ex, pkg)) {
-                        response = VersionManifestResolver.notFound(pkg, ref);
-                    } else {
-                        EcsLogger.warn("com.auto1.pantera.npm")
-                            .message("Cooldown filter error (version resolver) - falling back to unfiltered")
-                            .eventCategory("database")
-                            .eventAction("filter_error")
-                            .field("package.name", pkg)
-                            .error(ex)
-                            .field("log.source", "application")
-                            .log();
-                        response = this.emit(raw, pkg, ref, tarballPrefix, vary, clientETag);
-                    }
-                    return response;
-                });
-            }
-            return result;
-        });
+        return this.npm.getPackageMetadataOnly(pkg)
+            .map(Optional::of)
+            .toSingle(Optional.empty())
+            .to(SingleInterop.get())
+            .toCompletableFuture()
+            .thenCompose(
+                metadata -> metadata.isEmpty()
+                    ? CompletableFuture.completedFuture(Optional.<PackumentDecision>empty())
+                    : this.decision(pkg, auditCtx, owner)
+            )
+            .thenCompose(
+                decision -> decision.map(
+                    verdict -> this.emit(
+                        this::packument, verdict, pkg, ref, tarballPrefix, vary, clientETag
+                    )
+                ).orElseGet(
+                    () -> CompletableFuture.completedFuture(VersionManifestResolver.notFound(pkg, ref))
+                )
+            );
     }
 
     /**
-     * Fetch the raw upstream packument bytes for a package: concatenate the
-     * content stream into a single byte array, then bridge the RxJava
-     * {@code Maybe} to a {@code CompletableFuture}, defaulting to an empty
-     * array (rather than never completing) when the package does not exist.
-     *
-     * @param pkg Package name
-     * @return Future resolving to the raw packument bytes, or an empty array
-     *  if the package does not exist upstream
+     * Cooldown verdict for {@code pkg}; empty when every version is blocked.
      */
-    private CompletableFuture<byte[]> packumentBytes(final String pkg) {
-        return this.npm.getPackageMetadataOnly(pkg)
-            .flatMap(metadata -> this.npm.getPackageContentStream(pkg)
-                .flatMap(contentStream -> {
-                    final long contentSize = contentStream.size().orElse(-1L);
-                    return Concatenation.withSize(contentStream, contentSize)
-                        .single()
-                        .map(buf -> new Remaining(buf).bytes())
-                        .toMaybe();
-                })
+    private CompletableFuture<Optional<PackumentDecision>> decision(
+        final String pkg, final AuditContext auditCtx, final String owner
+    ) {
+        final CompletableFuture<Optional<PackumentDecision>> result;
+        if (this.cooldownMetadata == null || this.repoType == null) {
+            AuditLogger.resolution(auditCtx, this.repoType, this.repoName, pkg, owner, List.of());
+            result = this.skeleton(pkg).thenApply(bytes -> Optional.of(new PackumentDecision(bytes)));
+        } else {
+            result = this.cooldownMetadata.filterMetadataLazily(
+                this.repoType, this.repoName, DownloadPackageSlice.SKELETON, pkg,
+                () -> this.skeleton(pkg),
+                new NpmMetadataParser(), new NpmMetadataFilter(), new NpmMetadataRewriter(),
+                auditCtx, owner
+            ).handle(
+                (filtered, ex) -> {
+                    final CompletableFuture<Optional<PackumentDecision>> verdict;
+                    if (ex == null && filtered.isPresent()) {
+                        verdict = CompletableFuture.completedFuture(
+                            Optional.of(new PackumentDecision(filtered.get()))
+                        );
+                    } else if (ex != null && VersionManifestResolver.allBlocked(ex, pkg)) {
+                        verdict = CompletableFuture.completedFuture(Optional.empty());
+                    } else if (ex != null && !DownloadPackageSlice.backendFailure(ex)) {
+                        // Only a cooldown backend failure may fall back to the
+                        // unfiltered packument; anything else fails the request.
+                        verdict = CompletableFuture.failedFuture(ex);
+                    } else {
+                        if (ex != null) {
+                            EcsLogger.warn("com.auto1.pantera.npm")
+                                .message("Cooldown filter error (version resolver) - falling back to unfiltered")
+                                .eventCategory("database")
+                                .eventAction("filter_error")
+                                .field("package.name", pkg)
+                                .error(ex)
+                                .field("log.source", "application")
+                                .log();
+                        }
+                        verdict = this.skeleton(pkg).thenApply(
+                            bytes -> Optional.of(new PackumentDecision(bytes))
+                        );
+                    }
+                    return verdict;
+                }
+            ).thenCompose(java.util.function.Function.identity());
+        }
+        return result;
+    }
+
+    private CompletableFuture<byte[]> skeleton(final String pkg) {
+        return this.packument(pkg).thenCompose(
+            content -> content.map(body -> new PackumentSkeleton(body).bytes()).orElseGet(
+                () -> CompletableFuture.failedFuture(
+                    new IllegalStateException("packument vanished: " + pkg)
+                )
             )
-            .toSingle(new byte[0])
+        );
+    }
+
+    private CompletableFuture<Optional<Content>> packument(final String pkg) {
+        return this.npm.getPackageContentStream(pkg)
+            .map(Optional::of)
+            .toSingle(Optional.empty())
             .to(SingleInterop.get())
             .toCompletableFuture();
     }
 
-    /**
-     * Walk the cause chain for {@link AllVersionsBlockedException}, logging
-     * the standard {@code all_versions_blocked} record on a hit.
-     *
-     * @param ex Throwable raised by {@link CooldownMetadataService#filterMetadata}
-     * @param pkg Package name, for the log record
-     * @return true if the cause chain contains {@link AllVersionsBlockedException}
-     */
     private static boolean allBlocked(final Throwable ex, final String pkg) {
         Throwable cause = ex;
         boolean blocked = false;
@@ -264,99 +265,67 @@ public final class VersionManifestResolver {
     }
 
     /**
-     * Extract a single version's manifest from packument bytes, rewrite its
-     * tarball URL, and build the client response.
+     * Answer {@code pkg@ref} from the verdict and the stored packument.
      *
-     * @param packumentBytes (Cooldown-filtered or raw) packument bytes
+     * @param packument Opens the stored packument of a package
+     * @param decision Cooldown verdict on the packument's skeleton
      * @param pkg Package name
-     * @param ref Version string or dist-tag name
-     * @param tarballPrefix Client-facing base for the tarball URL
-     * @param vary {@code Vary} header value for the response (see
-     *  {@code com.auto1.pantera.http.headers.ClientBaseUrl#varyHeaderValue()})
-     * @param clientETag Client's If-None-Match value, if any
-     * @return Response
-     * @checkstyle ParameterNumberCheck (5 lines)
+     * @param ref Version or dist-tag
+     * @param tarballPrefix Client-facing tarball URL prefix
+     * @param vary Vary header value
+     * @param clientETag Client's If-None-Match
+     * @return Manifest response, 404 when {@code ref} names no surviving version
      */
-    Response emit(
-        final byte[] packumentBytes, final String pkg, final String ref,
+    CompletableFuture<Response> emit(
+        final java.util.function.Function<String, CompletableFuture<Optional<Content>>> packument,
+        final PackumentDecision decision, final String pkg, final String ref,
         final String tarballPrefix, final String vary, final Optional<String> clientETag
     ) {
-        try {
-            final ObjectMapper mapper = new ObjectMapper();
-            final JsonNode root = mapper.readTree(packumentBytes);
-            final Optional<JsonNode> manifest = VersionManifestResolver.manifestFor(root, ref);
-            final Response response;
-            if (manifest.isEmpty()) {
-                response = VersionManifestResolver.notFound(pkg, ref);
-            } else {
-                final JsonNode copy = manifest.get().deepCopy();
-                final JsonNode dist = copy.get("dist");
-                if (dist != null && dist.isObject() && dist.has("tarball")) {
-                    ((ObjectNode) dist).put(
-                        "tarball",
-                        Tarballs.rewriteTarball(dist.get("tarball").asText(), tarballPrefix)
-                    );
-                }
-                final byte[] body = mapper.writeValueAsBytes(copy);
-                final String etag = new MetadataETag(body).calculate();
-                if (clientETag.isPresent() && clientETag.get().equals(etag)) {
-                    response = ResponseBuilder.from(RsStatus.NOT_MODIFIED)
-                        .header("ETag", etag)
-                        .header("Cache-Control", "public, max-age=300")
-                        .varyHeader(vary)
-                        .build();
-                } else {
-                    response = ResponseBuilder.ok()
-                        .header("Content-Type", "application/json; charset=utf-8")
-                        .header("ETag", etag)
-                        .header("Cache-Control", "public, max-age=300")
-                        .varyHeader(vary)
-                        .body(body)
-                        .build();
-                }
-            }
-            return response;
-        } catch (final IOException ex) {
-            EcsLogger.warn("com.auto1.pantera.npm")
-                .message("Failed to resolve version manifest from packument")
-                .eventCategory("web")
-                .eventAction("version_resolution")
-                .eventOutcome("failure")
-                .field("package.name", pkg)
-                .error(ex)
-                .field("log.source", "application")
-                .log();
-            return VersionManifestResolver.notFound(pkg, ref);
+        final Optional<String> version = decision.resolve(ref);
+        if (version.isEmpty()) {
+            return CompletableFuture.completedFuture(VersionManifestResolver.notFound(pkg, ref));
         }
+        return packument.apply(pkg).thenCompose(
+            content -> content.map(
+                body -> new PackumentVersion(body, version.get()).manifest(tarballPrefix)
+            ).orElseGet(() -> CompletableFuture.completedFuture(Optional.empty()))
+        ).thenApply(
+            manifest -> manifest.map(
+                bytes -> VersionManifestResolver.manifestResponse(bytes, vary, clientETag)
+            ).orElseGet(() -> VersionManifestResolver.notFound(pkg, ref))
+        );
     }
 
     /**
-     * Resolve {@code ref} against a packument's {@code versions} map: a
-     * literal version wins; only when it does not match is {@code ref}
-     * looked up as a dist-tag name and the tag's target version tried.
+     * Answer with the streamed-out manifest; its ETag is the hash of the
+     * emitted bytes.
      *
-     * @param root Parsed packument
-     * @param ref Version string or dist-tag name
-     * @return The resolved manifest node, or empty if neither a matching
-     *  version nor tag exists
+     * @param body Manifest JSON, tarball URLs already rewritten
+     * @param vary Vary header value
+     * @param clientETag Client's If-None-Match
+     * @return 200 with the manifest, 304 when the client has it
      */
-    private static Optional<JsonNode> manifestFor(final JsonNode root, final String ref) {
-        final JsonNode versions = root.get("versions");
-        Optional<JsonNode> result = Optional.empty();
-        if (versions != null && versions.isObject()) {
-            if (versions.has(ref)) {
-                result = Optional.of(versions.get(ref));
-            } else {
-                final JsonNode distTags = root.get("dist-tags");
-                if (distTags != null && distTags.isObject() && distTags.has(ref)) {
-                    final String resolved = distTags.get(ref).asText();
-                    if (versions.has(resolved)) {
-                        result = Optional.of(versions.get(resolved));
-                    }
-                }
-            }
+    private static Response manifestResponse(
+        final byte[] body, final String vary, final Optional<String> clientETag
+    ) {
+        final String etag = new MetadataETag(body).calculate();
+        final Response response;
+        if (clientETag.isPresent() && clientETag.get().equals(etag)) {
+            response = ResponseBuilder.from(RsStatus.NOT_MODIFIED)
+                .header("ETag", etag)
+                .header("Cache-Control", "public, max-age=300")
+                .varyHeader(vary)
+                .build();
+        } else {
+            response = ResponseBuilder.ok()
+                .header("Content-Type", "application/json; charset=utf-8")
+                .header("ETag", etag)
+                .header("Cache-Control", "public, max-age=300")
+                .varyHeader(vary)
+                .body(body)
+                .build();
         }
-        return result;
+        return response;
     }
 
     /**

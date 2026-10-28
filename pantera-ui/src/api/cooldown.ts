@@ -162,3 +162,47 @@ export async function unblockBulk(items: BulkUnblockItem[]): Promise<BulkUnblock
   const { data } = await getApiClient().post<BulkUnblockResult>('/cooldown/unblock', { items })
   return data
 }
+
+// ---------------------------------------------------------------------------
+// Per-repository exemptions — GET/PUT /api/v1/repositories/:name/cooldown/exemptions
+// ---------------------------------------------------------------------------
+
+export interface CooldownExemption {
+  /** Exact package name, or a prefix ending in a single `*`. */
+  pattern: string
+  /** ISO-8601 instant; null when the exemption never expires. */
+  expires_at: string | null
+  reason: string
+  created_by?: string
+  created_at?: string
+  /** False once `expires_at` has passed. */
+  active?: boolean
+}
+
+export interface CooldownExemptionsResponse {
+  repository: string
+  exemptions: CooldownExemption[]
+  /** Active blocks released by the save (PUT only). */
+  released: number
+}
+
+export type CooldownExemptionInput = Pick<CooldownExemption, 'pattern' | 'expires_at' | 'reason'>
+
+export async function getCooldownExemptions(repo: string): Promise<CooldownExemptionsResponse> {
+  const { data } = await getApiClient().get<CooldownExemptionsResponse>(
+    `/repositories/${encodeURIComponent(repo)}/cooldown/exemptions`,
+  )
+  return data
+}
+
+/** Replace the repository's whole exemption list. */
+export async function putCooldownExemptions(
+  repo: string,
+  exemptions: CooldownExemptionInput[],
+): Promise<CooldownExemptionsResponse> {
+  const { data } = await getApiClient().put<CooldownExemptionsResponse>(
+    `/repositories/${encodeURIComponent(repo)}/cooldown/exemptions`,
+    { exemptions },
+  )
+  return data
+}

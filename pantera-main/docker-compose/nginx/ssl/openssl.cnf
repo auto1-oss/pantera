@@ -11,8 +11,14 @@ O = MyOrg
 OU = MyDept
 CN = localhost
 
+# macOS (and Go on macOS, which uses the system verifier) accepts a trusted
+# TLS server certificate only with the serverAuth extended key usage.
 [v3_req]
+basicConstraints = critical, CA:FALSE
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
 subjectAltName = @alt_names
 
 [alt_names]
 DNS.1 = localhost
+IP.1 = 127.0.0.1

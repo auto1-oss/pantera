@@ -25,9 +25,14 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Function;
 
 /**
  * Races multiple slices in parallel and returns the first 200 response.
+ *
+ * <p>Targets that share one cache (the remotes of one proxy repository) can
+ * pass a presence check: when the resource is already cached, only the first
+ * target serves it, so the hit is read and audited once.</p>
  *
  * <p>This is a low-level utility for "first response wins" patterns —
  * NOT a group repository resolver. For group/virtual repository resolution
@@ -51,6 +56,11 @@ public final class RaceSlice implements Slice {
     private final List<Slice> targets;
 
     /**
+     * Shared-cache presence check, see {@link #leader}.
+     */
+    private final Function<RequestLine, CompletableFuture<Boolean>> cached;
+
+    /**
      * New race slice.
      * @param targets Slices to race
      */
@@ -63,7 +73,21 @@ public final class RaceSlice implements Slice {
      * @param targets Slices to race
      */
     public RaceSlice(final List<Slice> targets) {
+        this(targets, line -> CompletableFuture.completedFuture(false));
+    }
+
+    /**
+     * New race slice over targets that share one cache.
+     * @param targets Slices to race
+     * @param cached Whether the requested resource is already in the shared
+     *  cache; when it is, only the first target is asked (see {@link #leader})
+     */
+    public RaceSlice(
+        final List<Slice> targets,
+        final Function<RequestLine, CompletableFuture<Boolean>> cached
+    ) {
         this.targets = Collections.unmodifiableList(targets);
+        this.cached = cached;
     }
 
     @Override
@@ -88,199 +112,251 @@ public final class RaceSlice implements Slice {
         // to all members. For GET/HEAD requests the body is typically empty,
         // so the additional buffering is negligible.
         return body.asBytesFuture().thenCompose(requestBytes -> {
-            // Create a result future
-            final CompletableFuture<Response> result = new CompletableFuture<>();
+            if (this.targets.size() < 2) {
+                return this.race(this.targets, line, headers, requestBytes);
+            }
+            return this.cached.apply(line)
+                .exceptionally(err -> false)
+                .thenCompose(hit -> hit
+                    ? this.leader(line, headers, requestBytes)
+                    : this.race(this.targets, line, headers, requestBytes)
+                );
+        });
+    }
 
-            // Track how many remotes have completed (any outcome).
-            final java.util.concurrent.atomic.AtomicInteger failedCount =
-                new java.util.concurrent.atomic.AtomicInteger(0);
+    /**
+     * Cache-hit path: every target shares one cache, so the first target
+     * alone serves the hit. Racing the rest would make each of them read and
+     * audit the same cached file. Anything but a 2xx/3xx falls back to the
+     * full race, so a hit never loses the other remotes as fallbacks.
+     */
+    private CompletableFuture<Response> leader(
+        final RequestLine line, final Headers headers, final byte[] requestBytes
+    ) {
+        return this.targets.get(0)
+            .response(line, headers, RaceSlice.memberBody(requestBytes))
+            .thenCompose(res -> {
+                final int code = res.status().code();
+                if (code >= 200 && code < 400) {
+                    return CompletableFuture.completedFuture(res);
+                }
+                return res.body().discard().thenCompose(
+                    ignored -> this.race(this.targets, line, headers, requestBytes)
+                );
+            });
+    }
 
-            // Track whether ANY remote returned a 5xx or threw — informs the
-            // 502-vs-404 decision when no 2xx and no 403 was observed.
-            final java.util.concurrent.atomic.AtomicBoolean anyServerError =
-                new java.util.concurrent.atomic.AtomicBoolean(false);
+    private static Content memberBody(final byte[] requestBytes) {
+        return requestBytes.length == 0 ? Content.EMPTY : new Content.From(requestBytes);
+    }
 
-            // First 403 captured (status, headers, drained bytes) so we can
-            // forward it verbatim if the priority rules pick "forbidden" as
-            // the final answer. Saved drained-form to avoid leaking the
-            // underlying HTTP body — every per-target handler drains its
-            // body, only the SAVED 403 is reconstituted at completion.
-            final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstForbidden =
-                new java.util.concurrent.atomic.AtomicReference<>();
+    /**
+     * Race {@code targets} in parallel: the first 2xx/3xx wins, otherwise the
+     * priority rules of {@link #completeBasedOnPriority} pick the answer.
+     */
+    private CompletableFuture<Response> race(
+        final List<Slice> targets, final RequestLine line, final Headers headers,
+        final byte[] requestBytes
+    ) {
+        // Create a result future
+        final CompletableFuture<Response> result = new CompletableFuture<>();
 
-            // First 404 captured the same way (WS8 Bug B5). completeBasedOnPriority's
-            // "all targets failed, nothing forbidden, nothing 5xx" fallback used to
-            // manufacture a bare bodyless 404 unconditionally, discarding a target's
-            // own honest 404 body (e.g. CachedNpmProxySlice's "version not found: X"
-            // JSON) that had already been drained into bytes just below. A single
-            // npm-proxy remote is still raced through this class (RaceSlice wraps
-            // even a one-element target list), so this loss reproduced on a live
-            // server for both npm_proxy and npm_group even though the honest body
-            // was correctly built one layer down.
-            final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstNotFound =
-                new java.util.concurrent.atomic.AtomicReference<>();
+        // Track how many remotes have completed (any outcome).
+        final java.util.concurrent.atomic.AtomicInteger failedCount =
+            new java.util.concurrent.atomic.AtomicInteger(0);
 
-            // First 405 captured the same way, plus a count: when EVERY target
-            // rejects the method (a PUT / DELETE to a read-only proxy), the
-            // 405 is relayed instead of being collapsed into a bare 404 that
-            // sends a mis-configured publisher hunting for a path problem.
-            final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstNotAllowed =
-                new java.util.concurrent.atomic.AtomicReference<>();
-            final java.util.concurrent.atomic.AtomicInteger notAllowedCount =
-                new java.util.concurrent.atomic.AtomicInteger(0);
+        // Track whether ANY remote returned a 5xx or threw — informs the
+        // 502-vs-404 decision when no 2xx and no 403 was observed.
+        final java.util.concurrent.atomic.AtomicBoolean anyServerError =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
-            // First circuit-open fast-fail (a 5xx carrying the
-            // X-Pantera-Circuit-Open marker) captured with its headers, so
-            // the marker and Retry-After reach the group resolver when no
-            // remote answered and none genuinely failed. Collapsing it into
-            // a bare 502 made a group convict this repository on the
-            // breaker's own output (CLAUDE.md breaker invariants).
-            final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstCircuitOpen =
-                new java.util.concurrent.atomic.AtomicReference<>();
+        // First 403 captured (status, headers, drained bytes) so we can
+        // forward it verbatim if the priority rules pick "forbidden" as
+        // the final answer. Saved drained-form to avoid leaking the
+        // underlying HTTP body — every per-target handler drains its
+        // body, only the SAVED 403 is reconstituted at completion.
+        final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstForbidden =
+            new java.util.concurrent.atomic.AtomicReference<>();
 
-            // Start all repository requests in parallel
-            for (int i = 0; i < this.targets.size(); i++) {
-                final int index = i;
-                final Slice target = this.targets.get(i);
+        // First 404 captured the same way (WS8 Bug B5). completeBasedOnPriority's
+        // "all targets failed, nothing forbidden, nothing 5xx" fallback used to
+        // manufacture a bare bodyless 404 unconditionally, discarding a target's
+        // own honest 404 body (e.g. CachedNpmProxySlice's "version not found: X"
+        // JSON) that had already been drained into bytes just below. A single
+        // npm-proxy remote is still raced through this class (RaceSlice wraps
+        // even a one-element target list), so this loss reproduced on a live
+        // server for both npm_proxy and npm_group even though the honest body
+        // was correctly built one layer down.
+        final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstNotFound =
+            new java.util.concurrent.atomic.AtomicReference<>();
 
-                // Create a fresh Content instance for each member from buffered bytes
-                final Content memberBody = requestBytes.length == 0
-                    ? Content.EMPTY
-                    : new Content.From(requestBytes);
+        // First 405 captured the same way, plus a count: when EVERY target
+        // rejects the method (a PUT / DELETE to a read-only proxy), the
+        // 405 is relayed instead of being collapsed into a bare 404 that
+        // sends a mis-configured publisher hunting for a path problem.
+        final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstNotAllowed =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        final java.util.concurrent.atomic.AtomicInteger notAllowedCount =
+            new java.util.concurrent.atomic.AtomicInteger(0);
 
-                EcsLogger.debug("com.auto1.pantera.http")
-                    .message("Sending request to target (index: " + index + ")")
-                    .eventCategory("web")
-                    .eventAction("pending")
-                    .eventOutcome("unknown")
-                    .field("url.path", line.uri().getPath())
-                    .field("log.source", "application")
-                    .log();
-                target.response(line, headers, memberBody)
-                .thenCompose(res -> {
-                    // If result already completed (someone else won), consume and discard
-                    if (result.isDone()) {
-                        EcsLogger.debug("com.auto1.pantera.http")
-                            .message("Repository response arrived after race completed (index: " + index + ")")
-                            .eventCategory("web")
-                            .eventAction("group_race")
-                            .eventOutcome("success")
-                            .field("event.reason", "late_response")
-                            .field("log.source", "application")
-                            .log();
-                        return res.body().asBytesFuture().thenApply(ignored -> null);
-                    }
+        // First circuit-open fast-fail (a 5xx carrying the
+        // X-Pantera-Circuit-Open marker) captured with its headers, so
+        // the marker and Retry-After reach the group resolver when no
+        // remote answered and none genuinely failed. Collapsing it into
+        // a bare 502 made a group convict this repository on the
+        // breaker's own output (CLAUDE.md breaker invariants).
+        final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstCircuitOpen =
+            new java.util.concurrent.atomic.AtomicReference<>();
 
-                    final int code = res.status().code();
+        // Start all repository requests in parallel
+        for (int i = 0; i < targets.size(); i++) {
+            final int index = i;
+            final Slice target = targets.get(i);
 
-                    // Priority rule 1: 2xx / 3xx wins immediately. Don't drain
-                    // the body — it will be served to the client. Drain any
-                    // saved 403 since it lost.
-                    if (code >= 200 && code < 400) {
-                        EcsLogger.debug("com.auto1.pantera.http")
-                            .message("Repository found artifact (index: " + index + ")")
-                            .eventCategory("web")
-                            .eventAction("group_race")
-                            .eventOutcome("success")
-                            .field("http.response.status_code", code)
-                            .field("log.source", "http")
-                            .log();
-                        result.complete(res);
-                        final DrainedResponse savedForbidden = firstForbidden.getAndSet(null);
-                        if (savedForbidden == null) {
-                            return CompletableFuture.completedFuture(null);
-                        }
-                        // No body to drain — DrainedResponse already has bytes,
-                        // and the underlying HTTP body was drained at capture
-                        // time. Nothing further to release.
-                        return CompletableFuture.completedFuture(null);
-                    }
+            // Create a fresh Content instance for each member from buffered bytes
+            final Content memberBody = RaceSlice.memberBody(requestBytes);
 
-                    // Failure paths: drain body, classify, race-continue.
-                    final boolean isForbidden = code == RsStatus.FORBIDDEN.code();
-                    final boolean is5xx = code >= 500;
-                    final boolean circuitOpen = is5xx && !res.headers()
-                        .values(UpstreamCircuitOpenException.HEADER).isEmpty();
-                    if (is5xx && !circuitOpen) {
-                        anyServerError.set(true);
-                    }
+            EcsLogger.debug("com.auto1.pantera.http")
+                .message("Sending request to target (index: " + index + ")")
+                .eventCategory("web")
+                .eventAction("pending")
+                .eventOutcome("unknown")
+                .field("url.path", line.uri().getPath())
+                .field("log.source", "application")
+                .log();
+            target.response(line, headers, memberBody)
+            .thenCompose(res -> {
+                // If result already completed (someone else won), consume and discard
+                if (result.isDone()) {
                     EcsLogger.debug("com.auto1.pantera.http")
-                        .message("Repository returned " + code
-                            + " (index: " + index + "); race continues")
+                        .message("Repository response arrived after race completed (index: " + index + ")")
                         .eventCategory("web")
                         .eventAction("group_race")
-                        .eventOutcome("failure")
-                        .field("event.reason",
-                            code == RsStatus.NOT_FOUND.code() ? "artifact_not_found"
-                                : isForbidden ? "forbidden"
-                                : is5xx ? "upstream_error"
-                                : "client_error")
+                        .eventOutcome("success")
+                        .field("event.reason", "late_response")
+                        .field("log.source", "application")
+                        .log();
+                    // Drain without materialising: on a cache hit the loser's
+                    // body is the whole cached artifact (hundreds of MB).
+                    return res.body().discard().thenApply(ignored -> null);
+                }
+
+                final int code = res.status().code();
+
+                // Priority rule 1: 2xx / 3xx wins immediately. Don't drain
+                // the body — it will be served to the client. Drain any
+                // saved 403 since it lost.
+                if (code >= 200 && code < 400) {
+                    EcsLogger.debug("com.auto1.pantera.http")
+                        .message("Repository found artifact (index: " + index + ")")
+                        .eventCategory("web")
+                        .eventAction("group_race")
+                        .eventOutcome("success")
                         .field("http.response.status_code", code)
                         .field("log.source", "http")
                         .log();
-                    return res.body().asBytesFuture().thenApply(bytes -> {
-                        if (isForbidden) {
-                            // CAS — only the FIRST 403 wins; later 403s' bytes
-                            // are dropped after the drain above (already done).
-                            firstForbidden.compareAndSet(
-                                null,
-                                new DrainedResponse(res.status(), res.headers(), bytes)
-                            );
-                        } else if (code == RsStatus.NOT_FOUND.code()) {
-                            // CAS — only the FIRST 404's body is kept (WS8 Bug B5).
-                            firstNotFound.compareAndSet(
-                                null,
-                                new DrainedResponse(res.status(), res.headers(), bytes)
-                            );
-                        } else if (circuitOpen) {
-                            firstCircuitOpen.compareAndSet(
-                                null,
-                                new DrainedResponse(res.status(), res.headers(), bytes)
-                            );
-                        } else if (code == RsStatus.METHOD_NOT_ALLOWED.code()) {
-                            notAllowedCount.incrementAndGet();
-                            firstNotAllowed.compareAndSet(
-                                null,
-                                new DrainedResponse(res.status(), res.headers(), bytes)
-                            );
-                        }
-                        if (failedCount.incrementAndGet() == this.targets.size()) {
-                            completeBasedOnPriority(
-                                result, firstForbidden, firstNotFound, anyServerError,
-                                notAllowedCount.get() == this.targets.size()
-                                    ? firstNotAllowed.get() : null,
-                                firstCircuitOpen.get()
-                            );
-                        }
-                        return null;
-                    });
-                })
-                .exceptionally(err -> {
-                    if (result.isDone()) {
-                        return null;
+                    result.complete(res);
+                    final DrainedResponse savedForbidden = firstForbidden.getAndSet(null);
+                    if (savedForbidden == null) {
+                        return CompletableFuture.completedFuture(null);
                     }
-                    EcsLogger.warn("com.auto1.pantera.http")
-                        .message("Failed to get response from repository (index: " + index + ")")
-                        .eventCategory("web")
-                        .eventAction("group_race")
-                        .eventOutcome("failure")
-                        .error(err)
-                        .field("log.source", "application")
-                        .log();
-                    // Treat exceptions the same as 5xx — race-continue + remember.
+                    // No body to drain — DrainedResponse already has bytes,
+                    // and the underlying HTTP body was drained at capture
+                    // time. Nothing further to release.
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                // Failure paths: drain body, classify, race-continue.
+                final boolean isForbidden = code == RsStatus.FORBIDDEN.code();
+                final boolean is5xx = code >= 500;
+                final boolean circuitOpen = is5xx && !res.headers()
+                    .values(UpstreamCircuitOpenException.HEADER).isEmpty();
+                if (is5xx && !circuitOpen) {
                     anyServerError.set(true);
-                    if (failedCount.incrementAndGet() == this.targets.size()) {
+                }
+                EcsLogger.debug("com.auto1.pantera.http")
+                    .message("Repository returned " + code
+                        + " (index: " + index + "); race continues")
+                    .eventCategory("web")
+                    .eventAction("group_race")
+                    .eventOutcome("failure")
+                    .field("event.reason",
+                        code == RsStatus.NOT_FOUND.code() ? "artifact_not_found"
+                            : isForbidden ? "forbidden"
+                            : is5xx ? "upstream_error"
+                            : "client_error")
+                    .field("http.response.status_code", code)
+                    .field("log.source", "http")
+                    .log();
+                return res.body().asBytesFuture().thenApply(bytes -> {
+                    if (isForbidden) {
+                        // CAS — only the FIRST 403 wins; later 403s' bytes
+                        // are dropped after the drain above (already done).
+                        firstForbidden.compareAndSet(
+                            null,
+                            new DrainedResponse(res.status(), res.headers(), bytes)
+                        );
+                    } else if (code == RsStatus.NOT_FOUND.code()) {
+                        // CAS — only the FIRST 404's body is kept (WS8 Bug B5).
+                        firstNotFound.compareAndSet(
+                            null,
+                            new DrainedResponse(res.status(), res.headers(), bytes)
+                        );
+                    } else if (circuitOpen) {
+                        firstCircuitOpen.compareAndSet(
+                            null,
+                            new DrainedResponse(res.status(), res.headers(), bytes)
+                        );
+                    } else if (code == RsStatus.METHOD_NOT_ALLOWED.code()) {
+                        notAllowedCount.incrementAndGet();
+                        firstNotAllowed.compareAndSet(
+                            null,
+                            new DrainedResponse(res.status(), res.headers(), bytes)
+                        );
+                    }
+                    if (failedCount.incrementAndGet() == targets.size()) {
                         completeBasedOnPriority(
-                            result, firstForbidden, firstNotFound, anyServerError, null,
+                            result, firstForbidden, firstNotFound, anyServerError,
+                            notAllowedCount.get() == targets.size()
+                                ? firstNotAllowed.get() : null,
                             firstCircuitOpen.get()
                         );
                     }
                     return null;
                 });
-            }
+            })
+            .exceptionally(err -> {
+                if (result.isDone()) {
+                    return null;
+                }
+                final String reason =
+                    new com.auto1.pantera.http.log.FailureCause(err).reason();
+                EcsLogger.warn("com.auto1.pantera.http")
+                    .message("Failed to get response from repository (index: " + index
+                        + ", cause: " + reason + ")")
+                    .eventCategory("web")
+                    .eventAction("group_race")
+                    .eventOutcome("failure")
+                    .field("event.reason", reason)
+                    .field("url.path", line.uri().getPath())
+                    .requestContext(headers)
+                    .error(err)
+                    .field("log.source", "application")
+                    .log();
+                // Treat exceptions the same as 5xx — race-continue + remember.
+                anyServerError.set(true);
+                if (failedCount.incrementAndGet() == targets.size()) {
+                    completeBasedOnPriority(
+                        result, firstForbidden, firstNotFound, anyServerError, null,
+                        firstCircuitOpen.get()
+                    );
+                }
+                return null;
+            });
+        }
 
-            return result;
-        });
+        return result;
+
     }
 
     /**

@@ -585,6 +585,16 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             crs, this.settings.cooldown(), this.dataSource,
             this.security.policy()
         ).register(router);
+        if (this.dataSource != null) {
+            new CooldownExemptionsHandler(
+                new com.auto1.pantera.cooldown.CooldownExemptionStore(
+                    this.dataSource, this.settings.cooldown()
+                ),
+                new com.auto1.pantera.cooldown.CooldownRepository(this.dataSource),
+                this.cooldownMetadata, CooldownSupport.extractCache(this.cooldown),
+                crs, this.security.policy(), this.settings.cacheInvalidationPubSub()
+            ).register(router);
+        }
         new SearchHandler(
             this.artifactIndex, this.security.policy(), crs::listAll, this.reindexer(crs)
         ).register(router);

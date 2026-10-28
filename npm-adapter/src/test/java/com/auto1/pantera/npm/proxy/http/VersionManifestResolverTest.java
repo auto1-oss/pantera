@@ -27,6 +27,7 @@ import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import io.reactivex.Maybe;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.io.StringReader;
@@ -106,7 +107,7 @@ final class VersionManifestResolverTest {
 
     @Test
     void emitsUnscopedVersionWithRewrittenTarball() throws Exception {
-        final Response response = RESOLVER.emit(
+        final Response response = emit(
             PACKUMENT, "pnpm", "11.5.1", "https://h/api/npm/npm_group", "Host", Optional.empty()
         );
         MatcherAssert.assertThat(
@@ -123,7 +124,7 @@ final class VersionManifestResolverTest {
     void emitCarriesTheSuppliedVaryHeader() {
         // I2: a shared cache must not cross-serve this response to a
         // different client whose derived base would differ.
-        final Response response = RESOLVER.emit(
+        final Response response = emit(
             PACKUMENT, "pnpm", "11.5.1", "https://h/api/npm/npm_group", "Host", Optional.empty()
         );
         MatcherAssert.assertThat(
@@ -139,7 +140,7 @@ final class VersionManifestResolverTest {
         // configured that value is "" (nothing left to vary by), and the
         // response must omit Vary entirely rather than send a malformed
         // "Vary: " (RFC 9110 S12.5.5).
-        final Response response = RESOLVER.emit(
+        final Response response = emit(
             PACKUMENT, "pnpm", "11.5.1", "https://h/api/npm/npm_group", "", Optional.empty()
         );
         MatcherAssert.assertThat(
@@ -151,11 +152,11 @@ final class VersionManifestResolverTest {
     @Test
     void emit304OmitsVaryHeaderWhenSuppliedValueIsEmpty() throws Exception {
         final String prefix = "https://h/api/npm/npm_group";
-        final Response first = RESOLVER.emit(
+        final Response first = emit(
             PACKUMENT, "pnpm", "11.5.1", prefix, "", Optional.empty()
         );
         final String etag = first.headers().single("ETag").getValue();
-        final Response revalidated = RESOLVER.emit(
+        final Response revalidated = emit(
             PACKUMENT, "pnpm", "11.5.1", prefix, "", Optional.of(etag)
         );
         MatcherAssert.assertThat(
@@ -175,7 +176,7 @@ final class VersionManifestResolverTest {
         // This is the /latest upstream-URL leak fix (spec S2.D): the dist-tag
         // must resolve to the same rewritten (Pantera-rooted) tarball as the
         // literal version, never the raw registry.npmjs.org URL.
-        final Response response = RESOLVER.emit(
+        final Response response = emit(
             PACKUMENT, "pnpm", "latest", "https://h/api/npm/npm_group", "Host", Optional.empty()
         );
         MatcherAssert.assertThat(
@@ -193,7 +194,7 @@ final class VersionManifestResolverTest {
         // Regression guard for the reported corepack bug: an unresolvable
         // version must 404 with an honest body, never the old {name,
         // modified} stub that silently 200s.
-        final Response response = RESOLVER.emit(
+        final Response response = emit(
             PACKUMENT, "pnpm", "9.9.9", "https://h/api/npm/npm_group", "Host", Optional.empty()
         );
         MatcherAssert.assertThat(
@@ -210,11 +211,11 @@ final class VersionManifestResolverTest {
     @Test
     void emitHonoursMatchingIfNoneMatchWith304() throws Exception {
         final String prefix = "https://h/api/npm/npm_group";
-        final Response first = RESOLVER.emit(
+        final Response first = emit(
             PACKUMENT, "pnpm", "11.5.1", prefix, "Host", Optional.empty()
         );
         final String etag = first.headers().single("ETag").getValue();
-        final Response revalidated = RESOLVER.emit(
+        final Response revalidated = emit(
             PACKUMENT, "pnpm", "11.5.1", prefix, "Host", Optional.of(etag)
         );
         MatcherAssert.assertThat(
@@ -241,10 +242,10 @@ final class VersionManifestResolverTest {
 
     @Test
     void differentTarballPrefixesProduceDifferentETags() {
-        final Response first = RESOLVER.emit(
+        final Response first = emit(
             PACKUMENT, "pnpm", "11.5.1", "https://h1/api/npm/npm_group", "Host", Optional.empty()
         );
-        final Response second = RESOLVER.emit(
+        final Response second = emit(
             PACKUMENT, "pnpm", "11.5.1", "https://h2/api/npm/npm_group", "Host", Optional.empty()
         );
         MatcherAssert.assertThat(
@@ -386,13 +387,36 @@ final class VersionManifestResolverTest {
     }
 
     @Test
-    void resolveFallsBackToRawEmitOnGenericFilterError() throws Exception {
-        // A non-AllVersionsBlockedException filter failure must fall back to
+    void resolveFailsClosedOnAnUnrecognisedFilterError() {
+        // Only a cooldown backend failure may fall back to the unfiltered
+        // packument; any other failure must not become a way past cooldown.
+        final CompletableFuture<byte[]> failed = new CompletableFuture<>();
+        failed.completeExceptionally(new IllegalStateException("unexpected"));
+        final VersionManifestResolver resolver = new VersionManifestResolver(
+            new FakeNpmProxy(RAW_PACKUMENT),
+            new StubCooldownMetadataService(failed),
+            "npm", "npm-proxy"
+        );
+        Assertions.assertThrows(
+            java.util.concurrent.ExecutionException.class,
+            () -> resolver.resolve(
+                "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", "Host", Optional.empty(),
+                AuditContext.NONE, "owner"
+            ).get(),
+            "the request fails (502 at the slice) instead of serving the raw packument"
+        );
+    }
+
+    @Test
+    void resolveFallsBackToRawEmitOnCooldownBackendFailure() throws Exception {
+        // A cooldown backend failure (here: a database error) falls back to
         // the RAW bytes -- 200 with version 11.5.1 is only reachable if the
         // fallback really emitted from raw (the filtered fixture would have
         // 404'd, same as the success-path test above).
         final CompletableFuture<byte[]> failed = new CompletableFuture<>();
-        failed.completeExceptionally(new IllegalStateException("cooldown backend unavailable"));
+        failed.completeExceptionally(
+            new IllegalStateException("cooldown backend unavailable", new java.sql.SQLException("down"))
+        );
         final VersionManifestResolver resolver = new VersionManifestResolver(
             new FakeNpmProxy(RAW_PACKUMENT),
             new StubCooldownMetadataService(failed),
@@ -403,7 +427,7 @@ final class VersionManifestResolverTest {
             AuditContext.NONE, "owner"
         ).get();
         MatcherAssert.assertThat(
-            "generic filter error falls back to serving the raw packument",
+            "backend failure falls back to serving the raw packument",
             response.status(),
             new IsEqual<>(RsStatus.OK)
         );
@@ -517,5 +541,26 @@ final class VersionManifestResolverTest {
         public String stats() {
             return "StubCooldownMetadataService";
         }
+    }
+
+    /**
+     * Run {@link VersionManifestResolver#emit} over an in-memory packument
+     * with cooldown off: the verdict is the packument's own skeleton.
+     */
+    private static Response emit(
+        final byte[] packument, final String pkg, final String ref,
+        final String prefix, final String vary, final Optional<String> etag
+    ) {
+        return RESOLVER.emit(
+            name -> java.util.concurrent.CompletableFuture.completedFuture(
+                Optional.of(new com.auto1.pantera.asto.Content.From(packument))
+            ),
+            new com.auto1.pantera.npm.misc.PackumentDecision(
+                new com.auto1.pantera.npm.misc.PackumentSkeleton(
+                    new com.auto1.pantera.asto.Content.From(packument)
+                ).bytes().join()
+            ),
+            pkg, ref, prefix, vary, etag
+        ).join();
     }
 }

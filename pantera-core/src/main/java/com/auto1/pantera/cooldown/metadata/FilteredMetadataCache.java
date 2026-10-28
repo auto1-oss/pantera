@@ -77,6 +77,14 @@ public class FilteredMetadataCache implements Cleanable<String> {
     private static final int DEFAULT_L1_SIZE = resolveDefaultL1Size();
 
     /**
+     * Default L1 byte budget (sum of cached filtered-document sizes), 1 GiB.
+     * Configurable via {@code PANTERA_COOLDOWN_METADATA_L1_MAX_BYTES} env var.
+     * The entry-count bound alone let a few thousand large packuments
+     * (tens of MB each) take gigabytes of heap.
+     */
+    private static final long DEFAULT_L1_MAX_BYTES = resolveDefaultL1MaxBytes();
+
+    /**
      * Default max TTL when no versions are blocked (24 hours).
      * Since release dates don't change, we can cache for a long time.
      */
@@ -247,6 +255,32 @@ public class FilteredMetadataCache implements Cleanable<String> {
         final Duration l2Ttl,
         final ValkeyConnection valkey
     ) {
+        this(l1Size, DEFAULT_L1_MAX_BYTES, l1Ttl, l2Ttl, valkey);
+    }
+
+    /**
+     * Full constructor with an explicit L1 byte budget.
+     *
+     * <p>L1 is bounded by entry count AND by bytes through a single Caffeine
+     * weight: each entry weighs {@code max(its bytes, l1MaxBytes / l1Size)}.
+     * The total weight stays under {@code l1MaxBytes}, so the summed entry
+     * bytes never exceed the budget and the entry count never exceeds
+     * {@code l1Size}; a mix of small and large entries evicts somewhat
+     * before either limit alone would.</p>
+     *
+     * @param l1Size Maximum L1 entry count (0 for L2-only mode)
+     * @param l1MaxBytes Maximum summed size of L1 entries in bytes
+     * @param l1Ttl L1 cache TTL
+     * @param l2Ttl L2 cache TTL
+     * @param valkey Valkey connection (null for single-tier)
+     */
+    public FilteredMetadataCache(
+        final int l1Size,
+        final long l1MaxBytes,
+        final Duration l1Ttl,
+        final Duration l2Ttl,
+        final ValkeyConnection valkey
+    ) {
         // L2-only mode: l1Size == 0 AND valkey is available
         this.l2OnlyMode = (l1Size == 0 && valkey != null);
         
@@ -255,9 +289,13 @@ public class FilteredMetadataCache implements Cleanable<String> {
         if (this.l2OnlyMode) {
             this.l1Cache = null;
         } else {
+            final int entries = l1Size > 0 ? l1Size : DEFAULT_L1_SIZE;
+            final long budget = l1MaxBytes > 0 ? l1MaxBytes : DEFAULT_L1_MAX_BYTES;
+            final int floor = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, budget / entries));
             // Use scheduler for more timely eviction of expired entries
             this.l1Cache = Caffeine.newBuilder()
-                .maximumSize(l1Size > 0 ? l1Size : DEFAULT_L1_SIZE)
+                .maximumWeight(budget)
+                .weigher((String key, CacheEntry entry) -> Math.max(entry.data().length, floor))
                 .scheduler(com.github.benmanes.caffeine.cache.Scheduler.systemScheduler())
                 .expireAfter(new Expiry<String, CacheEntry>() {
                     @Override
@@ -1498,6 +1536,27 @@ public class FilteredMetadataCache implements Cleanable<String> {
         ) {
             return new CacheEntry(data, Optional.of(earliestBlockedUntil), maxTtl, blockedVersions);
         }
+    }
+
+    /**
+     * Resolve default L1 byte budget from env var or fall back to 1 GiB.
+     * Configurable via {@code PANTERA_COOLDOWN_METADATA_L1_MAX_BYTES}.
+     *
+     * @return L1 byte budget
+     */
+    private static long resolveDefaultL1MaxBytes() {
+        final String env = System.getenv("PANTERA_COOLDOWN_METADATA_L1_MAX_BYTES");
+        if (env != null && !env.isEmpty()) {
+            try {
+                final long parsed = Long.parseLong(env.trim());
+                if (parsed > 0) {
+                    return parsed;
+                }
+            } catch (final NumberFormatException ignored) {
+                // fall through to default
+            }
+        }
+        return 1024L * 1024L * 1024L;
     }
 
     /**

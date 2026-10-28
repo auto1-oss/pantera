@@ -191,6 +191,54 @@ Audit-log entries inherit the originating HTTP request's `trace.id` so an artifa
 
 ---
 
+## Why a Request Got a 5xx
+
+The access-log line (logger `http.access`) only says that a request was answered with a 5xx. Its `message` names the status: `Bad gateway` (502), `Service unavailable` (503), `Gateway timeout` (504), `Not implemented` (501), `Internal server error` (500 and any other 5xx). The cause is on a separate application record with the same `trace.id`, written where the 5xx was decided. Every 5xx Pantera answers has at least one such record; a group's 502 has one per failed member.
+
+| Field | Meaning |
+|-------|---------|
+| `event.reason` | Short cause token, for aggregation (tokens below). |
+| `http.response.status_code` | The status Pantera answered (not the upstream's). |
+| `url.full`, `destination.address` | The upstream URL and host, when an upstream was involved. Credentials in the URL are masked. |
+| `error.type`, `error.message`, `error.stack_trace` | Present when a throwable caused the answer. `error.type` is the real cause, not the `CompletionException` wrapper; the wrapper chain stays in `error.stack_trace`. A plain upstream 5xx answer has no `error.*` fields. |
+| `repository.name`, `url.path`, `event.action` | Where it happened (actions below). |
+
+**`event.reason` tokens:**
+
+| Token | Cause |
+|-------|-------|
+| `upstream_status_<code>` | The upstream answered `<code>` (e.g. `upstream_status_503`). |
+| `circuit_open` | The outbound circuit breaker fast-failed the call (`X-Pantera-Circuit-Open`), or every remaining group member is skipped with an open breaker. |
+| `connection_refused`, `connect_timeout`, `read_timeout`, `idle_timeout`, `request_timeout`, `unknown_host`, `tls_error`, `connection_closed`, `egress_denied` | Transport failure of the upstream call. |
+| `request_rejected` | The HTTP client refused the request locally (e.g. Jetty's per-destination request queue is full). |
+| `upstream_request_failed` | npm proxy: the coalesced upstream fetch threw; the throwable is on the `proxy_request` record of the request that led the fetch. |
+| `cache_write_failed` | The upstream answered 200 but the body could not be cached (no throwable captured); when the throwable is known its own token is used instead. |
+| `storage_unavailable` | A local temp file or storage write failed. |
+| `bulkhead_full` | The per-repository bulkhead is full (503 + `Retry-After`). |
+| `index_timeout`, `index_unavailable` | The group's artifact-index query timed out or failed (500). |
+| `member_status_<code>` | A group member answered `<code>` and the walk moved on. |
+| `route_pattern_mismatch` | A request path did not match its route (500, a routing misconfiguration). |
+| `io_error`, `internal_error` | Another I/O failure / any other exception. |
+| `internal_error`, `unavailable`, `not_implemented` | REST API 5xx answered with a fixed message (the lower-cased `error.code`); an API 5xx caused by an exception carries that exception's token instead. |
+
+**`event.action` of the cause records:** `proxy_upstream` (proxy fetch), `cache_write` (cache commit / verify-and-serve), `proxy_cache` and `proxy_fetch_coalesced_error` (Maven-style cache fill), `proxy_request` (npm), `bulkhead_dispatch`, `group_member_fallthrough` (per failed group member), `group_sibling_pin_failed`, `group_targeted_read_failed`, `group_all_members_circuit_open`, `group_index_timeout`, `group_index_error`, `group_race` (a remote of a multi-remote proxy threw), `http_request_send` (outbound HTTP client), `response_stream` (body failed while streaming to the client), `request_routing`, `artifact_upload`, `package_search`, `metadata_merge`, `import_artifact`, `api_request` (REST API).
+
+**Levels.** Upstream and transient causes are `WARN`; unexpected internal failures are `ERROR`. Two per-request causes are `DEBUG`, because their state transitions are logged on their own: `circuit_open` (the breaker logs `circuit_breaker_trip` / `circuit_breaker_probe` / `circuit_breaker_close` at `WARN`/`INFO`) and `bulkhead_full` (counted by `pantera_bulkhead_overflow_total`). Enable `DEBUG` on the adapter logger to see each refused request. Group-level records that name `circuit_open` (`group_sibling_pin_failed`, `group_all_members_circuit_open`) stay at `WARN`.
+
+**One stack trace per failure.** A transport failure produces two records: the outbound client's single-line `http_request_send` record (`WARN`, `url.full`, `destination.address`, `event.reason`, `error.type` and `error.message`, no stack trace) and the answering slice's record with the full `error.stack_trace`. Both carry the same `trace.id`.
+
+To find the cause of a 502, take the `trace.id` of its access-log line and search the application logs for it:
+
+```
+trace.id: "4bf92f3577b34da6a3ce929d0e0e4736" and not log.logger: "http.access"
+```
+
+To rank causes across all 5xx: aggregate `event.reason` over `event.outcome: "failure" and http.response.status_code >= 500 and not log.logger: "http.access"`.
+
+The cause is logged only. Response bodies carry fixed generic text (`Upstream temporarily unavailable`, `Internal server error`) and never exception messages, stack traces, internal host names or paths. The `X-Pantera-Circuit-Open` marker and `Retry-After` headers are unchanged.
+
+---
+
 ## Audit Log Immutability and Retention
 
 The `audit_log` table is **write-once as of v2.2.0**. Flyway migration V129 attaches BEFORE UPDATE and BEFORE DELETE triggers that raise `feature_not_supported` on any mutation attempt — a SOC2 / ISO 27001 requirement.
@@ -464,6 +512,10 @@ Heap dumps are automatically generated on OutOfMemoryError:
 -XX:+HeapDumpOnOutOfMemoryError
 -XX:HeapDumpPath=/var/pantera/logs/dumps/heapdump.hprof
 ```
+
+The container start command adds the start time and host name to the file name
+(`heapdump-20261028-090100-<host>.hprof`), so a later out-of-memory exit does not
+find an existing dump and skip writing its own.
 
 Analyze heap dumps with Eclipse MAT, VisualVM, or JProfiler.
 

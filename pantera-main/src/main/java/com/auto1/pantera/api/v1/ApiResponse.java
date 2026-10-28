@@ -32,10 +32,85 @@ public final class ApiResponse {
 
     public static void sendError(final RoutingContext ctx, final int status,
         final String error, final String message) {
+        if (status >= 500) {
+            // Every 5xx the API answers leaves its cause in the log, joined
+            // to the request by trace.id. A literal message (e.g. "Database
+            // not configured") is fine to return as is; exception text goes
+            // through the Throwable overload below and is never returned.
+            ApiResponse.serverErrorLog(ctx, status, error)
+                .field("event.reason", error.toLowerCase(java.util.Locale.ROOT))
+                .message("API request failed with " + status + ": " + message)
+                .log();
+        }
         ctx.response()
             .setStatusCode(status)
             .putHeader("Content-Type", "application/json")
             .end(error(status, error, message).encode());
+    }
+
+    /**
+     * Answer a 5xx caused by {@code cause}: the throwable is logged
+     * (error.type / error.message / error.stack_trace, correlated by
+     * trace.id) and the client gets a generic message only — exception
+     * text can carry SQL, internal host names and file paths.
+     *
+     * @param ctx Routing context
+     * @param status HTTP status (5xx)
+     * @param error Error code
+     * @param cause Failure behind the answer
+     */
+    public static void sendError(final RoutingContext ctx, final int status,
+        final String error, final Throwable cause) {
+        ApiResponse.sendError(ctx, status, error, "Internal server error", cause);
+    }
+
+    /**
+     * Answer a 5xx caused by {@code cause} with a fixed, client-friendly
+     * {@code message} (e.g. "Sign-in is temporarily unavailable"): the
+     * throwable is logged once, correlated by trace.id, and never returned.
+     *
+     * @param ctx Routing context
+     * @param status HTTP status (5xx)
+     * @param error Error code
+     * @param message Fixed client-facing message (never exception text)
+     * @param cause Failure behind the answer
+     */
+    public static void sendError(final RoutingContext ctx, final int status,
+        final String error, final String message, final Throwable cause) {
+        final com.auto1.pantera.http.log.FailureCause failure =
+            new com.auto1.pantera.http.log.FailureCause(cause);
+        ApiResponse.serverErrorLog(ctx, status, error)
+            .field("event.reason", failure.reason())
+            .message("API request failed with " + status
+                + " (cause: " + failure.reason() + "): " + message)
+            .error(cause)
+            .log();
+        ctx.response()
+            .setStatusCode(status)
+            .putHeader("Content-Type", "application/json")
+            .end(error(status, error, message).encode());
+    }
+
+    /**
+     * Common fields of the cause record of an API 5xx.
+     */
+    private static com.auto1.pantera.http.log.EcsLogger serverErrorLog(
+        final RoutingContext ctx, final int status, final String error
+    ) {
+        final com.auto1.pantera.audit.AuditContext audit = new ApiAuditContext(ctx).value();
+        final com.auto1.pantera.http.log.EcsLogger log = status == 500
+            ? com.auto1.pantera.http.log.EcsLogger.error("com.auto1.pantera.api")
+            : com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.api");
+        return log
+            .eventCategory("web")
+            .eventAction("api_request")
+            .eventOutcome("failure")
+            .field("error.code", error)
+            .field("http.request.method", ctx.request().method().name())
+            .field("url.path", ctx.request().path())
+            .field("http.response.status_code", status)
+            .traceContext(audit.traceId(), audit.clientIp())
+            .field("log.source", "application");
     }
 
     public static JsonObject paginated(final JsonArray items, final int page,

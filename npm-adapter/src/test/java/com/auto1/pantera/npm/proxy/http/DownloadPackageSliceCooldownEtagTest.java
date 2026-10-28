@@ -193,6 +193,67 @@ final class DownloadPackageSliceCooldownEtagTest {
         }
     }
 
+    @Test
+    void unparseablePackumentFailsClosedInsteadOfServingUnfiltered() {
+        MatcherAssert.assertThat(
+            "a packument cooldown cannot parse is not served",
+            this.statusWhenFilterFails(
+                new com.auto1.pantera.cooldown.metadata.MetadataParseException(
+                    "Failed to parse NPM metadata JSON", new java.io.IOException("too deep")
+                )
+            ),
+            new IsEqual<>(502)
+        );
+    }
+
+    @Test
+    void unexpectedFailureFailsClosed() {
+        MatcherAssert.assertThat(
+            "an Error while evaluating is not a reason to serve unfiltered",
+            this.statusWhenFilterFails(new StackOverflowError()),
+            new IsEqual<>(502)
+        );
+    }
+
+    @Test
+    void cooldownBackendFailureStillServesUnfiltered() {
+        MatcherAssert.assertThat(
+            "a database outage does not break installs",
+            this.statusWhenFilterFails(
+                new IllegalStateException("db down", new java.sql.SQLException("connection refused"))
+            ),
+            new IsEqual<>(200)
+        );
+    }
+
+    private int statusWhenFilterFails(final Throwable failure) {
+        final Storage storage = new InMemoryStorage();
+        this.saveFilesToStorage(storage);
+        try (
+            VertxSliceServer server = new VertxSliceServer(
+                DownloadPackageSliceCooldownEtagTest.VERTX,
+                new DownloadPackageSlice(
+                    new NpmProxy(
+                        storage,
+                        new SliceSimple(ResponseBuilder.notFound().build())
+                    ),
+                    new PackagePath("ctx"),
+                    Optional.empty(),
+                    new FailingFilterService(failure),
+                    "npm",
+                    "npm-proxy"
+                ),
+                0
+            )
+        ) {
+            final int bound = server.start();
+            return WebClient
+                .create(DownloadPackageSliceCooldownEtagTest.VERTX)
+                .getAbs(String.format("http://127.0.0.1:%d/ctx/%s", bound, PKG))
+                .rxSend().blockingGet().statusCode();
+        }
+    }
+
     /**
      * Minimal but valid packument body for the fixture package.
      *
@@ -272,6 +333,51 @@ final class DownloadPackageSliceCooldownEtagTest {
         @Override
         public String stats() {
             return "AllBlockedFilterService";
+        }
+    }
+
+    /**
+     * Cooldown service failing every evaluation with a given failure.
+     */
+    private static final class FailingFilterService implements CooldownMetadataService {
+
+        private final Throwable failure;
+
+        FailingFilterService(final Throwable failure) {
+            this.failure = failure;
+        }
+
+        @Override
+        public <T> CompletableFuture<byte[]> filterMetadata(
+            final String repoType,
+            final String repoName,
+            final String packageName,
+            final byte[] rawMetadata,
+            final MetadataParser<T> parser,
+            final MetadataFilter<T> filter,
+            final MetadataRewriter<T> rewriter
+        ) {
+            return CompletableFuture.failedFuture(this.failure);
+        }
+
+        @Override
+        public void invalidate(final String repoType, final String repoName, final String packageName) {
+            // no-op stub
+        }
+
+        @Override
+        public void invalidateAll(final String repoType, final String repoName) {
+            // no-op stub
+        }
+
+        @Override
+        public void clearAll() {
+            // no-op stub
+        }
+
+        @Override
+        public String stats() {
+            return "FailingFilterService";
         }
     }
 
