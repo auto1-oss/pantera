@@ -84,10 +84,10 @@ public final class DockerSlice extends Slice.Wrap {
      *
      * <p>A read-only slice (a proxy) answers every write route (blob
      * upload POST/PATCH/PUT/GET/DELETE, manifest PUT and manifest/blob
-     * DELETE) with
-     * 405 {@code UNSUPPORTED} before reading the repository or authorizing
-     * the request, so a refused push never triggers an upstream lookup and
-     * its body is always drained.</p>
+     * DELETE) with 405 {@code UNSUPPORTED} before reading the repository or
+     * authorizing the request, so a refused push never triggers an upstream
+     * lookup and its body is always drained. A writable (hosted) slice
+     * serves manifest/blob DELETE (WS4-docker.5).</p>
      *
      * @param docker Docker repository.
      * @param policy Access policy.
@@ -152,6 +152,13 @@ public final class DockerSlice extends Slice.Wrap {
                 routes.add(RtRulePath.route(method, PathPatterns.UPLOADS,
                     new UnsupportedSlice()));
             }
+            // Deletion needs the authoritative store: a read-only registry
+            // (proxy, group) answers the spec's 405 UNSUPPORTED, never a
+            // bare 404 that tells the client the image does not exist.
+            routes.add(RtRulePath.route(MethodRule.DELETE, PathPatterns.MANIFESTS,
+                new UnsupportedSlice()));
+            routes.add(RtRulePath.route(MethodRule.DELETE, PathPatterns.BLOBS,
+                new UnsupportedSlice()));
         }
         routes.addAll(
             List.of(
@@ -198,6 +205,9 @@ public final class DockerSlice extends Slice.Wrap {
                 RtRulePath.route(MethodRule.GET, PathPatterns.REFERRERS,
                     auth(new ReferrersSlice(docker), policy, auth)
                 ),
+                // Hosted deletion (WS4-docker.5): removes the manifest link
+                // or the blob and answers 202 Accepted. A read-only slice
+                // never reaches these routes -- its 405 is matched above.
                 RtRulePath.route(MethodRule.DELETE, PathPatterns.MANIFESTS,
                     auth(new DeleteManifestSlice(docker, events.orElse(null)), policy, auth)
                 ),

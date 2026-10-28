@@ -81,8 +81,16 @@ public final class SimpleJsonRenderer {
                 entry.add("yanked", false);
             }
             if (file.distInfoMetadata().isPresent()) {
-                entry.add("data-dist-info-metadata",
-                    Json.createObjectBuilder().add("sha256", file.distInfoMetadata().get()));
+                // PEP 714 renamed the JSON key to "core-metadata" — the
+                // previous "data-dist-info-metadata" was the HTML *attribute*
+                // name, not a valid PEP 691/714 JSON key, so compliant
+                // clients silently ignored it. "dist-info-metadata" is kept
+                // as a legacy-client compat alias with the identical value.
+                final String sha256 = file.distInfoMetadata().get();
+                entry.add("core-metadata", Json.createObjectBuilder().add("sha256", sha256));
+                entry.add(
+                    "dist-info-metadata", Json.createObjectBuilder().add("sha256", sha256)
+                );
             }
             filesArray.add(entry);
         }

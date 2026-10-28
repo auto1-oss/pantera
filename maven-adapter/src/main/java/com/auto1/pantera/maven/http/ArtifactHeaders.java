@@ -44,11 +44,17 @@ final class ArtifactHeaders {
     }
 
     /**
-     * Content disposition header.
+     * Content disposition header. Package-visible (not just used by
+     * {@link #from}) so {@code CachedProxySlice}'s fresh-fetch response
+     * (WS4-maven.8) can attach the same {@code Content-Disposition} before
+     * the full checksum map is known.
+     * {@link #from}) so {@code CachedProxySlice}'s fresh-fetch response
+     * (WS4-maven.8) can attach the same {@code Content-Disposition} before
+     * the full checksum map is known.
      * @param location Artifact location
      * @return Headers with content disposition
      */
-    private static Header contentDisposition(final Key location) {
+    static Header contentDisposition(final Key location) {
         return new ContentFileName(new KeyLastPart(location).get());
     }
 
@@ -73,7 +79,8 @@ final class ArtifactHeaders {
     }
 
     /**
-     * Artifact content type header.
+     * Artifact content type header. Package-visible for the same reason as
+     * {@link #contentDisposition(Key)}.
      * @param key Artifact key
      * @return Content type header
      */

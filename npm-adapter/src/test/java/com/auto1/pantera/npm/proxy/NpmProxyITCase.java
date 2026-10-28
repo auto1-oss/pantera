@@ -27,6 +27,8 @@ import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.AllOf;
@@ -39,12 +41,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
-import org.quartz.JobBuilder;
-import org.quartz.JobDataMap;
-import org.quartz.Scheduler;
-import org.quartz.SimpleScheduleBuilder;
-import org.quartz.TriggerBuilder;
-import org.quartz.impl.StdSchedulerFactory;
 import org.testcontainers.Testcontainers;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
@@ -104,9 +100,12 @@ public final class NpmProxyITCase {
     private Queue<ArtifactEvent> events;
 
     /**
-     * Scheduler.
+     * Per-node executor driving {@link NpmProxyPackageProcessor#run()} on a
+     * fixed cadence — mirrors production (see
+     * {@code com.auto1.pantera.scheduling.LocalEventDrainScheduler}, in
+     * pantera-main, WS2.2b fix) without a cross-module test dependency on it.
      */
-    private Scheduler scheduler;
+    private ScheduledExecutorService scheduler;
 
     @Test
     public void installSingleModule() throws IOException, InterruptedException {
@@ -248,23 +247,14 @@ public final class NpmProxyITCase {
         );
         this.srv = new VertxSliceServer(NpmProxyITCase.VERTX, slice, NpmProxyITCase.listenPort);
         this.srv.start();
-        this.scheduler = new StdSchedulerFactory().getScheduler();
         this.events = new LinkedList<>();
-        final JobDataMap data = new JobDataMap();
-        data.put("events", this.events);
-        data.put("packages", packages);
-        data.put("rname", "npm-proxy");
-        data.put("storage", asto);
-        data.put("host", uri.getPath());
-        this.scheduler.scheduleJob(
-            JobBuilder.newJob(NpmProxyPackageProcessor.class).setJobData(data).withIdentity(
-                "job1", NpmProxyPackageProcessor.class.getSimpleName()
-            ).build(),
-            TriggerBuilder.newTrigger().startNow()
-                .withSchedule(SimpleScheduleBuilder.repeatSecondlyForever(5))
-                .withIdentity("trigger1", NpmProxyPackageProcessor.class.getSimpleName()).build()
-        );
-        this.scheduler.start();
+        final NpmProxyPackageProcessor processor = new NpmProxyPackageProcessor();
+        processor.setEvents(this.events);
+        processor.setPackages(packages);
+        processor.setStorage(asto);
+        processor.setHost(uri.getPath());
+        this.scheduler = Executors.newSingleThreadScheduledExecutor();
+        this.scheduler.scheduleAtFixedRate(processor::run, 0, 5, TimeUnit.SECONDS);
     }
 
     @AfterEach

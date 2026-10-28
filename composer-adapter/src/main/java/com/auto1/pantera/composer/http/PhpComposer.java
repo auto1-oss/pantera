@@ -10,18 +10,25 @@
  */
 package com.auto1.pantera.composer.http;
 
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.Repository;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.BasicAuthzSlice;
 import com.auto1.pantera.http.auth.CombinedAuthzSliceWrap;
 import com.auto1.pantera.http.auth.OperationControl;
 import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
@@ -90,12 +97,59 @@ public final class PhpComposer extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
-        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, true,
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, ArtifactIndex.NOP);
+    }
+
+    /**
+     * Full ctor with the read-side shared artifact index (WS4-composer.5/.6:
+     * {@code available-packages.json} / {@code packages/list.json}).
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex
+    ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, artifactIndex,
+            DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting, for a repository
+     * without a configured {@code url:}.
+     * @param repository Repository
+     * @param policy Access permissions
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact repository events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param immutable When true a published release cannot be overwritten
+     *  (identical re-upload: 201, different content: 409); when false release
+     *  uploads overwrite. Dev versions are always mutable.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, immutable,
             new ComposerBaseUrl(Optional.empty(), name));
     }
 
     /**
-     * Primary ctor, with the repository's {@code immutable} setting and the
+     * Ctor with the repository's {@code immutable} setting and the
      * client-facing base its served links are rooted at.
      * @param repository Repository
      * @param policy Access permissions
@@ -121,6 +175,88 @@ public final class PhpComposer extends Slice.Wrap {
         final boolean immutable,
         final ComposerBaseUrl base
     ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, ArtifactIndex.NOP,
+            DownloadPolicy.streamOnly(), immutable, base);
+    }
+
+    /**
+     * Ctor additionally carrying the WS1.7 (spec {@code
+     * WS1-storage-for-scale.md} &sect;3.B2) download policy. Only the two
+     * dist-archive download routes ({@link DownloadArchiveSlice}) become
+     * redirect-eligible under a non-{@link DownloadPolicy#streamOnly()} policy;
+     * every metadata route ({@code /p2/}, {@code available-packages.json},
+     * {@code packages/list.json}) always streams. Releases are immutable.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, artifactIndex,
+            downloadPolicy, true);
+    }
+
+    /**
+     * Ctor with the read-side artifact index, WS1.7 download policy and the
+     * repository's {@code immutable} setting, for a repository without a
+     * configured {@code url:}.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, artifactIndex,
+            downloadPolicy, immutable, new ComposerBaseUrl(Optional.empty(), name));
+    }
+
+    /**
+     * Primary ctor: read-side artifact index, WS1.7 download policy, the
+     * repository's {@code immutable} setting and the client-facing base its
+     * served links are rooted at.
+     * @param repository Repository
+     * @param policy Access permissions
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact repository events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param artifactIndex Read-side shared artifact index
+     * @param downloadPolicy Per-repo download policy (dist archives only)
+     * @param immutable When true a published release cannot be overwritten
+     *  (identical re-upload: 201, different content: 409); when false release
+     *  uploads overwrite. Dev versions are always mutable.
+     * @param base Client-facing base URL the served metadata links are rooted at
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable,
+        final ComposerBaseUrl base
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -129,42 +265,80 @@ public final class PhpComposer extends Slice.Wrap {
                             new RtRule.ByPath(PackageMetadataSlice.PACKAGE),
                             new RtRule.ByPath(PackageMetadataSlice.ALL_PACKAGES)
                         ),
-                        MethodRule.GET
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
                     ),
-                    PhpComposer.createAuthSlice(
-                        new PackageMetadataSlice(repository, base),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    PhpComposer.headAware(
+                        PhpComposer.createAuthSlice(
+                            new PackageMetadataSlice(repository, base),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    new RtRule.All(
+                        new RtRule.ByPath("^/p2/available-packages\\.json$"),
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
+                    ),
+                    PhpComposer.headAware(
+                        PhpComposer.createAuthSlice(
+                            new ComposerAvailablePackagesSlice(artifactIndex, name),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    new RtRule.All(
+                        new RtRule.ByPath("^/packages/list\\.json$"),
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
+                    ),
+                    PhpComposer.headAware(
+                        PhpComposer.createAuthSlice(
+                            new ComposerListSlice(artifactIndex, name),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),
                 new RtRulePath(
                     new RtRule.All(
                         new RtRule.ByPath(Pattern.compile("^/?artifacts/.*\\.(zip|tar\\.gz|tgz)$")),
-                        MethodRule.GET
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
                     ),
-                    PhpComposer.createAuthSlice(
-                        new DownloadArchiveSlice(repository),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    PhpComposer.headAware(
+                        PhpComposer.createAuthSlice(
+                            new DownloadArchiveSlice(repository, downloadPolicy),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),
                 new RtRulePath(
                     new RtRule.All(
                         new RtRule.ByPath(Pattern.compile("^/.*\\.(zip|tar\\.gz|tgz)$")),
-                        MethodRule.GET
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
                     ),
-                    PhpComposer.createAuthSlice(
-                        new DownloadArchiveSlice(repository),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    PhpComposer.headAware(
+                        PhpComposer.createAuthSlice(
+                            new DownloadArchiveSlice(repository, downloadPolicy),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),
@@ -198,6 +372,29 @@ public final class PhpComposer extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    /**
+     * Wrap a GET-shaped slice so a {@code HEAD} request resolves exactly as
+     * the equivalent {@code GET} would (status + headers), with the body
+     * dropped (RFC 9110 &sect;9.3.2). {@code GET} requests pass through
+     * unchanged. WS4-composer.8.
+     *
+     * @param origin GET-shaped slice
+     * @return Slice honouring both GET and HEAD
+     */
+    private static Slice headAware(final Slice origin) {
+        return (line, headers, body) -> {
+            if (line.method() != RqMethod.HEAD) {
+                return origin.response(line, headers, body);
+            }
+            final RequestLine asGet = new RequestLine(RqMethod.GET, line.uri(), line.version());
+            return origin.response(asGet, headers, body).thenCompose(resp ->
+                resp.body().asBytesFuture().thenApply(
+                    ignored -> new Response(resp.status(), resp.headers(), Content.EMPTY)
+                )
+            );
+        };
     }
 
     /**

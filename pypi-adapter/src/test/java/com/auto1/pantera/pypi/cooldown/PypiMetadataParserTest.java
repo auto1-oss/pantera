@@ -270,6 +270,63 @@ final class PypiMetadataParserTest {
         assertThat(times.containsKey("3.0.0"), is(false));
     }
 
+    @Test
+    void parsesDataYankedAttributeWithReason() throws Exception {
+        final String html = """
+            <!DOCTYPE html><html><body>
+            <a href="../../packages/foo-1.0.0.tar.gz#sha256=abc" data-yanked="broken build">foo-1.0.0.tar.gz</a>
+            </body></html>
+            """;
+        final PypiSimpleIndex index = this.parser.parse(html.getBytes(StandardCharsets.UTF_8));
+        assertThat(index.links(), hasSize(1));
+        assertThat(index.links().get(0).yanked(), equalTo("broken build"));
+    }
+
+    @Test
+    void parsesDataYankedAttributeWithEmptyReason() throws Exception {
+        final String html = """
+            <!DOCTYPE html><html><body>
+            <a href="../../packages/foo-1.0.0.tar.gz#sha256=abc" data-yanked="">foo-1.0.0.tar.gz</a>
+            </body></html>
+            """;
+        final PypiSimpleIndex index = this.parser.parse(html.getBytes(StandardCharsets.UTF_8));
+        assertThat(index.links(), hasSize(1));
+        assertThat(index.links().get(0).yanked(), equalTo(""));
+    }
+
+    @Test
+    void absentDataYankedMeansNotYanked() throws Exception {
+        final byte[] html = loadFixture();
+        final PypiSimpleIndex index = this.parser.parse(html);
+        assertThat(index.links().get(0).yanked(), is(nullValue()));
+    }
+
+    @Test
+    void parsesYankedFieldFromJsonAsString() throws Exception {
+        final String json = """
+            {"meta":{"api-version":"1.1"},"name":"foo","files":[
+              {"filename":"foo-1.0.0.tar.gz","url":"foo-1.0.0.tar.gz",
+               "hashes":{"sha256":"abc"},"yanked":"security issue"}
+            ]}
+            """;
+        final PypiSimpleIndex index = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertThat(index.links(), hasSize(1));
+        assertThat(index.links().get(0).yanked(), equalTo("security issue"));
+    }
+
+    @Test
+    void parsesYankedFalseFromJsonAsNotYanked() throws Exception {
+        final String json = """
+            {"meta":{"api-version":"1.1"},"name":"foo","files":[
+              {"filename":"foo-1.0.0.tar.gz","url":"foo-1.0.0.tar.gz",
+               "hashes":{"sha256":"abc"},"yanked":false}
+            ]}
+            """;
+        final PypiSimpleIndex index = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertThat(index.links(), hasSize(1));
+        assertThat(index.links().get(0).yanked(), is(nullValue()));
+    }
+
     private static byte[] loadFixture() throws IOException {
         try (InputStream input = PypiMetadataParserTest.class.getResourceAsStream(
             "/cooldown/pypi-simple-index-sample.html"

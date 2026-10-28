@@ -72,6 +72,26 @@ describe('RepoConfigForm — immutable artifacts', () => {
     expect(lastEmittedRepo(wrapper).immutable).toBe(false)
   })
 
+  it('honours the deprecated releaseImmutable alias and replaces it with immutable', async () => {
+    const wrapper = mountForm({
+      repo: { type: 'maven', storage: FS, releaseImmutable: false },
+    })
+    await flushPromises()
+    expect((wrapper.vm as unknown as Exposed).immutableArtifacts).toBe(false)
+    const emitted = lastEmittedRepo(wrapper)
+    expect(emitted.immutable).toBe(false)
+    expect('releaseImmutable' in emitted).toBe(false)
+  })
+
+  it('lets immutable win over releaseImmutable when both are set', async () => {
+    const wrapper = mountForm({
+      repo: { type: 'maven', storage: FS, immutable: true, releaseImmutable: false },
+    })
+    await flushPromises()
+    expect((wrapper.vm as unknown as Exposed).immutableArtifacts).toBe(true)
+    expect(lastEmittedRepo(wrapper).immutable).toBe(true)
+  })
+
   it('emits the toggled value in the next update:config payload', async () => {
     const wrapper = mountForm({ repo: { type: 'maven', storage: FS } })
     await flushPromises()

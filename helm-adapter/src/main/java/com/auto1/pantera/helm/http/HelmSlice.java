@@ -10,7 +10,9 @@
  */
 package com.auto1.pantera.helm.http;
 
+import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.Authentication;
@@ -31,12 +33,23 @@ import com.auto1.pantera.security.policy.Policy;
 
 import java.util.Optional;
 import java.util.Queue;
+import java.util.function.Predicate;
 
 /**
  * HelmSlice.
  * @since 0.1
  */
 public final class HelmSlice extends Slice.Wrap {
+
+    /**
+     * WS1.7 redirect gate for the shared catch-all GET route: only chart
+     * tarballs ({@code .tgz}) are redirect-eligible. {@code index.yaml} is
+     * served by {@link DownloadIndexSlice} on an earlier route and never
+     * reaches here; {@code .prov} provenance signatures fall through to the
+     * catch-all but end in {@code .prov}, not {@code .tgz}, so they stream.
+     */
+    private static final Predicate<Key> REDIRECTABLE =
+        key -> key.string().endsWith(".tgz");
 
     /**
      * Ctor.
@@ -85,8 +98,7 @@ public final class HelmSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer. Overwriting a pushed chart
-     * version is allowed (the behaviour before the {@code immutable} setting).
+     * Ctor with synchronous artifact-index writer -- stream-only downloads.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public HelmSlice(
@@ -99,20 +111,35 @@ public final class HelmSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
-        this(storage, base, policy, basicAuth, tokenAuth, name, events, syncIndex, false);
+        this(storage, base, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly());
     }
 
     /**
-     * Ctor with synchronous artifact-index writer and the immutability switch.
-     *
-     * @param storage The storage.
-     * @param base The base path the slice is expected to be accessed from
-     * @param policy Access policy.
-     * @param basicAuth Basic authentication.
-     * @param tokenAuth Token authentication.
-     * @param name Repository name
-     * @param events Events queue
-     * @param syncIndex Synchronous artifact-index writer
+     * Ctor with an explicit WS1.7 download policy: chart {@code .tgz} GETs
+     * become redirect-eligible under a non-{@link DownloadPolicy#streamOnly()}
+     * policy, while {@code index.yaml} and {@code .prov} provenance keep
+     * streaming (see {@link #REDIRECTABLE}).
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public HelmSlice(
+        final Storage storage,
+        final String base,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
+        this(storage, base, policy, basicAuth, tokenAuth, name, events, syncIndex, downloadPolicy,
+            false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
      * @param immutable When {@code true} a push of an already stored chart
      *  name+version answers 409 Conflict; when {@code false} it overwrites the
      *  archive and its {@code index.yaml} entry
@@ -127,6 +154,30 @@ public final class HelmSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(storage, base, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable When {@code true} a push of an already stored chart
+     *  name+version answers 409 Conflict; when {@code false} it overwrites the
+     *  archive and its {@code index.yaml} entry
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public HelmSlice(
+        final Storage storage,
+        final String base,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
         final boolean immutable
     ) {
         super(
@@ -161,7 +212,7 @@ public final class HelmSlice extends Slice.Wrap {
                 new RtRulePath(
                     MethodRule.GET,
                     HelmSlice.createAuthSlice(
-                        new StorageArtifactSlice(storage),
+                        new StorageArtifactSlice(storage, downloadPolicy, HelmSlice.REDIRECTABLE),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

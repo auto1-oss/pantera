@@ -20,9 +20,7 @@ import com.auto1.pantera.pypi.meta.Metadata;
 import com.auto1.pantera.pypi.meta.PackageInfo;
 import com.auto1.pantera.pypi.meta.ValidFilename;
 import com.auto1.pantera.scheduling.ArtifactEvent;
-import com.auto1.pantera.scheduling.JobDataRegistry;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
-import com.auto1.pantera.scheduling.QuartzJob;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -31,14 +29,18 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import org.quartz.JobExecutionContext;
 
 /**
  * Job to process package, loaded via proxy and add corresponding info to
  * events queue.
+ * <p>
+ * Runs as a per-node periodic {@link Runnable} tick (see
+ * {@code MetadataEventQueues}/{@code LocalEventDrainScheduler}) — never
+ * through the cluster-shared Quartz job store; see {@code GoProxyPackageProcessor}
+ * for the WS2.2b rationale.
  * @since 0.9
  */
-public final class PyProxyPackageProcessor extends QuartzJob {
+public final class PyProxyPackageProcessor implements Runnable {
 
     /**
      * Repository type.
@@ -61,10 +63,15 @@ public final class PyProxyPackageProcessor extends QuartzJob {
     private Storage asto;
 
     @Override
-    public void execute(final JobExecutionContext context) {
-        this.resolveFromRegistry(context);
+    public void run() {
         if (this.asto == null || this.packages == null || this.events == null) {
-            super.stopJob(context);
+            EcsLogger.error("com.auto1.pantera.pypi")
+                .message("PyPI proxy processor not initialized properly")
+                .eventCategory("web")
+                .eventAction("batch_processing")
+                .eventOutcome("failure")
+                .field("log.source", "application")
+                .log();
         } else {
             this.processPackagesBatch();
         }
@@ -249,51 +256,6 @@ public final class PyProxyPackageProcessor extends QuartzJob {
      */
     public void setStorage(final Storage storage) {
         this.asto = storage;
-    }
-
-    /**
-     * Set registry key for events queue (JDBC mode).
-     * @param key Registry key
-     */
-    public void setEvents_key(final String key) {
-        this.events = JobDataRegistry.lookup(key);
-    }
-
-    /**
-     * Set registry key for packages queue (JDBC mode).
-     * @param key Registry key
-     */
-    public void setPackages_key(final String key) {
-        this.packages = JobDataRegistry.lookup(key);
-    }
-
-    /**
-     * Set registry key for storage (JDBC mode).
-     * @param key Registry key
-     */
-    public void setStorage_key(final String key) {
-        this.asto = JobDataRegistry.lookup(key);
-    }
-
-    /**
-     * Resolve fields from job data registry if registry keys are present
-     * in the context and the fields are not yet set (JDBC mode fallback).
-     * @param context Job execution context
-     */
-    private void resolveFromRegistry(final JobExecutionContext context) {
-        if (context == null) {
-            return;
-        }
-        final org.quartz.JobDataMap data = context.getMergedJobDataMap();
-        if (this.packages == null && data.containsKey("packages_key")) {
-            this.packages = JobDataRegistry.lookup(data.getString("packages_key"));
-        }
-        if (this.asto == null && data.containsKey("storage_key")) {
-            this.asto = JobDataRegistry.lookup(data.getString("storage_key"));
-        }
-        if (this.events == null && data.containsKey("events_key")) {
-            this.events = JobDataRegistry.lookup(data.getString("events_key"));
-        }
     }
 
 }

@@ -258,6 +258,10 @@ final class SliceIndex implements Slice {
     ) {
         // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
         return RxFuture.single(this.storage.list(list))
+            .map(allKeys -> allKeys.stream()
+                .filter(key -> !IndexGenerator.isPep658MetadataFile(key))
+                .toList()
+            )
             .flatMap(keys -> {
                 // Return 404 if package doesn't exist (empty directory)
                 if (keys.isEmpty()) {
@@ -274,7 +278,14 @@ final class SliceIndex implements Slice {
                         .concatMapSingle(
                             key -> RxFuture.single(
                                 this.storage.list(key).thenCompose(
-                                    subKeys -> {
+                                    rawSubKeys -> {
+                                        // storage.list() is a raw string-prefix
+                                        // match: re-listing a real file's own key
+                                        // also returns its ".metadata" sibling
+                                        // (WS4-pypi.6) — filter it out.
+                                        final List<Key> subKeys = rawSubKeys.stream()
+                                            .filter(k -> !IndexGenerator.isPep658MetadataFile(k))
+                                            .toList();
                                         if (subKeys.isEmpty()) {
                                             // It's a file, not a directory
                                             return this.jsonEntry(
@@ -335,7 +346,13 @@ final class SliceIndex implements Slice {
                             key -> RxFuture.single(
                                 // Try to list this key as a directory (version folder)
                                 this.storage.list(key).thenCompose(
-                                    subKeys -> {
+                                    rawSubKeys -> {
+                                        // Filter out the ".metadata" sibling that a
+                                        // raw string-prefix list() also returns
+                                        // when re-listing a real file's own key.
+                                        final List<Key> subKeys = rawSubKeys.stream()
+                                            .filter(k -> !IndexGenerator.isPep658MetadataFile(k))
+                                            .toList();
                                         if (subKeys.isEmpty()) {
                                             // It's a file, not a directory - process it directly
                                             return this.storage.value(key).thenCompose(
@@ -439,9 +456,11 @@ final class SliceIndex implements Slice {
      * @param url Full URL for the file
      * @param sha256 SHA-256 hex digest
      * @param meta Optional sidecar metadata
-     * @param size File size in bytes, negative when unknown
-     * @param version Version directory (nullable)
+     * @param size File size in bytes (PEP 700), negative when unknown
+     * @param version Version directory (nullable for the no-version-folder
+     *  edge case, when the version is derived from the filename)
      * @return FileEntry for JSON rendering
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private static SimpleJsonRenderer.FileEntry buildJsonEntry(
         final String filename,

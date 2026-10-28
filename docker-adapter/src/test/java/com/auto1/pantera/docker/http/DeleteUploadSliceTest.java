@@ -61,7 +61,7 @@ final class DeleteUploadSliceTest {
             Content.EMPTY
         ).join();
         ResponseAssert.check(get,
-            RsStatus.OK, new Header("Docker-Upload-UUID", upload.uuid()));
+            RsStatus.NO_CONTENT, new Header("Docker-Upload-UUID", upload.uuid()));
     }
 
     @Test

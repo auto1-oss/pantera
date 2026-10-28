@@ -15,7 +15,6 @@ import com.auto1.pantera.VertxMain;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.misc.JavaResource;
-import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -45,37 +44,34 @@ public final class SettingsFromPath {
     /**
      * Searches settings by the provided path, if no settings are found,
      * example settings are used.
-     * @param quartz Quartz service
      * @return Pantera settings
      * @throws IOException On IO error
      */
-    public Settings find(final QuartzService quartz) throws IOException {
-        return this.find(quartz, java.util.Optional.empty());
+    public Settings find() throws IOException {
+        return this.find(java.util.Optional.empty());
     }
 
     /**
      * Searches settings by the provided path, reusing a pre-created DataSource.
-     * @param quartz Quartz service
      * @param dataSource Shared DataSource to avoid duplicate connection pools
      * @return Pantera settings
      * @throws IOException On IO error
      * @since 1.20.13
      */
-    public Settings find(final QuartzService quartz,
+    public Settings find(
         final java.util.Optional<javax.sql.DataSource> dataSource) throws IOException {
-        return this.find(quartz, dataSource, java.util.Optional.empty());
+        return this.find(dataSource, java.util.Optional.empty());
     }
 
     /**
      * Searches settings by the provided path, reusing pre-created DataSources.
-     * @param quartz Quartz service
      * @param dataSource Shared (API) DataSource
      * @param writeDataSource Dedicated write pool for DbConsumer (empty = use shared)
      * @return Pantera settings
      * @throws IOException On IO error
      * @since 1.21.0
      */
-    public Settings find(final QuartzService quartz,
+    public Settings find(
         final java.util.Optional<javax.sql.DataSource> dataSource,
         final java.util.Optional<javax.sql.DataSource> writeDataSource) throws IOException {
         boolean initialize = Boolean.parseBoolean(System.getenv("PANTERA_INIT"));
@@ -85,7 +81,7 @@ public final class SettingsFromPath {
         }
         final Settings settings = new YamlSettings(
             Yaml.createYamlInput(this.path.toFile()).readYamlMapping(),
-            this.path.getParent(), quartz, dataSource, writeDataSource
+            this.path.getParent(), dataSource, writeDataSource
         );
         final BlockingStorage bsto = new BlockingStorage(settings.configStorage());
         final Key init = new Key.From(".pantera", "initialized");

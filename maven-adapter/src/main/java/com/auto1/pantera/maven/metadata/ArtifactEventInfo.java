@@ -23,7 +23,7 @@ import java.util.Optional;
 public final class ArtifactEventInfo {
 
     /**
-     * Supported maven packages: jar, war, pom, maven-plugin, ejb, war, ear, rar, zip.
+     * Supported maven packages: jar, war, pom, ear, rar, zip, aar.
      * We try to find jar or war package (which is not javadoc and not sources) first, then
      * check for others. If artifact keys list is empty, error is thrown.
      * <a href="https://maven.apache.org/pom.html">Maven docs</a>.

@@ -12,6 +12,7 @@ package com.auto1.pantera.docker.asto;
 
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.docker.Catalog;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.Repo;
@@ -28,9 +29,34 @@ public final class AstoDocker implements Docker {
 
     private final Storage storage;
 
-    public AstoDocker(String registryName, Storage storage) {
+    /**
+     * WS1.7 (spec &sect;3.B2): this hosted registry's presigned-direct-
+     * download policy for blob GETs.
+     */
+    private final DownloadPolicy downloadPolicy;
+
+    /**
+     * @param registryName Registry name
+     * @param storage Storage
+     * @param downloadPolicy WS1.7 presigned-direct-download policy for blob
+     *  GETs (see {@link Docker#downloadPolicy()}).
+     */
+    public AstoDocker(final String registryName, final Storage storage, final DownloadPolicy downloadPolicy) {
         this.registryName = registryName;
         this.storage = storage;
+        this.downloadPolicy = downloadPolicy;
+    }
+
+    /**
+     * Convenience constructor for callers that do not (yet) configure a
+     * WS1.7 download policy -- delegates with {@link
+     * DownloadPolicy#streamOnly()}, preserving pre-2.3.0 behaviour exactly.
+     *
+     * @param registryName Registry name
+     * @param storage Storage
+     */
+    public AstoDocker(final String registryName, final Storage storage) {
+        this(registryName, storage, DownloadPolicy.streamOnly());
     }
 
     @Override
@@ -47,5 +73,10 @@ public final class AstoDocker implements Docker {
     public CompletableFuture<Catalog> catalog(Pagination pagination) {
         final Key root = Layout.repositories();
         return this.storage.list(root).thenApply(keys -> new AstoCatalog(root, keys, pagination));
+    }
+
+    @Override
+    public DownloadPolicy downloadPolicy() {
+        return this.downloadPolicy;
     }
 }

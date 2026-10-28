@@ -73,6 +73,12 @@ public final class PypiJsonMetadataRequestDetector {
      * {@link #JSON_API_PATTERN} because the outer anchor there already
      * disallows extra segments, but keeping a second guard makes the
      * intent explicit for future readers.
+     *
+     * <p>Group 1 = package name, group 2 = version — used by
+     * {@link #extractPackageAndVersion(String)} so the version-level
+     * JSON endpoint can be routed through its own cooldown filter
+     * ({@code PypiJsonHandler#handle}) instead of proxying upstream
+     * unfiltered.</p>
      */
     private static final Pattern VERSION_JSON_PATTERN = Pattern.compile(
         "^(?:.*/)?pypi/([^/]+)/([^/]+)/json/?$",

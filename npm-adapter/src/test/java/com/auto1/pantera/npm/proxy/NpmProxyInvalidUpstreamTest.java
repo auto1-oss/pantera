@@ -77,8 +77,13 @@ final class NpmProxyInvalidUpstreamTest {
     }
 
     @AfterEach
-    void tearDown() {
-        this.executor.shutdownNow();
+    void tearDown() throws Exception {
+        // A failed ingest releases its staging file on the executor after the
+        // response has completed; let it finish before @TempDir cleanup runs.
+        final long left = this.settledLeftovers();
+        this.executor.shutdown();
+        this.executor.awaitTermination(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat("every staging file is released", left, new IsEqual<>(0L));
     }
 
     @ParameterizedTest

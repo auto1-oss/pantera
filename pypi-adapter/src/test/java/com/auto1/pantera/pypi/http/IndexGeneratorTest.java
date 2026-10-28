@@ -103,6 +103,16 @@ class IndexGeneratorTest {
             entry.getString("url").isEmpty(),
             "file url must be populated"
         );
+        assertEquals(
+            "whl-content".getBytes().length,
+            entry.getJsonNumber("size").longValue(),
+            "PEP 700 per-file size must match the stored artifact size"
+        );
+        assertEquals(
+            1, parsed.getJsonArray("versions").size(),
+            "PEP 700 top-level versions[] must list the distinct version"
+        );
+        assertEquals("0.2.0", parsed.getJsonArray("versions").getString(0));
     }
 
     @Test
@@ -173,6 +183,30 @@ class IndexGeneratorTest {
         assertEquals(
             "world",
             parsed.getJsonArray("projects").getJsonObject(1).getString("name")
+        );
+    }
+
+    @Test
+    void htmlEmitsBothCoreMetadataAttributeNames() {
+        final Key artifact = new Key.From("hello", "0.2.0", "hello-0.2.0.whl");
+        this.storage.save(artifact, new Content.From("whl".getBytes())).join();
+        com.auto1.pantera.pypi.meta.PypiSidecar.write(
+            this.storage, artifact, null, java.time.Instant.now(), "deadbeef"
+        ).join();
+
+        new IndexGenerator(this.storage, new Key.From("hello"), "/pypi/hello")
+            .generate().join();
+
+        final String body = readBody(
+            this.storage.value(new Key.From(".pypi", "hello", "hello.html")).join()
+        );
+        assertTrue(
+            body.contains("data-core-metadata=\"sha256=deadbeef\""),
+            "HTML must emit the PEP 714 data-core-metadata attribute"
+        );
+        assertTrue(
+            body.contains("data-dist-info-metadata=\"sha256=deadbeef\""),
+            "HTML must still emit the legacy data-dist-info-metadata attribute"
         );
     }
 

@@ -141,6 +141,65 @@ final class CachedNpmProxySliceTest {
      * HEAD correctly; this proves the wrapper's own defense holds even if
      * some future route still has the same gap.
      */
+    /**
+     * A {@code GET} arriving while a {@code HEAD} of the same path is still in
+     * flight must not join it: the {@code HEAD}'s 404 (a route served only on
+     * {@code GET}) would become the {@code GET}'s answer. Deterministic version
+     * of the race {@link #headNotFoundDoesNotPoisonSubsequentGet} hit only
+     * when single-flight eviction lagged on a busy machine.
+     */
+    @Test
+    void getDoesNotJoinAnInFlightHead() throws Exception {
+        final byte[] tarball = "tarball-bytes".getBytes(StandardCharsets.UTF_8);
+        final CompletableFuture<Response> held = new CompletableFuture<>();
+        final java.util.concurrent.CountDownLatch headSent =
+            new java.util.concurrent.CountDownLatch(1);
+        final Slice origin = (line, headers, content) -> {
+            final CompletableFuture<Response> result;
+            if (line.method() == RqMethod.HEAD) {
+                headSent.countDown();
+                result = held;
+            } else {
+                result = CompletableFuture.completedFuture(
+                    ResponseBuilder.ok().body(tarball).build()
+                );
+            }
+            return result;
+        };
+        final CachedNpmProxySlice slice = new CachedNpmProxySlice(
+            origin, Optional.empty(), "head-join-repo", "upstream", "npm"
+        );
+        final String path = "/head-join-pkg/-/head-join-pkg-1.0.0.tgz";
+        final CompletableFuture<Response> head = slice.response(
+            new RequestLine(RqMethod.HEAD, path), Headers.EMPTY, Content.EMPTY
+        );
+        MatcherAssert.assertThat(
+            "the HEAD reached origin and is held there",
+            headSent.await(10, java.util.concurrent.TimeUnit.SECONDS),
+            new IsEqual<>(true)
+        );
+        final CompletableFuture<Response> get = slice.response(
+            new RequestLine(RqMethod.GET, path), Headers.EMPTY, Content.EMPTY
+        );
+        held.complete(ResponseBuilder.notFound().build());
+        final Response getResponse = get.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "the GET gets its own answer, not the in-flight HEAD's 404",
+            getResponse.status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the GET receives the artifact bytes",
+            getResponse.body().asBytesFuture().get(),
+            new IsEqual<>(tarball)
+        );
+        MatcherAssert.assertThat(
+            "the HEAD still reports its own 404",
+            head.get(10, java.util.concurrent.TimeUnit.SECONDS).status(),
+            new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+    }
+
     @Test
     void headNotFoundDoesNotPoisonSubsequentGet() throws Exception {
         final byte[] tarball = "tarball-bytes".getBytes(StandardCharsets.UTF_8);

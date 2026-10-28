@@ -25,6 +25,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
 
 /**
@@ -162,6 +163,28 @@ final class PypiMetadataRewriterTest {
     @Test
     void returnsCorrectContentType() {
         assertThat(this.rewriter.contentType(), equalTo("text/html"));
+    }
+
+    @Test
+    void roundTripsDataYankedAttribute() throws Exception {
+        final String html = """
+            <!DOCTYPE html><html><body>
+            <a href="../../packages/foo-1.0.0.tar.gz#sha256=abc" data-yanked="broken build">foo-1.0.0.tar.gz</a>
+            <a href="../../packages/foo-2.0.0.tar.gz#sha256=def">foo-2.0.0.tar.gz</a>
+            </body></html>
+            """;
+        final PypiSimpleIndex index = this.parser.parse(html.getBytes(StandardCharsets.UTF_8));
+        final byte[] rewritten = this.rewriter.rewrite(index);
+        final String output = new String(rewritten, StandardCharsets.UTF_8);
+
+        assertThat(output, containsString("data-yanked=\"broken build\""));
+
+        final PypiSimpleIndex reparsed = this.parser.parse(rewritten);
+        assertThat(reparsed.links().get(0).yanked(), equalTo("broken build"));
+        assertThat(
+            "Non-yanked link must not gain a data-yanked attribute",
+            reparsed.links().get(1).yanked(), is(nullValue())
+        );
     }
 
     private static byte[] loadFixture() throws IOException {
