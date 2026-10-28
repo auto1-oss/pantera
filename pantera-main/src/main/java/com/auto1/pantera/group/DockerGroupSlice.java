@@ -166,7 +166,7 @@ public final class DockerGroupSlice implements Slice {
         return CompletableFuture.allOf(all.toArray(CompletableFuture[]::new))
             .thenApply(
                 done -> this.answer(
-                    all.stream().map(CompletableFuture::join).toList(), page, line
+                    all.stream().map(CompletableFuture::join).toList(), page, line, headers
                 )
             );
     }
@@ -223,7 +223,9 @@ public final class DockerGroupSlice implements Slice {
                 .ifPresent(link -> found.header("Link", link));
             res = CompletableFuture.completedFuture(found.build());
         } else if (all.unavailable()) {
-            res = CompletableFuture.completedFuture(this.unavailable(line, all.retry()));
+            res = CompletableFuture.completedFuture(
+                this.unavailable(line, headers, all.retry())
+            );
         } else {
             res = this.delegate.response(line, headers, Content.EMPTY).thenApply(this::groupLinks);
         }
@@ -428,12 +430,13 @@ public final class DockerGroupSlice implements Slice {
      * Build the group catalog page from every member's outcome.
      */
     private Response answer(
-        final List<MemberCatalog> results, final Pagination page, final RequestLine line
+        final List<MemberCatalog> results, final Pagination page, final RequestLine line,
+        final Headers headers
     ) {
         final Merged all = merge(results);
         final Response res;
         if (!all.contributed() && all.unavailable()) {
-            res = this.unavailable(line, all.retry());
+            res = this.unavailable(line, headers, all.retry());
         } else {
             final List<String> names = all.page(page);
             final JsonArrayBuilder repos = Json.createArrayBuilder();
@@ -450,7 +453,9 @@ public final class DockerGroupSlice implements Slice {
     /**
      * No member could list: 503 + Retry-After, never an empty catalog.
      */
-    private Response unavailable(final RequestLine line, final long hint) {
+    private Response unavailable(
+        final RequestLine line, final Headers headers, final long hint
+    ) {
         final long retry = Math.max(5L, hint);
         EcsLogger.warn(LOGGER)
             .message(
@@ -460,8 +465,11 @@ public final class DockerGroupSlice implements Slice {
             .eventCategory("network")
             .eventAction("group_all_members_unavailable")
             .eventOutcome("failure")
+            .field("event.reason", "all_members_unavailable")
             .field("repository.name", this.group)
             .field("url.path", line.uri().getPath())
+            .field("http.response.status_code", RsStatus.SERVICE_UNAVAILABLE.code())
+            .requestContext(headers)
             .field("log.source", "application")
             .log();
         return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)

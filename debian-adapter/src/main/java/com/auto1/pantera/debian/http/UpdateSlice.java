@@ -227,7 +227,7 @@ public final class UpdateSlice implements Slice {
                 }
             ).handle(
                 (resp, throwable) -> UpdateSlice.deleteIfExists(this.asto, temp).thenCompose(
-                    nothing -> this.finish(resp, throwable, key, created.get())
+                    nothing -> this.finish(resp, throwable, key, created.get(), headers)
                 )
             ).thenCompose(Function.identity());
     }
@@ -278,10 +278,11 @@ public final class UpdateSlice implements Slice {
      * @param throwable Failure, null on success
      * @param key Package key
      * @param created Whether this request created the package key
+     * @param headers Request headers (correlation context of the error log)
      * @return Response
      */
     private CompletionStage<Response> finish(final Response resp, final Throwable throwable,
-        final Key key, final boolean created) {
+        final Key key, final boolean created, final Headers headers) {
         final CompletionStage<Response> res;
         if (throwable == null) {
             res = CompletableFuture.completedFuture(resp);
@@ -303,6 +304,13 @@ public final class UpdateSlice implements Slice {
                     } else if (cause instanceof PackageExistsException) {
                         failed = UpdateSlice.conflict(key);
                     } else {
+                        new com.auto1.pantera.http.log.ServerErrorLog(
+                            "com.auto1.pantera.debian", "artifact_upload", headers
+                        )
+                            .path(key.string())
+                            .status(RsStatus.INTERNAL_ERROR.code())
+                            .failure(throwable)
+                            .error("Debian package upload failed");
                         failed = ResponseBuilder.internalError().build();
                     }
                     return failed;

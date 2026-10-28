@@ -72,7 +72,7 @@ final class GoSumdbHandlerTest {
         final String path = "/sumdb/sum.golang.org/lookup/example.com/foo@v1.0.0";
         this.upstream.put(path, "example.com/foo v1.0.0\nh1:abc123=\n");
 
-        final Response first = this.handler.handle(new RequestLine(RqMethod.GET, path)).get();
+        final Response first = this.handler.handle(new RequestLine(RqMethod.GET, path), Headers.EMPTY).get();
         assertThat(first.status().success(), new Is<>(new IsEqual<>(true)));
         assertThat(
             new String(bodyOf(first), StandardCharsets.UTF_8),
@@ -83,7 +83,7 @@ final class GoSumdbHandlerTest {
             this.upstream.hits(path), new IsEqual<>(1)
         );
 
-        final Response second = this.handler.handle(new RequestLine(RqMethod.GET, path)).get();
+        final Response second = this.handler.handle(new RequestLine(RqMethod.GET, path), Headers.EMPTY).get();
         assertThat(
             new String(bodyOf(second), StandardCharsets.UTF_8),
             new IsEqual<>("example.com/foo v1.0.0\nh1:abc123=\n")
@@ -99,8 +99,8 @@ final class GoSumdbHandlerTest {
         final String path = "/sumdb/sum.golang.org/tile/8/0/001";
         this.upstream.put(path, "tile-bytes");
 
-        this.handler.handle(new RequestLine(RqMethod.GET, path)).get();
-        this.handler.handle(new RequestLine(RqMethod.GET, path)).get();
+        this.handler.handle(new RequestLine(RqMethod.GET, path), Headers.EMPTY).get();
+        this.handler.handle(new RequestLine(RqMethod.GET, path), Headers.EMPTY).get();
         assertThat(
             "tile responses are content-addressed/immutable — one upstream call total",
             this.upstream.hits(path), new IsEqual<>(1)
@@ -112,8 +112,8 @@ final class GoSumdbHandlerTest {
         final String path = "/sumdb/sum.golang.org/supported";
         this.upstream.put(path, "");
 
-        this.handler.handle(new RequestLine(RqMethod.GET, path)).get();
-        final Response second = this.handler.handle(new RequestLine(RqMethod.GET, path)).get();
+        this.handler.handle(new RequestLine(RqMethod.GET, path), Headers.EMPTY).get();
+        final Response second = this.handler.handle(new RequestLine(RqMethod.GET, path), Headers.EMPTY).get();
         assertThat(second.status().success(), new Is<>(new IsEqual<>(true)));
         assertThat(
             "supported must be probed live on every request, never cached",
@@ -125,7 +125,7 @@ final class GoSumdbHandlerTest {
     void supportedProbeFailureReturnsNotFound() throws Exception {
         final String path = "/sumdb/unsupported.example.com/supported";
         // No scripted body -> upstream 404s.
-        final Response resp = this.handler.handle(new RequestLine(RqMethod.GET, path)).get();
+        final Response resp = this.handler.handle(new RequestLine(RqMethod.GET, path), Headers.EMPTY).get();
         assertThat(resp.status().code(), new IsEqual<>(404));
     }
 
@@ -133,7 +133,7 @@ final class GoSumdbHandlerTest {
     void lookupMissWithUpstreamDownForwardsBadGatewayAndDoesNotCache() throws Exception {
         final String path = "/sumdb/sum.golang.org/lookup/example.com/bar@v1.0.0";
         this.upstream.fail(true);
-        final Response resp = this.handler.handle(new RequestLine(RqMethod.GET, path)).get();
+        final Response resp = this.handler.handle(new RequestLine(RqMethod.GET, path), Headers.EMPTY).get();
         assertThat(resp.status().code(), new IsEqual<>(502));
     }
 

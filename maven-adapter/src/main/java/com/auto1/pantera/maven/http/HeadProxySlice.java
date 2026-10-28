@@ -18,7 +18,9 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.rq.RequestLine;
 
 import java.util.Optional;
@@ -159,6 +161,23 @@ final class HeadProxySlice implements Slice {
                 // This is the same pattern as Docker ProxyLayers fix
                 resp.body().asBytesFuture().thenCompose(ignored -> {
                     if (!resp.status().success()) {
+                        if (resp.status().serverError()) {
+                            // Relayed verbatim (marker + Retry-After kept);
+                            // the cause is the upstream answer itself.
+                            new ServerErrorLog(
+                                "com.auto1.pantera.maven.http", "proxy_upstream", inbound
+                            )
+                                .path(line.uri().getPath())
+                                .status(resp.status().code())
+                                .reason(
+                                    resp.headers().values(
+                                        UpstreamCircuitOpenException.HEADER
+                                    ).isEmpty()
+                                        ? "upstream_status_" + resp.status().code()
+                                        : "circuit_open"
+                                )
+                                .warnUnlessExpected("Upstream HEAD answered " + resp.status().code());
+                        }
                         return CompletableFuture.completedFuture(
                             ResponseBuilder.from(resp.status()).headers(resp.headers()).build()
                         );

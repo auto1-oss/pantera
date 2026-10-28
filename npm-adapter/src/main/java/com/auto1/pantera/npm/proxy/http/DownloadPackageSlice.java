@@ -194,66 +194,13 @@ public final class DownloadPackageSlice implements Slice {
                 return this.serve(rawPackageName, headers, clientETag, auditCtx, owner, false);
             }
         }).whenComplete((r, e) -> recordPhase("packument_total", entryNs))
-        .exceptionally(error -> {
+        .exceptionally(error -> new FailureResponse("get_package", this.repoName)
             // CRITICAL: Convert exceptions to proper HTTP responses to prevent
-            // "Parse Error: Expected HTTP/" errors in npm client.
-            // Without this, exceptions propagate up and Vert.x closes the connection
-            // without sending HTTP headers.
-            final Throwable cause = unwrapException(error);
-            EcsLogger.error("com.auto1.pantera.npm")
-                .message("Error processing package request")
-                .eventCategory("web")
-                .eventAction("get_package")
-                .eventOutcome("failure")
-                .field("url.path", line.uri().getPath())
-                .error(cause)
-                .field("log.source", "application")
-                .log();
-            
-            // A breaker fast-fail keeps its marker so the group resolver
-            // can skip this member without convicting it.
-            if (cause instanceof com.auto1.pantera.http.UpstreamCircuitOpenException circuit) {
-                final ResponseBuilder rb = ResponseBuilder
-                    .from(com.auto1.pantera.http.RsStatus.byCode(502))
-                    .header(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true")
-                    .jsonBody("{\"error\":\"Upstream circuit breaker is open\"}");
-                if (circuit.retryAfterSeconds() > 0) {
-                    rb.header("Retry-After", Long.toString(circuit.retryAfterSeconds()));
-                }
-                return rb.build();
-            }
-            // Check if it's an HTTP exception with a specific status
-            if (cause instanceof com.auto1.pantera.http.PanteraHttpException) {
-                final com.auto1.pantera.http.PanteraHttpException httpEx = 
-                    (com.auto1.pantera.http.PanteraHttpException) cause;
-                return ResponseBuilder.from(httpEx.status())
-                    .jsonBody(String.format(
-                        "{\"error\":\"%s\"}",
-                        httpEx.getMessage() != null ? httpEx.getMessage() : "Upstream error"
-                    ))
-                    .build();
-            }
-            
-            // Generic 502 Bad Gateway for upstream errors
-            return ResponseBuilder.from(RsStatus.byCode(502))
-                .jsonBody(String.format(
-                    "{\"error\":\"Upstream error: %s\"}",
-                    cause.getMessage() != null ? cause.getMessage() : "Unknown error"
-                ))
-                .build();
-        });
+            // "Parse Error: Expected HTTP/" errors in npm client. The cause is
+            // logged; the body never carries exception text.
+            .answer(error, headers, line.uri().getPath()));
     }
     
-    /**
-     * Unwrap CompletionException to get the root cause.
-     */
-    private static Throwable unwrapException(final Throwable error) {
-        Throwable cause = error;
-        while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
-            cause = cause.getCause();
-        }
-        return cause;
-    }
 
     /**
      * Serve a packument streamed from storage; the document is never read

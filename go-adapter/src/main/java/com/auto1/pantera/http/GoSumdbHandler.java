@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.metrics.MicrometerMetrics;
@@ -140,18 +141,20 @@ final class GoSumdbHandler {
      * immutable cache.
      *
      * @param line Request line (must be a {@code /sumdb/} path)
+     * @param headers Request headers (carry the request's trace.id for the
+     *  cause record of a 5xx)
      * @return Future response
      */
-    CompletableFuture<Response> handle(final RequestLine line) {
+    CompletableFuture<Response> handle(final RequestLine line, final Headers headers) {
         final String path = line.uri().getPath();
         if (path.endsWith(SUPPORTED_SUFFIX)) {
             return this.probeSupported(line);
         }
         if (path.contains(LOOKUP_SEGMENT)) {
-            return this.loadImmutable(line, path, "lookup");
+            return this.loadImmutable(line, headers, path, "lookup");
         }
         if (path.contains(TILE_SEGMENT)) {
-            return this.loadImmutable(line, path, "tile");
+            return this.loadImmutable(line, headers, path, "tile");
         }
         return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
     }
@@ -189,7 +192,7 @@ final class GoSumdbHandler {
      * single-fetch upstream call only on a confirmed miss.
      */
     private CompletableFuture<Response> loadImmutable(
-        final RequestLine line, final String path, final String kind
+        final RequestLine line, final Headers headers, final String path, final String kind
     ) {
         final Key key = new KeyFromPath(path);
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
@@ -200,7 +203,7 @@ final class GoSumdbHandler {
                         .thenApply(bytes -> ResponseBuilder.ok().body(bytes).build());
                 }
                 GoSumdbHandler.recordCacheResult(this.repoName, kind, "miss");
-                return this.fetchAndCache(line, key, path);
+                return this.fetchAndCache(line, headers, key, path);
             })
             .toCompletableFuture();
     }
@@ -211,7 +214,7 @@ final class GoSumdbHandler {
      * on failure (never fabricate a 200, never cache a failure).
      */
     private CompletableFuture<Response> fetchAndCache(
-        final RequestLine line, final Key key, final String path
+        final RequestLine line, final Headers headers, final Key key, final String path
     ) {
         final AtomicReference<RsStatus> forwardStatus =
             new AtomicReference<>(RsStatus.BAD_GATEWAY);
@@ -223,21 +226,25 @@ final class GoSumdbHandler {
                     if (resp.status().success()) {
                         return Optional.of(new Content.From(bytes));
                     }
+                    if (resp.status().serverError()) {
+                        new ServerErrorLog("com.auto1.pantera.http", "sumdb_fetch", headers)
+                            .repository(this.repoName)
+                            .path(path)
+                            .status(resp.status().code())
+                            .upstreamStatus(resp.status().code())
+                            .warnUnlessExpected("Go sumdb upstream answer relayed");
+                    }
                     forwardStatus.set(resp.status());
                     forwardBody.set(bytes);
                     return Optional.empty();
                 }))
             .exceptionally(err -> {
-                EcsLogger.warn("com.auto1.pantera.http")
-                    .message("Go sumdb fetch failed")
-                    .eventCategory("web")
-                    .eventAction("sumdb_fetch")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.repoName)
-                    .field("url.path", path)
-                    .error(err)
-                    .field("log.source", "application")
-                    .log();
+                new ServerErrorLog("com.auto1.pantera.http", "sumdb_fetch", headers)
+                    .repository(this.repoName)
+                    .path(path)
+                    .status(RsStatus.BAD_GATEWAY.code())
+                    .failure(err)
+                    .warnUnlessExpected("Go sumdb fetch failed");
                 return Optional.empty();
             });
         return this.cache.load(key, remote, CacheControl.Standard.ALWAYS)

@@ -269,7 +269,7 @@ public final class DashboardHandler {
             return extractor.apply(emptyDashboard());
         }, HandlerExecutor.get()).whenComplete((json, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(200)

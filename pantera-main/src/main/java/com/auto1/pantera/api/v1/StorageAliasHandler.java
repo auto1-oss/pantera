@@ -221,7 +221,7 @@ public final class StorageAliasHandler {
             return yamlAliasesToArray(new ManageStorageAliases(this.asto).list());
         }, HandlerExecutor.get()).whenComplete((arr, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(200)
@@ -273,7 +273,7 @@ public final class StorageAliasHandler {
             if (cause instanceof EndpointRejected || cause instanceof SecretRebindException) {
                 ApiResponse.sendError(ctx, 400, "BAD_REQUEST", cause.getMessage());
             } else if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response().setStatusCode(200).end();
             }
@@ -316,7 +316,7 @@ public final class StorageAliasHandler {
                 } else if (cause instanceof IllegalStateException) {
                     ApiResponse.sendError(ctx, 404, "NOT_FOUND", cause.getMessage());
                 } else {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
             }
         });
@@ -338,7 +338,7 @@ public final class StorageAliasHandler {
             );
         }, HandlerExecutor.get()).whenComplete((arr, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(200)
@@ -392,7 +392,7 @@ public final class StorageAliasHandler {
             if (cause instanceof EndpointRejected || cause instanceof SecretRebindException) {
                 ApiResponse.sendError(ctx, 400, "BAD_REQUEST", cause.getMessage());
             } else if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response().setStatusCode(200).end();
             }
@@ -425,7 +425,7 @@ public final class StorageAliasHandler {
                 if (cause instanceof IllegalStateException) {
                     ApiResponse.sendError(ctx, 404, "NOT_FOUND", cause.getMessage());
                 } else {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
             }
         });

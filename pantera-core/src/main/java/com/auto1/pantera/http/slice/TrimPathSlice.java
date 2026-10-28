@@ -106,12 +106,19 @@ public final class TrimPathSlice implements Slice {
                 body
             );
         }
+        // A routing misconfiguration: the pattern goes to the log, never to
+        // the client (it describes Pantera's internal route layout).
+        new com.auto1.pantera.http.log.ServerErrorLog(
+            "com.auto1.pantera.http.slice.TrimPathSlice", "request_routing", headers
+        )
+            .path(full)
+            .status(com.auto1.pantera.http.RsStatus.INTERNAL_ERROR.code())
+            .reason("route_pattern_mismatch")
+            .warn("Request path was not matched to the route pattern " + this.ptn);
         // Consume request body to prevent Vert.x request leak
-        org.slf4j.LoggerFactory.getLogger("com.auto1.pantera.http.slice.TrimPathSlice")
-            .warn("TrimPathSlice NO MATCH: path={}, pattern={}", full, this.ptn);
         return body.asBytesFuture().thenApply(ignored ->
             ResponseBuilder.internalError()
-                .textBody(String.format("Request path %s was not matched to %s", full, this.ptn))
+                .textBody("Request path was not routed")
                 .build()
         );
     }

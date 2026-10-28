@@ -32,11 +32,13 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -418,7 +420,9 @@ public abstract class BaseCachedProxySlice implements Slice {
             () -> this.dispatchAfterGuard(line, headers, canonical.get(), entryNs)
                 .thenApply(com.auto1.pantera.http.fault.Result::ok)
         );
-        return gated.toCompletableFuture().thenApply(this::translateBulkheadResult);
+        return gated.toCompletableFuture().thenApply(
+            r -> this.translateBulkheadResult(r, headers, canonical.get())
+        );
     }
 
     /**
@@ -479,7 +483,8 @@ public abstract class BaseCachedProxySlice implements Slice {
      * to a 500 so the request never disappears.
      */
     private Response translateBulkheadResult(
-        final com.auto1.pantera.http.fault.Result<Response> r
+        final com.auto1.pantera.http.fault.Result<Response> r,
+        final Headers headers, final String path
     ) {
         if (r instanceof com.auto1.pantera.http.fault.Result.Ok<Response> ok) {
             return ok.value();
@@ -492,6 +497,12 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .recordBulkheadOverflow(this.repoName);
             }
             final long secs = Math.max(1L, overload.retryAfter().toSeconds());
+            new ServerErrorLog(this.logger(), "bulkhead_dispatch", headers)
+                .repository(this.repoName)
+                .path(path)
+                .status(RsStatus.SERVICE_UNAVAILABLE.code())
+                .reason("bulkhead_full")
+                .debug("Per-repo bulkhead is full, request refused");
             return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
                 .header("Retry-After", Long.toString(secs))
                 .header("X-Pantera-Bulkhead-Overflow", "true")
@@ -1213,7 +1224,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     });
                 }
                 if (!resp.status().success()) {
-                    return this.handleNonSuccess(resp, duration, key).thenApply(r -> {
+                    return this.handleNonSuccess(resp, duration, key, line, headers).thenApply(r -> {
                         if (!leaderGate.isDone()) {
                             leaderGate.complete(null);
                         }
@@ -1274,16 +1285,13 @@ public abstract class BaseCachedProxySlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.trackUpstreamFailure(error);
                 this.recordProxyMetric("exception", duration);
-                EcsLogger.warn("com.auto1.pantera." + this.repoType)
-                    .message("Streaming cache write failed with exception")
-                    .eventCategory("web")
-                    .eventAction("proxy_upstream")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.repoName)
-                    .field("event.duration", duration)
-                    .error(error)
-                    .field("log.source", "application")
-                    .log();
+                new ServerErrorLog(this.logger(), "proxy_upstream", headers)
+                    .repository(this.repoName)
+                    .path(line.uri().getPath())
+                    .upstream(this.upstreamUrl + line.uri().getPath())
+                    .status(RsStatus.BAD_GATEWAY.code())
+                    .failure(error)
+                    .warnUnlessExpected("Streaming cache write failed after " + duration + " ms");
                 return ResponseBuilder.badGateway()
                     .textBody("Upstream temporarily unavailable")
                     .build();
@@ -1310,39 +1318,36 @@ public abstract class BaseCachedProxySlice implements Slice {
                 if (resp.status().code() == 404) {
                     return this.handle404(resp, key, duration)
                         .thenCompose(signal ->
-                            this.signalToResponse(signal, line, key, store));
+                            this.signalToResponse(signal, line, key, store, headers, null));
                 }
                 if (!resp.status().success()) {
-                    return this.handleNonSuccess(resp, duration, key);
+                    return this.handleNonSuccess(resp, duration, key, line, headers);
                 }
                 this.recordProxyMetric("success", duration);
-                return this.cacheResponse(resp, key, owner, store)
-                    .thenApply(r -> FetchSignal.SUCCESS)
+                // The cache-write signal is passed through: a failed write
+                // used to be mapped to SUCCESS, so the follow-up cache read
+                // missed and the client got a 404 for an artifact the
+                // upstream had just served.
+                final java.util.concurrent.atomic.AtomicReference<Throwable> failure =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+                return this.cacheResponse(resp, key, owner, store, headers, failure)
                     .thenCompose(signal ->
-                        this.signalToResponse(signal, line, key, store));
+                        this.signalToResponse(
+                            signal, line, key, store, headers, failure.get()
+                        ));
             })
             .handle((resp, error) -> {
                 if (error != null) {
                     final long duration = System.currentTimeMillis() - startTime;
                     this.trackUpstreamFailure(error);
                     this.recordProxyMetric("exception", duration);
-                    EcsLogger.warn("com.auto1.pantera." + this.repoType)
-                        .message("Upstream request failed with exception")
-                        .eventCategory("web")
-                        .eventAction("proxy_upstream")
-                        .eventOutcome("failure")
-                        .field("repository.name", this.repoName)
-                        .field("event.duration", duration)
-                        .error(error)
-                        .field("log.source", "application")
-                        .log();
-                    return this.tryServeStale(
-                        key,
-                        () -> CompletableFuture.completedFuture(
-                            ResponseBuilder.unavailable()
-                                .textBody("Upstream temporarily unavailable")
-                                .build()
-                        )
+                    return this.staleOrUnavailable(
+                        key, line,
+                        new ServerErrorLog(this.logger(), "proxy_upstream", headers)
+                            .upstream(this.upstreamUrl + line.uri().getPath())
+                            .failure(error),
+                        true,
+                        "Upstream request failed with exception after " + duration + " ms"
                     );
                 }
                 return CompletableFuture.completedFuture(resp);
@@ -1357,7 +1362,9 @@ public abstract class BaseCachedProxySlice implements Slice {
         final FetchSignal signal,
         final RequestLine line,
         final Key key,
-        final CachedArtifactMetadataStore store
+        final CachedArtifactMetadataStore store,
+        final Headers headers,
+        final Throwable failure
     ) {
         switch (signal) {
             case SUCCESS:
@@ -1388,24 +1395,22 @@ public abstract class BaseCachedProxySlice implements Slice {
                 // structured WARN so operators can distinguish this failure
                 // mode from other 503 sources (circuit-breaker fast-fail,
                 // RepoBulkhead overload, raw upstream passthrough).
-                EcsLogger.warn("com.auto1.pantera." + this.repoType)
-                    .message("SingleFlight coalescer returned ERROR — "
-                        + "serving stale if available, else 503")
-                    .eventCategory("web")
-                    .eventAction("proxy_fetch_coalesced_error")
-                    .eventOutcome("failure")
-                    .field("event.reason", "coalescer_error")
-                    .field("repository.name", this.repoName)
-                    .field("url.path", line.uri().getPath())
-                    .field("log.source", "application")
-                    .log();
-                return this.tryServeStale(
-                    key,
-                    () -> CompletableFuture.completedFuture(
-                        ResponseBuilder.unavailable()
-                            .textBody("Upstream temporarily unavailable")
-                            .build()
-                    )
+                // The upstream answered 200 but its body could not be cached:
+                // cacheResponse logged the throwable (one stack trace); this
+                // record carries the answered status and the cause category,
+                // classified from that throwable (a body that broke mid-stream
+                // is connection_closed / read_timeout, a local disk failure
+                // io_error).
+                return this.staleOrUnavailable(
+                    key, line,
+                    new ServerErrorLog(this.logger(), "proxy_fetch_coalesced_error", headers)
+                        .upstream(this.upstreamUrl + line.uri().getPath())
+                        .reason(
+                            failure == null ? "cache_write_failed"
+                                : new com.auto1.pantera.http.log.FailureCause(failure).reason()
+                        ),
+                    false,
+                    "Upstream artifact could not be cached"
                 );
         }
     }
@@ -1419,7 +1424,9 @@ public abstract class BaseCachedProxySlice implements Slice {
         final Response resp,
         final Key key,
         final String owner,
-        final CachedArtifactMetadataStore store
+        final CachedArtifactMetadataStore store,
+        final Headers headers,
+        final java.util.concurrent.atomic.AtomicReference<Throwable> failure
     ) {
         final Path tempFile;
         final FileChannel channel; // NOPMD CloseResource - closed by Subscriber.onComplete/onError below; lifecycle owned by streaming subscriber
@@ -1432,13 +1439,38 @@ public abstract class BaseCachedProxySlice implements Slice {
                 StandardOpenOption.TRUNCATE_EXISTING
             );
         } catch (final IOException ex) {
+            failure.set(ex);
+            // The upstream body is never subscribed now: release it.
+            resp.body().subscribe(new org.reactivestreams.Subscriber<>() {
+                @Override
+                public void onSubscribe(final org.reactivestreams.Subscription sub) {
+                    sub.request(Long.MAX_VALUE);
+                }
+
+                @Override
+                public void onNext(final ByteBuffer item) {
+                    // discard
+                }
+
+                @Override
+                public void onError(final Throwable err) {
+                    // drain failures are not actionable
+                }
+
+                @Override
+                public void onComplete() {
+                    // drained
+                }
+            });
             EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to create temp file for cache streaming")
                 .eventCategory("web")
                 .eventAction("proxy_cache")
                 .eventOutcome("failure")
+                .field("event.reason", "storage_unavailable")
                 .field("repository.name", this.repoName)
                 .field("file.path", key.string())
+                .requestContext(headers)
                 .error(ex)
                 .field("log.source", "application")
                 .log();
@@ -1553,13 +1585,16 @@ public abstract class BaseCachedProxySlice implements Slice {
                 });
         }).exceptionally(err -> {
             deleteTempQuietly(tempFile);
+            failure.set(err);
             EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to cache upstream response")
                 .eventCategory("web")
                 .eventAction("proxy_cache")
                 .eventOutcome("failure")
+                .field("event.reason", new com.auto1.pantera.http.log.FailureCause(err).reason())
                 .field("repository.name", this.repoName)
                 .field("file.path", key.string())
+                .requestContext(headers)
                 .error(err)
                 .field("log.source", "application")
                 .log();
@@ -1722,6 +1757,13 @@ public abstract class BaseCachedProxySlice implements Slice {
                             new RuntimeException("HTTP " + code)
                         );
                         this.recordProxyMetric("error", duration);
+                        new ServerErrorLog(this.logger(), "proxy_upstream", incomingHeaders)
+                            .repository(this.repoName)
+                            .path(line.uri().getPath())
+                            .upstream(this.upstreamUrl + line.uri().getPath())
+                            .status(RsStatus.SERVICE_UNAVAILABLE.code())
+                            .reason(upstreamReason(resp, code))
+                            .warnUnlessExpected("Upstream answered " + code + " for an uncacheable path");
                         return resp.body().asBytesFuture()
                             .thenApply(bytes -> ResponseBuilder.unavailable()
                                 .textBody("Upstream temporarily unavailable")
@@ -1749,16 +1791,14 @@ public abstract class BaseCachedProxySlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.trackUpstreamFailure(error);
                 this.recordProxyMetric("exception", duration);
-                EcsLogger.warn("com.auto1.pantera." + this.repoType)
-                    .message("Direct upstream request failed with exception")
-                    .eventCategory("web")
-                    .eventAction("proxy_upstream")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.repoName)
-                    .field("event.duration", duration)
-                    .error(error)
-                    .field("log.source", "application")
-                    .log();
+                new ServerErrorLog(this.logger(), "proxy_upstream", incomingHeaders)
+                    .repository(this.repoName)
+                    .path(line.uri().getPath())
+                    .upstream(this.upstreamUrl + line.uri().getPath())
+                    .status(RsStatus.SERVICE_UNAVAILABLE.code())
+                    .failure(error)
+                    .warnUnlessExpected("Direct upstream request failed with exception after "
+                        + duration + " ms");
                 return ResponseBuilder.unavailable()
                     .textBody("Upstream error")
                     .build();
@@ -1805,7 +1845,8 @@ public abstract class BaseCachedProxySlice implements Slice {
      * </ul>
      */
     private CompletableFuture<Response> handleNonSuccess(
-        final Response resp, final long duration, final Key key
+        final Response resp, final long duration, final Key key,
+        final RequestLine line, final Headers headers
     ) {
         final int code = resp.status().code();
         if (code >= 500) {
@@ -1813,19 +1854,93 @@ public abstract class BaseCachedProxySlice implements Slice {
                 new RuntimeException("HTTP " + code)
             );
             this.recordProxyMetric("error", duration);
+            final String reason = upstreamReason(resp, code);
             return resp.body().asBytesFuture().thenCompose(ignored ->
-                this.tryServeStale(
-                    key,
-                    () -> CompletableFuture.completedFuture(
-                        ResponseBuilder.unavailable()
-                            .textBody("Upstream temporarily unavailable")
-                            .build()
-                    )
+                this.staleOrUnavailable(
+                    key, line,
+                    new ServerErrorLog(this.logger(), "proxy_upstream", headers)
+                        .upstream(this.upstreamUrl + line.uri().getPath())
+                        .reason(reason),
+                    false,
+                    "Upstream answered " + code
                 )
             );
         }
         this.recordProxyMetric("client_error", duration);
         return CompletableFuture.completedFuture(resp);
+    }
+
+    /**
+     * Upstream failed: serve stale cached bytes when allowed, else 503. The
+     * 503 is logged with its cause ({@code cause} — upstream status or
+     * throwable); a stale serve is logged by {@link #tryServeStale}, and a
+     * throwable that a stale serve absorbed is still logged here
+     * ({@code failed}). A failing stale lookup (metadata store, storage)
+     * still answers 503 and still logs the upstream cause, once.
+     *
+     * @param key Cache key
+     * @param line Request line
+     * @param cause Pre-filled cause record (reason / failure / upstream)
+     * @param failed Whether {@code cause} carries a throwable
+     * @param message What failed
+     * @return Stale 200 or 503
+     */
+    private CompletableFuture<Response> staleOrUnavailable(
+        final Key key, final RequestLine line,
+        final ServerErrorLog cause, final boolean failed, final String message
+    ) {
+        final Supplier<Response> unavailable = () -> ResponseBuilder.unavailable()
+            .textBody("Upstream temporarily unavailable")
+            .build();
+        CompletableFuture<Response> stale;
+        try {
+            stale = this.tryServeStale(
+                key, () -> CompletableFuture.completedFuture(unavailable.get())
+            );
+        } catch (final RuntimeException ex) {
+            stale = CompletableFuture.failedFuture(ex);
+        }
+        return stale.handle((resp, lookupErr) -> {
+            cause.repository(this.repoName).path(line.uri().getPath());
+            final Response answer;
+            if (lookupErr != null) {
+                // The stale lookup itself failed (metadata store / storage):
+                // still answer 503 and still log the UPSTREAM cause — the
+                // lookup failure is secondary and named in the message.
+                answer = unavailable.get();
+                cause.status(answer.status().code()).warn(
+                    message + "; stale-copy lookup also failed: "
+                        + new com.auto1.pantera.http.log.FailureCause(lookupErr).root()
+                );
+            } else if (resp.status().serverError()) {
+                answer = resp;
+                cause.status(resp.status().code()).warnUnlessExpected(message);
+            } else {
+                answer = resp;
+                if (failed) {
+                    cause.warn(message + "; served stale cached copy");
+                }
+            }
+            return answer;
+        });
+    }
+
+    /**
+     * {@code event.reason} for an upstream 5xx answer: {@code circuit_open}
+     * for the outbound breaker's fast-fail, else the upstream status.
+     */
+    private static String upstreamReason(final Response resp, final int code) {
+        if (!resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+            return "circuit_open";
+        }
+        return "upstream_status_" + code;
+    }
+
+    /**
+     * Logger name of this proxy's application records.
+     */
+    private String logger() {
+        return "com.auto1.pantera." + this.repoType;
     }
 
     /**

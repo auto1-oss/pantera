@@ -21,8 +21,10 @@ import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
 import com.auto1.pantera.http.cache.NegativeCache;
@@ -499,16 +501,12 @@ public final class CachedPyProxySlice implements Slice {
                     ignored -> this.verifyAndServePrimary(line, headers, key, path, actx)
                 );
         }).exceptionally(err -> {
-            EcsLogger.warn("com.auto1.pantera.pypi")
-                .message("PyPI primary-artifact verify-and-serve failed; returning 502")
-                .eventCategory("web")
-                .eventAction("cache_write")
-                .eventOutcome("failure")
-                .field("repository.name", this.repoName)
-                .field("url.path", path)
-                .error(err)
-                .field("log.source", "application")
-                .log();
+            new ServerErrorLog("com.auto1.pantera.pypi", "cache_write", headers)
+                .repository(this.repoName)
+                .path(path)
+                .status(RsStatus.BAD_GATEWAY.code())
+                .failure(err)
+                .warnUnlessExpected("PyPI primary-artifact verify-and-serve failed");
             return ResponseBuilder.badGateway().build();
         });
     }
@@ -532,7 +530,7 @@ public final class CachedPyProxySlice implements Slice {
     ) {
         final String upstream = this.upstreamUrl + path;
         final RequestContext ctx = new RequestContext(
-            org.apache.logging.log4j.ThreadContext.get("trace.id"),
+            new com.auto1.pantera.audit.AuditContext(headers).traceId(),
             null,
             this.repoName,
             path
@@ -571,6 +569,17 @@ public final class CachedPyProxySlice implements Slice {
                             ResponseBuilder.notFound().build()
                         );
                     }
+                    new ServerErrorLog("com.auto1.pantera.pypi", "proxy_upstream", headers)
+                        .repository(this.repoName)
+                        .path(path)
+                        .upstream(upstream)
+                        .status(RsStatus.BAD_GATEWAY.code())
+                        .reason(
+                            resp.headers().values(
+                                com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER
+                            ).isEmpty() ? "upstream_status_" + status : "circuit_open"
+                        )
+                        .warnUnlessExpected("Upstream answered " + status + " for distribution file");
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.badGateway()
                             .textBody("Upstream temporarily unavailable")
@@ -625,16 +634,13 @@ public final class CachedPyProxySlice implements Slice {
                 if (!leaderGate.isDone()) {
                     leaderGate.complete(null);
                 }
-                EcsLogger.warn("com.auto1.pantera.pypi")
-                    .message("PyPI stream-through primary fetch failed; returning 502")
-                    .eventCategory("web")
-                    .eventAction("cache_write")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.repoName)
-                    .field("url.path", path)
-                    .error(err)
-                    .field("log.source", "application")
-                    .log();
+                new ServerErrorLog("com.auto1.pantera.pypi", "proxy_upstream", headers)
+                    .repository(this.repoName)
+                    .path(path)
+                    .upstream(upstream)
+                    .status(RsStatus.BAD_GATEWAY.code())
+                    .failure(err)
+                    .warnUnlessExpected("PyPI stream-through primary fetch failed");
                 return ResponseBuilder.badGateway()
                     .textBody("Upstream temporarily unavailable")
                     .build();

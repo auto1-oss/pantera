@@ -246,7 +246,7 @@ public final class RepositoryHandler {
             HandlerExecutor.get()
         ).whenComplete((filtered, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 final int total = filtered.size();
                 final int from = Math.min(page * size, total);
@@ -297,7 +297,7 @@ public final class RepositoryHandler {
             return new SecretRedactor().redact(this.crs.value(rname));
         }, HandlerExecutor.get()).whenComplete((config, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else if (config == null) {
                 ApiResponse.sendError(
                     ctx, 404, "NOT_FOUND",
@@ -323,7 +323,7 @@ public final class RepositoryHandler {
             HandlerExecutor.get()
         ).whenComplete((exists, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else if (Boolean.TRUE.equals(exists)) {
                 ctx.response().setStatusCode(200).end();
             } else {
@@ -518,7 +518,7 @@ public final class RepositoryHandler {
                         "repository.type", repoType,
                         "error", String.valueOf(err.getMessage())
                     ), false);
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 this.filtersCache.invalidate(rname.toString());
                 this.eventBus.publish(RepositoryEvents.upsert(name));
@@ -752,7 +752,7 @@ public final class RepositoryHandler {
                 RepositoryHandler.audit(actor, clientIp, "REPO_DELETE", name,
                     java.util.Map.of("error", String.valueOf(err.getMessage())),
                     false);
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 return;
             }
             if (!Boolean.TRUE.equals(exists)) {
@@ -946,7 +946,7 @@ public final class RepositoryHandler {
                     RepositoryHandler.audit(actor, clientIp, "REPO_MOVE", name,
                         java.util.Map.of("new_name", newName,
                             "error", String.valueOf(err.getMessage())), false);
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
                 return;
             }
@@ -1012,7 +1012,7 @@ public final class RepositoryHandler {
             return new JsonObject().put("members", members).put("type", repoType);
         }, HandlerExecutor.get()).whenComplete((result, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else if (result == null) {
                 ApiResponse.sendError(
                     ctx, 404, "NOT_FOUND",

@@ -24,6 +24,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -195,15 +196,27 @@ public final class PypiJsonHandler {
      * serve-stale-on-outage), or directly from {@link #upstream} otherwise.
      * Normalises both paths to a plain {@link Response} so callers
      * (({@link #handle}, {@link #handleVersion})) don't need to know which
-     * path served it.
+     * path served it. A 5xx answered without a document (nothing cached,
+     * upstream failed) leaves a cause record correlated to the request;
+     * the single-flighted loader logs the underlying throwable.
      */
-    private CompletableFuture<Response> fetchUpstream(final RequestLine line) {
+    private CompletableFuture<Response> fetchUpstream(
+        final RequestLine line, final Headers headers
+    ) {
         if (this.baseLoader == null) {
             return this.upstream.response(line, Headers.EMPTY, Content.EMPTY);
         }
         return this.baseLoader.load(line.uri().getPath()).thenApply(outcome -> {
             if (outcome.isAvailable()) {
                 return ResponseBuilder.ok().body(outcome.body()).build();
+            }
+            if (outcome.status().serverError()) {
+                new ServerErrorLog("com.auto1.pantera.pypi", "metadata_fetch", headers)
+                    .repository(this.repoName)
+                    .path(line.uri().getPath())
+                    .status(outcome.status().code())
+                    .reason(outcome.circuitOpen() ? "circuit_open" : "upstream_unavailable")
+                    .warnUnlessExpected("PyPI JSON API document unavailable, nothing cached");
             }
             final ResponseBuilder unavailable = ResponseBuilder.from(outcome.status())
                 .body(outcome.errorBody());
@@ -266,7 +279,8 @@ public final class PypiJsonHandler {
                 ).value(),
                 versioned.get()[1],
                 user,
-                ctx
+                ctx,
+                headers
             );
         }
         // PEP 503 normalization (lowercase + collapse runs of [-_.] to single
@@ -281,7 +295,7 @@ public final class PypiJsonHandler {
                 () -> new IllegalArgumentException("Not a /pypi/<name>/json path: " + path)
             )
         ).value();
-        return this.fetchUpstream(line)
+        return this.fetchUpstream(line, headers)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->
@@ -308,13 +322,14 @@ public final class PypiJsonHandler {
      * @param version Requested version
      * @param user Authenticated user
      * @param ctx Audit context captured before any async hop
+     * @param headers Request headers (trace.id for a 5xx cause record)
      * @return Future response
      */
     private CompletableFuture<Response> handleVersion(
         final RequestLine line, final String pkg, final String version,
-        final String user, final AuditContext ctx
+        final String user, final AuditContext ctx, final Headers headers
     ) {
-        return this.fetchUpstream(line)
+        return this.fetchUpstream(line, headers)
             .thenCompose(resp -> bodyBytes(resp.body()).thenCompose(bytes -> {
                 if (!resp.status().success()) {
                     return CompletableFuture.completedFuture(

@@ -281,10 +281,19 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                 respondWithMetrics(request, ar.result().toString(), false,
                     System.currentTimeMillis() - startTime);
             } else {
+                com.auto1.pantera.http.log.EcsLogger.error("com.auto1.pantera.metrics")
+                    .message("Metrics scrape failed; answering 500")
+                    .eventCategory("web")
+                    .eventAction("metrics_scrape")
+                    .eventOutcome("failure")
+                    .field("http.response.status_code", 500)
+                    .error(ar.cause())
+                    .field("log.source", "application")
+                    .log();
                 request.response()
                     .setStatusCode(500)
                     .putHeader("Content-Type", "text/plain")
-                    .end("Metrics scrape failed: " + ar.cause().getMessage());
+                    .end("Metrics scrape failed");
             }
         });
     }

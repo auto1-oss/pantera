@@ -18,6 +18,7 @@ import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
@@ -31,6 +32,7 @@ import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -523,6 +525,8 @@ public final class ProxyDownloadSlice implements Slice {
                     .field("destination.address", ouri.getHost())
                     .field("event.reason", denied.get())
                     .field("repository.name", this.rname)
+                    .field("http.response.status_code", 502)
+                    .requestContext(headers)
                     .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(
@@ -549,13 +553,17 @@ public final class ProxyDownloadSlice implements Slice {
             if (!response.status().success()) {
                 leaderGate.complete(null);
                 EcsLogger.warn("com.auto1.pantera.composer")
-                    .message("Upstream download failed")
+                    .message("Upstream download failed with status "
+                        + response.status().code() + " (relayed)")
                     .eventCategory("web")
                     .eventAction("proxy_download")
                     .eventOutcome("failure")
+                    .field("event.reason", "upstream_status_" + response.status().code())
                     .field("package.name", packageName)
                     .field("package.version", version)
                     .field("http.response.status_code", response.status().code())
+                    .field("url.full", dist.url())
+                    .requestContext(headers)
                     .field("log.source", "http")
                     .log();
                 AuditLogger.access(
@@ -572,17 +580,15 @@ public final class ProxyDownloadSlice implements Slice {
             );
         }).exceptionally(err -> {
             leaderGate.complete(null);
-            EcsLogger.warn("com.auto1.pantera.composer")
-                .message("Composer dist fetch failed; returning 502")
-                .eventCategory("web")
-                .eventAction("proxy_download")
-                .eventOutcome("failure")
-                .field("package.name", packageName)
-                .field("package.version", version)
-                .field("repository.name", this.rname)
-                .error(err)
-                .field("log.source", "application")
-                .log();
+            new ServerErrorLog("com.auto1.pantera.composer", "proxy_download", headers)
+                .repository(this.rname)
+                .path(distKey.string())
+                .upstream(dist.url())
+                .status(RsStatus.BAD_GATEWAY.code())
+                .failure(err)
+                .warnUnlessExpected(
+                    "Composer dist fetch failed for " + packageName + " " + version
+                );
             AuditLogger.access(
                 ctx, this.rtype, this.rname, packageName, version, 0L, owner,
                 AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_UPSTREAM_UNAVAILABLE
@@ -621,10 +627,9 @@ public final class ProxyDownloadSlice implements Slice {
             ProxyDownloadSlice.shasumClaim(dist), NO_DEFERRED_ALGOS, rctx
         ).toCompletableFuture().thenApply(result -> {
             if (result instanceof Result.Err<?>) {
-                // The writer could not even open its temp file; the upstream
-                // body was never subscribed, so it is released here.
+                // The writer could not even open its temp file; it logged the
+                // cause and drained the never-subscribed upstream body itself.
                 leaderGate.complete(null);
-                response.body().discard();
                 AuditLogger.access(
                     ctx, this.rtype, this.rname, packageName, version, 0L,
                     owner, AuditLogger.OUTCOME_FAILURE,

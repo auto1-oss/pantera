@@ -197,7 +197,7 @@ public final class BulkAccessPolicyHandler {
             HandlerExecutor.get()
         ).whenComplete((result, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(200)

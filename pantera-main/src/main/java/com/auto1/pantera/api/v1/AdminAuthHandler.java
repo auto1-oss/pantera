@@ -180,7 +180,7 @@ public final class AdminAuthHandler {
             () -> this.pgpKeyringDao.list(), HandlerExecutor.get()
         ).whenComplete((rows, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 return;
             }
             final JsonArray keys = new JsonArray();
@@ -246,7 +246,7 @@ public final class AdminAuthHandler {
             return inserted;
         }, HandlerExecutor.get()).whenComplete((inserted, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 return;
             }
             EcsLogger.info("com.auto1.pantera.api.v1")
@@ -279,7 +279,7 @@ public final class AdminAuthHandler {
             () -> this.pgpKeyringDao.delete(keyId), HandlerExecutor.get()
         ).whenComplete((deleted, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 return;
             }
             if (!deleted) {
@@ -340,7 +340,7 @@ public final class AdminAuthHandler {
             return result;
         }, HandlerExecutor.get()).whenComplete((settings, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(200)
@@ -431,7 +431,7 @@ public final class AdminAuthHandler {
             return null;
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("Admin updated circuit-breaker settings (keys="
@@ -480,7 +480,7 @@ public final class AdminAuthHandler {
                     String.valueOf(current.maxBackoff().toSeconds()));
         }, HandlerExecutor.get()).whenComplete((settings, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(200)
@@ -565,7 +565,7 @@ public final class AdminAuthHandler {
             return null;
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("Admin updated upstream-breaker settings (keys="
@@ -614,7 +614,7 @@ public final class AdminAuthHandler {
                 .put("client_base_scheme", current.clientBaseScheme());
         }, HandlerExecutor.get()).whenComplete((settings, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(200)
@@ -697,7 +697,7 @@ public final class AdminAuthHandler {
             return null;
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("Admin updated client-base-url settings (keys="
@@ -726,7 +726,7 @@ public final class AdminAuthHandler {
             return result;
         }, HandlerExecutor.get()).whenComplete((settings, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(200)
@@ -774,7 +774,7 @@ public final class AdminAuthHandler {
             return null;
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 // B4: key NAMES are admin-supplied and currently safe to
                 // log (operational signal — which settings changed). Pair
@@ -824,7 +824,7 @@ public final class AdminAuthHandler {
             HandlerExecutor.get()
         ).whenComplete((count, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("Admin revoked all tokens for user (revoked_count=" + count + ")")

@@ -698,7 +698,7 @@ public final class CooldownHandler {
             return result;
         }, HandlerExecutor.get()).whenComplete((repos, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 final JsonArray arr = new JsonArray();
                 for (final JsonObject repo : repos) {
@@ -826,7 +826,7 @@ public final class CooldownHandler {
             return ApiResponse.paginated(items, page, size, (int) total);
         }, HandlerExecutor.get()).whenComplete((result, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(200)
@@ -917,7 +917,7 @@ public final class CooldownHandler {
             return ApiResponse.paginated(items, page, size, (int) total);
         }, HandlerExecutor.get()).whenComplete((result, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(200)
@@ -992,7 +992,7 @@ public final class CooldownHandler {
                             "error", String.valueOf(error.getMessage())
                         ), false, unblockIp);
                     ApiResponse.sendError(
-                        ctx, 500, "INTERNAL_ERROR", error.getMessage()
+                        ctx, 500, "INTERNAL_ERROR", error
                     );
                 }
             });
@@ -1063,7 +1063,7 @@ public final class CooldownHandler {
             HandlerExecutor.get()
         ).run(items).whenComplete((out, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", String.valueOf(err.getMessage()));
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 return;
             }
             CooldownHandler.recordAdminMetric("unblock_bulk");
@@ -1139,7 +1139,7 @@ public final class CooldownHandler {
                             "error", String.valueOf(error.getMessage())
                         ), false, unblockAllIp);
                     ApiResponse.sendError(
-                        ctx, 500, "INTERNAL_ERROR", error.getMessage()
+                        ctx, 500, "INTERNAL_ERROR", error
                     );
                 }
             });

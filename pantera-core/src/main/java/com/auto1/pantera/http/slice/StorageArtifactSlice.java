@@ -24,11 +24,13 @@ import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Location;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.metrics.MicrometerMetrics;
 
 import java.net.URI;
@@ -510,24 +512,25 @@ public final class StorageArtifactSlice implements Slice {
                     .body(content);
                 content.size().ifPresent(size -> builder.header("Content-Length", String.valueOf(size)));
                 return builder.build();
-            }).exceptionally(throwable -> IndexBackedArtifactSlice.toResponse(key, throwable));
+            }).exceptionally(
+                throwable -> IndexBackedArtifactSlice.toResponse(key, headers, throwable)
+            );
         }
 
-        private static Response toResponse(final Key key, final Throwable throwable) {
+        private static Response toResponse(
+            final Key key, final Headers headers, final Throwable throwable
+        ) {
             final Response response;
             if (IndexBackedArtifactSlice.isNotFound(throwable)) {
                 response = ResponseBuilder.notFound().build();
             } else {
-                EcsLogger.error("com.auto1.pantera.http")
-                    .message("Failed to serve artifact at key: " + key.string())
-                    .eventCategory("file")
-                    .eventAction("artifact_serve")
-                    .eventOutcome("failure")
-                    .error(throwable)
-                    .field("log.source", "application")
-                    .log();
+                new ServerErrorLog("com.auto1.pantera.http", "artifact_serve", headers)
+                    .path(key.string())
+                    .status(RsStatus.INTERNAL_ERROR.code())
+                    .failure(throwable)
+                    .error("Failed to serve artifact at key: " + key.string());
                 response = ResponseBuilder.internalError()
-                    .textBody("Failed to serve artifact: " + throwable.getMessage())
+                    .textBody("Failed to serve artifact")
                     .build();
             }
             return response;

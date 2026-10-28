@@ -408,8 +408,7 @@ public final class ArtifactHandler {
                 });
             }))
             .exceptionally(err -> {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
-                    err.getCause() != null ? err.getCause().getMessage() : err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 return null;
             });
     }
@@ -885,7 +884,7 @@ public final class ArtifactHandler {
                 .putHeader("Content-Type", "application/json")
                 .end(new JsonObject().put("token", token).encode()))
             .exceptionally(err -> {
-                ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Download tokens unavailable");
+                ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Download tokens unavailable", err);
                 return null;
             });
     }
@@ -927,7 +926,7 @@ public final class ArtifactHandler {
                 this.streamArtifact(ctx, repoName, verified.path());
             })
             .exceptionally(err -> {
-                ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Download tokens unavailable");
+                ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Download tokens unavailable", err);
                 return null;
             });
     }
@@ -1059,7 +1058,7 @@ public final class ArtifactHandler {
             return "unknown";
         }, HandlerExecutor.get()).whenComplete((repoType, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 return;
             }
             if (repoType == null) {
@@ -1171,7 +1170,7 @@ public final class ArtifactHandler {
             )
             .exceptionally(
                 err -> {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                     return null;
                 }
             );

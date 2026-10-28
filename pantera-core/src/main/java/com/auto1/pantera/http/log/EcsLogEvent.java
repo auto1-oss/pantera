@@ -251,8 +251,11 @@ public final class EcsLogEvent {
      * @see <a href="https://www.elastic.co/docs/reference/ecs/ecs-error">ECS Error Fields</a>
      */
     public EcsLogEvent error(final Throwable error) {
-        fields.put("error.message", error.getMessage() != null ? error.getMessage() : error.toString());
-        fields.put("error.type", error.getClass().getName());
+        // Type and message of the real cause, not of the CompletionException
+        // wrapper; the stack trace (original throwable) keeps the chain.
+        final Throwable cause = new FailureCause(error).root();
+        fields.put("error.message", cause.getMessage() != null ? cause.getMessage() : cause.toString());
+        fields.put("error.type", cause.getClass().getName());
         fields.put("error.stack_trace", getStackTrace(error));
         fields.put("event.outcome", "failure");
         return this;
@@ -369,12 +372,30 @@ public final class EcsLogEvent {
             return "Not found";
         }
         if (statusCode >= 500) {
-            return "Internal server error";
+            return serverErrorMessage(statusCode);
         }
         if (statusCode >= 400) {
             return "Client error";
         }
         return "Request processed";
+    }
+
+    /**
+     * Status-specific access-log message of a 5xx, so a 502 (upstream
+     * failure) is not reported as an internal error. Kept in step with
+     * {@code StructuredLogger}'s access-log messages.
+     *
+     * @param status 5xx status
+     * @return Message
+     */
+    private static String serverErrorMessage(final int status) {
+        return switch (status) {
+            case 502 -> "Bad gateway";
+            case 503 -> "Service unavailable";
+            case 504 -> "Gateway timeout";
+            case 501 -> "Not implemented";
+            default -> "Internal server error";
+        };
     }
 
     /**

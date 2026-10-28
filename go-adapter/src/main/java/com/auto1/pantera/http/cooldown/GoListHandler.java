@@ -22,6 +22,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.rq.RequestLine;
 
 import java.nio.charset.StandardCharsets;
@@ -196,6 +197,14 @@ public final class GoListHandler {
             if (!outcome.isAvailable()) {
                 // Nothing cached anywhere and upstream failed / returned
                 // non-2xx — forward its status + body unchanged, no filtering.
+                if (outcome.status().serverError()) {
+                    new ServerErrorLog("com.auto1.pantera.http.cooldown", "metadata_fetch", headers)
+                        .repository(this.repoName)
+                        .path(path)
+                        .status(outcome.status().code())
+                        .reason("upstream_unavailable")
+                        .warn("Go module metadata unavailable, nothing cached");
+                }
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.from(outcome.status())
                         .body(outcome.errorBody())
