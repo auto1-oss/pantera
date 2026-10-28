@@ -193,7 +193,10 @@ public final class GoMetadataBaseLoader {
                     if (resp.status().success()) {
                         return Optional.of(new Content.From(bytes));
                     }
-                    forward.set(Outcome.unavailable(resp.status(), bytes));
+                    // Keep the circuit-open marker: a group resolver must tell
+                    // a breaker fast-fail ("member skipped") from a real
+                    // upstream failure (see UpstreamCircuitOpenException).
+                    forward.set(Outcome.unavailable(resp.status(), resp.headers(), bytes));
                     return Optional.empty();
                 }))
             .exceptionally(err -> {
@@ -290,22 +293,58 @@ public final class GoMetadataBaseLoader {
          */
         private final byte[] errorBody;
 
+        /**
+         * True when the forwarded failure is the outbound breaker's own
+         * fast-fail (it carried
+         * {@link com.auto1.pantera.http.UpstreamCircuitOpenException#HEADER}).
+         */
+        private final boolean circuitOpen;
+
+        /**
+         * Retry-After of a circuit-open fast-fail, in seconds; zero when
+         * {@link #circuitOpen} is false or none was given.
+         */
+        private final long retryAfterSeconds;
+
         private Outcome(
             final byte[] body, final boolean stale,
-            final RsStatus status, final byte[] errorBody
+            final RsStatus status, final byte[] errorBody,
+            final boolean circuitOpen, final long retryAfterSeconds
         ) {
             this.body = body == null ? null : Arrays.copyOf(body, body.length);
             this.stale = stale;
             this.status = status;
             this.errorBody = errorBody == null ? null : Arrays.copyOf(errorBody, errorBody.length);
+            this.circuitOpen = circuitOpen;
+            this.retryAfterSeconds = retryAfterSeconds;
         }
 
         private static Outcome available(final byte[] body, final boolean stale) {
-            return new Outcome(body, stale, null, null);
+            return new Outcome(body, stale, null, null, false, 0L);
         }
 
         private static Outcome unavailable(final RsStatus status, final byte[] body) {
-            return new Outcome(null, false, status, body);
+            return new Outcome(null, false, status, body, false, 0L);
+        }
+
+        private static Outcome unavailable(
+            final RsStatus status, final Headers headers, final byte[] body
+        ) {
+            final boolean open = !headers.values(
+                com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER
+            ).isEmpty();
+            long retry = 0L;
+            if (open) {
+                final java.util.List<String> values = headers.values("Retry-After");
+                if (!values.isEmpty()) {
+                    try {
+                        retry = Long.parseLong(values.get(0).trim());
+                    } catch (final NumberFormatException ignored) {
+                        retry = 0L;
+                    }
+                }
+            }
+            return new Outcome(null, false, status, body, open, retry);
         }
 
         /**
@@ -343,6 +382,39 @@ public final class GoMetadataBaseLoader {
          */
         public byte[] errorBody() {
             return this.errorBody == null ? null : Arrays.copyOf(this.errorBody, this.errorBody.length);
+        }
+
+        /**
+         * @return true when the forwarded failure is a circuit-open
+         *         fast-fail whose marker must reach the client response
+         */
+        public boolean circuitOpen() {
+            return this.circuitOpen;
+        }
+
+        /**
+         * @return Retry-After seconds of a circuit-open fast-fail, zero if none
+         */
+        public long retryAfterSeconds() {
+            return this.retryAfterSeconds;
+        }
+
+        /**
+         * Response forwarding this failure: its status and body, plus the
+         * circuit-open marker and Retry-After when it was a breaker fast-fail.
+         *
+         * @return Response
+         */
+        public com.auto1.pantera.http.Response forward() {
+            final com.auto1.pantera.http.ResponseBuilder builder =
+                com.auto1.pantera.http.ResponseBuilder.from(this.status).body(this.errorBody());
+            if (this.circuitOpen) {
+                builder.header(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true");
+                if (this.retryAfterSeconds > 0) {
+                    builder.header("Retry-After", Long.toString(this.retryAfterSeconds));
+                }
+            }
+            return builder.build();
         }
     }
 }

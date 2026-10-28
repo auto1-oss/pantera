@@ -202,14 +202,10 @@ public final class GoListHandler {
                         .repository(this.repoName)
                         .path(path)
                         .status(outcome.status().code())
-                        .reason("upstream_unavailable")
-                        .warn("Go module metadata unavailable, nothing cached");
+                        .reason(outcome.circuitOpen() ? "circuit_open" : "upstream_unavailable")
+                        .warnUnlessExpected("Go module metadata unavailable, nothing cached");
                 }
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.from(outcome.status())
-                        .body(outcome.errorBody())
-                        .build()
-                );
+                return CompletableFuture.completedFuture(outcome.forward());
             }
             return this.processUpstream(outcome.body(), module, user, ctx);
         });

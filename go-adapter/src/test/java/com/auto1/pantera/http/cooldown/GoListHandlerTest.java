@@ -189,6 +189,44 @@ final class GoListHandlerTest {
     }
 
     @Test
+    void keepsTheCircuitOpenMarkerOfABreakerFastFail() throws Exception {
+        // A group resolver must see a breaker fast-fail as "member skipped",
+        // so the marker and Retry-After survive the metadata loader.
+        this.upstream.circuitOpen(true);
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/github.com/foo/open/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
+            "alice"
+        ).get();
+        org.hamcrest.MatcherAssert.assertThat(
+            "status", resp.status().code(), new org.hamcrest.core.IsEqual<>(502)
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "circuit-open marker",
+            resp.headers().values(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("true"))
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "Retry-After", resp.headers().values("Retry-After"),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("30"))
+        );
+    }
+
+    @Test
+    void plainUpstreamFailureCarriesNoCircuitOpenMarker() throws Exception {
+        this.upstream.fail(true);
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/github.com/foo/down/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
+            "alice"
+        ).get();
+        org.hamcrest.MatcherAssert.assertThat(
+            resp.headers().values(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of())
+        );
+    }
+
+    @Test
     void passesThroughMalformedBodyAsBestEffort() throws Exception {
         // GoMetadataParser tolerates non-version lines — it just collects every
         // non-empty trimmed line as a "version". The handler therefore
@@ -401,6 +439,7 @@ final class GoListHandlerTest {
         private final Map<String, byte[]> script = new HashMap<>();
         private final Map<String, AtomicInteger> hits = new HashMap<>();
         private volatile boolean failing;
+        private volatile boolean circuitOpen;
 
         void put(final String path, final String body) {
             this.script.put(path, body.getBytes(StandardCharsets.UTF_8));
@@ -409,6 +448,10 @@ final class GoListHandlerTest {
 
         void fail(final boolean value) {
             this.failing = value;
+        }
+
+        void circuitOpen(final boolean value) {
+            this.circuitOpen = value;
         }
 
         int hits(final String path) {
@@ -425,6 +468,14 @@ final class GoListHandlerTest {
                 path, k -> new AtomicInteger(0)
             );
             counter.incrementAndGet();
+            if (this.circuitOpen) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.badGateway()
+                        .header(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true")
+                        .header("Retry-After", "30")
+                        .build()
+                );
+            }
             if (this.failing) {
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.badGateway().build()
