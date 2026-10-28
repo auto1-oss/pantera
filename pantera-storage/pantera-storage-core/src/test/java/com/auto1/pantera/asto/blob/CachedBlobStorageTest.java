@@ -249,11 +249,14 @@ final class CachedBlobStorageTest {
 
         storage.save(key, new Content.From(data)).join();
 
-        // Acked from local disk durability, not the blob-store PUT: zero
-        // GETs, and the index already carries a PENDING_WRITE entry before
-        // the gated upload has even started.
+        // Acked from local disk durability, not the blob-store PUT: save()
+        // returned while the gated PUT cannot complete (release is still
+        // up), with zero GETs and a PENDING_WRITE entry in the index. The
+        // PUT itself may already have STARTED - the uploader picks the key up
+        // as soon as it is enqueued and the fake counts a call on entry, before
+        // its gate - so its call count is not asserted here.
         MatcherAssert.assertThat("save() must not wait for the blob-store PUT", fake.getCalls(), new IsEqual<>(0));
-        MatcherAssert.assertThat(fake.putCalls(), new IsEqual<>(0));
+        MatcherAssert.assertThat("the gated PUT has not been released", release.getCount(), new IsEqual<>(1L));
         MatcherAssert.assertThat("index must record PENDING_WRITE immediately after save() returns", storage.isPendingWrite(key), new IsEqual<>(true));
         final byte[] servedWhilePending = storage.value(key).join().asBytesFuture().join();
         MatcherAssert.assertThat("value() must serve the just-saved bytes from disk", servedWhilePending, new IsEqual<>(data));
