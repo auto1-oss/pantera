@@ -48,6 +48,8 @@ CMD [ "sh", "-c", "\
   ulimit -n ${ULIMIT_NOFILE} 2>/dev/null || ulimit -n $(ulimit -Hn) 2>/dev/null || true && \
   ulimit -u ${ULIMIT_NPROC} 2>/dev/null || ulimit -u $(ulimit -Hu) 2>/dev/null || true && \
   echo 'Ulimits - nofile: '$(ulimit -n)' nproc: '$(ulimit -u) && \
+  # Unique heap dump name per container start: the JVM never overwrites an existing dump \n\
+  JVM_ARGS=$(printf '%s' \"$JVM_ARGS\" | sed -E \"s#(-XX:HeapDumpPath=[^ ]*)[.]hprof#\\1-$(date +%Y%m%d-%H%M%S)-$(hostname).hprof#\") && \
   exec java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \
   $JVM_ARGS \

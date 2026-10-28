@@ -122,7 +122,7 @@ Group response-body drain concurrency is sized automatically per repository by t
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `JVM_ARGS` | (see Dockerfile defaults) | Complete JVM argument string. When set, replaces all default JVM flags. Keep `-XX:HeapDumpPath` on a directory that exists in the image (`/var/pantera/logs/dumps/`) and is backed by a volume with free space at least the size of the heap; otherwise an out-of-memory exit leaves no heap dump. |
+| `JVM_ARGS` | (see Dockerfile defaults) | Complete JVM argument string. When set, replaces all default JVM flags. Keep `-XX:HeapDumpPath` on a directory that exists in the image (`/var/pantera/logs/dumps/`) and is backed by a volume with free space at least the size of the heap; otherwise an out-of-memory exit leaves no heap dump. A path ending in `.hprof` gets the container's start time and host name added (`heapdump-20261028-090100-<host>.hprof`), so dumps from successive restarts or several instances sharing one volume never collide. |
 | `ULIMIT_NOFILE` | `1048576` | Target file descriptor soft limit. The container entrypoint raises the soft limit to this value or the hard limit, whichever is lower. |
 | `ULIMIT_NPROC` | `65536` | Target process/thread soft limit. |
 
