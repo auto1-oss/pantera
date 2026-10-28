@@ -105,6 +105,15 @@ public final class CachedNpmProxySlice implements Slice {
     private final SingleFlight<Key, UpstreamOutcome> deduplicator;
 
     /**
+     * Request coalescing for {@code HEAD}, kept apart from {@link #deduplicator}
+     * so a {@code GET} never joins a {@code HEAD}'s fetch. A {@code HEAD} that
+     * 404s on a route served only on {@code GET} would otherwise hand its 404
+     * to a {@code GET} arriving while the entry is still in flight or, since
+     * a finished entry is evicted asynchronously, just after it finished.
+     */
+    private final SingleFlight<Key, UpstreamOutcome> headDeduplicator;
+
+    /**
      * Ctor with default settings.
      *
      * @param origin Origin slice
@@ -141,6 +150,11 @@ public final class CachedNpmProxySlice implements Slice {
         // 5-minute zombie TTL (PANTERA_DEDUP_MAX_AGE_MS = 300 000 ms).
         // 10K max entries bounds memory.
         this.deduplicator = new SingleFlight<>(
+            Duration.ofMinutes(5),
+            10_000,
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+        );
+        this.headDeduplicator = new SingleFlight<>(
             Duration.ofMinutes(5),
             10_000,
             ContextualExecutor.contextualize(ForkJoinPool.commonPool())
@@ -211,7 +225,13 @@ public final class CachedNpmProxySlice implements Slice {
         // in-flight signal and their reference stays null.
         final java.util.concurrent.atomic.AtomicReference<Response> leaderResponse =
             new java.util.concurrent.atomic.AtomicReference<>();
-        return this.deduplicator.load(
+        final SingleFlight<Key, UpstreamOutcome> flight;
+        if (line.method() == RqMethod.HEAD) {
+            flight = this.headDeduplicator;
+        } else {
+            flight = this.deduplicator;
+        }
+        return flight.load(
             key,
             () -> this.doFetch(line, headers, body, key, leaderResponse)
         ).thenCompose(outcome -> {
