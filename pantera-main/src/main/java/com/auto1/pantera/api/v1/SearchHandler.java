@@ -273,13 +273,9 @@ public final class SearchHandler {
         }
         future.whenComplete((result, error) -> {
             if (error != null) {
-                ctx.response()
-                    .setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
-                    .putHeader("Content-Type", "application/json")
-                    .end(new JsonObject()
-                        .put("code", HttpStatus.INTERNAL_SERVER_ERROR_500)
-                        .put("message", error.getMessage())
-                        .encode());
+                ApiResponse.sendError(
+                    ctx, HttpStatus.INTERNAL_SERVER_ERROR_500, "INTERNAL_ERROR", "Search failed", error
+                );
                 return;
             }
             // Fix 5: no client-side permission filtering needed — SQL already filtered.
@@ -397,13 +393,9 @@ public final class SearchHandler {
         );
         this.index.locate(path).whenComplete((repos, error) -> {
             if (error != null) {
-                ctx.response()
-                    .setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
-                    .putHeader("Content-Type", "application/json")
-                    .end(new JsonObject()
-                        .put("code", HttpStatus.INTERNAL_SERVER_ERROR_500)
-                        .put("message", error.getMessage())
-                        .encode());
+                ApiResponse.sendError(
+                    ctx, HttpStatus.INTERNAL_SERVER_ERROR_500, "INTERNAL_ERROR", "Artifact lookup failed", error
+                );
             } else {
                 final java.util.List<String> allowed = repos.stream()
                     .filter(r -> perms.implies(new AdapterBasicPermission(r, "read")))
@@ -582,13 +574,9 @@ public final class SearchHandler {
         final List<String> allowedRepos = this.resolveAllowedRepos(perms);
         this.index.getStats(allowedRepos).whenComplete((map, error) -> {
             if (error != null) {
-                ctx.response()
-                    .setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
-                    .putHeader("Content-Type", "application/json")
-                    .end(new JsonObject()
-                        .put("code", HttpStatus.INTERNAL_SERVER_ERROR_500)
-                        .put("message", error.getMessage())
-                        .encode());
+                ApiResponse.sendError(
+                    ctx, HttpStatus.INTERNAL_SERVER_ERROR_500, "INTERNAL_ERROR", "Search statistics are unavailable", error
+                );
             } else {
                 final JsonObject json = new JsonObject();
                 map.forEach((key, value) -> {
