@@ -465,6 +465,10 @@ Heap dumps are automatically generated on OutOfMemoryError:
 -XX:HeapDumpPath=/var/pantera/logs/dumps/heapdump.hprof
 ```
 
+The container start command adds the start time and host name to the file name
+(`heapdump-20261028-090100-<host>.hprof`), so a later out-of-memory exit does not
+find an existing dump and skip writing its own.
+
 Analyze heap dumps with Eclipse MAT, VisualVM, or JProfiler.
 
 ---

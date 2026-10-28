@@ -2068,6 +2068,11 @@ available:
 
 ### Dockerfile Default Command
 
+Before starting Java, the command adds the start time and host name to a
+`-XX:HeapDumpPath` in `JVM_ARGS` that ends in `.hprof`
+(`heapdump.hprof` becomes `heapdump-20261028-090100-<host>.hprof`), because the
+JVM never overwrites an existing dump.
+
 ```
 java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \

@@ -225,7 +225,7 @@ docker stats pantera --no-stream
 **Recovery:**
 
 1. Increase container memory limit.
-2. Copy the heap dump for analysis: `docker cp pantera:/var/pantera/logs/dumps/heapdump.hprof .`
+2. Copy the heap dumps for analysis: `docker cp pantera:/var/pantera/logs/dumps/ ./dumps`. Each dump is named `heapdump-<start time>-<host>.hprof`.
 3. Analyze with Eclipse MAT or VisualVM.
 4. Restart the container.
 
