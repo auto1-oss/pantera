@@ -37,6 +37,15 @@ import org.reactivestreams.Subscriber;
  * a Composer package, whether its versions are keyed by name (v1) or listed
  * in an array (v2). Keys that contain a slash cannot be addressed.</p>
  *
+ * <p>A leading {@code **} segment matches any key path prefix, including
+ * none: the rule selects every string value whose key path ends in the
+ * remaining segments, at any depth. {@code **}{@code /tarball} selects a
+ * root-level {@code tarball} member as well as {@code versions/*}{@code
+ * /dist/tarball} and {@code versions/*}{@code /dist/bin/*}{@code /tarball}.
+ * {@code **} has this meaning only as the first segment; anywhere else it is
+ * an ordinary key. When several rules select the same value only one of
+ * them applies, so rules should not overlap.</p>
+ *
  * <p>Malformed JSON is passed through as stored: the scanner never throws
  * and only rewrites what it positively recognised.</p>
  *

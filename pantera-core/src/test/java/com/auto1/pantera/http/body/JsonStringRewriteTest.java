@@ -82,6 +82,72 @@ final class JsonStringRewriteTest {
         );
     }
 
+    /**
+     * A pg-like npm packument: tarballs at the root, under {@code dist},
+     * under {@code dist.bin.*} (an object) and in an array, plus look-alike
+     * keys that must not be selected.
+     */
+    private static final String NESTED = "{\"tarball\":\"/root.tgz\",\"versions\":{\"1.0.0\":{"
+        + "\"dist\":{\"tarball\":\"/pg/-/pg-1.0.0.tgz\",\"bin\":{\"linux\":{\"tarball\":\"/bin/l.tgz\","
+        + "\"host\":\"/h\"}}},\"tarballs\":\"/no.tgz\",\"xtarball\":\"/no.tgz\","
+        + "\"list\":[{\"tarball\":\"/a.tgz\"},[{\"tarball\":\"/b.tgz\"}],\"/no.tgz\"],"
+        + "\"tarball\":{\"nested\":\"/no.tgz\"},\"arr\":{\"tarball\":[\"/no.tgz\"]}}}}";
+
+    @Test
+    void deepRuleSelectsTheKeyAtEveryDepth() {
+        MatcherAssert.assertThat(
+            JsonStringRewriteTest.rewrite(NESTED, "**/tarball", url -> "P" + url),
+            new IsEqual<>(
+                NESTED.replace("\"/root.tgz\"", "\"P/root.tgz\"")
+                    .replace("\"/pg/-/pg-1.0.0.tgz\"", "\"P/pg/-/pg-1.0.0.tgz\"")
+                    .replace("\"/bin/l.tgz\"", "\"P/bin/l.tgz\"")
+                    .replace("\"/a.tgz\"", "\"P/a.tgz\"")
+                    .replace("\"/b.tgz\"", "\"P/b.tgz\"")
+            )
+        );
+    }
+
+    @Test
+    void deepRuleMatchesALongerSuffix() {
+        MatcherAssert.assertThat(
+            JsonStringRewriteTest.rewrite(NESTED, "**/bin/*/tarball", url -> "P" + url),
+            new IsEqual<>(NESTED.replace("\"/bin/l.tgz\"", "\"P/bin/l.tgz\""))
+        );
+    }
+
+    @Test
+    void deepRuleSelectsARootMember() {
+        MatcherAssert.assertThat(
+            JsonStringRewriteTest.rewrite("{\"tarball\":\"/x\",\"k\":\"/y\"}", "**/tarball", url -> "P" + url),
+            new IsEqual<>("{\"tarball\":\"P/x\",\"k\":\"/y\"}")
+        );
+    }
+
+    @Test
+    void deepRuleSelectsNothingWithoutTheKey() {
+        MatcherAssert.assertThat(
+            JsonStringRewriteTest.rewrite(KEYED, "**/tarball", url -> "P" + url),
+            new IsEqual<>(KEYED)
+        );
+    }
+
+    @Test
+    void exactRuleStillSelectsOnlyItsPath() {
+        MatcherAssert.assertThat(
+            JsonStringRewriteTest.rewrite(NESTED, "versions/*/dist/tarball", url -> "P" + url),
+            new IsEqual<>(NESTED.replace("\"/pg/-/pg-1.0.0.tgz\"", "\"P/pg/-/pg-1.0.0.tgz\""))
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2, 3, 7, 64})
+    void deepRuleDoesNotDependOnChunkBoundaries(final int chunk) {
+        MatcherAssert.assertThat(
+            JsonStringRewriteTest.rewrite(NESTED, chunk, "**/tarball", url -> "P" + url),
+            new IsEqual<>(JsonStringRewriteTest.rewrite(NESTED, "**/tarball", url -> "P" + url))
+        );
+    }
+
     @Test
     void unchangedValueKeepsItsOriginalEscaping() {
         final String stored = "{\"dist\":{\"url\":\"a\\/b\\u0041\"}}";

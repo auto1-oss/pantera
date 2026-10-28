@@ -135,15 +135,28 @@ Precedence (highest first): per-repo-name SNAPSHOT → per-repo-name (non-SNAPSH
   through the verdict: only versions and `time` entries present in the
   filtered skeleton are emitted (a version the cached verdict has not seen is
   withheld, never served unevaluated), `dist-tags` is replaced by the
-  filtered one, and relative tarball URLs are prefixed on the way through.
-  The filtered body is compact JSON; its `ETag` derives from the stored
-  content hash and the filtered skeleton. When cooldown cannot evaluate a
+  filtered one, and relative tarball URLs (every `tarball` string, at any
+  depth, as on the unfiltered path) are prefixed on the way through.
+  Kept `time` entries are served with their stored value, including
+  non-string ones such as `time.unpublished`. Only the first JSON value of
+  the stored document is read. The filtered body is compact JSON; its `ETag`
+  derives from the stored content hash and the filtered skeleton with its
+  members sorted by key, so it does not depend on whether a full or an
+  abbreviated request filled the verdict cache. When cooldown cannot evaluate a
   stored packument, the request answers `502` instead of serving it
   unfiltered; only a cooldown backend failure (database error, timeout) still
   falls back to the unfiltered document, so an outage of the cooldown store
   does not break installs. Ingest and serve parse with the same Jackson size
-  limits, and the skeleton keeps only shallow string values, so nothing deep
-  reaches the cooldown parser.
+  limits, and the skeleton keeps only shallow string values (a non-string
+  `time` entry keeps its key with an empty-object stub, a non-string
+  dist-tag is dropped), so nothing deep reaches the cooldown parser. A
+  single-version manifest (`GET /{pkg}/{version}`) is copied token by token
+  out of the stored packument, never built as a tree, so a deeply nested
+  version is served like any other; when the version key occurs more than
+  once, the last occurrence is served, as a client parsing the packument
+  sees it. Verdict envelopes cached by an earlier 2.2.11 build lack the
+  `time` stubs and keep dropping `time.unpublished` until their TTL expires
+  or the package is refreshed.
 - **dist-tag shortcut (`GET /{pkg}/latest`):** served through the same filter
   path so unbounded `npm install foo` resolutions see only allowed versions.
 - Supports both the full packument and the abbreviated (`application/vnd.npm.install-v1+json`) variant.

@@ -87,6 +87,74 @@ final class AbbreviatedMetadataStreamTest {
         );
     }
 
+    @Test
+    void replacesInvalidUtf8InsteadOfFailing() throws Exception {
+        final JsonObject actual = AbbreviatedMetadataStreamTest.stream(
+            AbbreviatedMetadataStreamTest.bytes(
+                "{\"name\":\"x\",\"readme\":\"", new byte[] {(byte) 0xFF, (byte) 0xFE},
+                "\",\"versions\":{\"1.0.0\":{\"version\":\"1.0.0\",\"deprecated\":\"a",
+                new byte[] {(byte) 0xC3}, "b\"}}}"
+            )
+        );
+        MatcherAssert.assertThat(
+            "invalid bytes in a kept field become U+FFFD",
+            actual.getJsonObject("versions").getJsonObject("1.0.0").getString("deprecated"),
+            new IsEqual<>("a\uFFFDb")
+        );
+        MatcherAssert.assertThat(
+            "invalid bytes in a skipped field do not drop the document",
+            actual.getString("name"),
+            new IsEqual<>("x")
+        );
+    }
+
+    @Test
+    void replacesLoneSurrogatesInsteadOfFailing() throws Exception {
+        final JsonObject actual = AbbreviatedMetadataStreamTest.stream(
+            "{\"name\":\"x\",\"versions\":{\"1.0.0\":{\"deprecated\":\"\\ud800x\","
+                + "\"description\":\"\\udc00\"}},\"dist-tags\":{\"latest\":\"y\\ud800\"}}"
+        );
+        MatcherAssert.assertThat(
+            "lone surrogate in a version field becomes '?'",
+            actual.getJsonObject("versions").getJsonObject("1.0.0").getString("deprecated"),
+            new IsEqual<>("?x")
+        );
+        MatcherAssert.assertThat(
+            "lone surrogate at the end of a copied section becomes '?'",
+            actual.getJsonObject("dist-tags").getString("latest"),
+            new IsEqual<>("y?")
+        );
+    }
+
+    @Test
+    void skipsALeadingByteOrderMark() throws Exception {
+        MatcherAssert.assertThat(
+            AbbreviatedMetadataStreamTest.stream(
+                AbbreviatedMetadataStreamTest.bytes(
+                    new byte[] {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF},
+                    "{\"name\":\"bom\",\"versions\":{}}"
+                )
+            ).getString("name"),
+            new IsEqual<>("bom")
+        );
+    }
+
+    @Test
+    void keepsValidNonAsciiTextByteForByte() throws Exception {
+        final String doc = "{\"name\":\"\u00e9\u4e2d\",\"time\":{\"modified\":\"m\"},"
+            + "\"versions\":{\"1.0.0\":{\"deprecated\":\"\ud83d\ude00 \u00fc\",\"description\":\"\u00e0\",\"version\":\"1.0.0\"}}}";
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        final byte[] bytes = doc.getBytes(StandardCharsets.UTF_8);
+        new AbbreviatedMetadataStream(() -> new ByteArrayInputStream(bytes)).writeTo(out);
+        MatcherAssert.assertThat(
+            out.toString(StandardCharsets.UTF_8),
+            new IsEqual<>(
+                "{\"name\":\"\u00e9\u4e2d\",\"modified\":\"m\",\"time\":{\"modified\":\"m\"},"
+                    + "\"versions\":{\"1.0.0\":{\"version\":\"1.0.0\",\"deprecated\":\"\ud83d\ude00 \u00fc\"}}}"
+            )
+        );
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("rejected")
     void rejectsWhatTheDomImplementationRejects(final String label, final String doc) {
@@ -101,6 +169,39 @@ final class AbbreviatedMetadataStreamTest {
             Exception.class,
             () -> AbbreviatedMetadataStreamTest.stream(doc),
             label + ": streaming implementation rejects"
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("rejected")
+    void tellsAnInvalidDocumentFromAnUnexpectedShape(final String label, final String doc) {
+        final Exception error = Assertions.assertThrows(
+            Exception.class, () -> AbbreviatedMetadataStreamTest.stream(doc), label
+        );
+        MatcherAssert.assertThat(
+            label,
+            error instanceof com.fasterxml.jackson.core.JsonParseException,
+            new IsEqual<>(
+                label.startsWith("root") || "truncated".equals(label) || "empty".equals(label)
+            )
+        );
+    }
+
+    @Test
+    void reportsASyntaxErrorAfterAShapeProblem() {
+        Assertions.assertThrows(
+            com.fasterxml.jackson.core.JsonParseException.class,
+            () -> AbbreviatedMetadataStreamTest.stream("{\"name\":1,\"versions\":{\"1.0.0\":{\"a\":")
+        );
+    }
+
+    @Test
+    void ignoresContentAfterTheRootObject() throws Exception {
+        MatcherAssert.assertThat(
+            AbbreviatedMetadataStreamTest.stream(
+                "{\"name\":\"x\",\"time\":{\"modified\":\"m\"}} {\"name\":\"y\"} garbage"
+            ).getString("name"),
+            new IsEqual<>("x")
         );
     }
 
@@ -179,6 +280,34 @@ final class AbbreviatedMetadataStreamTest {
             Arguments.of("truncated", "{\"name\":\"x\",\"versions\":{\"1.0.0\":{\"name\""),
             Arguments.of("empty", "")
         );
+    }
+
+    /**
+     * Concatenate text (as UTF-8) and raw byte parts.
+     *
+     * @param parts Strings and byte arrays
+     * @return Bytes
+     */
+    private static byte[] bytes(final Object... parts) {
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        for (final Object part : parts) {
+            final byte[] chunk;
+            if (part instanceof byte[] raw) {
+                chunk = raw;
+            } else {
+                chunk = part.toString().getBytes(StandardCharsets.UTF_8);
+            }
+            out.writeBytes(chunk);
+        }
+        return out.toByteArray();
+    }
+
+    private static JsonObject stream(final byte[] bytes) throws Exception {
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new AbbreviatedMetadataStream(() -> new ByteArrayInputStream(bytes)).writeTo(out);
+        return Json.createReader(
+            new StringReader(out.toString(StandardCharsets.UTF_8))
+        ).readObject();
     }
 
     /**

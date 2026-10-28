@@ -11,13 +11,19 @@
 package com.auto1.pantera.npm.misc;
 
 import com.auto1.pantera.asto.Content;
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * The cooldown verdict on a packument, read from its filtered
@@ -92,9 +98,33 @@ public final class PackumentDecision {
     }
 
     /**
+     * Digest of the verdict that does not depend on the member order of the
+     * document the skeleton was extracted from: the stored {@code meta.json}
+     * ({@code name, dist-tags, versions, time}) and the abbreviated document
+     * ({@code name, modified, time, dist-tags, versions}) give the same
+     * verdict the same digest, whichever of them filled the shared verdict
+     * cache. Object members are hashed sorted by key, so the digest changes
+     * exactly when a surviving version, a {@code time} entry, a dist-tag or
+     * the name does.
+     *
+     * @return SHA-256 hex of the canonical skeleton
+     */
+    public String fingerprint() {
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (JsonGenerator gen = MAPPER.getFactory().createGenerator(out)) {
+            PackumentDecision.canonical(gen, this.skeleton);
+        } catch (final IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+        return new MetadataETag(out.toByteArray()).calculate();
+    }
+
+    /**
      * Streamed packument with cooldown applied: withheld versions and their
-     * {@code time} entries dropped, {@code dist-tags} replaced by the
-     * filtered ones, relative tarball URLs prefixed.
+     * {@code time} entries dropped (every other {@code time} entry is served
+     * with its stored value, also when that is not a string),
+     * {@code dist-tags} replaced by the filtered ones, relative tarball URLs
+     * prefixed.
      *
      * @param packument Stored packument
      * @param prefix Tarball URL prefix
@@ -102,7 +132,7 @@ public final class PackumentDecision {
      */
     public Content apply(final Content packument, final String prefix) {
         final Map<String, PackumentTransform.Section> sections = new HashMap<>();
-        final Map<String, java.util.function.Predicate<String>> keep = new HashMap<>();
+        final Map<String, Predicate<String>> keep = new HashMap<>();
         final Map<String, JsonNode> replacements = new HashMap<>();
         sections.put("versions", PackumentTransform.Section.MEMBERS);
         keep.put("versions", this::allows);
@@ -123,6 +153,37 @@ public final class PackumentDecision {
                 Optional.of(prefix)
             )
         );
+    }
+
+    /**
+     * Write a tree with object members sorted by key. Recursion is bounded:
+     * a skeleton is at most three levels deep, and the {@link PackumentJson#SKELETON}
+     * generator refuses anything deeper than its nesting limit.
+     *
+     * @param gen Generator
+     * @param node Tree
+     * @throws IOException On a generator failure
+     */
+    private static void canonical(final JsonGenerator gen, final JsonNode node) throws IOException {
+        if (node.isObject()) {
+            final List<String> names = new ArrayList<>(node.size());
+            node.fieldNames().forEachRemaining(names::add);
+            Collections.sort(names);
+            gen.writeStartObject();
+            for (final String name : names) {
+                gen.writeFieldName(name);
+                PackumentDecision.canonical(gen, node.get(name));
+            }
+            gen.writeEndObject();
+        } else if (node.isArray()) {
+            gen.writeStartArray();
+            for (final JsonNode element : node) {
+                PackumentDecision.canonical(gen, element);
+            }
+            gen.writeEndArray();
+        } else {
+            MAPPER.writeTree(gen, node);
+        }
     }
 
     private static JsonNode parse(final byte[] bytes) {
