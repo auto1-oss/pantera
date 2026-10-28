@@ -113,7 +113,7 @@ final class NpmProxyInvalidUpstreamTest {
         MatcherAssert.assertThat(
             "nothing is stored", delegate.list(Key.ROOT).join(), new IsEqual<>(List.of())
         );
-        MatcherAssert.assertThat("no temp file is left", this.leftovers(), new IsEqual<>(0L));
+        MatcherAssert.assertThat("no temp file is left", this.settledLeftovers(), new IsEqual<>(0L));
     }
 
     @Test
@@ -181,7 +181,7 @@ final class NpmProxyInvalidUpstreamTest {
             npm.getPackageContentStream(NAME).blockingGet().asBytesFuture().join(),
             new IsEqual<>(content)
         );
-        MatcherAssert.assertThat("no temp file is left", this.leftovers(), new IsEqual<>(0L));
+        MatcherAssert.assertThat("no temp file is left", this.settledLeftovers(), new IsEqual<>(0L));
     }
 
     @ParameterizedTest
@@ -252,6 +252,24 @@ final class NpmProxyInvalidUpstreamTest {
         try (Stream<Path> files = Files.list(this.tmp)) {
             return files.count();
         }
+    }
+
+    /**
+     * Temp files left once in-flight work settles. A background refresh
+     * deletes its staging file after the upstream call the test waited for
+     * has returned, so the count is polled instead of read once.
+     *
+     * @return Remaining temp files, 0 as soon as they are gone
+     * @throws Exception On listing failure
+     */
+    private long settledLeftovers() throws Exception {
+        final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        long left = this.leftovers();
+        while (left > 0 && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+            left = this.leftovers();
+        }
+        return left;
     }
 
     private static byte[] bytes(final Storage storage, final String key) {
