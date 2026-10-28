@@ -10,15 +10,21 @@
  */
 package com.auto1.pantera.npm.misc;
 
-import com.fasterxml.jackson.core.JsonEncoding;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PushbackReader;
+import java.io.Reader;
 import java.io.StringWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
@@ -45,6 +51,13 @@ import java.util.concurrent.Callable;
  * {@code dist-tags}, {@code versions} or version entry. Bytes differ from
  * {@code JsonObject.toString()} (escaping, number spelling), the JSON value
  * does not.</p>
+ *
+ * <p>The validating scan reads the root object to its end whatever it finds,
+ * so the failure tells an invalid document from a valid one npm cannot use:
+ * a document that is not one JSON object (truncated, invalid syntax, a root
+ * that is not an object) fails with a {@link JsonParseException}; a
+ * well-formed object of an unexpected shape fails with a plain
+ * {@link IOException}. Content after the root object is not read.</p>
  *
  * <p>Blocking: never call it on an event loop.</p>
  *
@@ -96,12 +109,16 @@ public final class AbbreviatedMetadataStream {
      * Write the abbreviated packument. The target is flushed, not closed.
      *
      * @param out Target
+     * @throws JsonParseException When the packument is not one JSON object
      * @throws Exception When the packument cannot be read or has a shape the
      *  DOM implementation rejects
      */
     public void writeTo(final OutputStream out) throws Exception {
         final Summary summary = this.scan();
-        try (JsonGenerator gen = FACTORY.createGenerator(out, JsonEncoding.UTF8)) {
+        // Encoded by a Writer, not Jackson's UTF-8 generator: a lone surrogate
+        // (an upstream "\ud800" escape) becomes '?' instead of failing the document.
+        final Writer writer = new OutputStreamWriter(out, StandardCharsets.UTF_8);
+        try (JsonGenerator gen = FACTORY.createGenerator(writer)) {
             gen.disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
             gen.writeStartObject();
             if (summary.name != null) {
@@ -116,43 +133,56 @@ public final class AbbreviatedMetadataStream {
             this.section(gen, AbbreviatedMetadataStream.VERSIONS, summary.versions);
             gen.writeEndObject();
         }
+        writer.flush();
     }
 
     /**
-     * Validating pass: the top-level values the output is derived from.
+     * Validating pass: the top-level values the output is derived from. The
+     * whole root object is read even after a shape problem, so a syntax
+     * error anywhere in it is reported as such.
      *
      * @return Summary
-     * @throws Exception On unreadable or rejected input
+     * @throws JsonParseException When the packument is not one JSON object
+     * @throws Exception On unreadable input or a rejected shape
      */
     private Summary scan() throws Exception {
         final Summary summary = new Summary();
-        try (InputStream input = this.source.call(); JsonParser parser = FACTORY.createParser(input)) {
-            AbbreviatedMetadataStream.require(
-                parser.nextToken() == JsonToken.START_OBJECT, "packument is not a JSON object"
-            );
+        try (Reader input = this.open(); JsonParser parser = FACTORY.createParser(input)) {
+            if (parser.nextToken() != JsonToken.START_OBJECT) {
+                throw new JsonParseException(parser, "packument is not a JSON object");
+            }
             while (parser.nextToken() == JsonToken.FIELD_NAME) {
                 final String key = parser.currentName();
                 final JsonToken token = parser.nextToken();
                 if ("name".equals(key)) {
-                    AbbreviatedMetadataStream.require(token == JsonToken.VALUE_STRING, "name");
-                    summary.name = parser.getText();
+                    if (summary.check(token == JsonToken.VALUE_STRING, "name")) {
+                        summary.name = parser.getText();
+                    }
+                    parser.skipChildren();
                 } else if (AbbreviatedMetadataStream.TIME.equals(key)) {
-                    AbbreviatedMetadataStream.require(token == JsonToken.START_OBJECT, key);
-                    summary.time += 1;
-                    summary.modified = AbbreviatedMetadataStream.modified(parser);
+                    if (summary.check(token == JsonToken.START_OBJECT, key)) {
+                        summary.time += 1;
+                        summary.modified = AbbreviatedMetadataStream.modified(parser, summary);
+                    } else {
+                        parser.skipChildren();
+                    }
                 } else if (AbbreviatedMetadataStream.TAGS.equals(key)) {
-                    AbbreviatedMetadataStream.require(token == JsonToken.START_OBJECT, key);
+                    summary.check(token == JsonToken.START_OBJECT, key);
                     summary.tags += 1;
                     parser.skipChildren();
                 } else if (AbbreviatedMetadataStream.VERSIONS.equals(key)) {
-                    AbbreviatedMetadataStream.require(token == JsonToken.START_OBJECT, key);
-                    summary.versions += 1;
-                    AbbreviatedMetadataStream.checkVersions(parser);
+                    if (summary.check(token == JsonToken.START_OBJECT, key)) {
+                        summary.versions += 1;
+                        AbbreviatedMetadataStream.checkVersions(parser, summary);
+                    } else {
+                        parser.skipChildren();
+                    }
                 } else {
                     parser.skipChildren();
                 }
             }
         }
+        AbbreviatedMetadataStream.require(summary.shape == null, summary.shape);
         return summary;
     }
 
@@ -170,7 +200,7 @@ public final class AbbreviatedMetadataStream {
         if (occurrences == 0) {
             return;
         }
-        try (InputStream input = this.source.call(); JsonParser parser = FACTORY.createParser(input)) {
+        try (Reader input = this.open(); JsonParser parser = FACTORY.createParser(input)) {
             parser.nextToken();
             int seen = 0;
             while (parser.nextToken() == JsonToken.FIELD_NAME) {
@@ -194,23 +224,42 @@ public final class AbbreviatedMetadataStream {
     }
 
     /**
+     * Open the packument as text. Decoding through a Reader replaces invalid
+     * UTF-8 with U+FFFD instead of failing the document, as 2.2.10 did; a
+     * leading byte order mark is skipped.
+     *
+     * @return Packument text
+     * @throws Exception On read error
+     */
+    private Reader open() throws Exception {
+        final PushbackReader reader = new PushbackReader(
+            new InputStreamReader(this.source.call(), StandardCharsets.UTF_8)
+        );
+        final int first = reader.read();
+        if (first != -1 && first != '\uFEFF') {
+            reader.unread(first);
+        }
+        return reader;
+    }
+
+    /**
      * Read {@code time.modified}; the parser is on the {@code time} object.
      *
      * @param parser Parser
+     * @param summary Where a shape problem is recorded
      * @return Modified timestamp or null when absent
-     * @throws IOException On a non-string value or unreadable input
+     * @throws IOException On unreadable input
      */
-    private static String modified(final JsonParser parser) throws IOException {
+    private static String modified(final JsonParser parser, final Summary summary)
+        throws IOException {
         String result = null;
         while (parser.nextToken() == JsonToken.FIELD_NAME) {
             final boolean wanted = "modified".equals(parser.currentName());
             final JsonToken token = parser.nextToken();
-            if (wanted) {
-                AbbreviatedMetadataStream.require(token == JsonToken.VALUE_STRING, "time.modified");
+            if (wanted && summary.check(token == JsonToken.VALUE_STRING, "time.modified")) {
                 result = parser.getText();
-            } else {
-                parser.skipChildren();
             }
+            parser.skipChildren();
         }
         return result;
     }
@@ -220,13 +269,13 @@ public final class AbbreviatedMetadataStream {
      * {@code versions}.
      *
      * @param parser Parser
-     * @throws IOException On a non-object entry or unreadable input
+     * @param summary Where a shape problem is recorded
+     * @throws IOException On unreadable input
      */
-    private static void checkVersions(final JsonParser parser) throws IOException {
+    private static void checkVersions(final JsonParser parser, final Summary summary)
+        throws IOException {
         while (parser.nextToken() == JsonToken.FIELD_NAME) {
-            AbbreviatedMetadataStream.require(
-                parser.nextToken() == JsonToken.START_OBJECT, "versions entry"
-            );
+            summary.check(parser.nextToken() == JsonToken.START_OBJECT, "versions entry");
             parser.skipChildren();
         }
     }
@@ -352,5 +401,24 @@ public final class AbbreviatedMetadataStream {
          * Occurrences of {@code versions}.
          */
         private int versions;
+
+        /**
+         * First shape problem found, null while there is none.
+         */
+        private String shape;
+
+        /**
+         * Record a shape problem unless one is recorded already.
+         *
+         * @param condition Expected condition
+         * @param what What was checked
+         * @return The condition
+         */
+        private boolean check(final boolean condition, final String what) {
+            if (!condition && this.shape == null) {
+                this.shape = what;
+            }
+            return condition;
+        }
     }
 }

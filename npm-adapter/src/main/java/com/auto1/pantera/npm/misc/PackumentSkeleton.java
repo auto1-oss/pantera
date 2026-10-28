@@ -20,10 +20,18 @@ import java.util.concurrent.CompletableFuture;
  * {@code dist-tags}, {@code time} and the keys of {@code versions} (each
  * version's object replaced by {@code {}}).
  *
- * <p>Only string values are kept ({@code name}, each dist-tag, each
- * {@code time} entry) and only object-valued sections, so the skeleton is at
- * most three levels deep whatever the document holds: nothing deep reaches
- * the cooldown parser and rewriter.</p>
+ * <p>Only string values and only object-valued sections are kept, so the
+ * skeleton is at most three levels deep whatever the document holds: nothing
+ * deep reaches the cooldown parser and rewriter. {@code name} and each
+ * dist-tag are kept only when they are strings; a non-string dist-tag is not
+ * valid npm metadata and is dropped from the served document too. Every
+ * {@code time} entry keeps its key: a string value is kept, any other value
+ * (the {@code unpublished} object of an unpublished package) is replaced by
+ * {@code {}}, which the cooldown parser never reads as a release date. The
+ * cooldown filter can then drop the entries of withheld versions by key, and
+ * {@link PackumentDecision#apply} serves every kept entry with its stored
+ * value. Verdict envelopes cached before the stubs were added lack them and
+ * keep dropping such entries until their TTL expires.</p>
  *
  * <p>Extracted by streaming the stored document through
  * {@link PackumentTransform}; the skeleton itself is small (well under 1 MB
@@ -61,7 +69,7 @@ public final class PackumentSkeleton {
                 Map.of(
                     "name", PackumentTransform.Section.STRING,
                     "dist-tags", PackumentTransform.Section.STRINGS,
-                    "time", PackumentTransform.Section.STRINGS,
+                    "time", PackumentTransform.Section.STRINGS_OR_STUBS,
                     "versions", PackumentTransform.Section.STUBS
                 ),
                 PackumentTransform.Section.SKIP,

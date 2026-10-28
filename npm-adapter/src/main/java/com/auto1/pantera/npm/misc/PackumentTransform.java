@@ -17,6 +17,7 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.async.ByteArrayFeeder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.reactivex.Flowable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -41,13 +42,22 @@ import org.reactivestreams.Subscriber;
  * <p>What happens to each root member is decided by {@link Rules}: copied,
  * dropped, replaced by a given tree, or filtered member by member (the
  * {@code versions} and {@code time} objects). Relative {@code tarball} URLs
- * ({@code "/pkg/-/pkg-1.0.0.tgz"}) can be prefixed on the way through.</p>
+ * ({@code "/pkg/-/pkg-1.0.0.tgz"}) can be prefixed on the way through: every
+ * kept string value of a {@code tarball} key, at any depth including the
+ * root, the same values the unfiltered serve selects with the {@code
+ * **}{@code /tarball} rule of
+ * {@link com.auto1.pantera.http.body.JsonStringRewrite}.</p>
  *
  * <p>The output is compact JSON; formatting of the stored document is not
- * kept. Numbers are copied exactly. A {@link Section#MEMBERS},
- * {@link Section#STUBS} or {@link Section#STRINGS} member whose value is not
- * an object is dropped, so the shape of what is kept never depends on the
- * document.</p>
+ * kept. Numbers are copied as their stored text, so {@code -0.0},
+ * {@code 1.10} and {@code 1e5} come out as stored. A {@link Section#MEMBERS},
+ * {@link Section#STUBS}, {@link Section#STRINGS} or
+ * {@link Section#STRINGS_OR_STUBS} member whose value is not an object is
+ * dropped, so the shape of what is kept never depends on the document.</p>
+ *
+ * <p>Only the first root value is read: whatever follows it (a second
+ * document, trailing garbage) is ignored, as a tree parser reading the
+ * document would, so the output is always one JSON value.</p>
  *
  * @since 2.2.11
  */
@@ -127,6 +137,12 @@ public final class PackumentTransform implements Content {
          */
         STRINGS,
         /**
+         * Keep the member, filtering its object's entries by key; a string
+         * value is kept, any other value is replaced by an empty object, so
+         * every key survives and the kept part stays shallow.
+         */
+        STRINGS_OR_STUBS,
+        /**
          * Replace the member's value by a given tree; the tree is appended
          * at the end of the document when the member is absent.
          */
@@ -164,6 +180,11 @@ public final class PackumentTransform implements Content {
      * Per-subscription parser/generator state.
      */
     private static final class Pump {
+
+        /**
+         * Key of a tarball URL.
+         */
+        private static final String TARBALL = "tarball";
 
         /**
          * Rules.
@@ -231,10 +252,14 @@ public final class PackumentTransform implements Content {
         private String held;
 
         /**
-         * The held field is kept when its value is an object (true) or a
-         * string (false).
+         * Which values of the held field are kept.
          */
-        private boolean heldObject;
+        private Held kind;
+
+        /**
+         * The root value has been read; everything after it is ignored.
+         */
+        private boolean done;
 
         Pump(final Rules rules) {
             this.rules = rules;
@@ -250,16 +275,20 @@ public final class PackumentTransform implements Content {
         }
 
         List<ByteBuffer> feed(final ByteBuffer chunk) throws IOException {
-            final byte[] bytes = new byte[chunk.remaining()];
-            chunk.duplicate().get(bytes);
-            this.feeder.feedInput(bytes, 0, bytes.length);
-            this.drain();
+            if (!this.done) {
+                final byte[] bytes = new byte[chunk.remaining()];
+                chunk.duplicate().get(bytes);
+                this.feeder.feedInput(bytes, 0, bytes.length);
+                this.drain();
+            }
             return this.take();
         }
 
         List<ByteBuffer> finish() throws IOException {
-            this.feeder.endOfInput();
-            this.drain();
+            if (!this.done) {
+                this.feeder.endOfInput();
+                this.drain();
+            }
             this.gen.close();
             return this.take();
         }
@@ -268,6 +297,10 @@ public final class PackumentTransform implements Content {
             JsonToken token = this.parser.nextToken();
             while (token != null && token != JsonToken.NOT_AVAILABLE) {
                 this.on(token);
+                this.done = this.parser.getParsingContext().inRoot();
+                if (this.done) {
+                    break;
+                }
                 token = this.parser.nextToken();
             }
         }
@@ -317,12 +350,12 @@ public final class PackumentTransform implements Content {
         }
 
         private void field(final String name) throws IOException {
+            this.tarball = this.rules.prefix().isPresent() && Pump.TARBALL.equals(name);
             if (this.depth == 1) {
                 this.root(name);
             } else if (this.depth == 2 && this.keyed()) {
                 this.entry(name);
             } else {
-                this.tarball = this.rules.prefix().isPresent() && "tarball".equals(name);
                 this.gen.writeFieldName(name);
             }
         }
@@ -336,9 +369,9 @@ public final class PackumentTransform implements Content {
                 this.writeReplacement(name);
                 this.pending = true;
             } else if (this.section == Section.STRING) {
-                this.hold(name, false);
+                this.hold(name, Held.STRING);
             } else if (this.keyed()) {
-                this.hold(name, true);
+                this.hold(name, Held.OBJECT);
             } else {
                 this.gen.writeFieldName(name);
             }
@@ -346,30 +379,37 @@ public final class PackumentTransform implements Content {
 
         private boolean keyed() {
             return this.section == Section.MEMBERS || this.section == Section.STUBS
-                || this.section == Section.STRINGS;
+                || this.section == Section.STRINGS || this.section == Section.STRINGS_OR_STUBS;
         }
 
-        private void hold(final String name, final boolean object) {
+        private void hold(final String name, final Held what) {
             this.held = name;
-            this.heldObject = object;
+            this.kind = what;
         }
 
         /**
          * Write the held field with its value when the value has the kept
-         * kind, drop both otherwise.
+         * kind, with an empty object for a stubbed one, drop both otherwise.
          */
         private void release(final JsonToken token) throws IOException {
             final String name = this.held;
             this.held = null;
-            if (this.heldObject && token == JsonToken.START_OBJECT) {
+            if (this.kind == Held.OBJECT && token == JsonToken.START_OBJECT) {
                 this.gen.writeFieldName(name);
                 ++this.depth;
                 this.gen.copyCurrentEvent(this.parser);
-            } else if (!this.heldObject && token == JsonToken.VALUE_STRING) {
+            } else if (this.kind != Held.OBJECT && token == JsonToken.VALUE_STRING) {
                 this.gen.writeFieldName(name);
                 this.gen.writeString(this.parser.getText());
-            } else if (token.isStructStart()) {
-                this.skipping = 1;
+            } else {
+                if (this.kind == Held.STRING_OR_STUB) {
+                    this.gen.writeFieldName(name);
+                    this.gen.writeStartObject();
+                    this.gen.writeEndObject();
+                }
+                if (token.isStructStart()) {
+                    this.skipping = 1;
+                }
             }
         }
 
@@ -378,7 +418,9 @@ public final class PackumentTransform implements Content {
             if (keep != null && !keep.test(name)) {
                 this.pending = true;
             } else if (this.section == Section.STRINGS) {
-                this.hold(name, false);
+                this.hold(name, Held.STRING);
+            } else if (this.section == Section.STRINGS_OR_STUBS) {
+                this.hold(name, Held.STRING_OR_STUB);
             } else {
                 this.gen.writeFieldName(name);
                 if (this.section == Section.STUBS) {
@@ -390,18 +432,49 @@ public final class PackumentTransform implements Content {
         }
 
         private void scalar(final JsonToken token, final boolean url) throws IOException {
-            if (url && token == JsonToken.VALUE_STRING && this.parser.getText().startsWith("/")) {
-                this.gen.writeString(this.rules.prefix().get() + this.parser.getText());
+            if (url && token == JsonToken.VALUE_STRING) {
+                this.gen.writeString(this.prefixed(this.parser.getText()));
+            } else if (token.isNumeric()) {
+                this.gen.writeNumber(this.parser.getText());
             } else {
-                this.gen.copyCurrentEventExact(this.parser);
+                this.gen.copyCurrentEvent(this.parser);
             }
         }
 
+        /**
+         * A tarball URL with the prefix applied when it is relative.
+         *
+         * @param url Stored URL
+         * @return URL to emit
+         */
+        private String prefixed(final String url) {
+            final String result;
+            if (url.startsWith("/")) {
+                result = this.rules.prefix().get() + url;
+            } else {
+                result = url;
+            }
+            return result;
+        }
+
+        /**
+         * Write a replacement tree. Its own {@code tarball} string members
+         * (the tree is a shallow object of strings, the filtered
+         * {@code dist-tags}) are prefixed like those of the stored document.
+         */
         private void writeReplacement(final String name) throws IOException {
             final JsonNode tree = this.rules.replacements().get(name);
             if (tree != null && this.replaced.add(name)) {
                 this.gen.writeFieldName(name);
-                MAPPER.writeTree(this.gen, tree);
+                final JsonNode url = tree.get(Pump.TARBALL);
+                if (this.rules.prefix().isPresent() && tree.isObject() && url != null
+                    && url.isTextual()) {
+                    final ObjectNode copy = ((ObjectNode) tree).deepCopy();
+                    copy.put(Pump.TARBALL, this.prefixed(url.asText()));
+                    MAPPER.writeTree(this.gen, copy);
+                } else {
+                    MAPPER.writeTree(this.gen, tree);
+                }
             }
         }
 
@@ -413,5 +486,23 @@ public final class PackumentTransform implements Content {
                 }
             }
         }
+    }
+
+    /**
+     * Which values of a held field are kept.
+     */
+    private enum Held {
+        /**
+         * An object.
+         */
+        OBJECT,
+        /**
+         * A string.
+         */
+        STRING,
+        /**
+         * A string; any other value is kept as an empty object.
+         */
+        STRING_OR_STUB
     }
 }

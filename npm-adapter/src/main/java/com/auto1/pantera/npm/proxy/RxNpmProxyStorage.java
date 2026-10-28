@@ -14,6 +14,8 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.rx.RxFuture;
 import com.auto1.pantera.asto.rx.RxStorage;
+import com.auto1.pantera.http.PanteraHttpException;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.StorageExecutors;
@@ -22,6 +24,7 @@ import com.auto1.pantera.npm.proxy.model.NpmAsset;
 import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import com.auto1.pantera.npm.proxy.model.PackumentBody;
 import com.auto1.pantera.npm.proxy.model.PackumentSink;
+import com.fasterxml.jackson.core.JsonParseException;
 import io.reactivex.Completable;
 import io.reactivex.Maybe;
 import io.reactivex.Scheduler;
@@ -186,12 +189,21 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
 
     /**
      * Generate abbreviated metadata from the full content, streaming.
-     * Includes time field for pnpm compatibility. A packument that cannot be
-     * abbreviated yields an empty body (stored as an empty
+     * Includes time field for pnpm compatibility. A well-formed packument
+     * that cannot be abbreviated (a shape npm metadata does not have, such as
+     * a non-object {@code versions}) yields an empty body (stored as an empty
      * {@code meta.abbreviated.json} without hash, as before).
+     *
+     * <p>A document that is not one JSON object (an upstream 200 with a
+     * truncated or otherwise invalid body) is refused as an upstream failure
+     * before anything is written: the save fails with a 502
+     * {@link PanteraHttpException}, so a first fetch answers as for an
+     * unreachable upstream and a refresh keeps the cached copy.</p>
+     *
      * @param packageName Package name for logging context
      * @param full Full package JSON content
      * @return Abbreviated JSON body, owned by the caller
+     * @throws PanteraHttpException When the document is not one JSON object
      */
     private PackumentBody generateAbbreviated(final String packageName, final PackumentBody full) {
         try (PackumentSink sink = new PackumentSink(this.tmp, this.executor)) {
@@ -209,6 +221,24 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 .field("log.source", "application")
                 .log();
             return result;
+        } catch (final JsonParseException invalid) {
+            EcsLogger.warn("com.auto1.pantera.npm")
+                .message(
+                    String.format(
+                        "Upstream packument is not a valid JSON object, not caching it: %d bytes", full.size()
+                    )
+                )
+                .eventCategory("web")
+                .eventAction("get_package")
+                .eventOutcome("failure")
+                .field("event.reason", "invalid_upstream_document")
+                .field("package.name", packageName)
+                .error(invalid)
+                .field("log.source", "application")
+                .log();
+            throw new PanteraHttpException(
+                RsStatus.BAD_GATEWAY, "Upstream packument is not valid JSON", invalid
+            );
         } catch (final Exception e) {
             EcsLogger.error("com.auto1.pantera.npm")
                 .message(String.format("Failed to generate abbreviated metadata: full=%d bytes", full.size()))

@@ -19,7 +19,6 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.npm.Tarballs;
 import com.auto1.pantera.npm.cooldown.NpmMetadataParser;
 import com.auto1.pantera.npm.cooldown.NpmMetadataRewriter;
 import com.auto1.pantera.npm.cooldown.NpmMetadataFilter;
@@ -28,12 +27,8 @@ import com.auto1.pantera.npm.misc.PackumentDecision;
 import com.auto1.pantera.npm.misc.PackumentSkeleton;
 import com.auto1.pantera.npm.misc.PackumentVersion;
 import com.auto1.pantera.npm.proxy.NpmProxy;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 
-import java.io.IOException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -291,59 +286,46 @@ public final class VersionManifestResolver {
             return CompletableFuture.completedFuture(VersionManifestResolver.notFound(pkg, ref));
         }
         return packument.apply(pkg).thenCompose(
-            content -> content.map(body -> new PackumentVersion(body, version.get()).manifest())
-                .orElseGet(() -> CompletableFuture.completedFuture(Optional.empty()))
+            content -> content.map(
+                body -> new PackumentVersion(body, version.get()).manifest(tarballPrefix)
+            ).orElseGet(() -> CompletableFuture.completedFuture(Optional.empty()))
         ).thenApply(
             manifest -> manifest.map(
-                node -> this.manifestResponse(node, pkg, tarballPrefix, vary, clientETag)
+                bytes -> VersionManifestResolver.manifestResponse(bytes, vary, clientETag)
             ).orElseGet(() -> VersionManifestResolver.notFound(pkg, ref))
         );
     }
 
-    private Response manifestResponse(
-        final JsonNode manifest, final String pkg,
-        final String tarballPrefix, final String vary, final Optional<String> clientETag
+    /**
+     * Answer with the streamed-out manifest; its ETag is the hash of the
+     * emitted bytes.
+     *
+     * @param body Manifest JSON, tarball URLs already rewritten
+     * @param vary Vary header value
+     * @param clientETag Client's If-None-Match
+     * @return 200 with the manifest, 304 when the client has it
+     */
+    private static Response manifestResponse(
+        final byte[] body, final String vary, final Optional<String> clientETag
     ) {
-        try {
-            final ObjectMapper mapper = com.auto1.pantera.npm.misc.PackumentJson.MAPPER;
-            final JsonNode dist = manifest.get("dist");
-            if (dist != null && dist.isObject() && dist.has("tarball")) {
-                ((ObjectNode) dist).put(
-                    "tarball",
-                    Tarballs.rewriteTarball(dist.get("tarball").asText(), tarballPrefix)
-                );
-            }
-            final byte[] body = mapper.writeValueAsBytes(manifest);
-            final String etag = new MetadataETag(body).calculate();
-            final Response response;
-            if (clientETag.isPresent() && clientETag.get().equals(etag)) {
-                response = ResponseBuilder.from(RsStatus.NOT_MODIFIED)
-                    .header("ETag", etag)
-                    .header("Cache-Control", "public, max-age=300")
-                    .varyHeader(vary)
-                    .build();
-            } else {
-                response = ResponseBuilder.ok()
-                    .header("Content-Type", "application/json; charset=utf-8")
-                    .header("ETag", etag)
-                    .header("Cache-Control", "public, max-age=300")
-                    .varyHeader(vary)
-                    .body(body)
-                    .build();
-            }
-            return response;
-        } catch (final IOException ex) {
-            EcsLogger.warn("com.auto1.pantera.npm")
-                .message("Failed to serialise version manifest")
-                .eventCategory("web")
-                .eventAction("version_resolution")
-                .eventOutcome("failure")
-                .field("package.name", pkg)
-                .error(ex)
-                .field("log.source", "application")
-                .log();
-            return ResponseBuilder.internalError().build();
+        final String etag = new MetadataETag(body).calculate();
+        final Response response;
+        if (clientETag.isPresent() && clientETag.get().equals(etag)) {
+            response = ResponseBuilder.from(RsStatus.NOT_MODIFIED)
+                .header("ETag", etag)
+                .header("Cache-Control", "public, max-age=300")
+                .varyHeader(vary)
+                .build();
+        } else {
+            response = ResponseBuilder.ok()
+                .header("Content-Type", "application/json; charset=utf-8")
+                .header("ETag", etag)
+                .header("Cache-Control", "public, max-age=300")
+                .varyHeader(vary)
+                .body(body)
+                .build();
         }
+        return response;
     }
 
     /**

@@ -66,9 +66,12 @@ public final class DownloadPackageSlice implements Slice {
     static final String SKELETON = "skeleton";
 
     /**
-     * Path of every version's tarball URL in a packument.
+     * Every {@code tarball} string of a packument, at any depth: ingest
+     * ({@code TarballRefRewriter}) strips the host from all of them, not only
+     * from {@code versions.*.dist.tarball} (e.g. {@code pg}'s
+     * {@code versions.*.dist.bin.*.tarball}), so all of them are re-rooted.
      */
-    private static final String TARBALL = "versions/*/dist/tarball";
+    private static final String TARBALL = "**/tarball";
     /**
      * NPM Proxy facade.
      */
@@ -207,7 +210,7 @@ public final class DownloadPackageSlice implements Slice {
      * into memory whole.
      *
      * <p>Without cooldown the stored document is streamed with its relative
-     * tarball URLs rewritten in place ({@link JsonStringRewrite}). With
+     * tarball URLs, at any depth, rewritten in place ({@link JsonStringRewrite}). With
      * cooldown, the verdict is taken on the document's
      * {@link PackumentSkeleton}, which the filtered-metadata envelope caches
      * (the document is only scanned on an envelope miss), and the body is
@@ -280,8 +283,7 @@ public final class DownloadPackageSlice implements Slice {
                     result = this.raw(stored, prefix, headers, clientETag, Optional.empty(), owner);
                 } else {
                     result = this.filtered(
-                        stored, new PackumentDecision(skeleton.get()), skeleton.get(),
-                        prefix, headers, clientETag
+                        stored, new PackumentDecision(skeleton.get()), prefix, headers, clientETag
                     );
                 }
                 return result;
@@ -410,13 +412,14 @@ public final class DownloadPackageSlice implements Slice {
 
     /**
      * Stream the stored document through the cooldown verdict. Its ETag
-     * derives from the stored content hash and the filtered skeleton, so it
-     * changes when either the document or the verdict does.
+     * derives from the stored content hash and the verdict's
+     * {@link PackumentDecision#fingerprint()}, so it changes when either the
+     * document or the verdict does, and not with the request kind (full or
+     * abbreviated) that filled the shared verdict cache.
      */
     private CompletableFuture<Response> filtered(
         final Stored stored,
         final PackumentDecision decision,
-        final byte[] skeleton,
         final String prefix,
         final Headers headers,
         final Optional<String> clientETag
@@ -424,7 +427,7 @@ public final class DownloadPackageSlice implements Slice {
         final String etag = MetadataETag.derive(
             new MetadataETag(
                 stored.hash().orElse(stored.metadata().lastModified())
-                    + ':' + new MetadataETag(skeleton).calculate()
+                    + ':' + decision.fingerprint()
             ).calculate(),
             prefix
         );
