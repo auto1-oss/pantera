@@ -3547,6 +3547,8 @@ All API errors follow a consistent JSON format:
 | `NOT_IMPLEMENTED` | 501         | Feature not available                |
 | `UNAVAILABLE`     | 503         | Dependency unavailable (e.g., no DB) |
 
+A `500` caused by an exception answers `message: "Internal server error"`; the exception is logged (`event.action: api_request`, with `error.*` and the request's `trace.id`), never returned.
+
 ---
 
 ## 18. Pagination

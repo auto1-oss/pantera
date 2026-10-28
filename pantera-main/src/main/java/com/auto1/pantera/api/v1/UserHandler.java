@@ -246,7 +246,7 @@ public final class UserHandler {
             HandlerExecutor.get()
         ).whenComplete((result, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 final JsonArray items = new JsonArray();
                 for (final JsonObject obj : result.items()) {
@@ -271,7 +271,7 @@ public final class UserHandler {
             HandlerExecutor.get()
         ).whenComplete((opt, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else if (opt.isPresent()) {
                 ctx.response()
                     .setStatusCode(200)
@@ -466,7 +466,7 @@ public final class UserHandler {
                 ctx, 404, "NOT_FOUND", String.format("User '%s' not found", uname)
             );
         } else {
-            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", "Failed to update user");
+            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", "Failed to update user", err);
         }
     }
 
@@ -511,7 +511,7 @@ public final class UserHandler {
                         String.format("User '%s' not found", uname)
                     );
                 } else {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
             }
         });
@@ -643,7 +643,7 @@ public final class UserHandler {
                         String.format("User '%s' not found", uname)
                     );
                 } else {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
             }
         });
@@ -687,7 +687,7 @@ public final class UserHandler {
                         String.format("User '%s' not found", uname)
                     );
                 } else {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
             }
         });

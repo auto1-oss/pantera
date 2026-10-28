@@ -256,6 +256,19 @@ public final class ProxyCacheWriter {
         try {
             tempFile = Files.createTempFile("pantera-proxy-", ".tmp");
         } catch (final IOException ex) {
+            EcsLogger.error("com.auto1.pantera.http.cache")
+                .message("Proxy cache temp file could not be created; artifact not served"
+                    + " (cause: storage_unavailable)")
+                .eventCategory("file")
+                .eventAction("cache_write")
+                .eventOutcome("failure")
+                .field("event.reason", "storage_unavailable")
+                .field("repository.name", this.repoName)
+                .field("url.path", primaryKey.string())
+                .traceContext(traceId(ctx), null)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
             return CompletableFuture.completedFuture(
                 Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
             );
@@ -450,8 +463,9 @@ public final class ProxyCacheWriter {
      * @param ctx             Request context (trace id), may be null.
      * @return Stage that completes synchronously with a {@link StreamedArtifact}
      *         except in the narrow case where temp file creation itself fails;
-     *         in that case the caller receives Err(StorageUnavailable) and the
-     *         upstream body is left unsubscribed for the caller to drain.
+     *         in that case the failure is logged here, the upstream body is
+     *         drained here (the caller must not subscribe it) and the caller
+     *         receives Err(StorageUnavailable).
      */
     public CompletionStage<Result<StreamedArtifact>> streamThroughAndCommit(
         final Key primaryKey,
@@ -472,9 +486,7 @@ public final class ProxyCacheWriter {
         try {
             tempFile = Files.createTempFile("pantera-proxy-", ".tmp");
         } catch (final IOException ex) {
-            return CompletableFuture.completedFuture(
-                Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
-            );
+            return this.tempFileFailed(ex, primaryKey, upstreamBody, ctx);
         }
         final FileChannel channel; // NOPMD CloseResource - closed asynchronously inside doOnComplete/doOnError/doOnCancel terminal callbacks; try-with-resources would close it before any tee chunk could be written
         try {
@@ -485,9 +497,7 @@ public final class ProxyCacheWriter {
             );
         } catch (final IOException ex) {
             deleteQuietly(tempFile);
-            return CompletableFuture.completedFuture(
-                Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
-            );
+            return this.tempFileFailed(ex, primaryKey, upstreamBody, ctx);
         }
         // Phase 7.5 parallel-prefetch trick (same as writeAndVerify): fire
         // every blocking sidecar fetch BEFORE we start consuming the primary
@@ -1435,6 +1445,42 @@ public final class ProxyCacheWriter {
         Content body,
         CompletionStage<Result<Void>> verificationOutcome
     ) {
+    }
+
+    /**
+     * The stream-through temp file could not be created: the tee is never
+     * built, so the upstream body is drained here and the caller answers 5xx (every proxy maps this
+     * {@code Err} to 502). This is the innermost site that knows the cause,
+     * so it logs it, once, with the throwable.
+     *
+     * @param err I/O failure
+     * @param primaryKey Artifact key
+     * @param upstreamBody Unsubscribed upstream body, drained here
+     * @param ctx Request context (trace.id)
+     * @return Err(StorageUnavailable)
+     */
+    private CompletableFuture<Result<StreamedArtifact>> tempFileFailed(
+        final IOException err, final Key primaryKey,
+        final Publisher<ByteBuffer> upstreamBody, final RequestContext ctx
+    ) {
+        EcsLogger.error("com.auto1.pantera.http.cache")
+            .message("Stream-through temp file could not be created; artifact not served"
+                + " (cause: storage_unavailable)")
+            .eventCategory("file")
+            .eventAction("cache_write")
+            .eventOutcome("failure")
+            .field("event.reason", "storage_unavailable")
+            .field("repository.name", this.repoName)
+            .field("url.path", primaryKey.string())
+            .traceContext(traceId(ctx), null)
+            .error(err)
+            .field("log.source", "application")
+            .log();
+        // Release the upstream connection: nobody will subscribe now.
+        Flowable.fromPublisher(upstreamBody).subscribe(buf -> { }, ignored -> { });
+        return CompletableFuture.completedFuture(
+            Result.err(new Fault.StorageUnavailable(err, primaryKey.string()))
+        );
     }
 
     /** A verified-but-not-yet-committed artifact that can be served immediately. */

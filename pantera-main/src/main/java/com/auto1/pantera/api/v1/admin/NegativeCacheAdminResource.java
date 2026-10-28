@@ -529,7 +529,7 @@ public final class NegativeCacheAdminResource {
         if (err != null) {
             final Throwable cause = err instanceof CompletionException && err.getCause() != null
                 ? err.getCause() : err;
-            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", String.valueOf(cause.getMessage()));
+            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", cause);
         } else {
             ctx.response()
                 .setStatusCode(200)

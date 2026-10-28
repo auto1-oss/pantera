@@ -169,9 +169,12 @@ curl -X POST http://localhost:8086/api/v1/auth/token \
 
 **Symptoms:** Proxy repositories return HTTP 502 Bad Gateway or 504 Gateway Timeout.
 
-**Diagnosis:**
+**Diagnosis:** the cause of each 5xx is on the application record that shares the access-log line's `trace.id`. Its `event.reason` names the cause (`upstream_status_503`, `connect_timeout`, `circuit_open`, ...) and `url.full` / `destination.address` name the upstream. See [Logging: Why a Request Got a 5xx](logging.md#why-a-request-got-a-5xx).
 
 ```bash
+# Causes of recent 5xx answers, most frequent first
+docker logs pantera 2>&1 | jq -r 'select(.["event.outcome"] == "failure" and (.["http.response.status_code"] // 0) >= 500 and .["log.logger"] != "http.access") | .["event.reason"]' | sort | uniq -c | sort -rn
+
 # Test upstream connectivity from inside the container
 docker exec pantera curl -I https://repo1.maven.org/maven2
 

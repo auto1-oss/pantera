@@ -74,7 +74,7 @@ class ProxyBlobTest {
     void shouldHandleStatus() {
         final byte[] data = "content".getBytes();
         final CompletableFuture<Content> content = new ProxyBlob(
-            (line, headers, body) -> ResponseBuilder.internalError(new IllegalArgumentException()).completedFuture(),
+            (line, headers, body) -> ResponseBuilder.internalError().completedFuture(),
             "test-2",
             new Digest.FromString("sha256:567"),
             data.length

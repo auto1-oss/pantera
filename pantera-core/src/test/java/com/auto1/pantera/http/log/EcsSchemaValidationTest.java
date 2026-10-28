@@ -290,6 +290,26 @@ public final class EcsSchemaValidationTest {
     }
 
     @Test
+    void gatewayStatusesProduceStatusSpecificMessages() {
+        final com.auto1.pantera.http.RsStatus[] statuses = {
+            com.auto1.pantera.http.RsStatus.BAD_GATEWAY,
+            com.auto1.pantera.http.RsStatus.SERVICE_UNAVAILABLE,
+            com.auto1.pantera.http.RsStatus.GATEWAY_TIMEOUT,
+        };
+        final String[] expected = {"Bad gateway", "Service unavailable", "Gateway timeout"};
+        for (int idx = 0; idx < statuses.length; idx += 1) {
+            capture.events.clear();
+            new EcsLogEvent()
+                .httpMethod("GET")
+                .httpStatus(statuses[idx])
+                .urlPath("/maven-central/a.jar")
+                .log();
+            assertEquals(expected[idx], payloadMessage(capture.lastEvent()),
+                statuses[idx].code() + " must produce a status-specific message");
+        }
+    }
+
+    @Test
     void statusCodeMessageIsNeverNullOrEmpty() {
         // Verify the default-message path never returns null/empty for common status codes
         final int[] codes = {200, 201, 204, 304, 400, 401, 403, 404, 500, 503};

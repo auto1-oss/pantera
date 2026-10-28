@@ -163,19 +163,10 @@ public final class PypiHandler {
             HandlerExecutor.get()
         ).whenComplete((outcome, err) -> {
             if (err != null) {
-                EcsLogger.error(PypiHandler.LOGGER)
-                    .message("PyPI " + action + " failed")
-                    .eventCategory("web")
-                    .eventAction(action)
-                    .eventOutcome("failure")
-                    .field("repository.name", repo)
-                    .field("package.name", pkg)
-                    .field("package.version", version)
-                    .error(err)
-                    .field("log.source", "application")
-                    .log();
+                // One record: sendError logs the throwable with the request's
+                // trace.id (url.path names repository, package and version).
                 ApiResponse.sendError(
-                    ctx, 500, "INTERNAL_ERROR", "PyPI " + action + " failed"
+                    ctx, 500, "INTERNAL_ERROR", "PyPI " + action + " failed", err
                 );
             } else if (outcome == Outcome.NO_REPOSITORY) {
                 ApiResponse.sendError(

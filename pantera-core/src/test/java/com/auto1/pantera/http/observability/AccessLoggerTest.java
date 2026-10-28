@@ -129,6 +129,24 @@ final class AccessLoggerTest {
     }
 
     @Test
+    @DisplayName("5xx access message names the status, not 'Internal server error' for all")
+    void serverErrorMessageIsStatusSpecific() {
+        final int[] codes = {500, 502, 503, 504};
+        final String[] expected = {
+            "Internal server error", "Bad gateway", "Service unavailable", "Gateway timeout",
+        };
+        for (int idx = 0; idx < codes.length; idx += 1) {
+            StructuredLogger.access().forRequest(minimalCtx())
+                .status(codes[idx]).duration(1L).log();
+            MatcherAssert.assertThat(
+                "access message of " + codes[idx],
+                payloadField(this.capture.last(), "message"),
+                new org.hamcrest.core.IsEqual<>(expected[idx])
+            );
+        }
+    }
+
+    @Test
     @DisplayName(">5000ms slow → WARN per LevelPolicy.CLIENT_FACING_SLOW")
     void slowRequestLogsAtWarn() {
         StructuredLogger.access().forRequest(minimalCtx())

@@ -90,10 +90,14 @@ public final class ImportSlice implements Slice {
                         .eventCategory("web")
                         .eventAction("import_artifact")
                         .eventOutcome("failure")
+                        .field("http.response.status_code", 500)
+                        .requestContext(headers)
                         .error(cause)
                         .field("log.source", "application")
                         .log();
-                    return ResponseBuilder.internalError(cause).build();
+                    return ResponseBuilder.internalError()
+                        .textBody("Import processing failed")
+                        .build();
                 }).toCompletableFuture();
         } catch (final ResponseException rex) {
             // EXPECTED: ResponseException carries its own HTTP response;
@@ -105,10 +109,14 @@ public final class ImportSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("import_artifact")
                 .eventOutcome("failure")
+                .field("http.response.status_code", 500)
+                .requestContext(headers)
                 .error(ex)
                 .field("log.source", "application")
                 .log();
-            return CompletableFuture.completedFuture(ResponseBuilder.internalError(ex).build());
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.internalError().textBody("Import processing failed").build()
+            );
         }
     }
 

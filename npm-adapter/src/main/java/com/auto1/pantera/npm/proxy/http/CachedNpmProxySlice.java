@@ -23,6 +23,7 @@ import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.cache.NegativeCacheRegistry;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -327,13 +328,18 @@ public final class CachedNpmProxySlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.recordProxyMetric("exception", duration);
                 this.recordUpstreamErrorMetric(error);
+                final String reason =
+                    new com.auto1.pantera.http.log.FailureCause(error).reason();
                 EcsLogger.warn("com.auto1.pantera.npm")
-                    .message("NPM proxy: upstream request failed")
+                    .message("NPM proxy: upstream request failed (cause: " + reason + ")")
                     .eventCategory("web")
                     .eventAction("proxy_request")
                     .eventOutcome("failure")
+                    .field("event.reason", reason)
                     .field("repository.name", this.repoName)
                     .field("package.name", key.string())
+                    .field("url.path", line.uri().getPath())
+                    .requestContext(headers)
                     .error(error)
                     .field("log.source", "application")
                     .log();
@@ -381,6 +387,23 @@ public final class CachedNpmProxySlice implements Slice {
                 );
             case ERROR:
             default:
+                // One record per 503 answered: the upstream status, or
+                // upstream_request_failed when the fetch threw. The throwable
+                // itself is logged once, by the request that led the
+                // coalesced fetch (doFetch, under the leader's trace.id); a
+                // SingleFlight follower's record carries no throwable and is
+                // not joined to the leader's by trace.id — match them by
+                // repository.name, url.path and time.
+                new ServerErrorLog("com.auto1.pantera.npm", "proxy_request", headers)
+                    .repository(this.repoName)
+                    .path(line.uri().getPath())
+                    .status(RsStatus.SERVICE_UNAVAILABLE.code())
+                    .reason(
+                        outcome.status() > 0
+                            ? "upstream_status_" + outcome.status()
+                            : "upstream_request_failed"
+                    )
+                    .warn("NPM proxy could not fetch from upstream");
                 return CompletableFuture.completedFuture(
                     CachedNpmProxySlice.withUpstreamStatus(
                         ResponseBuilder.unavailable()

@@ -84,7 +84,7 @@ public final class TroubleshootResource {
                         ApiResponse.sendError(ctx, 400, "BAD_REQUEST", cause.getMessage());
                     } else {
                         ApiResponse.sendError(
-                            ctx, 500, "INTERNAL_ERROR", String.valueOf(cause.getMessage())
+                            ctx, 500, "INTERNAL_ERROR", cause
                         );
                     }
                 }

@@ -277,7 +277,7 @@ public final class CooldownInspectResource {
     private static void send(final RoutingContext ctx, final JsonObject json, final Throwable err) {
         if (err != null) {
             ApiResponse.sendError(
-                ctx, 500, "INTERNAL_ERROR", String.valueOf(PackageInspector.cause(err).getMessage())
+                ctx, 500, "INTERNAL_ERROR", PackageInspector.cause(err)
             );
         } else {
             ctx.response().setStatusCode(200)

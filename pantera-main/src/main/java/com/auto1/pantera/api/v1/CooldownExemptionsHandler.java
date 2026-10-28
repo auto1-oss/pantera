@@ -278,16 +278,11 @@ public final class CooldownExemptionsHandler {
         } else if (cause instanceof ApiException api) {
             ApiResponse.sendError(ctx, api.status, api.code, api.getMessage());
         } else {
-            EcsLogger.error("com.auto1.pantera.cooldown")
-                .message("Cooldown exemptions request failed")
-                .eventCategory("configuration")
-                .eventAction("cooldown_exemptions_update")
-                .eventOutcome("failure")
-                .field("repository.name", ctx.pathParam("name"))
-                .error(cause)
-                .field("log.source", "application")
-                .log();
-            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", "Failed to process cooldown exemptions");
+            // One record: sendError logs the throwable (url.path names the
+            // repository) with the request's trace.id.
+            ApiResponse.sendError(
+                ctx, 500, "INTERNAL_ERROR", "Failed to process cooldown exemptions", cause
+            );
         }
     }
 

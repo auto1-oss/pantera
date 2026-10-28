@@ -852,7 +852,16 @@ public final class StructuredLogger {
             return "Request processed";
         }
         if (status >= 500) {
-            return "Internal server error";
+            // Status-specific: a 502 is an upstream failure, not an internal
+            // error. The cause of any 5xx is on the application record that
+            // shares this line's trace.id.
+            return switch (status) {
+                case 502 -> "Bad gateway";
+                case 503 -> "Service unavailable";
+                case 504 -> "Gateway timeout";
+                case 501 -> "Not implemented";
+                default -> "Internal server error";
+            };
         }
         if (status == 404) {
             return "Not found";

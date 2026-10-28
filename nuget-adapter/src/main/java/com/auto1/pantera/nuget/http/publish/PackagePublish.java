@@ -203,9 +203,20 @@ public final class PackagePublish implements Route {
                     return this.syncIndex.recordSync(event)
                         .thenApply(ignored -> RsStatus.CREATED);
                 }
-            ).exceptionally(throwable ->
-                toStatus(throwable.getCause() == null ? throwable : throwable.getCause())
-            ).thenApply(s -> ResponseBuilder.from(s).build());
+            ).exceptionally(throwable -> {
+                final RsStatus status =
+                    toStatus(throwable.getCause() == null ? throwable : throwable.getCause());
+                if (status.serverError()) {
+                    new com.auto1.pantera.http.log.ServerErrorLog(
+                        "com.auto1.pantera.nuget", "artifact_upload", headers
+                    )
+                        .repository(this.name)
+                        .status(status.code())
+                        .failure(throwable)
+                        .error("NuGet package publish failed");
+                }
+                return status;
+            }).thenApply(s -> ResponseBuilder.from(s).build());
         }
 
         /**

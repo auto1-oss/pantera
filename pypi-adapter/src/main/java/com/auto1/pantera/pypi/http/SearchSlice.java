@@ -17,8 +17,10 @@ import com.auto1.pantera.asto.streams.ContentAsStream;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.html.HtmlEscape;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.pypi.NormalizedProjectName;
 import com.auto1.pantera.pypi.cooldown.Pep440VersionComparator;
@@ -78,7 +80,14 @@ public final class SearchSlice implements Slice {
                         .body(content)
                         .build();
                 }
-                return ResponseBuilder.internalError(throwable).build();
+                // The cause is logged; the body names none (exception text
+                // can carry storage paths).
+                new ServerErrorLog("com.auto1.pantera.pypi", "package_search", headers)
+                    .path(line.uri().getPath())
+                    .status(RsStatus.INTERNAL_ERROR.code())
+                    .failure(throwable)
+                    .error("PyPI XML-RPC search failed");
+                return ResponseBuilder.internalError().textBody("Search failed").build();
             }
         ).toCompletableFuture();
     }

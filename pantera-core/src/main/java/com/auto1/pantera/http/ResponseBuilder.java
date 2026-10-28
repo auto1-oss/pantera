@@ -93,11 +93,6 @@ public class ResponseBuilder {
         return new ResponseBuilder(RsStatus.INTERNAL_ERROR);
     }
 
-    public static ResponseBuilder internalError(Throwable error) {
-        return new ResponseBuilder(RsStatus.INTERNAL_ERROR)
-            .body(errorBody(error));
-    }
-
     public static ResponseBuilder partialContent() {
         return new ResponseBuilder(RsStatus.PARTIAL_CONTENT);
     }

@@ -210,7 +210,7 @@ public final class SettingsHandler {
             HandlerExecutor.get()
         ).whenComplete((result, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response()
                     .setStatusCode(HttpStatus.OK_200)
@@ -443,7 +443,7 @@ public final class SettingsHandler {
                 oldValueJson, err == null ? newValueJson : null
             );
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response().setStatusCode(HttpStatus.OK_200)
                     .putHeader("Content-Type", "application/json")
@@ -508,7 +508,7 @@ public final class SettingsHandler {
                         "Cannot disable the '" + msg.substring("protected:".length())
                             + "' provider — it is required for fallback access.");
                 } else {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
             }
         });
@@ -542,7 +542,7 @@ public final class SettingsHandler {
             this.authProviderDao.put(type, priority, jcfg);
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 this.flushAuthCache();
                 ctx.response().setStatusCode(201)
@@ -596,7 +596,7 @@ public final class SettingsHandler {
                         "Cannot delete the '" + msg.substring("protected:".length())
                             + "' provider — it is required for fallback access.");
                 } else {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 }
             }
         });
@@ -631,7 +631,7 @@ public final class SettingsHandler {
             this.authProviderDao.updateConfig(providerId, jobj);
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 this.flushAuthCache();
                 ctx.response().setStatusCode(200)
@@ -694,8 +694,7 @@ public final class SettingsHandler {
             HandlerExecutor.get())
             .whenComplete((rows, err) -> {
                 if (err != null) {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
-                        err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                     return;
                 }
                 final JsonObject body = new JsonObject();
@@ -746,8 +745,7 @@ public final class SettingsHandler {
             HandlerExecutor.get())
             .whenComplete((row, err) -> {
                 if (err != null) {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
-                        err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                     return;
                 }
                 final JsonObject body = new JsonObject().put("key", key);
@@ -853,8 +851,7 @@ public final class SettingsHandler {
                     oldRuntimeJson, err == null ? newRuntimeJson : null
                 );
                 if (err != null) {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
-                        err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 } else {
                     // Return the canonical GET-shaped response so a UI can
                     // re-render from the response without a re-fetch. The
@@ -927,8 +924,7 @@ public final class SettingsHandler {
                     oldDeleteJson, null
                 );
                 if (err != null) {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
-                        err.getMessage());
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
                 } else {
                     ctx.response().setStatusCode(204).end();
                 }

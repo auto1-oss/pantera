@@ -382,13 +382,17 @@ public final class ProxyDownloadSlice implements Slice {
             return target.response(newLine, out, Content.EMPTY).thenCompose(response -> {
                 if (!response.status().success()) {
                     EcsLogger.warn("com.auto1.pantera.composer")
-                        .message("Upstream download failed")
+                        .message("Upstream download failed with status "
+                            + response.status().code() + " (relayed)")
                         .eventCategory("web")
                         .eventAction("proxy_download")
                         .eventOutcome("failure")
+                        .field("event.reason", "upstream_status_" + response.status().code())
                         .field("package.name", packageName)
                         .field("package.version", version)
                         .field("http.response.status_code", response.status().code())
+                        .field("url.full", orig)
+                        .requestContext(headers)
                         .field("log.source", "http")
                         .log();
                     AuditLogger.access(

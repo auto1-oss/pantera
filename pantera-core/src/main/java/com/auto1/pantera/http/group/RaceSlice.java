@@ -329,11 +329,17 @@ public final class RaceSlice implements Slice {
                 if (result.isDone()) {
                     return null;
                 }
+                final String reason =
+                    new com.auto1.pantera.http.log.FailureCause(err).reason();
                 EcsLogger.warn("com.auto1.pantera.http")
-                    .message("Failed to get response from repository (index: " + index + ")")
+                    .message("Failed to get response from repository (index: " + index
+                        + ", cause: " + reason + ")")
                     .eventCategory("web")
                     .eventAction("group_race")
                     .eventOutcome("failure")
+                    .field("event.reason", reason)
+                    .field("url.path", line.uri().getPath())
+                    .requestContext(headers)
                     .error(err)
                     .field("log.source", "application")
                     .log();

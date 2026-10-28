@@ -37,6 +37,7 @@ import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -973,16 +974,12 @@ final class CachedProxySlice implements Slice {
                 this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr, auditCtx)
             );
         }).exceptionally(err -> {
-            EcsLogger.warn("com.auto1.pantera.http")
-                .message("Go primary-artifact verify-and-serve failed; returning 502")
-                .eventCategory("web")
-                .eventAction("cache_write")
-                .eventOutcome("failure")
-                .field("repository.name", this.rname)
-                .field("url.path", key.string())
-                .error(err)
-                .field("log.source", "application")
-                .log();
+            new ServerErrorLog("com.auto1.pantera.http", "cache_write", auditCtx.requestHeaders())
+                .repository(this.rname)
+                .path(key.string())
+                .status(RsStatus.BAD_GATEWAY.code())
+                .failure(err)
+                .warnUnlessExpected("Go primary-artifact verify-and-serve failed");
             return ResponseBuilder.badGateway().build();
         }).toCompletableFuture();
     }
@@ -1006,7 +1003,7 @@ final class CachedProxySlice implements Slice {
         final AuditContext auditCtx
     ) {
         final RequestContext ctx = new RequestContext(
-            org.apache.logging.log4j.ThreadContext.get("trace.id"),
+            auditCtx.traceId(),
             null,
             this.rname,
             key.string()
@@ -1035,6 +1032,17 @@ final class CachedProxySlice implements Slice {
                             ResponseBuilder.notFound().build()
                         );
                     }
+                    new ServerErrorLog(
+                        "com.auto1.pantera.http", "proxy_upstream", auditCtx.requestHeaders()
+                    )
+                        .repository(this.rname)
+                        .path(key.string())
+                        .status(RsStatus.BAD_GATEWAY.code())
+                        .reason(
+                            resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()
+                                ? "upstream_status_" + status : "circuit_open"
+                        )
+                        .warnUnlessExpected("Upstream answered " + status + " for module artifact");
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.badGateway()
                             .textBody("Upstream temporarily unavailable")
@@ -1111,16 +1119,14 @@ final class CachedProxySlice implements Slice {
                 if (!leaderGate.isDone()) {
                     leaderGate.complete(null);
                 }
-                EcsLogger.warn("com.auto1.pantera.http")
-                    .message("Go stream-through primary fetch failed; returning 502")
-                    .eventCategory("web")
-                    .eventAction("cache_write")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.rname)
-                    .field("url.path", key.string())
-                    .error(err)
-                    .field("log.source", "application")
-                    .log();
+                new ServerErrorLog(
+                    "com.auto1.pantera.http", "proxy_upstream", auditCtx.requestHeaders()
+                )
+                    .repository(this.rname)
+                    .path(key.string())
+                    .status(RsStatus.BAD_GATEWAY.code())
+                    .failure(err)
+                    .warnUnlessExpected("Go stream-through primary fetch failed");
                 return ResponseBuilder.badGateway()
                     .textBody("Upstream temporarily unavailable")
                     .build();

@@ -218,7 +218,7 @@ public final class AuthHandler {
         ).whenComplete((user, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
-                    "Sign-in is temporarily unavailable. Please try again.");
+                    "Sign-in is temporarily unavailable. Please try again.", err);
             } else if (user.isPresent()) {
                 this.loginThrottle.recordSuccess(name, client);
                 final Tokens.TokenPair pair = this.tokens.generatePair(user.get());
@@ -336,17 +336,10 @@ public final class AuthHandler {
             return new JsonObject().put("url", url).put("state", state);
         }, HandlerExecutor.get()).whenComplete((result, err) -> {
             if (err != null) {
-                EcsLogger.error("com.auto1.pantera.api.v1")
-                    .message("SSO redirect failed: "
-                        + (err.getMessage() != null ? err.getMessage() : err.getClass().getSimpleName()))
-                    .eventCategory("authentication")
-                    .eventAction("sso_redirect")
-                    .error(err)
-                    .field("log.source", "application")
-                    .field("event.outcome", "failure")
-                    .log();
+                // One record: sendError logs the throwable with the request's
+                // trace.id; the client gets the fixed sign-in message.
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
-                    "Sign-in is temporarily unavailable. Please try again.");
+                    "Sign-in is temporarily unavailable. Please try again.", err);
             } else if (result == null) {
                 ApiResponse.sendError(ctx, 404, "NOT_FOUND",
                     "Sign-in provider is not configured.");
@@ -1262,7 +1255,7 @@ public final class AuthHandler {
             return arr;
         }, HandlerExecutor.get()).whenComplete((arr, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 ctx.response().setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
@@ -1295,7 +1288,7 @@ public final class AuthHandler {
             HandlerExecutor.get()
         ).whenComplete((revoked, err) -> {
             if (err != null) {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else if (revoked) {
                 ctx.response().setStatusCode(204).end();
             } else {
