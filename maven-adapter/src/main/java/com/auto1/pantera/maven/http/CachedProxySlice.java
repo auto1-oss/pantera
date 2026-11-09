@@ -26,6 +26,7 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.BaseCachedProxySlice;
 import com.auto1.pantera.http.cache.DigestComputer;
+import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.cache.ProxyCacheConfig;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
 import com.auto1.pantera.http.cache.SidecarFile;
@@ -1439,6 +1440,21 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     "Upstream answered " + err.status() + " for primary artifact"
                 );
             }
+        } else if (!response.headers().values(NegativeCache.SKIP_HEADER).isEmpty()) {
+            EcsLogger.info(CachedProxySlice.LOGGER)
+                .message("Upstream answered " + err.status()
+                    + " for primary artifact; answering non-authoritative 404")
+                .eventCategory("web")
+                .eventAction("proxy_upstream_miss")
+                .eventOutcome("failure")
+                .field("event.reason", "upstream_status_" + err.status())
+                .field("http.response.status_code", err.status())
+                .field("repository.name", this.repoName())
+                .field("url.path", path)
+                .field("url.full", upstreamUri)
+                .requestContext(inboundHeaders)
+                .field("log.source", "application")
+                .log();
         }
         return response;
     }
@@ -1460,6 +1476,12 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      *       (transient cooldown).</li>
      *   <li><b>401, 403</b> → propagate verbatim (auth is authoritative,
      *       not a fallthrough signal).</li>
+     *   <li><b>Any other 4xx</b> (409, 400, 422, …) → 404 carrying
+     *       {@link NegativeCache#SKIP_HEADER}: the upstream refused this
+     *       path (e.g. a release-only repository answering 409 to a
+     *       SNAPSHOT request), it did not fail. A 502 here convicted the
+     *       member on the group breaker; the skip marker keeps the miss
+     *       out of every negative cache.</li>
      *   <li><b>5xx (no Retry-After)</b> → 502 badGateway; group fanout
      *       will try the next member. Index cache MUST NOT write a
      *       negative-cache entry for these.</li>
@@ -1493,6 +1515,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 .textBody("Upstream auth required")
                 .build();
         }
+        if (status >= 400 && status < 500) {
+            return ResponseBuilder.notFound()
+                .header(NegativeCache.SKIP_HEADER, "true")
+                .build();
+        }
         // Outbound-breaker fast-fail: keep the marker (and Retry-After)
         // on the re-synthesised 502 so the group resolver skips this
         // member instead of convicting it on the breaker's own output.
@@ -1503,8 +1530,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             err.retryAfter().ifPresent(ra -> rb.header("Retry-After", ra));
             return rb.build();
         }
-        // 5xx and any other unclassified non-2xx — transient,
-        // surface as bad-gateway so group fanout retries another member.
+        // 5xx (and any non-4xx stray) — transient, surface as
+        // bad-gateway so group fanout retries another member.
         return ResponseBuilder.badGateway()
             .textBody("Upstream temporarily unavailable")
             .build();

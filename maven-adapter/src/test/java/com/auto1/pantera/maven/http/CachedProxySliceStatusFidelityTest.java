@@ -152,6 +152,38 @@ final class CachedProxySliceStatusFidelityTest {
     }
 
     @Test
+    void upstream409MapsToUnverified404() {
+        // An upstream 409 (e.g. a release-only repository refusing a
+        // SNAPSHOT path) is a refusal, not an outage: mapping it to 502
+        // convicted the member on the group breaker and turned every
+        // group miss into a 503 for the whole block window.
+        final Response r = invoke(constantResponse(RsStatus.CONFLICT, null));
+        MatcherAssert.assertThat(
+            "409 maps to a miss, not a 502",
+            r.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "the miss is marked non-authoritative so it is never negative-cached",
+            r.headers().values(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER),
+            new IsEqual<>(List.of("true"))
+        );
+    }
+
+    @Test
+    void upstream400MapsToUnverified404() {
+        final Response r = invoke(constantResponse(RsStatus.BAD_REQUEST, null));
+        MatcherAssert.assertThat(
+            "400 maps to a miss, not a 502",
+            r.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "the miss is marked non-authoritative so it is never negative-cached",
+            r.headers().values(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER),
+            new IsEqual<>(List.of("true"))
+        );
+    }
+
+    @Test
     void circuitOpen502KeepsMarkerAndRetryAfter() {
         final Slice fastfail = (line, headers, body) ->
             CompletableFuture.completedFuture(

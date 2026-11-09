@@ -24,6 +24,7 @@
 
 ### 🔧 Bug fixes
 
+- **An upstream `4xx` no longer blocks a group member** — a Maven proxy answers an upstream `409`/`400` with an uncached `404` instead of a `502`, and a group skips any member `4xx` other than `429` without counting it against the member's circuit breaker, so a few refused requests can no longer turn every miss in the group into a `503`. ([@aydasraf](https://github.com/aydasraf))
 - **Clustered deployments no longer drop artifact events or proxy index/audit records** — the per-node event drain and the per-format proxy index/audit processors (Maven, npm, PyPI, Go, Composer) ran through cluster-shared Quartz, which could fire them on the wrong node or delete another node's job; they now run on each node's own scheduler. ([@aydasraf](https://github.com/aydasraf))
 - **Docker manifest `GET`/`HEAD` honour `Accept`** — a `406` when the client accepts none of the manifest's media types (wildcards respected), instead of an unparseable body. ([@aydasraf](https://github.com/aydasraf))
 - **Docker proxy caches manifests per negotiated `Accept`-variant** — the client's `Accept` is forwarded upstream and keys the cache, so a multi-variant tag no longer cross-serves the wrong media type. ([@aydasraf](https://github.com/aydasraf))
