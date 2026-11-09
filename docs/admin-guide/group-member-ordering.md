@@ -56,7 +56,13 @@ migration; it is purely noise at this point.
   upstream circuit breaker is open.
 - A member redirect (`3xx`) or a member that does not support the method
   (`405`, for example `HEAD` on a proxy endpoint that only answers `GET`)
-  does not count as a member failure and is not relayed. pypi groups
+  does not count as a member failure and is not relayed. Neither does any
+  other member `4xx` except `429` (for example a `409` from an upstream
+  that refuses a SNAPSHOT path in a release repository): the group asks
+  the next member, never trips that member's circuit breaker, and if no
+  member has the file it answers a `404` that is not cached as "not
+  found". A Maven proxy member answers such an upstream `4xx` with that
+  same uncached `404` instead of a `502`. pypi groups
   rewrite `/simple/<name>/` to the PEP 503 normalised name before asking
   members.
 - A group always serves through its members' current configuration.
