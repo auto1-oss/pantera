@@ -88,7 +88,8 @@ public final class MavenProxy implements Slice {
                     cfg.type(),
                     cooldown,
                     asto,  // Pass storage for checksum persistence
-                    cooldownMetadata
+                    cooldownMetadata,
+                    cfg.verifyPgp()
                 )
             ).collect(Collectors.toList()),
             line -> asto.map(

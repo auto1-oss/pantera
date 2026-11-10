@@ -108,7 +108,7 @@ final class ComposerProxyDistSizeTest {
         processor.setStorage(storage);
         processor.setPackages(packages);
         processor.setEvents(events);
-        processor.execute(null);
+        processor.run();
         MatcherAssert.assertThat(events.poll().size(), new IsEqual<>((long) ZIP.length));
     }
 

@@ -13,7 +13,10 @@ package com.auto1.pantera.maven.security;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -84,5 +87,63 @@ public final class InMemoryKeyringStore implements KeyringStore {
      */
     public int size() {
         return this.byId.size();
+    }
+
+    /**
+     * Parse an ASCII-armored public key block and describe every key it
+     * contains (a master key plus any sub-keys) — one {@link KeyDescriptor}
+     * per key, each carrying the same original armored text. Used by the
+     * admin keyring-upload endpoint (WS4-maven.3) to derive the
+     * {@code key_id_hex}/{@code fingerprint} pair(s) to persist, without
+     * duplicating this parsing logic in {@code pantera-main}.
+     *
+     * @param asciiArmored ASCII-armored public key block bytes
+     * @return One descriptor per key found in the block
+     * @throws IOException on IO failure
+     * @throws PGPException on PGP decoding failure
+     */
+    public static List<KeyDescriptor> describeKeys(final byte[] asciiArmored)
+        throws IOException, PGPException {
+        Objects.requireNonNull(asciiArmored, "asciiArmored");
+        final List<KeyDescriptor> descriptors = new ArrayList<>();
+        try (InputStream decoder = PGPUtil.getDecoderStream(
+            new ByteArrayInputStream(asciiArmored)
+        )) {
+            final PGPPublicKeyRingCollection rings = new BcPGPPublicKeyRingCollection(decoder);
+            final Iterator<PGPPublicKeyRing> ringIter = rings.getKeyRings();
+            while (ringIter.hasNext()) {
+                final Iterator<PGPPublicKey> keyIter = ringIter.next().getPublicKeys();
+                while (keyIter.hasNext()) {
+                    descriptors.add(describe(keyIter.next()));
+                }
+            }
+        }
+        return descriptors;
+    }
+
+    /**
+     * @param key Parsed public key
+     * @return Descriptor with the 16-char uppercase hex long key id and the
+     *         40-char uppercase hex SHA-1 fingerprint
+     */
+    private static KeyDescriptor describe(final PGPPublicKey key) {
+        final StringBuilder fingerprint = new StringBuilder(40);
+        for (final byte b : key.getFingerprint()) {
+            fingerprint.append(String.format(Locale.ROOT, "%02X", b));
+        }
+        return new KeyDescriptor(
+            String.format(Locale.ROOT, "%016X", key.getKeyID()),
+            fingerprint.toString()
+        );
+    }
+
+    /**
+     * A single key's identity, as derived from an uploaded ASCII-armored
+     * block.
+     *
+     * @param keyIdHex 16-char uppercase hex long key id
+     * @param fingerprintHex 40-char uppercase hex SHA-1 fingerprint
+     */
+    public record KeyDescriptor(String keyIdHex, String fingerprintHex) {
     }
 }

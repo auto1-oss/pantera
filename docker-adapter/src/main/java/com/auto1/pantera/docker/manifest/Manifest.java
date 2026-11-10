@@ -26,6 +26,9 @@ import java.io.ByteArrayInputStream;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -185,6 +188,70 @@ public final class Manifest {
             .filter(digest -> digest != null && !digest.isEmpty())
             .map(Digest.FromString::new)
             .collect(Collectors.toList());
+    }
+
+    /**
+     * OCI 1.1 {@code subject} descriptor digest — present when this manifest
+     * refers to another manifest (a signature, SBOM, or other attachment
+     * pushed via {@code oras attach} / {@code cosign} OCI-mode). Absent for
+     * an ordinary image manifest.
+     *
+     * @return Subject digest, or empty if the {@code subject} field is absent.
+     */
+    public Optional<Digest> subject() {
+        final JsonObject subj = this.json.getJsonObject("subject");
+        if (subj == null) {
+            return Optional.empty();
+        }
+        final String digest = subj.getString("digest", null);
+        if (Strings.isNullOrEmpty(digest)) {
+            return Optional.empty();
+        }
+        return Optional.of(new Digest.FromString(digest));
+    }
+
+    /**
+     * OCI 1.1 {@code artifactType} — identifies the type of artifact this
+     * manifest represents (e.g. a cosign signature, an SBOM). Falls back to
+     * the {@code config.mediaType} per the OCI referrers algorithm when the
+     * top-level field is absent, since most referrer producers (cosign,
+     * oras) set one or the other.
+     *
+     * @return Artifact type, or empty when neither is present.
+     */
+    public Optional<String> artifactType() {
+        final String direct = this.json.getString("artifactType", null);
+        if (!Strings.isNullOrEmpty(direct)) {
+            return Optional.of(direct);
+        }
+        final JsonObject config = this.json.getJsonObject("config");
+        if (config != null) {
+            final String configType = config.getString("mediaType", null);
+            if (!Strings.isNullOrEmpty(configType)) {
+                return Optional.of(configType);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Top-level manifest {@code annotations} — copied verbatim into the
+     * referrer descriptor served by {@code GET .../referrers/<digest>} so
+     * consumers (e.g. cosign) can inspect signature metadata without
+     * fetching the full referring manifest.
+     *
+     * @return Annotations map, or empty when absent.
+     */
+    public Optional<Map<String, String>> annotations() {
+        final JsonObject fields = this.json.getJsonObject("annotations");
+        if (fields == null || fields.isEmpty()) {
+            return Optional.empty();
+        }
+        final Map<String, String> result = new LinkedHashMap<>();
+        for (final String key : fields.keySet()) {
+            result.put(key, fields.getString(key, ""));
+        }
+        return Optional.of(Collections.unmodifiableMap(result));
     }
 
     /**

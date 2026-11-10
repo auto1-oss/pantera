@@ -136,3 +136,46 @@ groups:
             If-None-Match / If-Modified-Since validators, or a cache eviction bug is dropping
             the stored ETag. Reproduce with: `curl -i -H 'If-None-Match: <etag>' <upstream-url>`.
           runbook_url: "https://github.com/auto1-oss/pantera/blob/master/docs/runbooks/low-conditional-get-hit-rate.md"
+
+  - name: pantera_v23_alerts
+    rules:
+
+      # ------------------------------------------------------------------
+      # Alert: CachedBlobStorage write-back queue near capacity.
+      #
+      # WS1.2/WS1.6 durable write-back admits a save into an in-memory
+      # queue and acknowledges the caller before the S3-compatible PUT
+      # completes; CachedBlobStorage rejects new admissions outright
+      # (admission-first backpressure, logged as
+      # "Write-back queue saturated") once depth reaches capacity. This
+      # alert fires BEFORE that 503 backpressure engages, at 80% of the
+      # configured cache.write-back-queue-capacity, so an operator has a
+      # window to act instead of learning about it from client-visible
+      # 503s.
+      #
+      # Metric series: pantera_storage_cache_writeback_queue_depth{cache},
+      # pantera_storage_cache_writeback_queue_capacity{cache} — both
+      # gauges bound by CachedBlobStorageMetricsBinder.
+      # ------------------------------------------------------------------
+      - alert: PanteraWriteBackQueueNearCapacity
+        expr: |
+          (
+            max by (cache) (pantera_storage_cache_writeback_queue_depth)
+            /
+            clamp_min(max by (cache) (pantera_storage_cache_writeback_queue_capacity), 1)
+          ) >= 0.8
+        for: 5m
+        labels:
+          severity: warn
+          team: devops
+          component: storage-write-back
+        annotations:
+          summary: "Write-back queue for cache {{ $labels.cache }} is at {{ $value | humanizePercentage }} of capacity"
+          description: |
+            pantera_storage_cache_writeback_queue_depth for cache {{ $labels.cache }} has been at or
+            above 80% of pantera_storage_cache_writeback_queue_capacity for 5 minutes. At 100% new
+            saves are rejected outright (admission-first backpressure, client-visible 503). Check
+            pantera_storage_cache_writeback_oldest_pending_age_seconds for the same cache — a high
+            age means uploads are stuck (backend outage/throttling), not just high volume; check
+            pantera_storage_blobstore_requests_total{outcome="throttled"} to confirm.
+          runbook_url: "https://github.com/auto1-oss/pantera/blob/master/docs/runbooks/write-back-queue-near-capacity.md"

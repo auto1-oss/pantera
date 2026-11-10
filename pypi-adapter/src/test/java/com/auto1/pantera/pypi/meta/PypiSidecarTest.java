@@ -149,6 +149,38 @@ class PypiSidecarTest {
     }
 
     @Test
+    void writesAndReadsCoreMetadataSha256() {
+        PypiSidecar.write(
+            this.storage, ARTIFACT_KEY, ">=3.8", UPLOAD_TIME, "deadbeefcafe"
+        ).join();
+
+        final PypiSidecar.Meta meta = PypiSidecar.read(this.storage, ARTIFACT_KEY)
+            .join()
+            .orElseThrow(() -> new AssertionError("Sidecar missing after write"));
+
+        MatcherAssert.assertThat(
+            "dist-info-metadata must carry the PEP 658 .metadata sha256",
+            meta.distInfoMetadata(),
+            new IsEqual<>(Optional.of("deadbeefcafe"))
+        );
+    }
+
+    @Test
+    void fourArgWriteLeavesCoreMetadataAbsent() {
+        PypiSidecar.write(this.storage, ARTIFACT_KEY, ">=3.8", UPLOAD_TIME).join();
+
+        final PypiSidecar.Meta meta = PypiSidecar.read(this.storage, ARTIFACT_KEY)
+            .join()
+            .orElseThrow(() -> new AssertionError("Sidecar missing after write"));
+
+        MatcherAssert.assertThat(
+            "The 4-arg overload (no .metadata extracted) must not fabricate a digest",
+            meta.distInfoMetadata(),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
     void yanksAndUnyanks() {
         PypiSidecar.write(this.storage, ARTIFACT_KEY, ">=3.9", UPLOAD_TIME).join();
 

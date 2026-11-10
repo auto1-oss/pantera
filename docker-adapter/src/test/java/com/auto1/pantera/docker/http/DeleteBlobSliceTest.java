@@ -122,6 +122,28 @@ final class DeleteBlobSliceTest {
     }
 
     @Test
+    void shouldKeepLayerReferencedByAnotherImagesUntaggedReferrer() {
+        final Digest shared = this.blob("team/a", "signature-payload");
+        this.image("team/a", "1", shared);
+        final Digest subject = this.image("team/b", "1");
+        this.referrer("team/b", "sig", subject, shared);
+        // The tag delete leaves the referrer pullable by digest (and listed
+        // by the referrers API), so it still references the layer.
+        this.docker.repo("team/b").manifests()
+            .delete(ManifestReference.fromTag("sig")).join();
+        MatcherAssert.assertThat(
+            "A layer an OCI 1.1 referrer of another image uses is shared",
+            this.delete(String.format("/v2/team/a/blobs/%s", shared.string())),
+            new IsErrorsResponse(RsStatus.CONFLICT, "DENIED")
+        );
+        MatcherAssert.assertThat(
+            "The referrer's layer survives",
+            this.exists(shared),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
     void shouldDeleteLayerOnceOtherImageDropsIt() {
         final Digest shared = this.blob("team/a", "formerly-shared-layer");
         this.image("team/a", "1", shared);
@@ -226,6 +248,38 @@ final class DeleteBlobSliceTest {
                     )
                 )
                 .collect(Collectors.joining(","))
+        );
+        return this.docker.repo(name).manifests()
+            .put(
+                ManifestReference.fromTag(tag),
+                new Content.From(body.getBytes(StandardCharsets.UTF_8))
+            ).join().digest();
+    }
+
+    /**
+     * Pushes an OCI 1.1 referrer (artifact manifest with a {@code subject})
+     * whose single layer is {@code layer}.
+     *
+     * @param name Image name.
+     * @param tag Tag.
+     * @param subject Subject manifest digest.
+     * @param layer Layer digest.
+     * @return Referrer manifest digest.
+     */
+    private Digest referrer(
+        final String name, final String tag, final Digest subject, final Digest layer
+    ) {
+        final Digest config = this.blob(name, String.format("{\"referrer\":\"%s\"}", tag));
+        final String body = String.format(
+            "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\","
+                + "\"artifactType\":\"application/vnd.example.sig.v1+json\","
+                + "\"config\":{\"mediaType\":\"application/vnd.oci.empty.v1+json\","
+                + "\"digest\":\"%s\",\"size\":1},"
+                + "\"layers\":[{\"mediaType\":\"application/octet-stream\","
+                + "\"digest\":\"%s\",\"size\":1}],"
+                + "\"subject\":{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\","
+                + "\"digest\":\"%s\",\"size\":1}}",
+            config.string(), layer.string(), subject.string()
         );
         return this.docker.repo(name).manifests()
             .put(

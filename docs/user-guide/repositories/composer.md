@@ -38,7 +38,7 @@ Set `secure-http` to `false` only if your Pantera instance does not use HTTPS.
 
 ### Using a Proxy Repository Directly
 
-You can also point Composer at a `php-proxy` repository (for example `http://pantera-host:8080/php-proxy`) when you only need upstream packages. The proxy answers `packages.json` itself and sends the per-package lookups back to its own `/p2/` endpoint. Use a group when you also need packages from a local repository.
+You can also point Composer at a `php-proxy` repository (for example `http://pantera-host:8080/php-proxy`) when you only need upstream packages. The proxy answers `packages.json` itself and sends the per-package lookups back to its own `/p2/` endpoint. The root never depends on the upstream, so packages Pantera has already cached keep installing while the upstream is unavailable. Use a group when you also need packages from a local repository.
 
 Dev-branch dists (`dev-*`, `*-dev`) downloaded through a proxy are tied to the commit named in the metadata. The dist URL ends in `?ref=<commit>`, so after the branch moves, `composer update` downloads the new commit rather than a cached copy of the old one.
 
@@ -83,6 +83,22 @@ How a group resolves package metadata:
 - A package that exists in a local member belongs to that member. The group never asks a proxy member about it, including its `dev-*` branches, so Packagist cannot add versions to a private package and private package names are not sent upstream.
 - A `403` from a member is returned as `403`. A group reader also needs read permission on the member repositories.
 - When a member cannot answer (for example, the upstream is down) and no other member has the package, the group returns `503` with `Retry-After` instead of `404`. When the upstream circuit breaker is open, the proxy's `502` and the group's `503` both carry `X-Pantera-Circuit-Open: true` and the breaker's `Retry-After`.
+
+### Archive Downloads
+
+The first download of an archive through a proxy streams the bytes to Composer while Pantera writes them to its cache. Before the cached copy is committed, Pantera compares the streamed bytes with the `dist.shasum` (SHA-1) declared in the package metadata: an archive that does not match is never cached, so the next request fetches it again, and Composer's own `dist.shasum` check rejects the corrupted download. Concurrent first requests for the same archive share one upstream download. `HEAD` requests are answered like the matching `GET` on every path (same status and headers, no body).
+
+When an administrator enables `download-mode: redirect` on a hosted repository stored in an object store, an archive download may answer `302 Found` with a time-limited object-store URL instead of streaming the bytes. Composer follows the redirect and its `dist.shasum` check is unchanged; your machine must be able to reach the object store directly (see [Streaming Downloads](../streaming-downloads.md#presigned-direct-download-redirects)). Package metadata is never redirected.
+
+### Package Catalog Endpoints
+
+A hosted repository lists the packages published into it at `GET /packages/list.json` (`{"packageNames": [...]}`, optionally `?q=<term>` to narrow the list) and `GET /p2/available-packages.json` (`{"available-packages": [...]}`):
+
+```bash
+curl -sS -u 'your-username:your-api-token' 'http://pantera-host:8080/php-local/packages/list.json?q=my-package'
+```
+
+On a proxy repository the same two paths are forwarded live to the upstream and are not cached.
 
 ---
 
@@ -179,6 +195,8 @@ On a `php-proxy`, the same `DELETE` of a cached path evicts it, and the next req
 | `400 Bad Request` on upload | The archive is unreadable or its `composer.json` is missing or invalid | Rebuild the archive with `composer archive` |
 | `503 Service Unavailable` with `Retry-After` from a group, or `502` from a proxy | The upstream could not be reached or sent invalid metadata | Retry later. The package is not reported as missing during an upstream outage |
 | `403 Forbidden` from a group | Your account cannot read one of the group's member repositories | Ask an admin for read access on the member repositories |
+| Composer reports a failed checksum verification for a downloaded archive | Through a proxy: the upstream sent an archive that does not match its declared `dist.shasum`, and Pantera did not cache it. From a hosted repository: a dev branch was re-uploaded after your lock file was written | Retry the install; for a re-uploaded dev branch run `composer update <package>` |
+| Download fails after a `302` redirect | `download-mode: redirect` is enabled for the repository but your network cannot reach the object store | Ask an admin to set `download-mode: stream` for the repository, or allow access to the object store endpoint |
 
 ---
 

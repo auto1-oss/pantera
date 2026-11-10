@@ -897,6 +897,7 @@ public class RepositorySlices {
                             tokens.auth(),
                             cfg.name(),
                             artifactEvents(),
+                            cfg.downloadPolicy(),
                             cfg.immutable()
                         )
                     ),
@@ -943,7 +944,9 @@ public class RepositorySlices {
                         new NpmSlice(
                             RepositorySlices.optionalUrl(cfg), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
                             this.settings.syncArtifactIndexer(), this.settings.artifactIndex(),
-                            cfg.immutable()
+                            // WS1.7: only .tgz tarballs redirect; packuments and every
+                            // metadata route always stream.
+                            cfg.downloadPolicy(), cfg.immutable()
                         ),
                         path -> RepositorySlices.NPM_TARBALL.matcher(path).matches()
                     ),
@@ -960,6 +963,7 @@ public class RepositorySlices {
                         cfg.name(),
                         artifactEvents(),
                         this.settings.syncArtifactIndexer(),
+                        cfg.downloadPolicy(),
                         cfg.immutable()
                     )),
                     cfg
@@ -973,7 +977,7 @@ public class RepositorySlices {
                         cfg,
                         new HelmSlice(
                             cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
-                            this.settings.syncArtifactIndexer(), cfg.immutable()
+                            this.settings.syncArtifactIndexer(), cfg.downloadPolicy(), cfg.immutable()
                         ),
                         path -> !RepositorySlices.HELM_CHART_API.matcher(path).matches()
                     ),
@@ -988,7 +992,9 @@ public class RepositorySlices {
                         new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
                             tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()),
                             artifactEvents(),
-                            this.settings.syncArtifactIndexer(), cfg.immutable())
+                            this.settings.syncArtifactIndexer(),
+                            // WS1.7: only .rpm/.drpm package bytes redirect; repodata streams.
+                            cfg.downloadPolicy(), cfg.immutable())
                     ),
                     cfg
                 );
@@ -1018,6 +1024,10 @@ public class RepositorySlices {
                             cfg.name(),
                             artifactEvents(),
                             this.settings.syncArtifactIndexer(),
+                            this.settings.artifactIndex(),
+                            // WS1.7: only the dist-archive download redirects;
+                            // packages.json / provider metadata always stream.
+                            cfg.downloadPolicy(),
                             cfg.immutable(),
                             new ComposerBaseUrl(phpUrl, cfg.name())
                         )),
@@ -1069,7 +1079,10 @@ public class RepositorySlices {
                         new NuGet(
                             cfg.url(), new com.auto1.pantera.nuget.AstoRepository(cfg.storage()),
                             securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
-                            this.settings.syncArtifactIndexer(), cfg.immutable()
+                            // WS1.7: only .nupkg/.snupkg content redirects; service
+                            // index / registration / versions / search stream.
+                            this.settings.syncArtifactIndexer(), cfg.downloadPolicy(),
+                            cfg.immutable()
                         ),
                         path -> !"/package".equals(path) && !path.startsWith("/package/")
                     ),
@@ -1083,7 +1096,16 @@ public class RepositorySlices {
                         cfg,
                         new MavenSlice(cfg.storage(), securityPolicy(),
                             authentication(), tokens.auth(), cfg.name(), artifactEvents(),
-                            this.settings.syncArtifactIndexer(), cfg.immutable())
+                            this.settings.syncArtifactIndexer(),
+                            // WS4-maven.1/.2: per-repo verifyPgp; release
+                            // immutability is the repository's `immutable`
+                            // setting (deprecated alias: releaseImmutable).
+                            new com.auto1.pantera.maven.http.MavenHostedPolicy(
+                                cfg.verifyPgp(), cfg.immutable()
+                            ),
+                            // WS1.7: only real binary-artifact GETs redirect;
+                            // maven-metadata.xml + checksum/signature sidecars stream.
+                            cfg.downloadPolicy())
                     ),
                     cfg
                 );
@@ -1124,6 +1146,7 @@ public class RepositorySlices {
                         cfg.name(),
                         artifactEvents(),
                         this.settings.syncArtifactIndexer(),
+                        cfg.downloadPolicy(),
                         cfg.immutable()
                     )),
                     cfg
@@ -1588,7 +1611,8 @@ public class RepositorySlices {
             case "docker":
                 final Docker docker = new AstoDocker(
                     cfg.name(),
-                    new SubStorage(RegistryRoot.V2, cfg.storage())
+                    new SubStorage(RegistryRoot.V2, cfg.storage()),
+                    cfg.downloadPolicy()
                 );
                 if (cfg.port().isPresent()) {
                     slice = new DockerSlice(docker, securityPolicy(),
@@ -1628,7 +1652,7 @@ public class RepositorySlices {
                             cfg.storage(), securityPolicy(), authentication(),
                             new com.auto1.pantera.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
                             artifactEvents(),
-                            this.settings.syncArtifactIndexer(),
+                            this.settings.syncArtifactIndexer(), cfg.downloadPolicy(),
                             cfg.immutable()
                         )
                     )
@@ -1649,7 +1673,8 @@ public class RepositorySlices {
                             cfg.storage(), securityPolicy(), authentication(), tokens,
                             cfg.url().toString(), cfg.name(), artifactEvents(),
                             this.settings.syncArtifactIndexer(), this.condaUploadTickets(),
-                            cfg.immutable()
+                            // WS1.7: only package bytes redirect; repodata.json streams.
+                            cfg.downloadPolicy(), cfg.immutable()
                         ),
                         path -> !path.endsWith("authentications")
                     )
@@ -1688,7 +1713,9 @@ public class RepositorySlices {
                         new HexSlice(cfg.storage(), securityPolicy(), authentication(),
                             artifactEvents(), cfg.name(),
                             this.settings.syncArtifactIndexer(), this.hexRegistrySigner(),
-                            cfg.immutable()),
+                            // WS1.7: only /tarballs/ bytes redirect; registry records
+                            // are re-signed and always stream.
+                            cfg.downloadPolicy(), cfg.immutable()),
                         path -> !RepositorySlices.HEX_RELEASE_API.matcher(path).matches()
                     )
                 );
@@ -1703,7 +1730,8 @@ public class RepositorySlices {
                             new com.auto1.pantera.pypi.http.PySlice(
                                 cfg.storage(), securityPolicy(), authentication(),
                                 tokens.auth(), cfg.name(), artifactEvents(),
-                                this.settings.syncArtifactIndexer(), cfg.immutable()
+                                this.settings.syncArtifactIndexer(), cfg.downloadPolicy(),
+                                cfg.immutable()
                             )
                         ),
                         "simple"

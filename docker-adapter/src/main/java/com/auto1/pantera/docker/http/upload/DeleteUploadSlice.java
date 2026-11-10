@@ -48,7 +48,7 @@ public class DeleteUploadSlice extends UploadSlice {
                     x -> x.map(
                         upload -> upload.cancel()
                             .thenApply(
-                                offset -> ResponseBuilder.ok()
+                                offset -> ResponseBuilder.noContent()
                                     .header("Docker-Upload-UUID", request.uuid())
                                     .build()
                             )

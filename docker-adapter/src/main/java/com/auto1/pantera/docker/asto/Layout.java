@@ -37,6 +37,33 @@ public final class Layout {
         return new Key.From(manifests(repo), "tags");
     }
 
+    /**
+     * Prefix-listable root under which every referrer of a given subject
+     * digest is indexed — one file per referrer, so concurrent {@code oras
+     * attach}/{@code cosign sign} pushes never read-modify-write a shared
+     * list file.
+     *
+     * @param repo Repository name.
+     * @param subject Subject digest referrers point at.
+     * @return Referrers-for-subject root key.
+     */
+    public static Key referrersRoot(String repo, Digest subject) {
+        return new Key.From(manifests(repo), "referrers", subject.alg(), subject.hex());
+    }
+
+    /**
+     * Key for a single referrer's descriptor entry under a subject's
+     * referrers root.
+     *
+     * @param repo Repository name.
+     * @param subject Subject digest the referrer points at.
+     * @param referrer Digest of the referring manifest itself.
+     * @return Referrer descriptor key.
+     */
+    public static Key referrer(String repo, Digest subject, Digest referrer) {
+        return new Key.From(referrersRoot(repo, subject), referrer.string());
+    }
+
     public static Key upload(String name, final String uuid) {
         return new Key.From(repositories(), name, "_uploads", uuid);
     }

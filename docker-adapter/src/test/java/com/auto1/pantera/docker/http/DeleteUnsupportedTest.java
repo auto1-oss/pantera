@@ -27,11 +27,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.util.Optional;
 
 /**
- * B77: a registry that does not support deletion — a read-only
- * ({@code docker-proxy}) slice — MUST answer 405 on the manifest and blob
- * DELETE endpoints (OCI distribution spec), not a bare 404 that tells the
- * client the image does not exist. Hosted repositories support DELETE
- * (see {@link DeleteManifestSliceTest} / {@link DeleteBlobSliceTest}).
+ * B77: a registry that does not support deletion — a read-only slice, i.e. a
+ * proxy or a group, which has no authoritative store to delete from — MUST
+ * answer 405 on the manifest and blob DELETE endpoints (OCI distribution
+ * spec), not a bare 404 that tells the client the image does not exist.
+ * A writable (hosted) slice deletes instead: see
+ * {@code DeleteManifestSliceTest} and {@code DeleteBlobSliceTest}.
  */
 final class DeleteUnsupportedTest {
 
@@ -47,7 +48,8 @@ final class DeleteUnsupportedTest {
                 new AstoDocker("test_registry", new InMemoryStorage()),
                 Policy.FREE, AuthScheme.NONE, Optional.empty(),
                 SyncArtifactIndexer.NOOP, false
-            ).response(new RequestLine(RqMethod.DELETE, path), Headers.EMPTY, Content.EMPTY)
+            )
+                .response(new RequestLine(RqMethod.DELETE, path), Headers.EMPTY, Content.EMPTY)
                 .join(),
             new IsErrorsResponse(RsStatus.METHOD_NOT_ALLOWED, "UNSUPPORTED")
         );

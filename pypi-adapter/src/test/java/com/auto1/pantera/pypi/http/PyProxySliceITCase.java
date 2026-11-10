@@ -138,6 +138,44 @@ final class PyProxySliceITCase {
     }
 
     @Test
+    void headRequestForIndexReturnsOkWithNoBodyAndPopulatesCache() throws Exception {
+        final String key = "a2utils";
+        final HttpURLConnection con = (HttpURLConnection) URI.create(
+            String.format("http://localhost:%s/%s/", this.container.port(), key)
+        ).toURL().openConnection();
+        con.setRequestMethod(RqMethod.HEAD.value());
+        MatcherAssert.assertThat(
+            "HEAD on an index page returns 200, not 405 (WS4-pypi.8)",
+            con.getResponseCode(),
+            new IsEqual<>(RsStatus.OK.code())
+        );
+        MatcherAssert.assertThat(
+            "HEAD response carries no body",
+            con.getContentLength() == 0 || con.getContentLength() == -1
+        );
+        MatcherAssert.assertThat(
+            "HEAD on an uncached index still populates the cache (real GET underneath)",
+            this.storage.value(new Key.From(key)).join().asString(),
+            new StringContainsInOrder(new ListOf<>("<!DOCTYPE html>", "Links for a2utils"))
+        );
+        con.disconnect();
+    }
+
+    @Test
+    void headRequestForMissingArtifactReturns404NotMethodNotAllowed() throws Exception {
+        final HttpURLConnection con = (HttpURLConnection) URI.create(
+            String.format("http://localhost:%s/abc/123/", this.container.port())
+        ).toURL().openConnection();
+        con.setRequestMethod(RqMethod.HEAD.value());
+        MatcherAssert.assertThat(
+            "Missing artifact HEAD -> 404, never 405 (WS4-pypi.8)",
+            con.getResponseCode(),
+            new IsEqual<>(RsStatus.NOT_FOUND.code())
+        );
+        con.disconnect();
+    }
+
+    @Test
     void proxiesUnsuccessfulResponseStatus() throws Exception {
         final HttpURLConnection con = (HttpURLConnection) URI.create(
             String.format("http://localhost:%s/abc/123/", this.container.port())

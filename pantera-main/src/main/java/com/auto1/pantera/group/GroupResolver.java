@@ -1605,7 +1605,12 @@ public final class GroupResolver implements Slice {
                     isTargetedLocalRead, walk, result, pinArtifactName);
                 return;
             }
-            // Other 4xx or any 5xx -> record failure, cascade.
+            if (this.skipOnClientError(member, resp, line, walk, memberLatency)) {
+                tryNextSequentialMember(iter, line, headers, requestBytes,
+                    isTargetedLocalRead, walk, result, pinArtifactName);
+                return;
+            }
+            // 429 or any 5xx -> record failure, cascade.
             drainBody(resp.body());
             member.recordFailure();
             walk.noteFailure(member);
@@ -1626,6 +1631,44 @@ public final class GroupResolver implements Slice {
             tryNextSequentialMember(iter, line, headers, requestBytes,
                 isTargetedLocalRead, walk, result, pinArtifactName);
         });
+    }
+
+    /**
+     * A member 4xx (409, 400, 401, 422, …; 403 and 404 are handled before
+     * this) is the member refusing the request, not the member failing:
+     * skip it WITHOUT {@code recordFailure()} — the same rule as the
+     * upstream HTTP breaker, which never trips on 4xx. Convicting on a 4xx
+     * let a handful of upstream 409s keep a member blocked and turned every
+     * group miss into a 503 for the whole block window. The walk is marked
+     * unverified so a terminal 404 is not negative-cached. 429 is excluded:
+     * it is a capacity signal and keeps the failure path.
+     *
+     * @return {@code true} when the member was skipped and the walk must
+     *     continue with the next member.
+     */
+    private boolean skipOnClientError(
+        final MemberSlice member, final Response resp, final RequestLine line,
+        final WalkState walk, final long memberLatency
+    ) {
+        final RsStatus status = resp.status();
+        if (!status.clientError() || status == RsStatus.TOO_MANY_REQUESTS) {
+            return false;
+        }
+        drainBody(resp.body());
+        walk.anyUnverified.set(true);
+        recordMemberOutcome(member, "client_error", memberLatency);
+        EcsLogger.debug("com.auto1.pantera.group")
+            .message("Group member answered " + status.code()
+                + " (client error), trying next without conviction")
+            .eventCategory("web")
+            .eventAction("group_member_fallthrough")
+            .field("repository.name", this.group)
+            .field("member.name", member.name())
+            .field("http.response.status_code", status.code())
+            .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
+            .log();
+        return true;
     }
 
     /**

@@ -24,6 +24,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.collection.IsEmptyCollection;
@@ -34,6 +35,8 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
@@ -78,7 +81,7 @@ class WheelSliceTest {
                     new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-pypi"),
                     new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
                 ),
-                new Content.From(this.multipartBody(body, boundary, filename))
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
             )
         );
         MatcherAssert.assertThat(
@@ -128,7 +131,7 @@ class WheelSliceTest {
                 Headers.from(
                     ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
                 ),
-                new Content.From(this.multipartBody(body, boundary, filename))
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
             )
         );
         MatcherAssert.assertThat(
@@ -165,7 +168,7 @@ class WheelSliceTest {
                 Headers.from(
                     ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
                 ),
-                new Content.From(this.multipartBody(body, boundary, filename))
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
                 )
         );
         MatcherAssert.assertThat(
@@ -192,11 +195,125 @@ class WheelSliceTest {
                 Headers.from(
                     ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
                 ),
-                new Content.From(this.multipartBody(body, boundary, filename))
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
             )
         );
         MatcherAssert.assertThat(
             "Event to queue is empty", this.queue.isEmpty()
+        );
+    }
+
+    @Test
+    void rejectsUploadWithMismatchedDigest() throws IOException {
+        // S7: twine's sha256_digest form field must be verified against the
+        // received bytes; a corrupted upload is refused and nothing is stored.
+        final String boundary = "digest-mismatch-boundary";
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] body = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        MatcherAssert.assertThat(
+            "Returns BAD_REQUEST status on sha256_digest mismatch",
+            new WheelSlice(this.asto, Optional.of(this.queue), "test"),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.BAD_REQUEST),
+                new RequestLine(RqMethod.POST, "/"),
+                Headers.from(
+                    ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
+                ),
+                new Content.From(
+                    this.multipartBodyWithDigest(body, boundary, filename, "0".repeat(64))
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "Corrupted upload is not stored",
+            this.asto.list(Key.ROOT).join(),
+            new IsEmptyCollection<>()
+        );
+        MatcherAssert.assertThat(
+            "No event reached the queue for a rejected upload", this.queue.isEmpty()
+        );
+    }
+
+    @Test
+    void savesContentWhenDeclaredDigestMatches() throws IOException, NoSuchAlgorithmException {
+        final String boundary = "digest-match-boundary";
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] body = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        final String digest = WheelSliceTest.sha256Hex(body);
+        MatcherAssert.assertThat(
+            "Returns CREATED status when sha256_digest matches the stored bytes",
+            new WheelSlice(this.asto, Optional.of(this.queue), "test"),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.CREATED),
+                new RequestLine(RqMethod.POST, "/"),
+                Headers.from(
+                    ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
+                ),
+                new Content.From(this.multipartBodyWithDigest(body, boundary, filename, digest))
+            )
+        );
+        MatcherAssert.assertThat(
+            "Saves content to storage",
+            this.asto.value(new Key.From("pantera-sample", "0.2", filename)).join().asBytes(),
+            new IsEqual<>(body)
+        );
+    }
+
+    @Test
+    void uploadPersistsPep658MetadataFileAndSidecarDigest()
+        throws IOException, NoSuchAlgorithmException {
+        final String boundary = "pep658-boundary";
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] body = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        MatcherAssert.assertThat(
+            "Returns CREATED status",
+            new WheelSlice(this.asto, Optional.of(this.queue), "test"),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.CREATED),
+                new RequestLine(RqMethod.POST, "/"),
+                Headers.from(
+                    ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
+                ),
+                new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
+            )
+        );
+        final Key metadataKey = new Key.From(
+            "pantera-sample", "0.2", filename + ".metadata"
+        );
+        MatcherAssert.assertThat(
+            "PEP 658 .metadata file must be persisted alongside the artifact",
+            this.asto.exists(metadataKey).join(),
+            new IsEqual<>(true)
+        );
+        final byte[] metadataBytes = this.asto.value(metadataKey).join().asBytes();
+        MatcherAssert.assertThat(
+            "the persisted .metadata bytes must contain the package's core metadata",
+            new String(metadataBytes, StandardCharsets.US_ASCII).contains("Name: pantera-sample")
+        );
+        final String expectedSha256 = WheelSliceTest.sha256Hex(metadataBytes);
+        final com.auto1.pantera.pypi.meta.PypiSidecar.Meta sidecar =
+            com.auto1.pantera.pypi.meta.PypiSidecar.read(
+                this.asto, new Key.From("pantera-sample", "0.2", filename)
+            ).join().orElseThrow(() -> new AssertionError("Sidecar missing after upload"));
+        MatcherAssert.assertThat(
+            "the sidecar dist-info-metadata field must record the .metadata file's own sha256",
+            sidecar.distInfoMetadata(),
+            new IsEqual<>(Optional.of(expectedSha256))
+        );
+        final String index = new String(
+            this.asto.value(new Key.From(".pypi", "pantera-sample", "pantera-sample.html"))
+                .join().asBytes(),
+            StandardCharsets.UTF_8
+        );
+        MatcherAssert.assertThat(
+            "the regenerated index advertises the PEP 714 core-metadata digest",
+            index.contains("data-core-metadata=\"sha256=" + expectedSha256 + "\""),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the .metadata sibling is not listed as a release file",
+            index.contains(".metadata#"),
+            new IsEqual<>(false)
         );
     }
 
@@ -540,7 +657,7 @@ class WheelSliceTest {
             Headers.from(
                 ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
             ),
-            new Content.From(this.multipartBody(body, boundary, filename))
+            new Content.From(WheelSliceTest.multipartBody(body, boundary, filename))
         ).join();
     }
 
@@ -606,6 +723,35 @@ class WheelSliceTest {
         body.write(input);
         body.write(String.format("\r\n--%s--", boundary).getBytes(StandardCharsets.US_ASCII));
         return body.toByteArray();
+    }
+
+    private byte[] multipartBodyWithDigest(final byte[] input, final String boundary,
+        final String filename, final String digest) throws IOException {
+        final ByteArrayOutputStream body = new ByteArrayOutputStream();
+        body.write(
+            String.join(
+                "\r\n",
+                "Ignored preamble",
+                String.format("--%s", boundary),
+                "Content-Disposition: form-data; name=\"sha256_digest\"",
+                "",
+                digest,
+                String.format("--%s", boundary),
+                String.format(
+                    "Content-Disposition: form-data; name=\"content\"; filename=\"%s\"",
+                    filename
+                ),
+                "",
+                ""
+            ).getBytes(StandardCharsets.US_ASCII)
+        );
+        body.write(input);
+        body.write(String.format("\r\n--%s--", boundary).getBytes(StandardCharsets.US_ASCII));
+        return body.toByteArray();
+    }
+
+    private static String sha256Hex(final byte[] data) throws NoSuchAlgorithmException {
+        return Hex.encodeHexString(MessageDigest.getInstance("SHA-256").digest(data));
     }
 
 }

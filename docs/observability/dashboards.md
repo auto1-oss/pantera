@@ -56,3 +56,47 @@ broken upstream.
 Read the **Proxy Phase Latency** dashboard before launching any further
 performance work. The dominant phase identifies the bottleneck — work on
 that one rather than guessing.
+
+## Docker Compose provisioned dashboards
+
+`pantera-main/docker-compose/grafana/provisioning/dashboards/` auto-provisions
+into the local stack's Grafana on `docker compose up` (no import step
+needed) — distinct from the two JAR-shipped dashboards above.
+
+| Dashboard | File | Purpose |
+|-----------|------|---------|
+| Cache & Storage | `pantera-cache-storage.json` | Generic `Storage`-interface op rate/latency, cache hit/eviction/dedup/error rates, the WS1.6/WS1.7 blob-store tier (op rate/latency, disk-cache bytes used/max, write-back queue depth/capacity, oldest-pending age, eviction bytes/sec, cross-node invalidation), presigned direct-download redirect-vs-stream decision, and the Go module proxy sumdb cache. |
+| Main Overview | `pantera-main-overview.json` | Fleet-wide landing dashboard. |
+| Repository | `pantera-repository.json` | Per-repo download/upload rate and bandwidth. |
+| Proxy | `pantera-proxy.json` | Proxy phase latency, bulkhead permits, cache-integrity failures. |
+| Group | `pantera-group.json` | Group-repository member walk metrics. |
+| Cooldown | `pantera-cooldown.json` | Cooldown filter duration, cache size, active blocks. |
+| Upstream Circuit Breaker | `pantera-upstream-circuit-breaker.json` | Same coverage as the JAR-shipped dashboard above, pre-provisioned. |
+| Infrastructure | `pantera-infrastructure.json` | JVM, GC, Vert.x, DB connection pool. |
+| Vert.x Metrics | `pantera-vertx-metrics.json` | Vert.x event-loop and server metrics. |
+| Proxy Phase Latency | `proxy-phase-latency.json` | Same coverage as the JAR-shipped dashboard above, pre-provisioned. |
+
+### Cache & Storage — 2.3.0 metric coverage
+
+The WS1.6/WS1.7 panels on this dashboard consume:
+
+- `pantera_storage_blobstore_requests_total{backend,operation,outcome}` +
+  `pantera_storage_blobstore_request_duration_seconds{backend,operation,outcome}`
+  (transfer SLO ladder — `histogram_quantile` panels need
+  `PANTERA_METRICS_PERCENTILES_HISTOGRAM=true`).
+- `pantera_storage_cache_disk_bytes_used` / `_max`,
+  `pantera_storage_cache_writeback_queue_depth` / `_capacity`,
+  `pantera_storage_cache_writeback_oldest_pending_age_seconds` — all gauges
+  tagged `cache` (the disk-cache's root path, not a repo name).
+- `pantera_cache_eviction_bytes_total{cache_type,cache_tier}` and
+  `pantera_storage_invalidation_total{stage,outcome}` — counters, charted as
+  `rate()`.
+- `pantera_storage_download_decision_total{repo_name,decision}` — the
+  redirect-vs-stream ratio and presign issuance rate both derive from this
+  one counter.
+- `pantera_go_sumdb_cache_total{repo_name,kind,result}` — already
+  provisioned prior to this addition.
+
+See [Monitoring: Storage Metrics](../admin-guide/monitoring.md) for the full
+per-metric description table and the known-gap notes (index entry
+count/rebuild duration and the WS2 HA surface have no meter yet).

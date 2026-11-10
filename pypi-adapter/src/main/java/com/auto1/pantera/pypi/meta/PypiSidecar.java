@@ -48,7 +48,8 @@ public final class PypiSidecar {
     }
 
     /**
-     * Writes a new sidecar file for the given artifact key.
+     * Writes a new sidecar file for the given artifact key, with no
+     * PEP 658 core-metadata digest recorded.
      *
      * @param storage      Target storage
      * @param artifactKey  Key of the artifact (e.g. {@code requests/2.28.0/requests-2.28.0.tar.gz})
@@ -62,6 +63,29 @@ public final class PypiSidecar {
         final String requiresPython,
         final Instant uploadTime
     ) {
+        return write(storage, artifactKey, requiresPython, uploadTime, null);
+    }
+
+    /**
+     * Writes a new sidecar file for the given artifact key, recording the
+     * PEP 658/714 core-metadata SHA-256 digest when the caller has already
+     * extracted and persisted the distribution's {@code .metadata} file.
+     *
+     * @param storage      Target storage
+     * @param artifactKey  Key of the artifact (e.g. {@code requests/2.28.0/requests-2.28.0.tar.gz})
+     * @param requiresPython Python version constraint string, may be empty or null
+     * @param uploadTime   Upload timestamp
+     * @param metadataSha256 Hex SHA-256 of the persisted {@code .metadata} file,
+     *                       or {@code null} when none was extracted
+     * @return Completion future
+     */
+    public static CompletableFuture<Void> write(
+        final Storage storage,
+        final Key artifactKey,
+        final String requiresPython,
+        final Instant uploadTime,
+        final String metadataSha256
+    ) {
         final JsonObjectBuilder builder = Json.createObjectBuilder()
             .add("upload-time", uploadTime.toString())
             .add("yanked", false);
@@ -71,7 +95,11 @@ public final class PypiSidecar {
             builder.add("requires-python", requiresPython);
         }
         builder.addNull("yanked-reason");
-        builder.addNull("dist-info-metadata");
+        if (metadataSha256 == null || metadataSha256.isEmpty()) {
+            builder.addNull("dist-info-metadata");
+        } else {
+            builder.add("dist-info-metadata", metadataSha256);
+        }
         final String json = builder.build().toString();
         return storage.save(
             sidecarKey(artifactKey),

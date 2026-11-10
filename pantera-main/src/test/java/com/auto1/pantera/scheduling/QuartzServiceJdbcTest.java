@@ -16,13 +16,7 @@ import com.auto1.pantera.db.PostgreSQLTestConfig;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
-import java.util.Queue;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 import javax.sql.DataSource;
-import org.awaitility.Awaitility;
-import org.cactoos.list.ListOf;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.AfterEach;
@@ -35,6 +29,13 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 /**
  * Tests for {@link QuartzService} in JDBC clustering mode.
  * Uses Testcontainers PostgreSQL.
+ * <p>
+ * The two-scheduler-against-one-JDBC-store crux scenario (node B firing a
+ * trigger must not delete node A's job) needs two real, concurrently-running
+ * schedulers and genuine cross-node trigger acquisition timing — that is an
+ * integration concern, not a fast unit test. See
+ * {@code QuartzTwoNodeClusteringITCase} (WS2.2, 2.3.0), run via
+ * {@code mvn verify -Pitcase}.
  *
  * @since 1.20.13
  */
@@ -135,26 +136,6 @@ final class QuartzServiceJdbcTest {
         } finally {
             ram.stop();
         }
-    }
-
-    @Test
-    void schedulesAndExecutesPeriodicJob() throws Exception {
-        final AtomicInteger count = new AtomicInteger();
-        final Queue<String> queue = this.service.addPeriodicEventsProcessor(
-            1,
-            new ListOf<Consumer<String>>(item -> count.incrementAndGet())
-        );
-        this.service.start();
-        queue.add("one");
-        queue.add("two");
-        queue.add("three");
-        Awaitility.await().atMost(15, TimeUnit.SECONDS)
-            .until(() -> count.get() >= 3);
-        MatcherAssert.assertThat(
-            "All 3 items should be processed by JDBC-backed scheduler",
-            count.get(),
-            Matchers.greaterThanOrEqualTo(3)
-        );
     }
 
     @Test

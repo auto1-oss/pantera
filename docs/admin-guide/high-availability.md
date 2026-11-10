@@ -51,7 +51,8 @@ All nodes connect to the same PostgreSQL instance (or cluster). It holds:
 - Import session state
 - Settings and auth provider configuration
 - Quartz JDBC scheduler tables (for clustered job scheduling)
-- Node registry with heartbeats
+- Revocation blocklist (`revocation_blocklist` table) — the durable source of
+  truth for token revocation; see [Token Revocation](#token-revocation) below
 
 ### PostgreSQL HA
 
@@ -85,7 +86,8 @@ All nodes must connect to the same Valkey instance (or cluster) for cache invali
 
 ### How Cache Invalidation Works
 
-1. Node A modifies data (e.g., updates a repository config).
+1. Node A modifies data (e.g., updates a repository config, a role's
+   permissions, or a user's enabled state).
 2. Node A publishes an invalidation message to Valkey channel `pantera:cache:invalidate`.
 3. Message format: `{instanceId}|{cacheType}|{key}` (or `*` for invalidateAll).
 4. Nodes B and C receive the message and evict the matching entry from their local Caffeine caches.
@@ -243,6 +245,51 @@ Quartz clustering requires:
 
 - A shared PostgreSQL database (same as Pantera's main database)
 - The `QRTZ_*` tables (created automatically by Pantera on first start)
+
+**Node-local work never goes through the clustered store.** Clustered
+Quartz does not pin a repeating trigger to the node that scheduled it — any
+node's scheduler thread can acquire and fire it. Work that depends on
+in-memory state only one node actually has (a queue, a connection, an
+in-flight object) is scheduled on that node's own dedicated timer instead —
+the artifact-events queue that feeds the search index and
+`artifact_publish` audit records is drained by a per-node scheduler, never
+by a clustered Quartz job. Each proxy repository's package-processor
+(Maven/Gradle, npm, PyPI, Go, Composer — the post-fetch step that indexes a
+cached artifact and emits its `artifact_publish` audit record) is scheduled
+the same way as of 2.3.0: a per-node timer drains only the queue the local
+node itself populated, so a node's proxy indexing never depends on another
+node's scheduler thread acquiring the right firing. (Prior releases routed
+this through the clustered store with a node-local registry lookup, which
+could leave a repository's queue under-drained if firings kept landing on
+nodes without that registry entry.)
+
+---
+
+## Known Gaps
+
+Multi-node correctness for token revocation, the artifact-events pipeline,
+and authorization/settings propagation is covered (above). Not yet
+implemented as of 2.3.0 — do not rely on the following in a multi-node
+deployment:
+
+- **Readiness.** The health check (`GET /.health`) returns 200 with no
+  dependency checks — a node with a dead database pool or unreachable S3
+  still reports healthy and keeps taking traffic.
+- **Graceful drain.** SIGTERM does not flip readiness before the socket
+  starts rejecting connections, so a rolling deploy can 503 in-flight
+  requests the load balancer had already routed.
+- **`DbConsumer` shutdown flush.** A clean shutdown can still drop the last
+  buffered window (up to a few seconds) of `artifact_publish` audit
+  records; the search index self-heals independently, so this is an audit
+  gap, not a data-loss gap.
+- **Download tokens.** Cross-node validation requires
+  `PANTERA_DOWNLOAD_TOKEN_SECRET` pinned identically on every node (the
+  per-node default secret does not work in HA); "single-use" is
+  advertised but not enforced; comparison is not constant-time.
+- **Fleet visibility.** There is no `pantera_nodes` heartbeat registry.
+  Leader election and Valkey Cluster (vs. Sentinel) are explicitly out of
+  scope — sharding adds nothing given the global-key, single-channel pub/sub
+  design.
 
 ---
 

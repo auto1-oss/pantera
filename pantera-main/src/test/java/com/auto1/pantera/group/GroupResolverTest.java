@@ -1075,6 +1075,97 @@ final class GroupResolverTest {
             "Cache-only miss on a blocked member must NOT poison the negative cache");
     }
 
+    // ---- Member 4xx is a refusal, not an outage ----
+
+    @Test
+    void member409_skipsWithoutConviction_nextMemberServes() {
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        final GroupResolver resolver = resolverWithRegistry(
+            registry, staticSlice(RsStatus.CONFLICT), okSlice(), buildNegativeCache()
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(200, resp.status().code(),
+            "A member answering 409 must be skipped and the next member must serve");
+        assertFalse(registry.isBlocked(PROXY_A),
+            "A member 4xx must not convict the member on the group breaker");
+    }
+
+    @Test
+    void member409_restNotFound_unverified404_notNegativeCached() {
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        final NegativeCache negCache = buildNegativeCache();
+        final GroupResolver resolver = resolverWithRegistry(
+            registry, staticSlice(RsStatus.CONFLICT), notFoundSlice(), negCache
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(404, resp.status().code(),
+            "A 409 plus 404s is a miss, not a 502 outage");
+        assertFalse(
+            resp.headers().values(NegativeCache.SKIP_HEADER).isEmpty(),
+            "The 404 must carry the negative-cache skip marker");
+        assertFalse(registry.isBlocked(PROXY_A),
+            "A member 4xx must not convict the member on the group breaker");
+        assertFalse(
+            negCache.isKnown404(new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION)),
+            "A walk that saw a member 4xx must NOT poison the negative cache");
+    }
+
+    @Test
+    void member5xx_stillConvicts() {
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        final GroupResolver resolver = resolverWithRegistry(
+            registry, staticSlice(RsStatus.INTERNAL_ERROR), notFoundSlice(),
+            buildNegativeCache()
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(502, resp.status().code(),
+            "A genuine member 5xx still yields a 502 terminal");
+        assertTrue(registry.isBlocked(PROXY_A),
+            "A genuine member 5xx still convicts the member");
+    }
+
+    /**
+     * Registry that blocks a member on its first recorded failure.
+     */
+    private static AutoBlockRegistry tripOnFirstFailureRegistry() {
+        return new AutoBlockRegistry(
+            new AutoBlockSettings(
+                0.5, 1, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+    }
+
+    /**
+     * Two-proxy resolver (PROXY_A then PROXY_B) sharing one registry.
+     */
+    private static GroupResolver resolverWithRegistry(
+        final AutoBlockRegistry registry, final Slice first, final Slice second,
+        final NegativeCache negCache
+    ) {
+        return new GroupResolver(
+            GROUP,
+            List.of(
+                new MemberSlice(PROXY_A, first, registry, true),
+                new MemberSlice(PROXY_B, second, registry, true)
+            ),
+            Collections.emptyList(),
+            Optional.of(new RecordingIndex(Optional.of(List.of()))),
+            REPO_TYPE,
+            Set.of(PROXY_A, PROXY_B),
+            negCache,
+            java.util.concurrent.ForkJoinPool.commonPool()
+        );
+    }
+
     /**
      * Build a resolver whose single proxy member has its group-layer
      * circuit BLOCKED (one failure against a min-calls=1 registry).

@@ -504,6 +504,61 @@ final class SingleFlightPropertyTest {
     }
 
     /**
+     * Regression guard for the async-cleanup race fixed alongside this test:
+     * {@code load()} used to schedule cache invalidation and follower
+     * completion as two independently-dispatched {@code whenCompleteAsync}
+     * callbacks on {@code shared}, with no ordering guarantee between them.
+     * A caller could therefore observe its own future complete and
+     * immediately issue a fresh {@code load()} for the same key while the
+     * invalidation callback was still queued (or mid-flight) on the
+     * executor — silently rejoining the just-finished entry instead of
+     * triggering a new loader invocation. This surfaced as a genuine flake
+     * in {@code go-adapter}'s {@code GoMetadataBaseLoaderTest} (isolated
+     * runs widen the window; a warm full-suite run usually hides it).
+     *
+     * <p>{@link SingleFlight#load} now performs the invalidation and the
+     * follower completion in the <em>same</em> {@code whenCompleteAsync}
+     * callback, so the invalidation happens-before the caller observes
+     * completion — deterministically, with no sleep or poll required. We
+     * repeat the exact "get() then immediately load() again" sequence many
+     * times with fresh keys to make this a meaningful regression guard
+     * rather than a single low-probability sample.</p>
+     */
+    @Test
+    @Timeout(30)
+    void secondLoadImmediatelyAfterCompletionAlwaysTriggersFreshLoader() throws Exception {
+        final SingleFlight<String, Integer> sf = new SingleFlight<>(
+            Duration.ofSeconds(10), 1024, this.executor
+        );
+        final int iterations = 500;
+        for (int i = 0; i < iterations; i++) {
+            final String key = "race-key-" + i;
+            final AtomicInteger loaderInvocations = new AtomicInteger(0);
+            final CompletableFuture<Integer> first = sf.load(key, () -> {
+                loaderInvocations.incrementAndGet();
+                return CompletableFuture.completedFuture(1);
+            });
+            MatcherAssert.assertThat(first.get(5, TimeUnit.SECONDS), equalTo(1));
+            // No sleep, no poll: issued the instant the caller observes the
+            // first load's completion — exactly the window that used to race.
+            final CompletableFuture<Integer> second = sf.load(key, () -> {
+                loaderInvocations.incrementAndGet();
+                return CompletableFuture.completedFuture(2);
+            });
+            MatcherAssert.assertThat(
+                "iteration " + i + ": second load must return a fresh value, "
+                    + "not the first call's stale result",
+                second.get(5, TimeUnit.SECONDS), equalTo(2)
+            );
+            MatcherAssert.assertThat(
+                "iteration " + i + ": a load() issued immediately after the "
+                    + "prior one completed must always trigger a fresh loader",
+                loaderInvocations.get(), equalTo(2)
+            );
+        }
+    }
+
+    /**
      * Different keys must not coalesce even when loaders run concurrently.
      */
     @Test

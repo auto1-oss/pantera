@@ -10,7 +10,9 @@
  */
 package com.auto1.pantera.rpm.http;
 
+import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.Authentication;
@@ -32,12 +34,26 @@ import com.auto1.pantera.security.policy.Policy;
 
 import java.util.Optional;
 import java.util.Queue;
+import java.util.function.Predicate;
 
 /**
  * Pantera {@link Slice} for RPM repository HTTP API.
  * @since 0.7
  */
 public final class RpmSlice extends Slice.Wrap {
+
+    /**
+     * WS1.7 redirect gate for the shared catch-all GET route: only binary
+     * packages ({@code .rpm}) and delta packages ({@code .drpm}) are
+     * redirect-eligible. Everything under {@code repodata/} ({@code
+     * repomd.xml}, {@code *-primary.xml.gz}, {@code *.sqlite.bz2}, ...) is
+     * metadata and MUST stream -- none of it ends in {@code .rpm}/{@code
+     * .drpm}, so this predicate never leaks an index into a 302.
+     */
+    private static final Predicate<Key> REDIRECTABLE = key -> {
+        final String path = key.string();
+        return path.endsWith(".rpm") || path.endsWith(".drpm");
+    };
 
     /**
      * Ctor.
@@ -80,8 +96,7 @@ public final class RpmSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer; an existing package is
-     * replaced only with {@code ?override=true}.
+     * Ctor with synchronous artifact-index writer -- stream-only downloads.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public RpmSlice(
@@ -93,18 +108,34 @@ public final class RpmSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
-        this(storage, policy, basicAuth, tokenAuth, config, events, syncIndex, false);
+        this(storage, policy, basicAuth, tokenAuth, config, events, syncIndex,
+            DownloadPolicy.streamOnly());
     }
 
     /**
-     * Primary ctor.
-     * @param storage Storage
-     * @param policy Access policy.
-     * @param basicAuth Basic authentication.
-     * @param tokenAuth Token authentication, may be null.
-     * @param config Repository configuration.
-     * @param events Artifact events queue
-     * @param syncIndex Synchronous artifact-index writer
+     * Ctor with an explicit WS1.7 download policy: {@code .rpm}/{@code .drpm}
+     * package GETs become redirect-eligible under a non-{@link
+     * DownloadPolicy#streamOnly()} policy, while {@code repodata/} metadata
+     * keeps streaming (see {@link #REDIRECTABLE}).
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public RpmSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final RepoConfig config,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, config, events, syncIndex, downloadPolicy,
+            false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
      * @param immutable Whether an existing package may never be replaced,
      *  not even with {@code ?override=true}
      * @checkstyle ParameterNumberCheck (5 lines)
@@ -119,9 +150,32 @@ public final class RpmSlice extends Slice.Wrap {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final boolean immutable
     ) {
+        this(storage, policy, basicAuth, tokenAuth, config, events, syncIndex,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable Whether an existing package may never be replaced,
+     *  not even with {@code ?override=true}
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public RpmSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final RepoConfig config,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
+        final boolean immutable
+    ) {
         super(
             RpmSlice.createSliceRoute(
-                storage, policy, basicAuth, tokenAuth, config, events, syncIndex, immutable
+                storage, policy, basicAuth, tokenAuth, config, events, syncIndex, downloadPolicy,
+                immutable
             )
         );
     }
@@ -135,6 +189,7 @@ public final class RpmSlice extends Slice.Wrap {
      * @param config Repository configuration
      * @param events Artifact events queue
      * @param syncIndex Synchronous artifact-index writer
+     * @param downloadPolicy WS1.7 download policy for the catch-all GET route
      * @param immutable Whether an existing package may never be replaced
      * @return Slice route
      * @checkstyle ParameterNumberCheck (5 lines)
@@ -147,13 +202,18 @@ public final class RpmSlice extends Slice.Wrap {
         final RepoConfig config,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
         final boolean immutable
     ) {
         return new SliceRoute(
             new RtRulePath(
                 MethodRule.GET,
                 RpmSlice.createAuthSlice(
-                    new EmptyRepodataSlice(new StorageArtifactSlice(storage), storage, config),
+                    new EmptyRepodataSlice(
+                        new StorageArtifactSlice(storage, downloadPolicy, RpmSlice.REDIRECTABLE),
+                        storage,
+                        config
+                    ),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

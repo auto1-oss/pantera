@@ -53,9 +53,13 @@ final class PypiHtmlAttributes {
             ));
         }
         if (meta.distInfoMetadata().isPresent()) {
+            // PEP 714 renamed the attribute to data-core-metadata;
+            // data-dist-info-metadata is kept for clients that have not
+            // picked up the rename. Same (escaped) value under both names.
+            final String digest = HtmlEscape.escape(meta.distInfoMetadata().get());
             attrs.append(String.format(
-                " data-dist-info-metadata=\"sha256=%s\"",
-                HtmlEscape.escape(meta.distInfoMetadata().get())
+                " data-core-metadata=\"sha256=%s\" data-dist-info-metadata=\"sha256=%s\"",
+                digest, digest
             ));
         }
         return attrs.toString();
