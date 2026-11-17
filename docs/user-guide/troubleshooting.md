@@ -208,6 +208,14 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 
 ---
 
+### Generic HTTP clients and CI tool installers
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Jenkins tool installer: `failed, due to missing Last-Modified header value` | Pantera before 2.2.12 sent no `Last-Modified` on artifact downloads | Upgrade to 2.2.12 or later; see [Response Headers](response-headers.md#last-modified). |
+| `502 All upstream remotes failed` for a `.tar.gz`, `.tgz` or other non-jar file of a Maven or Gradle proxy, while jars and poms download | Pantera 2.2.11 and earlier could not cache such a file once it was more than a few hundred kilobytes (`404` before 2.2.11) | Upgrade to 2.2.12 or later. |
+| A `.tar.gz` or `.tgz` from a proxy fails with `gzip: stdin: not in gzip format`, is several times larger than upstream, or has the wrong checksum | Pantera before 2.2.12 unpacked a gzip file whose upstream labels it `Content-Encoding: gzip` and cached the inner tar | Upgrade to 2.2.12 or later, then ask an administrator to evict the cached copy. |
+
 ## Getting Help
 
 If the issue is not covered here:
