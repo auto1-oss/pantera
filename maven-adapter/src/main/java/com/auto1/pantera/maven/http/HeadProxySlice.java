@@ -19,10 +19,13 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
+import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
+import com.auto1.pantera.http.headers.LastModified;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.rq.RequestLine;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -131,13 +134,22 @@ final class HeadProxySlice implements Slice {
             if (!present) {
                 return this.upstreamHead(line, headers);
             }
-            return raw.metadata(key).thenApply(meta -> {
-                final ResponseBuilder resp = ResponseBuilder.ok();
-                meta.read(Meta.OP_SIZE).ifPresent(size ->
-                    resp.header("Content-Length", String.valueOf(size))
-                );
-                return resp.build();
-            }).exceptionally(err -> {
+            return raw.metadata(key).thenCombine(
+                HeadProxySlice.recordedLastModified(raw, key, rawPath),
+                (meta, recorded) -> {
+                    final ResponseBuilder resp = ResponseBuilder.ok();
+                    meta.read(Meta.OP_SIZE).ifPresent(size ->
+                        resp.header("Content-Length", String.valueOf(size))
+                    );
+                    // The date a GET of this file reports: the upstream date
+                    // recorded with it, else its storage time, read from the
+                    // metadata already fetched for Content-Length.
+                    resp.header(
+                        recorded.orElseGet(() -> new LastModified(meta, Instant.now()))
+                    );
+                    return resp.build();
+                }
+            ).exceptionally(err -> {
                 EcsLogger.debug("com.auto1.pantera.maven")
                     .message("HEAD cache-hit metadata read failed; serving 200 without length")
                     .eventCategory("web")
@@ -149,6 +161,35 @@ final class HeadProxySlice implements Slice {
                 return ResponseBuilder.ok().build();
             });
         }).toCompletableFuture();
+    }
+
+    /**
+     * The {@code Last-Modified} a GET of the cached file relays: the upstream
+     * date the standard cache flow recorded next to it. Empty when none was
+     * recorded or it cannot be read. A primary artifact (jar, pom, ...) never
+     * has one, so its HEAD skips the lookup.
+     * @param raw Cache storage
+     * @param key Cached file
+     * @param path Request path
+     * @return Recorded header, if any
+     */
+    private static CompletableFuture<Optional<LastModified>> recordedLastModified(
+        final Storage raw, final Key key, final String path
+    ) {
+        final CompletableFuture<Optional<LastModified>> res;
+        if (CachedProxySlice.isPrimaryArtifact(path)) {
+            res = CompletableFuture.completedFuture(Optional.empty());
+        } else {
+            res = new CachedArtifactMetadataStore(raw).load(key)
+                .thenApply(
+                    meta -> meta.flatMap(
+                        recorded -> recorded.headers().values(LastModified.NAME)
+                            .stream().findFirst()
+                    ).map(LastModified::new)
+                )
+                .exceptionally(err -> Optional.empty());
+        }
+        return res;
     }
 
     private CompletableFuture<Response> upstreamHead(

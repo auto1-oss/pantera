@@ -33,6 +33,7 @@ import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
 import com.auto1.pantera.http.fault.Result;
+import com.auto1.pantera.http.headers.LastModified;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.ServerErrorLog;
@@ -51,9 +52,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -831,9 +829,9 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     }
 
     private static String httpDate(final Instant when) {
-        return DateTimeFormatter.RFC_1123_DATE_TIME.format(
-            ZonedDateTime.ofInstant(when, ZoneOffset.UTC)
-        );
+        // Fixed-length HTTP date: RFC_1123_DATE_TIME drops the leading zero
+        // of the day ("Tue, 3 Nov 2026"), which strict clients reject.
+        return new LastModified(when).getValue();
     }
 
     private static String firstHeader(final Headers headers, final String name) {
@@ -897,7 +895,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @return {@code true} if we should route this request through
      *         {@link ProxyCacheWriter}.
      */
-    private static boolean isPrimaryArtifact(final String path) {
+    static boolean isPrimaryArtifact(final String path) {
         if (path.endsWith("/") || path.contains("maven-metadata.xml")) {
             return false;
         }
@@ -938,9 +936,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         // reflects THIS request's correlation context.
         final com.auto1.pantera.audit.AuditContext auditCtx = this.captureAuditContext(headers);
         final Storage storage = this.rawStorage.orElseThrow();
-        return storage.exists(key).thenCompose(presentInStorage -> {
-            if (presentInStorage) {
-                return this.serveFromCache(storage, key, auditCtx, path, headers);
+        return CachedProxySlice.storedAt(storage, key).thenCompose(stored -> {
+            if (stored.isPresent()) {
+                return this.serveFromCache(
+                    storage, key, auditCtx, path, headers, stored.get()
+                );
             }
             // Cooldown gate moved into fetchVerifyAndCache (post-headers).
             // The pre-fetch HEAD probe via MavenHeadSource was the dominant
@@ -1149,7 +1149,13 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     auditCtx, path, inboundHeaders, artifact.body().size().orElse(0L),
                     com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
                 );
-                return ResponseBuilder.ok().body(artifact.body()).build();
+                // The copy is being stored now; the next request is dated
+                // with its storage time. Generic HTTP clients (CI tool
+                // installers) refuse a download without Last-Modified.
+                return ResponseBuilder.ok()
+                    .header(new LastModified(Instant.now()))
+                    .body(artifact.body())
+                    .build();
             });
             })
         ).exceptionally(err -> {
@@ -1528,15 +1534,63 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private CompletableFuture<Response> serveFromCache(
         final Storage storage, final Key key,
         final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String path, final Headers headers
+        final String path, final Headers headers, final LastModified modified
     ) {
         return storage.value(key).thenApply(content -> {
             this.auditPrimaryAccess(
                 auditCtx, path, headers, content.size().orElse(0L),
                 com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
             );
-            return ResponseBuilder.ok().body(content).build();
+            return ResponseBuilder.ok().header(modified).body(content).build();
         });
+    }
+
+    /**
+     * The date of a cached artifact: its storage time; empty when the
+     * artifact is not cached. One metadata read answers both "is it cached"
+     * and "when was it stored" (on an object store the same {@code HEAD} an
+     * existence check costs), so dating a cache hit adds no storage round
+     * trip to the hot path.
+     *
+     * @param storage Cache storage
+     * @param key Artifact key
+     * @return Date of the cached artifact, empty when absent; fails like an
+     *  existence check would on any other storage error
+     */
+    private static CompletableFuture<Optional<LastModified>> storedAt(
+        final Storage storage, final Key key
+    ) {
+        return storage.metadata(key).handle(
+            (meta, err) -> {
+                final Optional<LastModified> stored;
+                if (err == null) {
+                    stored = Optional.of(new LastModified(meta, Instant.now()));
+                } else if (CachedProxySlice.notStored(err)) {
+                    stored = Optional.empty();
+                } else {
+                    throw new java.util.concurrent.CompletionException(
+                        CachedProxySlice.unwrap(err)
+                    );
+                }
+                return stored;
+            }
+        );
+    }
+
+    /**
+     * Whether a metadata failure only says the key is not in storage,
+     * however many wrappers the storage stack put around it.
+     * @param err Failure
+     * @return True for a missing key
+     */
+    private static boolean notStored(final Throwable err) {
+        Throwable cause = err;
+        boolean missing = false;
+        while (cause != null && !missing) {
+            missing = cause instanceof com.auto1.pantera.asto.ValueNotFoundException;
+            cause = cause.getCause();
+        }
+        return missing;
     }
 
     /**
