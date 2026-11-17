@@ -24,6 +24,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.HeadAsGetSlice;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -195,17 +196,22 @@ public final class HelmSlice extends Slice.Wrap {
                         )
                     )
                 ),
+                // HEAD is answered like the matching GET, without the body:
+                // bound to GET alone, these routes let `curl -I` or a CI
+                // installer probing a chart fall through to the 405 below.
                 new RtRulePath(
                     new RtRule.All(
-                        MethodRule.GET,
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                         new RtRule.ByPath(DownloadIndexSlice.PTRN)
                     ),
-                    HelmSlice.createAuthSlice(
-                        new DownloadIndexSlice(base, storage),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    new HeadAsGetSlice(
+                        HelmSlice.createAuthSlice(
+                            new DownloadIndexSlice(base, storage),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),
@@ -217,6 +223,22 @@ public final class HelmSlice extends Slice.Wrap {
                         tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                // The repository answers a HEAD itself, whatever the download
+                // policy: a presigned URL is signed for GET, so a client that
+                // followed a redirect with HEAD would be refused.
+                new RtRulePath(
+                    MethodRule.HEAD,
+                    new HeadAsGetSlice(
+                        HelmSlice.createAuthSlice(
+                            new StorageArtifactSlice(storage),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),

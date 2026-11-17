@@ -539,6 +539,10 @@ cooldown-filtered by Pantera, and a redirect would bypass both. This is
 enforced structurally (the metadata-serving code paths never consult a
 presigned URL at all), not by a config flag a repository could get wrong.
 
+Only a `GET` is redirected. A `HEAD` is always answered by Pantera itself: a
+presigned URL is signed for `GET`, and the object store refuses any other
+method on it.
+
 **Wired today** -- the concrete immutable-byte route of each of these hosted
 repository types:
 

@@ -52,7 +52,7 @@ store, instead of streaming the bytes through Pantera. This is opt-in
 per-repository (admin-configured `download-mode`) and only ever applies to
 immutable byte objects — metadata (manifests, tags, package indexes,
 signatures, and checksum sidecars such as `repodata/`, `index.yaml`/`.prov`,
-apt `Release`/`Packages`, and `maven-metadata.xml`) is never redirected. Standard HTTP clients follow redirects transparently; the
+apt `Release`/`Packages`, and `maven-metadata.xml`) is never redirected. Only a `GET` is redirected: a `HEAD` (`curl -I`) is always answered by Pantera itself. Standard HTTP clients follow redirects transparently; the
 one thing to be aware of is that **your client must be able to reach the
 object store directly**, not just Pantera — see [Storage Backends: Presigned
 Direct-Download](../admin-guide/storage-backends.md#presigned-direct-download-ws17)

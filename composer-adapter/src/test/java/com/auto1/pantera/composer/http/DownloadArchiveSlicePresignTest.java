@@ -103,6 +103,51 @@ final class DownloadArchiveSlicePresignTest {
         );
     }
 
+    /**
+     * A {@code HEAD} of a dist archive is answered by the repository, never
+     * redirected: a presigned URL is signed for GET, so the object store
+     * refuses a client that follows the redirect with HEAD.
+     */
+    @Test
+    void headOfDistIsAnsweredByTheRepositoryNeverRedirected() {
+        final PresigningStorage storage = new PresigningStorage(new InMemoryStorage());
+        storage.save(new Key.From("vendor/pkg/1.0.0.zip"), content("zip")).join();
+        final Slice slice = new PhpComposer(
+            new AstoRepository(
+                storage, Optional.of("http://localhost/php-repo"), Optional.of("php-repo")
+            ),
+            new PolicyByUsername(USER),
+            new Authentication.Single(USER, PASS),
+            null,
+            "php-repo",
+            Optional.empty(),
+            SyncArtifactIndexer.NOOP,
+            ArtifactIndex.NOP,
+            new DownloadPolicy(DownloadMode.REDIRECT, 600L)
+        );
+
+        final Response head = slice.response(
+            new RequestLine("HEAD", "/vendor/pkg/1.0.0.zip"),
+            Headers.from(new Authorization.Basic(USER, PASS)),
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "a HEAD of a dist archive must be answered by the repository (200)",
+            head.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the HEAD must announce the length of the archive",
+            head.headers().values("Content-Length").stream().distinct().toList(),
+            new IsEqual<>(java.util.List.of(String.valueOf("zip".length())))
+        );
+        MatcherAssert.assertThat(
+            "the HEAD must carry no body", head.body().asBytes().length, new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "no URL may be signed for a HEAD", storage.presignCalls.get(), new IsEqual<>(0)
+        );
+    }
+
     private static Response get(final Slice slice, final String path) {
         return slice.response(
             new RequestLine("GET", path),

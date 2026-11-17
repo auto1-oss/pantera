@@ -208,17 +208,44 @@ public final class CondaSlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     RtRule.FALLBACK,
-                    new HeadAsGetSlice(
-                        CondaSlice.routes(
-                            new Setup(storage, policy, users, tokens, repo),
-                            new PostStageCommitSlice(url, tickets, repo),
-                            new UploadSlices(
-                                new UpdateSlice(storage, events, repo, syncIndex, immutable), tickets
-                            ),
-                            downloadPolicy
-                        )
+                    CondaSlice.byMethod(
+                        new Setup(storage, policy, users, tokens, repo),
+                        new PostStageCommitSlice(url, tickets, repo),
+                        new UploadSlices(
+                            new UpdateSlice(storage, events, repo, syncIndex, immutable), tickets
+                        ),
+                        downloadPolicy
                     )
                 )
+            )
+        );
+    }
+
+    /**
+     * Routes of the repository by method. A {@code HEAD} answers what the
+     * {@code GET} would, without the body, and the repository answers it
+     * itself whatever the download policy: a presigned URL is signed for
+     * {@code GET}, so a client that followed a redirect with {@code HEAD}
+     * would be refused by the object store.
+     * @param setup Repository setup
+     * @param stage Stage/commit slice
+     * @param upload Upload slices
+     * @param downloadPolicy WS1.7 download policy for package downloads
+     * @return Route slice
+     */
+    private static Slice byMethod(
+        final Setup setup, final Slice stage, final UploadSlices upload,
+        final DownloadPolicy downloadPolicy
+    ) {
+        return new SliceRoute(
+            new RtRulePath(
+                MethodRule.HEAD,
+                new HeadAsGetSlice(
+                    CondaSlice.routes(setup, stage, upload, DownloadPolicy.streamOnly())
+                )
+            ),
+            new RtRulePath(
+                RtRule.FALLBACK, CondaSlice.routes(setup, stage, upload, downloadPolicy)
             )
         );
     }

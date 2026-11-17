@@ -103,6 +103,50 @@ final class DebianSlicePresignTest {
         );
     }
 
+    /**
+     * A {@code HEAD} of a package is answered by the repository, never
+     * redirected: a presigned URL is signed for GET, so the object store
+     * refuses a client that follows the redirect with HEAD.
+     */
+    @Test
+    void headOfDebIsAnsweredByTheRepositoryNeverRedirected() {
+        final PresigningStorage storage = new PresigningStorage(new InMemoryStorage());
+        storage.save(new Key.From("dists", CODENAME, "Release"), content("Origin: test\n")).join();
+        storage.save(
+            new Key.From("pool", "main", "n", "nginx", "nginx_1.0_amd64.deb"), content("deb-bytes")
+        ).join();
+        final DebianSlice slice = new DebianSlice(
+            storage,
+            new PolicyByUsername(USER),
+            new Authentication.Single(USER, PASS),
+            new TestConfig(),
+            Optional.empty(),
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
+            new DownloadPolicy(DownloadMode.REDIRECT, 600L)
+        );
+
+        final Response head = slice.response(
+            new RequestLine("HEAD", "/pool/main/n/nginx/nginx_1.0_amd64.deb"),
+            Headers.from(new Authorization.Basic(USER, PASS)),
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "a HEAD of a .deb must be answered by the repository (200)",
+            head.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the HEAD must announce the length of the package",
+            head.headers().values("Content-Length").stream().distinct().toList(),
+            new IsEqual<>(java.util.List.of(String.valueOf("deb-bytes".length())))
+        );
+        MatcherAssert.assertThat(
+            "the HEAD must carry no body", head.body().asBytes().length, new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "no URL may be signed for a HEAD", storage.presignCalls.get(), new IsEqual<>(0)
+        );
+    }
+
     private static Response get(final DebianSlice slice, final String path) {
         return slice.response(
             new RequestLine("GET", path),

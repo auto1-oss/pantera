@@ -213,6 +213,44 @@ final class DownloadSlicePresignTest {
         );
     }
 
+    /**
+     * A {@code HEAD} of a tarball is answered by the repository, never
+     * redirected: a presigned URL is signed for GET, so the object store
+     * refuses a client that follows the redirect with HEAD.
+     */
+    @Test
+    void headOfTarballIsAnsweredByTheRepositoryNeverRedirected() {
+        final PresigningStorage storage = new PresigningStorage(new InMemoryStorage());
+        storage.save(new Key.From(TARBALL), content("tar")).join();
+        final HexSlice slice = new HexSlice(
+            storage, Policy.FREE,
+            (name, pass) -> Optional.of(new AuthUser(name, "test")),
+            Optional.empty(), REPO,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
+            new RegistrySigner(), REDIRECT
+        );
+
+        final Response head = slice.response(
+            new RequestLine("HEAD", "/" + TARBALL),
+            Headers.from(new Authorization.Basic("alice", "pw")), Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "a HEAD of a tarball must be answered by the repository (200)",
+            head.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the HEAD must announce the length of the tarball",
+            head.headers().values("Content-Length").stream().distinct().toList(),
+            new IsEqual<>(java.util.List.of(String.valueOf("tar".length())))
+        );
+        MatcherAssert.assertThat(
+            "the HEAD must carry no body", head.body().asBytes().length, new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "no URL may be signed for a HEAD", storage.presignCalls.get(), new IsEqual<>(0)
+        );
+    }
+
     private static Response get(final Slice slice, final String path) {
         return slice.response(
             new RequestLine("GET", path), Headers.EMPTY, Content.EMPTY

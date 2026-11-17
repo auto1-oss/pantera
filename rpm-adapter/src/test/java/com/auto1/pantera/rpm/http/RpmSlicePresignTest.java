@@ -115,6 +115,38 @@ final class RpmSlicePresignTest {
         );
     }
 
+    /**
+     * A {@code HEAD} of a package is answered by the repository, never
+     * redirected: a presigned URL is signed for GET, so the object store
+     * refuses a client that follows the redirect with HEAD.
+     */
+    @Test
+    void headOfRpmIsAnsweredByTheRepositoryNeverRedirected() {
+        final PresigningStorage storage = new PresigningStorage(new InMemoryStorage());
+        storage.save(new Key.From("nginx-1.0.rpm"), content("rpm-bytes")).join();
+
+        final Response head = redirecting(storage).response(
+            new RequestLine("HEAD", "/nginx-1.0.rpm"),
+            Headers.from(new Authorization.Basic(USER, PASS)),
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "a HEAD of an .rpm must be answered by the repository (200)",
+            head.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the HEAD must announce the length of the package",
+            head.headers().values("Content-Length").stream().distinct().toList(),
+            new IsEqual<>(java.util.List.of(String.valueOf("rpm-bytes".length())))
+        );
+        MatcherAssert.assertThat(
+            "the HEAD must carry no body", head.body().asBytes().length, new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "no URL may be signed for a HEAD", storage.presignCalls.get(), new IsEqual<>(0)
+        );
+    }
+
     private static RpmSlice redirecting(final Storage storage) {
         return new RpmSlice(
             storage,

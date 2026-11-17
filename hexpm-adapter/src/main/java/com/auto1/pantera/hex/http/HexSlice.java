@@ -22,6 +22,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.HeadAsGetSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.perms.Action;
@@ -162,6 +163,29 @@ public final class HexSlice extends Slice.Wrap {
                         users,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                // HEAD is answered like the matching GET, without the body:
+                // routed for GET alone, `curl -I` got 404 for a file that
+                // exists. The repository answers it itself, whatever the
+                // download policy: a presigned URL is signed for GET, so a
+                // client that followed a redirect with HEAD would be refused.
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.HEAD,
+                        new RtRule.Any(
+                            new RtRule.ByPath(DownloadSlice.PACKAGES_PTRN),
+                            new RtRule.ByPath(DownloadSlice.TARBALLS_PTRN)
+                        )
+                    ),
+                    new HeadAsGetSlice(
+                        new BasicAuthzSlice(
+                            new DownloadSlice(storage, name, signer),
+                            users,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),

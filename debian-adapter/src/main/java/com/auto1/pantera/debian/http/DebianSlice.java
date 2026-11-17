@@ -23,6 +23,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.HeadAsGetSlice;
 import com.auto1.pantera.http.slice.*;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.RepositoryEvents;
@@ -165,6 +166,24 @@ public final class DebianSlice extends Slice.Wrap {
                         new OperationControl(
                             policy,
                             new AdapterBasicPermission(config.codename(), Action.Standard.READ)
+                        )
+                    )
+                ),
+                // HEAD is answered like the matching GET, without the body:
+                // routed for GET alone, `curl -I` got 404 for a file that
+                // exists. The repository answers it itself, whatever the
+                // download policy: a presigned URL is signed for GET, so a
+                // client that followed a redirect with HEAD would be refused.
+                new RtRulePath(
+                    MethodRule.HEAD,
+                    new HeadAsGetSlice(
+                        new BasicAuthzSlice(
+                            new ReleaseSlice(new StorageArtifactSlice(storage), storage, config),
+                            users,
+                            new OperationControl(
+                                policy,
+                                new AdapterBasicPermission(config.codename(), Action.Standard.READ)
+                            )
                         )
                     )
                 ),

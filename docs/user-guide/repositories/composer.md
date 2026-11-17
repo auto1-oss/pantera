@@ -88,7 +88,7 @@ How a group resolves package metadata:
 
 The first download of an archive through a proxy streams the bytes to Composer while Pantera writes them to its cache. Before the cached copy is committed, Pantera compares the streamed bytes with the `dist.shasum` (SHA-1) declared in the package metadata: an archive that does not match is never cached, so the next request fetches it again, and Composer's own `dist.shasum` check rejects the corrupted download. Concurrent first requests for the same archive share one upstream download. `HEAD` requests are answered like the matching `GET` on every path (same status and headers, no body).
 
-When an administrator enables `download-mode: redirect` on a hosted repository stored in an object store, an archive download may answer `302 Found` with a time-limited object-store URL instead of streaming the bytes. Composer follows the redirect and its `dist.shasum` check is unchanged; your machine must be able to reach the object store directly (see [Streaming Downloads](../streaming-downloads.md#presigned-direct-download-redirects)). Package metadata is never redirected.
+When an administrator enables `download-mode: redirect` on a hosted repository stored in an object store, an archive download may answer `302 Found` with a time-limited object-store URL instead of streaming the bytes. Composer follows the redirect and its `dist.shasum` check is unchanged; your machine must be able to reach the object store directly (see [Streaming Downloads](../streaming-downloads.md#presigned-direct-download-redirects)). Package metadata and `HEAD` requests are never redirected.
 
 ### Package Catalog Endpoints
 
