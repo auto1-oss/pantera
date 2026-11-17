@@ -31,6 +31,20 @@ import java.time.format.DateTimeParseException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
+import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
+import java.util.List;
+import java.util.Map;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Track 5 Phase 2B acceptance test for the Maven {@code HeadProxySlice}:
@@ -100,6 +114,89 @@ final class HeadProxySliceCacheFirstTest {
             "Last-Modified is a valid RFC 1123 HTTP date",
             isValidHttpDate(resp.headers().single("Last-Modified").getValue()),
             new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    @DisplayName("HEAD on a cached file relays the Last-Modified its GET relays")
+    void headHitRelaysRecordedLastModified() {
+        // The standard cache flow records the upstream response headers next
+        // to the file and a GET of the cached file relays them; HEAD must
+        // announce the same date.
+        final String path = "/org/example/dist/1.0/dist-1.0-bin.tar.gz";
+        final String recorded = "Sun, 17 Jun 2018 18:35:49 GMT";
+        final byte[] bytes = "cached-archive".getBytes(StandardCharsets.UTF_8);
+        final InMemoryStorage storage = new InMemoryStorage();
+        final Key key = new Key.From(path.substring(1));
+        storage.save(key, new Content.From(bytes)).join();
+        new CachedArtifactMetadataStore(storage).save(
+            key,
+            Headers.from("Last-Modified", recorded),
+            new CachedArtifactMetadataStore.ComputedDigests(bytes.length, Map.of())
+        ).join();
+        final Response resp = new HeadProxySlice(
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new AssertionError("upstream must not be hit on cache HEAD")
+            ),
+            Optional.of(storage)
+        ).response(
+            new RequestLine(RqMethod.HEAD, path), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "200 OK from local storage", resp.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the recorded upstream date is relayed",
+            resp.headers().values("Last-Modified"), new IsEqual<>(List.of(recorded))
+        );
+        MatcherAssert.assertThat(
+            "Content-Length is the cached file's size",
+            resp.headers().values("Content-Length"),
+            new IsEqual<>(List.of(String.valueOf(bytes.length)))
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        // A primary artifact.
+        "/org/apache/maven/apache-maven/3.5.4/apache-maven-3.5.4-bin.zip",
+        // A file of the standard cache flow whose upstream sent no date.
+        "/org/example/dist/1.0/dist-1.0-bin.tar.gz"
+    })
+    @DisplayName("HEAD on a cached file without a recorded date reports its storage time")
+    void headHitReportsStorageTime(final String path, @TempDir final Path dir)
+        throws Exception {
+        final Key key = new Key.From(path.substring(1));
+        final List<String> looked = new CopyOnWriteArrayList<>();
+        final Storage storage = new Storage.Wrap(new FileStorage(dir)) {
+            @Override
+            public CompletableFuture<Boolean> exists(final Key target) {
+                looked.add(target.string());
+                return super.exists(target);
+            }
+        };
+        storage.save(key, new Content.From("cached".getBytes(StandardCharsets.UTF_8)))
+            .get(30, TimeUnit.SECONDS);
+        Files.setLastModifiedTime(
+            dir.resolve(key.string()), FileTime.from(Instant.parse("2018-06-17T18:35:49Z"))
+        );
+        final Response resp = new HeadProxySlice(
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new AssertionError("upstream must not be hit on cache HEAD")
+            ),
+            Optional.of(storage)
+        ).response(
+            new RequestLine(RqMethod.HEAD, path), Headers.EMPTY, Content.EMPTY
+        ).get(30, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "the storage time is reported",
+            resp.headers().values("Last-Modified"),
+            new IsEqual<>(List.of("Sun, 17 Jun 2018 18:35:49 GMT"))
+        );
+        MatcherAssert.assertThat(
+            "a primary artifact has no recorded headers to look for",
+            looked.contains(key.string() + ".pantera-meta.json"),
+            new IsEqual<>(!path.endsWith(".zip"))
         );
     }
 

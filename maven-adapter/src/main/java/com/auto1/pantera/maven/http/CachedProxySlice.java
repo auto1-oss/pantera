@@ -36,6 +36,7 @@ import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
 import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.ContentLength;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.LastModified;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.ServerErrorLog;
@@ -58,9 +59,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -903,9 +901,9 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     }
 
     private static String httpDate(final Instant when) {
-        return DateTimeFormatter.RFC_1123_DATE_TIME.format(
-            ZonedDateTime.ofInstant(when, ZoneOffset.UTC)
-        );
+        // Fixed-length HTTP date: RFC_1123_DATE_TIME drops the leading zero
+        // of the day ("Tue, 3 Nov 2026"), which strict clients reject.
+        return new LastModified(when).getValue();
     }
 
     private static String firstHeader(final Headers headers, final String name) {
@@ -969,7 +967,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @return {@code true} if we should route this request through
      *         {@link ProxyCacheWriter}.
      */
-    private static boolean isPrimaryArtifact(final String path) {
+    static boolean isPrimaryArtifact(final String path) {
         if (path.endsWith("/") || path.contains("maven-metadata.xml")) {
             return false;
         }

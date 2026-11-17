@@ -12,12 +12,9 @@ package com.auto1.pantera.maven.http;
 
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.LastModified;
 
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.Optional;
 
 /**
  * Builds the {@code Last-Modified} response header from storage metadata, so
@@ -37,37 +34,9 @@ final class LastModifiedHeader {
      * always present, mirroring {@code CachedProxySlice#buildMetadataResponse}.
      *
      * @param meta Storage metadata
-     * @return {@code Last-Modified} header, RFC 1123 formatted
+     * @return {@code Last-Modified} header, a fixed-length HTTP date
      */
     static Header from(final Meta meta) {
-        return new Header("Last-Modified", httpDate(instant(meta)));
-    }
-
-    /**
-     * Resolve the timestamp to advertise.
-     * @param meta Storage metadata
-     * @return Best-known timestamp
-     */
-    private static Instant instant(final Meta meta) {
-        final Optional<? extends Instant> updated = meta.read(Meta.OP_UPDATED_AT);
-        if (updated.isPresent()) {
-            return updated.get();
-        }
-        final Optional<? extends Instant> created = meta.read(Meta.OP_CREATED_AT);
-        if (created.isPresent()) {
-            return created.get();
-        }
-        return Instant.now();
-    }
-
-    /**
-     * Format an instant as an RFC 1123 HTTP date.
-     * @param when Instant to format
-     * @return RFC 1123 formatted date string
-     */
-    private static String httpDate(final Instant when) {
-        return DateTimeFormatter.RFC_1123_DATE_TIME.format(
-            ZonedDateTime.ofInstant(when, ZoneOffset.UTC)
-        );
+        return new LastModified(meta, Instant.now());
     }
 }

@@ -74,6 +74,7 @@ import com.auto1.pantera.http.filter.Filters;
 import com.auto1.pantera.http.timeout.AutoBlockRegistry;
 import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import com.auto1.pantera.http.slice.DeleteRoutingSlice;
+import com.auto1.pantera.http.slice.LastModifiedSlice;
 import com.auto1.pantera.http.slice.PathPrefixStripSlice;
 import com.auto1.pantera.http.slice.ReservedPathSlice;
 import com.auto1.pantera.http.slice.NativeDeleteCascadeSlice;
@@ -1769,7 +1770,20 @@ public class RepositorySlices {
         Optional<Filters> opt = settings.caches()
             .filtersCache()
             .filters(cfg.name(), cfg.repoYaml());
-        Slice filtered = opt.isPresent() ? new FilterSlice(origin, opt.get()) : origin;
+        // Every served representation carries Last-Modified: generic HTTP
+        // clients (CI tool installers, curl -z, wget -N) fail or re-download
+        // without it. An adapter that dates its own response keeps its
+        // value; the rest get the storage time of the requested object.
+        // Docker is left out: registry clients never read the header and a
+        // blob path is not a storage key, so every pull would pay a storage
+        // lookup for nothing.
+        final Slice dated = cfg.type().startsWith("docker")
+            ? origin
+            : new LastModifiedSlice(
+                origin, cfg.storageOpt(),
+                new RepoStorageKey(cfg.type(), cfg.port().isPresent())
+            );
+        Slice filtered = opt.isPresent() ? new FilterSlice(dated, opt.get()) : dated;
 
         // Wrap with repository metrics to add repo_name and repo_type labels
         final Slice withMetrics = new com.auto1.pantera.http.slice.RepoMetricsSlice(

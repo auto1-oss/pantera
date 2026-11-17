@@ -53,6 +53,27 @@ If you ever see this header reach a client, that is a bug; please report it.
 
 ---
 
+## `Last-Modified`
+
+A standard header, listed here because generic HTTP clients depend on it: CI tool installers (the Jenkins Extra Tool Installers plugin refuses a download without it), `curl -z`, `wget -N`, Ansible `get_url`.
+
+Every successful `GET` and `HEAD` of a repository path carries it, for hosted, proxy and group repositories of every format except Docker (registry clients do not use it).
+
+| Response | Value |
+|---|---|
+| An artifact stored in the repository (hosted, or already cached by a proxy) | The time the artifact was stored in Pantera. |
+| A proxy response that relays the upstream's own `Last-Modified` | The upstream's date. |
+| A proxy answering a cache miss, a generated index or listing | The time of the request. |
+| A checksum or signature file (`.sha1`, `.md5`, `.sha256`, `.sha512`, `.asc`, `.sig`) | The time of the request. |
+
+The date of a stored artifact changes only when the stored copy is written again (a re-upload, or a proxy fetching the artifact again after its cached copy was evicted). A client that compares it with the date of an earlier download may therefore download a proxied artifact a second time once, right after it was first cached, and not again.
+
+Reading the storage time never delays a download for long: if the storage does not answer within 500 ms the response is dated with the time of the request.
+
+Pantera does not answer `304 Not Modified` to `If-Modified-Since` on artifact downloads: a conditional request gets the full `200` response.
+
+---
+
 ## Related Pages
 
 - [Error Reference](error-reference.md) -- What each `X-Pantera-Fault` tag means for your client.
