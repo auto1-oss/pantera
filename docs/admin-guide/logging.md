@@ -227,6 +227,12 @@ The access-log line (logger `http.access`) only says that a request was answered
 
 **One stack trace per failure.** A transport failure produces two records: the outbound client's single-line `http_request_send` record (`WARN`, `url.full`, `destination.address`, `event.reason`, `error.type` and `error.message`, no stack trace) and the answering slice's record with the full `error.stack_trace`. Both carry the same `trace.id`.
 
+**Repeated upstream requests.** When an upstream closes a connection before answering, the outbound client sends a `GET` or `HEAD` again (see [Upstream Connection Retry](performance-tuning.md#upstream-connection-retry-v2212)). The failed attempt leaves its `http_request_send` record (`WARN`, `event.reason: connection_closed`), followed by one `INFO` record per repeat: `event.action: http_request_retry`, with `destination.address`, `http.request.method` and `url.path`, under the same logging context as the first attempt. When a repeat succeeds there is no 5xx and no further record. To see how often an upstream drops connections:
+
+```
+event.action: "http_request_retry"
+```
+
 To find the cause of a 502, take the `trace.id` of its access-log line and search the application logs for it:
 
 ```

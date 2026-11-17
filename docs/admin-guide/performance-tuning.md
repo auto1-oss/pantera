@@ -289,6 +289,24 @@ Per-host state-machine circuit breaker in front of the Jetty client. Trips close
 
 ---
 
+## Upstream Connection Retry (v2.2.12+)
+
+Registries and their load balancers close kept-alive connections: on an idle timeout, after a number of requests, on a restart. A close can cross a request that Pantera has already sent on that connection, and the request then fails although the upstream is healthy. Pantera sends such a request again on another connection.
+
+| Rule | Value |
+|------|-------|
+| Requests repeated | `GET` and `HEAD` without a body. A `POST`, `PUT` or `DELETE` is never repeated: the upstream may already have acted on it. |
+| Failure that triggers it | The upstream closed or reset the connection before any part of an answer arrived (`event.reason: connection_closed`). |
+| Never repeated | Timeouts, refused connections, DNS and TLS failures, and any answer the upstream did send, whatever its status. |
+| Attempts | The first one and up to two more, sent at once. |
+| Position | Inside the circuit breaker: a close that the next attempt recovers from is not counted against the upstream. |
+
+A connection lost in the middle of a response body is not covered: the bytes are already on their way to the client.
+
+**Observability:** every repeat writes one `INFO` record with `event.action: http_request_retry`, `event.reason: connection_closed`, `destination.address`, `http.request.method` and `url.path`. Each failed attempt is still counted in `pantera_upstream_requests_total` and logged as `http_request_send`, so a registry that drops connections often stays visible even when no client notices. There is no setting: the rule is fixed.
+
+---
+
 ## Related Pages
 
 - [Installation](installation.md) -- Resource recommendations for Docker
