@@ -1614,77 +1614,21 @@ public abstract class BaseCachedProxySlice implements Slice {
     private CompletableFuture<?> saveFromTempFile(
         final Key key, final Path tempFile, final long size
     ) {
+        // The storage writer asks its source for more chunks while it still
+        // has writes queued, so the source is asked again after it completed.
+        // ProxyCacheWriter's file content ignores such a late request; reading
+        // the closed file there failed the save of any artifact larger than a
+        // few chunks.
+        final Content content = ProxyCacheWriter.streamingFileContent(tempFile, size);
         if (this.storage.isPresent()) {
-            final Content content = new Content.From(
-                Optional.of(size), filePublisher(tempFile)
-            );
             return this.storage.get().save(key, content);
         }
         // Fallback: use cache.load (non-storage-backed mode)
-        final Content content = new Content.From(
-            Optional.of(size), filePublisher(tempFile)
-        );
         return this.cache.load(
             key,
             () -> CompletableFuture.completedFuture(Optional.of(content)),
             CacheControl.Standard.ALWAYS
         ).toCompletableFuture();
-    }
-
-    /**
-     * Create a reactive-streams {@link org.reactivestreams.Publisher} that reads
-     * a temp file in 64 KB chunks. Replaces the previous {@code Flowable.using}
-     * pattern so this class no longer imports {@code io.reactivex.Flowable}.
-     *
-     * @param tempFile Temp file to read
-     * @return Publisher of ByteBuffer chunks
-     */
-    private static org.reactivestreams.Publisher<ByteBuffer> filePublisher(final Path tempFile) {
-        return subscriber -> {
-            final FileChannel[] holder = new FileChannel[1];
-            try {
-                holder[0] = FileChannel.open(tempFile, StandardOpenOption.READ);
-            } catch (final IOException ex) {
-                subscriber.onSubscribe(new org.reactivestreams.Subscription() {
-                    @Override public void request(final long n) { }
-                    @Override public void cancel() { }
-                });
-                subscriber.onError(ex);
-                return;
-            }
-            final FileChannel chan = holder[0];
-            subscriber.onSubscribe(new org.reactivestreams.Subscription() {
-                private volatile boolean cancelled;
-
-                @Override
-                public void request(final long n) {
-                    try {
-                        long remaining = n;
-                        while (remaining > 0 && !this.cancelled) {
-                            final ByteBuffer buf = ByteBuffer.allocate(65_536);
-                            final int read = chan.read(buf);
-                            if (read < 0) {
-                                chan.close();
-                                subscriber.onComplete();
-                                return;
-                            }
-                            buf.flip();
-                            subscriber.onNext(buf);
-                            remaining--;
-                        }
-                    } catch (final Exception ex) {
-                        closeChannelQuietly(chan);
-                        subscriber.onError(ex);
-                    }
-                }
-
-                @Override
-                public void cancel() {
-                    this.cancelled = true;
-                    closeChannelQuietly(chan);
-                }
-            });
-        };
     }
 
     /**

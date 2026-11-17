@@ -1360,6 +1360,9 @@ public final class ProxyCacheWriter {
      * lifecycle -- only the channel is closed when the stream terminates;
      * the caller remains responsible for eventually deleting {@code file}
      * (both call sites already do, after {@link #fireOnWrite} has run).
+     * Also the source of the cache save in {@link BaseCachedProxySlice}'s
+     * standard flow: a request that arrives after the last chunk is a
+     * no-op, which the storage file writer relies on.
      *
      * @param file Temp file holding the already-downloaded (and, on the
      *             stream-through path, already-digested) bytes.
@@ -1367,7 +1370,7 @@ public final class ProxyCacheWriter {
      *             length so downstream storages get an exact byte count.
      * @return A single-subscription streaming {@link Content}.
      */
-    private static Content streamingFileContent(final Path file, final long size) {
+    static Content streamingFileContent(final Path file, final long size) {
         return new Content.From(
             Optional.of(size),
             Flowable.using(
