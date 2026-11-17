@@ -79,6 +79,15 @@ Before merging a new reactive site, ask:
 
 ---
 
+## A Publisher Must Ignore Demand After Its Terminal Signal
+
+A `Subscription.request(n)` that arrives after the publisher signalled `onComplete` or `onError` MUST be a no-op (Reactive Streams 3.6), and no signal may follow a terminal one (1.7). This is not a corner case: the storage file writer requests chunks ahead while it still has writes queued, so its source is routinely asked again after the last chunk.
+
+A hand-written file publisher that closed its channel at end of file and then read it on the late request emitted `onError(ClosedChannelException)` after `onComplete`; the writer dropped its queued writes and the save failed. This made a Maven or Gradle proxy fail every file of the standard cache flow that was larger than a few chunks: `502` in 2.2.11, `404` before. `InMemoryStorage` never requests ahead, so tests on it do not see the defect.
+
+- Do not hand-write a `Publisher` over a file. Use `Flowable.using(open, channel -> Flowable.generate(...), close)` as `ProxyCacheWriter`, `StreamThroughCache` and `CachingBlob` do; RxJava ignores late demand and closes the channel on completion, error and cancel.
+- Test a save path on `FileStorage` (`@TempDir`) with a body larger than a megabyte, not only on `InMemoryStorage`. `BaseCachedProxySliceFileStorageTest` is the reference.
+
 ## ContextualExecutor for Async Hops (v2.2.0+)
 
 Every async hop on the request path MUST preserve MDC + APM transaction context. Without it, `trace.id`, `span.id`, `transaction.id`, `user.name`, `client.ip`, and the active APM transaction get dropped on the worker thread — and every log line emitted past the hop is unjoinable in Kibana.

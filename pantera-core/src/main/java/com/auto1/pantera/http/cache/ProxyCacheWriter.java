@@ -1296,9 +1296,11 @@ public final class ProxyCacheWriter {
     /**
      * Create a {@link Content} that streams {@code file} in
      * {@link #CHUNK_SIZE} chunks and leaves it on disk; the caller owns the
-     * file's lifecycle.
+     * file's lifecycle. Also the source of the cache save in
+     * {@link BaseCachedProxySlice}'s standard flow: a request that arrives
+     * after the last chunk is a no-op, which the storage file writer relies on.
      */
-    private static Content contentFromFile(final Path file, final long size) {
+    static Content contentFromFile(final Path file, final long size) {
         return fileContent(file, size, false);
     }
 
