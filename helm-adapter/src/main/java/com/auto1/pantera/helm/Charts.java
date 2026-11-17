@@ -19,7 +19,6 @@ import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -76,7 +75,10 @@ interface Charts {
                         .thenAccept(bytes -> {
                             TgzArchive tgz = new TgzArchive(bytes);
                             final ChartYaml chart = tgz.chartYaml();
-                            pckgs.putIfAbsent(chart.name(), new HashSet<>());
+                            // The charts are read concurrently: two versions
+                            // of one chart add to the same set from different
+                            // threads, and a plain HashSet lost one of them.
+                            pckgs.putIfAbsent(chart.name(), ConcurrentHashMap.newKeySet());
                             pckgs.get(chart.name()).add(chart.version());
                         })
                 ).toArray(CompletableFuture[]::new)
