@@ -154,6 +154,67 @@ final class LastModifiedSliceTest {
     }
 
     @Test
+    void datesFromTheBodyWithoutAskingStorage() throws Exception {
+        // A storage returns the modification time with the bytes; the
+        // adapter passes that content on as the response body.
+        final CountingStorage counting = new CountingStorage(this.storage);
+        final Instant carried = Instant.parse("2020-02-29T12:00:00Z");
+        final Response response = new LastModifiedSlice(
+            new SliceSimple(
+                ResponseBuilder.ok().body(
+                    new Content.From(
+                        Optional.of((long) LastModifiedSliceTest.DATA.length),
+                        new Content.From(LastModifiedSliceTest.DATA),
+                        Optional.of(carried)
+                    )
+                ).build()
+            ),
+            Optional.of(counting), LastModifiedSliceTest.KEYS, LastModifiedSliceTest.clock(),
+            LastModifiedSliceTest.PATIENCE
+        ).response(
+            new RequestLine(RqMethod.GET, LastModifiedSliceTest.PATH),
+            Headers.EMPTY, Content.EMPTY
+        ).get(30, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "the date is the one the body carries",
+            response.headers().values("Last-Modified"),
+            new IsEqual<>(List.of("Sat, 29 Feb 2020 12:00:00 GMT"))
+        );
+        MatcherAssert.assertThat(
+            "storage is not asked for a date the body already has",
+            counting.lookups(), new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "the body is intact",
+            response.body().asBytesFuture().get(30, TimeUnit.SECONDS),
+            new IsEqual<>(LastModifiedSliceTest.DATA)
+        );
+    }
+
+    @Test
+    void capsBodyTimeAtRequestTime() throws Exception {
+        MatcherAssert.assertThat(
+            new LastModifiedSlice(
+                new SliceSimple(
+                    ResponseBuilder.ok().body(
+                        new Content.From(
+                            Optional.empty(),
+                            new Content.From(LastModifiedSliceTest.DATA),
+                            Optional.of(Instant.parse("2099-01-01T00:00:00Z"))
+                        )
+                    ).build()
+                ),
+                Optional.of(this.storage), LastModifiedSliceTest.KEYS,
+                LastModifiedSliceTest.clock(), LastModifiedSliceTest.PATIENCE
+            ).response(
+                new RequestLine(RqMethod.GET, LastModifiedSliceTest.PATH),
+                Headers.EMPTY, Content.EMPTY
+            ).get(30, TimeUnit.SECONDS).headers().values("Last-Modified"),
+            new IsEqual<>(List.of(LastModifiedSliceTest.NOW_DATE))
+        );
+    }
+
+    @Test
     void neverDatesInTheFuture() throws Exception {
         // A storage time ahead of the server clock (clock skew between the
         // storage and this node) is capped: Last-Modified may not be later

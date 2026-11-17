@@ -210,7 +210,13 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 if (Files.exists(file) && Files.exists(meta)) {
-                    return CacheMeta.read(meta);
+                    // The sidecar is rewritten after every hit (truncate,
+                    // then write) under this lock. Read outside it, a hit
+                    // that lands mid-rewrite sees an empty file and takes
+                    // every field for unset: no size, no modification time.
+                    synchronized (getLock(meta)) {
+                        return CacheMeta.read(meta);
+                    }
                 }
             } catch (final IOException ex) { // NOPMD EmptyCatchBlock - intentional: any cache read error falls through to network fetch
                 // EXPECTED: any cache-read error falls through to a fresh
@@ -224,13 +230,13 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             }
             if (!this.validateOnRead) {
                 return CompletableFuture.completedFuture(
-                    this.serveCached(file, meta, cm)
+                    this.serveCached(key, file, meta, cm)
                 );
             }
             return this.matchRemoteAsync(key, cm).thenCompose(valid -> {
                 if (valid) {
                     return CompletableFuture.completedFuture(
-                        this.serveCached(file, meta, cm)
+                        this.serveCached(key, file, meta, cm)
                     );
                 }
                 return this.fetchAndPersist(key, file, meta);
@@ -240,16 +246,28 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
 
     /**
      * Serve content from local cache and update access metadata in background.
+     * The content carries the remote object's modification time recorded
+     * with the entry, so a hit is dated without contacting the remote. An
+     * entry cached before that time was recorded learns it once, in the
+     * background, and carries it from the next hit on.
+     * @param key Storage key
      * @param file Path to cached file
      * @param meta Path to metadata file
      * @param cm Cache metadata
      * @return Cached content
      */
-    private Content serveCached(final Path file, final Path meta, final CacheMeta cm) {
+    private Content serveCached(
+        final Key key, final Path file, final Path meta, final CacheMeta cm
+    ) {
         final Content cnt = new Content.From(
             cm.size > 0 ? Optional.of(cm.size) : Optional.empty(),
-            filePublisher(file)
+            filePublisher(file),
+            cm.lastModified > 0
+                ? Optional.of(Instant.ofEpochMilli(cm.lastModified)) : Optional.empty()
         );
+        if (cm.lastModified == 0) {
+            this.learnLastModified(key, meta);
+        }
         CompletableFuture.runAsync(() -> {
             try {
                 synchronized (getLock(meta)) {
@@ -420,12 +438,52 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                                 .log();
                         }
                     });
-                result.complete(new Content.From(cnt.size(), stream));
+                result.complete(new Content.From(cnt.size(), stream, cnt.lastModified()));
             } catch (final IOException ioe) {
                 result.completeExceptionally(new PanteraIOException(ioe));
             }
         });
         return result;
+    }
+
+    /**
+     * Record the remote object's modification time in an entry that lacks
+     * it. Best-effort and off the request path: a failure leaves the entry
+     * as it was and the next hit tries again.
+     * @param key Storage key
+     * @param meta Path to metadata file
+     */
+    private void learnLastModified(final Key key, final Path meta) {
+        super.metadata(key).thenAccept(
+            remote -> {
+                final long modified = CacheMeta.fromRemote(remote).lastModified;
+                try {
+                    synchronized (getLock(meta)) {
+                        final CacheMeta current = CacheMeta.read(meta);
+                        // A remote that reports no time is asked once only.
+                        current.lastModified = modified > 0 ? modified : CacheMeta.UNDATED;
+                        CacheMeta.write(meta, current);
+                    }
+                } catch (final IOException ex) {
+                    EcsLogger.debug("com.auto1.pantera.asto.s3")
+                        .message("Failed to record modification time of cache entry")
+                        .eventAction("resource_cleanup_failed")
+                        .error(ex)
+                        .field("log.source", "application")
+                        .log();
+                }
+            }
+        ).exceptionally(
+            err -> {
+                EcsLogger.debug("com.auto1.pantera.asto.s3")
+                    .message("Failed to read modification time of cached object")
+                    .eventAction("resource_cleanup_failed")
+                    .error(err)
+                    .field("log.source", "application")
+                    .log();
+                return null;
+            }
+        );
     }
 
     /**
@@ -668,6 +726,17 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         long size;
         long lastAccess;
         long hits;
+        /**
+         * Marks an entry whose remote reports no modification time.
+         */
+        static final long UNDATED = -1L;
+
+        /**
+         * Epoch millis the remote object was last modified; 0 when not
+         * recorded yet (an entry written before this was recorded),
+         * {@link #UNDATED} when the remote has none.
+         */
+        long lastModified;
 
         static CacheMeta read(final Path meta) throws IOException {
             final Properties p = new Properties();
@@ -679,6 +748,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             cm.size = Long.parseLong(p.getProperty("size", "0"));
             cm.lastAccess = Long.parseLong(p.getProperty("lastAccess", "0"));
             cm.hits = Long.parseLong(p.getProperty("hits", "0"));
+            cm.lastModified = Long.parseLong(p.getProperty("lastModified", "0"));
             return cm;
         }
 
@@ -688,6 +758,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             p.setProperty("size", Long.toString(cm.size));
             p.setProperty("lastAccess", Long.toString(cm.lastAccess));
             p.setProperty("hits", Long.toString(cm.hits));
+            p.setProperty("lastModified", Long.toString(cm.lastModified));
             try (OutputStream out = Files.newOutputStream(meta)) {
                 p.store(out, "cache");
             }
@@ -697,6 +768,9 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             final CacheMeta cm = new CacheMeta();
             cm.etag = meta.read(Meta.OP_MD5).map(Object::toString).orElse("");
             cm.size = meta.read(Meta.OP_SIZE).map(Long.class::cast).orElse(0L);
+            cm.lastModified = meta.read(Meta.OP_UPDATED_AT)
+                .map(Instant.class::cast).map(Instant::toEpochMilli)
+                .orElse(CacheMeta.UNDATED);
             return cm;
         }
     }

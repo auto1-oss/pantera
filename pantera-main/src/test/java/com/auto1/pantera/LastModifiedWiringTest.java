@@ -11,11 +11,15 @@
 package com.auto1.pantera;
 
 import com.amihaiemil.eoyaml.Yaml;
+import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlMappingBuilder;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.auth.JwtTokens;
+import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
@@ -27,7 +31,6 @@ import com.auto1.pantera.settings.StorageByAlias;
 import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.settings.repo.Repositories;
 import com.auto1.pantera.test.TestSettings;
-import com.auto1.pantera.test.TestStoragesCache;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -40,7 +43,9 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,6 +58,11 @@ import org.junit.jupiter.params.provider.CsvSource;
  * a {@code Last-Modified} header for every repository format: generic HTTP
  * clients (a CI tool installer, {@code curl -z}, {@code wget -N}) fail or
  * re-download without it. The value is the time the artifact was stored.
+ *
+ * <p>A {@code GET} pays no storage request for it: the storage returns the
+ * time with the bytes and the adapter passes that content on as the response
+ * body. An adapter that rebuilt the body would cost every download a
+ * metadata read, a {@code HEAD} request on an object store.</p>
  *
  * @since 2.2.12
  */
@@ -128,8 +138,10 @@ final class LastModifiedWiringTest {
             this.tmp.resolve(LastModifiedWiringTest.REPO).resolve(artifact),
             FileTime.from(LastModifiedWiringTest.STORED)
         );
+        final CountingStorages storages = new CountingStorages();
         final Response rsp = this.slices(
-            this.repo(type).add("url", "http://localhost/" + LastModifiedWiringTest.REPO)
+            this.repo(type).add("url", "http://localhost/" + LastModifiedWiringTest.REPO),
+            storages
         ).slice(new Key.From(LastModifiedWiringTest.REPO), 8080).response(
             new RequestLine(
                 RqMethod.valueOf(method),
@@ -145,9 +157,24 @@ final class LastModifiedWiringTest {
             rsp.headers().values("Last-Modified"),
             new IsEqual<>(List.of(LastModifiedWiringTest.STORED_DATE))
         );
+        if ("GET".equals(method)) {
+            MatcherAssert.assertThat(
+                "a download is dated without a storage metadata request",
+                storages.metadataRequests(), new IsEqual<>(0)
+            );
+        } else {
+            // A HEAD has no body to carry the time: the metadata is read,
+            // which also shows the counter observes the repository storage.
+            MatcherAssert.assertThat(
+                "a HEAD reads the storage metadata",
+                storages.metadataRequests() > 0, new IsEqual<>(true)
+            );
+        }
     }
 
-    private RepositorySlices slices(final YamlMappingBuilder repo) {
+    private RepositorySlices slices(
+        final YamlMappingBuilder repo, final StoragesCache storages
+    ) {
         return new RepositorySlices(
             new TestSettings(),
             new SingleRepo(
@@ -155,7 +182,7 @@ final class LastModifiedWiringTest {
                     Yaml.createYamlMappingBuilder().add("repo", repo.build()).build(),
                     new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
                     new Key.From(LastModifiedWiringTest.REPO),
-                    new TestStoragesCache(),
+                    storages,
                     false
                 )
             ),
@@ -173,6 +200,37 @@ final class LastModifiedWiringTest {
                     .add("path", this.tmp.toString())
                     .build()
             );
+    }
+
+    /**
+     * Storages that count the metadata requests made to them.
+     */
+    private static final class CountingStorages extends StoragesCache {
+
+        /**
+         * Metadata requests.
+         */
+        private final AtomicInteger metas;
+
+        CountingStorages() {
+            super();
+            this.metas = new AtomicInteger();
+        }
+
+        @Override
+        public Storage storage(final YamlMapping yaml) {
+            return new Storage.Wrap(super.storage(yaml)) {
+                @Override
+                public CompletableFuture<? extends Meta> metadata(final Key key) {
+                    CountingStorages.this.metas.incrementAndGet();
+                    return super.metadata(key);
+                }
+            };
+        }
+
+        int metadataRequests() {
+            return this.metas.get();
+        }
     }
 
     /**
