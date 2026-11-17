@@ -427,6 +427,27 @@ The `AND checksum = -1336931361` guard makes the statement a no-op on any databa
 
 ---
 
+### A Proxied `.tar.gz` or `.tgz` Is Not a Gzip File
+
+**Symptom:** a `.tar.gz` / `.tgz` downloaded through a proxy repository fails with `gzip: stdin: not in gzip format`, is several times larger than the upstream file, or does not match the upstream checksum.
+
+**Cause:** the upstream labels its stored `.gz` files with a gzip content-coding (Apache `AddEncoding x-gzip .gz .tgz`, an object store whose object carries `Content-Encoding: gzip`). Pantera before 2.2.12 undid that coding and cached the inner tar under the archive's name. 2.2.12 fetches such files byte for byte, but a copy cached earlier is still served until it is evicted.
+
+**Fix:** after upgrading, evict the affected paths; the next request fetches the file again.
+
+```bash
+curl -u "$USER:$PASS" -X DELETE "https://pantera.example.com/<proxy-repo>/<path>/<file>.tar.gz"
+```
+
+To find affected copies on a filesystem cache storage, list the `.gz` / `.tgz` files that do not start with the gzip magic bytes `1f 8b`:
+
+```bash
+find /var/pantera/data/<proxy-repo> -type f \( -name '*.gz' -o -name '*.tgz' \) \
+  -exec sh -c '[ "$(head -c 2 "$1" | od -An -tx1 | tr -d " \n")" = 1f8b ] || echo "$1"' _ {} \;
+```
+
+Registries that serve archives without a content-coding (Maven Central, npmjs, PyPI) were never affected.
+
 ### Negative Cache Returning Stale 404s
 
 **Symptoms:** A newly published artifact returns 404 from a proxy repository even though it exists upstream.

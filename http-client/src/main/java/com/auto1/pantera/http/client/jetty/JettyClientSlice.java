@@ -28,6 +28,7 @@ import org.eclipse.jetty.client.AsyncRequestContent;
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.Request;
 import org.eclipse.jetty.http.HttpFields;
+import org.eclipse.jetty.http.HttpHeader;
 import org.eclipse.jetty.util.Callback;
 import org.eclipse.jetty.util.thread.Scheduler;
 import java.net.URI;
@@ -565,7 +566,44 @@ final class JettyClientSlice implements Slice {
         for (Header header : withTrace) {
             request.headers(mutable -> mutable.add(header.getKey(), header.getValue()));
         }
+        // A gzip file is fetched as stored. A server that announces the
+        // encoding of its .gz / .tgz files (Apache "AddEncoding x-gzip .gz
+        // .tgz", an object store whose object carries Content-Encoding: gzip)
+        // sends the archive unchanged and labels it with a gzip
+        // content-coding: "x-gzip", or "gzip" to a client that offers gzip.
+        // Undoing that coding hands back the inner tar under the archive's
+        // name. So no compression is asked for such a file, and a
+        // Content-Encoding on its response is kept from Jetty, which then
+        // neither decodes the body nor drops its Content-Length.
+        if (JettyClientSlice.gzipFile(uri)) {
+            request.headers(
+                mutable -> mutable.put(HttpHeader.ACCEPT_ENCODING, "identity")
+            );
+            request.onResponseHeader(
+                (response, field) -> field.getHeader() != HttpHeader.CONTENT_ENCODING
+            );
+        }
         return request;
+    }
+
+    /**
+     * Whether the request names a gzip file: the file itself is the gzip
+     * stream, so a gzip content-coding on its response is the format of the
+     * file, not a compression applied for the transfer.
+     *
+     * @param uri Request URI
+     * @return True for a path ending in {@code .gz} or {@code .tgz}
+     */
+    private static boolean gzipFile(final URI uri) {
+        final String path = uri.getPath();
+        final boolean gzip;
+        if (path == null) {
+            gzip = false;
+        } else {
+            final String lower = path.toLowerCase(Locale.ROOT);
+            gzip = lower.endsWith(".gz") || lower.endsWith(".tgz");
+        }
+        return gzip;
     }
 
     /**
