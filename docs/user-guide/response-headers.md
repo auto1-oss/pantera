@@ -68,7 +68,7 @@ Every successful `GET` and `HEAD` of a repository path carries it, for hosted, p
 
 The date of a stored artifact changes only when the stored copy is written again (a re-upload, or a proxy fetching the artifact again after its cached copy was evicted). A client that compares it with the date of an earlier download may therefore download a proxied artifact a second time once, right after it was first cached, and not again.
 
-Reading the storage time never delays a download for long: if the storage does not answer within 500 ms the response is dated with the time of the request.
+The storage time is read together with the artifact, so it adds no storage request to a download. Where it has to be looked up separately (a `HEAD` request, for example) it never delays the response for long: if the storage does not answer within 500 ms the response is dated with the time of the request.
 
 Pantera does not answer `304 Not Modified` to `If-Modified-Since` on artifact downloads: a conditional request gets the full `200` response.
 

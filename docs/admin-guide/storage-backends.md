@@ -197,6 +197,8 @@ cache:
 | `low-watermark-percent` | `80` | Stop eviction at this capacity |
 | `validate-on-read` | `true` | Validate cache integrity against S3 |
 
+Each cached object keeps the modification time S3 reported for it, so a cache hit can be served with a `Last-Modified` header without contacting S3. An entry cached by a version before 2.2.12 lacks it: its first hit after the upgrade makes one background `HEAD` request to learn it, and no further ones.
+
 **Sizing recommendation:** Set `max-bytes` to fit your hot working set (the artifacts accessed most frequently in a typical build cycle). For most teams, 10-50 GB is sufficient.
 
 ### Index Cache Mode (`cache.mode: index`)

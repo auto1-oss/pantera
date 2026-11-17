@@ -41,6 +41,12 @@ import java.util.function.Function;
  * time of the request when the path is not a stored object: a proxy that is
  * storing the artifact while it streams it, or a generated document.</p>
  *
+ * <p>The storage time normally costs nothing: a storage returns it with the
+ * bytes ({@link Content#lastModified()}) and an adapter that passes that
+ * content on as the response body hands it over. Only a response whose body
+ * does not know its time (a {@code HEAD} answer, a body the adapter rebuilt)
+ * is looked up in storage.</p>
+ *
  * <p>Only the header is added: status, the other headers (the
  * {@code Content-Length} of a {@code HEAD} answer among them) and the body
  * pass through. A storage failure never fails the response, and a storage
@@ -48,8 +54,8 @@ import java.util.function.Function;
  * is then dated with the time of the request.</p>
  *
  * <p>The lookup is one storage metadata read (a {@code HEAD} on an object
- * store) made after the origin answered, so a hot serve path that already
- * holds the object's metadata should date its own response and skip it.</p>
+ * store) made after the origin answered, so a serve path should keep the
+ * storage's content as its response body, or date the response itself.</p>
  *
  * @since 2.2.12
  */
@@ -130,7 +136,7 @@ public final class LastModifiedSlice implements Slice {
                 resp -> {
                     final CompletableFuture<Response> dated;
                     if (LastModifiedSlice.undated(resp)) {
-                        dated = this.modified(line.uri().getPath()).thenApply(
+                        dated = this.modified(line.uri().getPath(), resp.body()).thenApply(
                             modified -> new Response(
                                 resp.status(),
                                 resp.headers().copy().add(modified),
@@ -164,16 +170,24 @@ public final class LastModifiedSlice implements Slice {
      * now; the time of the request when it is not a stored object or its
      * storage time cannot be read in time.
      * @param path Request path
+     * @param body Response body, which knows its time when it is the
+     *  content a storage returned
      * @return Header, never a failed future
      */
-    private CompletableFuture<LastModified> modified(final String path) {
+    private CompletableFuture<LastModified> modified(final String path, final Content body) {
         final Instant now = this.clock.instant();
         final LastModified request = new LastModified(now);
         // Composed from a completed stage so that anything thrown while the
-        // key is resolved or the storage is called ends in the fallback
-        // below instead of failing the response.
+        // body is asked, the key is resolved or the storage is called ends
+        // in the fallback below instead of failing the response.
         return CompletableFuture.completedFuture(path)
-            .thenCompose(target -> this.stored(target, now))
+            .thenCompose(
+                target -> body.lastModified()
+                    .map(carried -> carried.isAfter(now) ? now : carried)
+                    .map(LastModified::new)
+                    .map(CompletableFuture::completedFuture)
+                    .orElseGet(() -> this.stored(target, now))
+            )
             .completeOnTimeout(request, this.patience.toMillis(), TimeUnit.MILLISECONDS)
             .exceptionally(
                 err -> {

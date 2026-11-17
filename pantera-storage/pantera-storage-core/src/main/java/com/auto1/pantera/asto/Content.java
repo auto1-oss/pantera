@@ -25,6 +25,7 @@ import java.io.PipedOutputStream;
 import java.io.StringReader;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -54,6 +55,20 @@ public interface Content extends Publisher<ByteBuffer> {
      * @return Size of content in bytes if known.
      */
     Optional<Long> size();
+
+    /**
+     * Time the content was last modified, when its source knows it.
+     *
+     * <p>A storage learns this with the bytes: from the file attributes it
+     * reads for the size, from the response of the object-store read. A
+     * caller that serves the content (a {@code Last-Modified} response
+     * header) takes it from here instead of asking the storage again.</p>
+     *
+     * @return Modification time, empty when unknown.
+     */
+    default Optional<Instant> lastModified() {
+        return Optional.empty();
+    }
 
     /**
      * Reads bytes from the content into memory asynchronously.
@@ -256,6 +271,11 @@ public interface Content extends Publisher<ByteBuffer> {
         private final Publisher<ByteBuffer> publisher;
 
         /**
+         * Time the content was last modified, if known.
+         */
+        private final Optional<Instant> modified;
+
+        /**
          * Ctor.
          *
          * @param array Content bytes.
@@ -287,8 +307,21 @@ public interface Content extends Publisher<ByteBuffer> {
          * @param publisher Content bytes.
          */
         public From(final Optional<Long> size, final Publisher<ByteBuffer> publisher) {
+            this(size, publisher, Optional.empty());
+        }
+
+        /**
+         * @param size Total content size in bytes, if known.
+         * @param publisher Content bytes.
+         * @param modified Time the content was last modified, if known.
+         */
+        public From(
+            final Optional<Long> size, final Publisher<ByteBuffer> publisher,
+            final Optional<Instant> modified
+        ) {
             this.length = size;
             this.publisher = publisher;
+            this.modified = modified;
         }
 
         @Override
@@ -299,6 +332,11 @@ public interface Content extends Publisher<ByteBuffer> {
         @Override
         public Optional<Long> size() {
             return this.length;
+        }
+
+        @Override
+        public Optional<Instant> lastModified() {
+            return this.modified;
         }
     }
 
@@ -320,12 +358,19 @@ public interface Content extends Publisher<ByteBuffer> {
          * @param original The original content
          */
         public OneTime(final Content original) {
-            this.wrapped = new Content.From(original.size(), new OneTimePublisher<>(original));
+            this.wrapped = new Content.From(
+                original.size(), new OneTimePublisher<>(original), original.lastModified()
+            );
         }
 
         @Override
         public Optional<Long> size() {
             return this.wrapped.size();
+        }
+
+        @Override
+        public Optional<Instant> lastModified() {
+            return this.wrapped.lastModified();
         }
 
         @Override

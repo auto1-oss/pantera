@@ -36,6 +36,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -425,18 +426,26 @@ public final class FileStorage implements Storage {
                 new PanteraIOException("Unable to load from root")
             ).get();
         } else {
-            res = this.metadata(key).thenApply(
-                meta -> meta.read(Meta.OP_SIZE).orElseThrow(
-                    () -> new PanteraException(
-                        String.format("Size is not available for '%s' key", key.string())
-                    )
-                )
-            ).thenCompose(
-                size -> this.keyPath(key).thenApply(path -> ImmutablePair.of(path, size))
-            ).thenApply(
-                pair -> new Content.OneTime(
-                    new Content.From(pair.getValue(), new File(pair.getKey()).content())
-                )
+            // The attributes read for the size also hold the modification
+            // time: the content carries it, so serving the file with a
+            // Last-Modified header costs no second read.
+            res = this.metadata(key).thenCompose(
+                meta -> {
+                    final long size = meta.read(Meta.OP_SIZE).orElseThrow(
+                        () -> new PanteraException(
+                            String.format("Size is not available for '%s' key", key.string())
+                        )
+                    );
+                    return this.keyPath(key).thenApply(
+                        path -> new Content.OneTime(
+                            new Content.From(
+                                Optional.of(size),
+                                new File(path).content(),
+                                meta.read(Meta.OP_UPDATED_AT).map(Instant.class::cast)
+                            )
+                        )
+                    );
+                }
             );
         }
         return res.whenComplete((content, throwable) -> {
