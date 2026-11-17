@@ -22,6 +22,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.HeadAsGetSlice;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.rpm.RepoConfig;
@@ -150,14 +151,19 @@ public final class RpmSlice extends Slice.Wrap {
         final boolean immutable
     ) {
         return new SliceRoute(
+            // HEAD is answered like the matching GET, without the body: bound
+            // to GET alone this route answered 404 to `curl -I` for a file
+            // that exists.
             new RtRulePath(
-                MethodRule.GET,
-                RpmSlice.createAuthSlice(
-                    new EmptyRepodataSlice(new StorageArtifactSlice(storage), storage, config),
-                    basicAuth,
-                    tokenAuth,
-                    new OperationControl(
-                        policy, new AdapterBasicPermission(config.name(), Action.Standard.READ)
+                new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
+                new HeadAsGetSlice(
+                    RpmSlice.createAuthSlice(
+                        new EmptyRepodataSlice(new StorageArtifactSlice(storage), storage, config),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(config.name(), Action.Standard.READ)
+                        )
                     )
                 )
             ),

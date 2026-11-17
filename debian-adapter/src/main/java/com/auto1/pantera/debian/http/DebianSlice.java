@@ -21,6 +21,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.HeadAsGetSlice;
 import com.auto1.pantera.http.slice.*;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.RepositoryEvents;
@@ -102,14 +103,19 @@ public final class DebianSlice extends Slice.Wrap {
     ) {
         super(
             new SliceRoute(
+                // HEAD is answered like the matching GET, without the body:
+                // bound to GET alone this route answered 404 to `curl -I`
+                // for a file that exists.
                 new RtRulePath(
-                    MethodRule.GET,
-                    new BasicAuthzSlice(
-                        new ReleaseSlice(new StorageArtifactSlice(storage), storage, config),
-                        users,
-                        new OperationControl(
-                            policy,
-                            new AdapterBasicPermission(config.codename(), Action.Standard.READ)
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
+                    new HeadAsGetSlice(
+                        new BasicAuthzSlice(
+                            new ReleaseSlice(new StorageArtifactSlice(storage), storage, config),
+                            users,
+                            new OperationControl(
+                                policy,
+                                new AdapterBasicPermission(config.codename(), Action.Standard.READ)
+                            )
                         )
                     )
                 ),

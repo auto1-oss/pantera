@@ -124,8 +124,18 @@ final class LastModifiedWiringTest {
         "go,     GET,  example.com/hello/@v/v1.0.1.zip",
         "pypi,   GET,  hello/0.2.0/hello-0.2.0.tar.gz",
         "helm,   GET,  cert-manager/cert-manager-v1.17.4.tgz",
+        "helm,   HEAD, cert-manager/cert-manager-v1.17.4.tgz",
         "npm,    GET,  @acme/pkg/-/@acme/pkg-1.0.0.tgz",
-        "php,    GET,  artifacts/acme/lib/2.0.0/acme-lib-2.0.0.zip"
+        "php,    GET,  artifacts/acme/lib/2.0.0/acme-lib-2.0.0.zip",
+        "php,    HEAD, artifacts/acme/lib/2.0.0/acme-lib-2.0.0.zip",
+        "gem,    GET,  gems/builder-3.2.4.gem",
+        "gem,    HEAD, gems/builder-3.2.4.gem",
+        "rpm,    GET,  packages/time-1.7-45.el7.x86_64.rpm",
+        "rpm,    HEAD, packages/time-1.7-45.el7.x86_64.rpm",
+        "pypi,   HEAD, hello/0.2.0/hello-0.2.0.tar.gz",
+        "go,     HEAD, example.com/hello/@v/v1.0.1.zip",
+        "npm,    HEAD, @acme/pkg/-/@acme/pkg-1.0.0.tgz",
+        "gradle, HEAD, org/example/tool/1.0/tool-1.0.jar"
     })
     void storedArtifactIsDatedWithItsStorageTime(
         final String type, final String method, final String artifact
@@ -162,9 +172,9 @@ final class LastModifiedWiringTest {
                 "a download is dated without a storage metadata request",
                 storages.metadataRequests(), new IsEqual<>(0)
             );
-        } else {
-            // A HEAD has no body to carry the time: the metadata is read,
-            // which also shows the counter observes the repository storage.
+        } else if ("maven".equals(type) || "file".equals(type)) {
+            // These adapters answer HEAD from the storage metadata, which
+            // also shows the counter observes the repository storage.
             MatcherAssert.assertThat(
                 "a HEAD reads the storage metadata",
                 storages.metadataRequests() > 0, new IsEqual<>(true)
