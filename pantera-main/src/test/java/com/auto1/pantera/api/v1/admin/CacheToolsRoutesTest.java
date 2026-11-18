@@ -102,7 +102,9 @@ final class CacheToolsRoutesTest {
     @Test
     void probeByUrlListsEveryDerivedKey() throws Exception {
         final NegativeCache cache = NegativeCacheRegistry.instance().sharedCache();
-        final NegativeCacheKey member = new NegativeCacheKey("npm_proxy", "npm-proxy", "qa-ct-probe", "1.0.0");
+        final NegativeCacheKey member = new NegativeCacheKey(
+            "npm_proxy", "npm-proxy", "qa-ct-probe", "1.0.0/qa-ct-probe-1.0.0.tgz"
+        );
         cache.cacheNotFound(member);
         try {
             final JsonObject body = this.call(

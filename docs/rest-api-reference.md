@@ -3591,9 +3591,11 @@ over pub/sub. Without Valkey everything is the answering node's L1
 A negative-cache key is `{scope, repoType, artifactName, artifactVersion}`:
 the repository that cached the 404, its type, and the artifact as that
 producer names it -- group repositories use the dotted/normalised
-artifact name and a `<version>/<file>` version, proxies the URL form
-(`com/example/lib`) and the bare version. An empty `artifactVersion` is a
-metadata (version-less) key.
+artifact name, proxies the URL form (`com/example/lib`). The version is
+`<version>/<file>` for both: a 404 is remembered per file, never for a
+version as a whole (proxies used the bare version up to 2.2.11; such
+entries are no longer consulted and expire with their TTL). An empty
+`artifactVersion` is a metadata (version-less) key.
 
 ### GET /api/v1/admin/neg-cache
 

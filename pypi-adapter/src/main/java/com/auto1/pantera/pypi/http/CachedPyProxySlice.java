@@ -242,7 +242,7 @@ public final class CachedPyProxySlice implements Slice {
 
         // Check negative cache first (404s)
         if (this.negativeCache.isKnown404(
-            com.auto1.pantera.http.cache.NegativeCacheKey.fromPath(
+            com.auto1.pantera.http.cache.NegativeCacheKey.forFile(
                 this.repoName, this.repoType, path))) {
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("PyPI package cached as 404 (negative cache hit)")
@@ -368,7 +368,7 @@ public final class CachedPyProxySlice implements Slice {
                         .log();
                     // Cache 404 to avoid repeated upstream requests
                     this.negativeCache.cacheNotFound(
-                        com.auto1.pantera.http.cache.NegativeCacheKey.fromPath(
+                        com.auto1.pantera.http.cache.NegativeCacheKey.forFile(
                             this.repoName, this.repoType, key.string()));
                     this.recordProxyMetric("not_found", duration);
                     return CompletableFuture.completedFuture(response);

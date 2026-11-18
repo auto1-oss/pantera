@@ -37,8 +37,8 @@ final class DerivedNegativeKeysTest {
             keys,
             new IsEqual<>(List.of(
                 new NegativeCacheKey("npm_group", "npm-group", "lodash", "4.17.21/lodash-4.17.21.tgz"),
-                new NegativeCacheKey("npm_local", "npm", "lodash", "4.17.21"),
-                new NegativeCacheKey("npm_proxy", "npm-proxy", "lodash", "4.17.21")
+                new NegativeCacheKey("npm_local", "npm", "lodash", "4.17.21/lodash-4.17.21.tgz"),
+                new NegativeCacheKey("npm_proxy", "npm-proxy", "lodash", "4.17.21/lodash-4.17.21.tgz")
             ))
         );
     }
