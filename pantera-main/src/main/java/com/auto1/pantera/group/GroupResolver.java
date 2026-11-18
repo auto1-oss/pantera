@@ -26,7 +26,9 @@ import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.FaultTranslator;
 import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.AnswerReason;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestReasons;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -539,6 +541,7 @@ public final class GroupResolver implements Slice {
                 .field("url.path", path)
                 .field("log.source", "application")
                 .log();
+            RequestReasons.instance().note(headers, RequestReasons.NEGATIVE_CACHE);
             recordPhase("resolve_total", resolveStartNs);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
@@ -1699,7 +1702,9 @@ public final class GroupResolver implements Slice {
             .add(new Header(
                 com.auto1.pantera.http.cache.BaseCachedProxySlice.CACHE_ONLY_HEADER, "true"
             ));
-        return member.slice().response(rewritten, memberHeaders, memberBody);
+        return GroupResolver.noted(
+            member.slice().response(rewritten, memberHeaders, memberBody), headers
+        );
     }
 
     /**
@@ -1901,7 +1906,38 @@ public final class GroupResolver implements Slice {
         final Headers memberHeaders = sanitizeMemberHeaders(headers)
             .copy()
             .add(new Header(EcsLoggingSlice.INTERNAL_ROUTING_HEADER, "true"));
-        return member.slice().response(rewritten, memberHeaders, memberBody);
+        return GroupResolver.noted(
+            member.slice().response(rewritten, memberHeaders, memberBody), headers
+        );
+    }
+
+    /**
+     * Note for the group's request why a member did not answer 2xx: the
+     * reason its answer carries (every repository puts one on a non-2xx
+     * answer, see {@code ReasonSlice}), or how the call to it failed. The
+     * answer the group then gives, a 404 after every member or a 5xx after a
+     * failed one, is explained by what its members said.
+     *
+     * @param answer Answer of the member
+     * @param headers Headers of the group's request
+     * @return The member's answer, unchanged
+     */
+    private static CompletableFuture<Response> noted(
+        final CompletableFuture<Response> answer, final Headers headers
+    ) {
+        return answer.whenComplete(
+            (response, error) -> {
+                if (error != null) {
+                    RequestReasons.instance().note(
+                        headers, new com.auto1.pantera.http.log.FailureCause(error).reason()
+                    );
+                } else if (response.status().code() >= 400) {
+                    new AnswerReason(response).token().ifPresent(
+                        reason -> RequestReasons.instance().note(headers, reason)
+                    );
+                }
+            }
+        );
     }
 
     /**

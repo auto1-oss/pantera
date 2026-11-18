@@ -1809,7 +1809,12 @@ public class RepositorySlices {
         // Docker clients parse OCI error bodies and the adapter advertises
         // a Basic+Bearer challenge: give the body-less 401/413 produced by
         // the generic gates above the same shape.
-        return cfg.type().startsWith("docker") ? new OciErrorsSlice(gated) : gated;
+        // Outermost: every answer of this repository with a status of 400
+        // or above leaves with the reason why it was given, for the access
+        // record (and for a group that has this repository as a member).
+        return new com.auto1.pantera.http.slice.ReasonSlice(
+            cfg.type().startsWith("docker") ? new OciErrorsSlice(gated) : gated
+        );
     }
 
     /**

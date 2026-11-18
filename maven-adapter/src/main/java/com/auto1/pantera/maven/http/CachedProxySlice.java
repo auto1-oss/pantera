@@ -1418,6 +1418,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final String path, final String upstreamUri
     ) {
         final Response response = CachedProxySlice.mapUpstreamStatus(err);
+        if (!response.status().serverError()) {
+            // The 5xx branch below notes its cause through ServerErrorLog;
+            // what the upstream answered is the reason of a 4xx as well.
+            com.auto1.pantera.http.log.RequestReasons.instance().note(
+                inboundHeaders,
+                com.auto1.pantera.http.log.RequestReasons.upstream(err.status())
+            );
+        }
         if (response.status().serverError()) {
             // Plain upstream answer, no throwable: event.reason carries the
             // upstream status (or circuit_open for the breaker's fast-fail),

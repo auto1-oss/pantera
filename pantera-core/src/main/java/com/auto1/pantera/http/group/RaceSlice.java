@@ -332,6 +332,9 @@ public final class RaceSlice implements Slice {
                 }
                 final String reason =
                     new com.auto1.pantera.http.log.FailureCause(err).reason();
+                // The 502 this remote leads to is explained on the access
+                // record by how the call to it failed.
+                com.auto1.pantera.http.log.RequestReasons.instance().note(headers, reason);
                 EcsLogger.warn("com.auto1.pantera.http")
                     .message("Failed to get response from repository (index: " + index
                         + ", cause: " + reason + ")")

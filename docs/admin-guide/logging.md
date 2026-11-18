@@ -191,9 +191,36 @@ Audit-log entries inherit the originating HTTP request's `trace.id` so an artifa
 
 ---
 
-## Why a Request Got a 5xx
+## Why a Request Was Not Answered 2xx
 
-The access-log line (logger `http.access`) only says that a request was answered with a 5xx. Its `message` names the status: `Bad gateway` (502), `Service unavailable` (503), `Gateway timeout` (504), `Not implemented` (501), `Internal server error` (500 and any other 5xx). The cause is on a separate application record with the same `trace.id`, written where the 5xx was decided. Every 5xx Pantera answers has at least one such record; a group's 502 has one per failed member.
+Every access record (logger `http.access`, `event.action: http_request`) with a status of 400 or above carries `event.reason`: a short token saying why (v2.2.12+). It is on the access record itself, so it needs no second record, no matching `trace.id` and no debug logging. A 404 from the negative cache and a 404 of the upstream, or a 503 for a full bulkhead and a 502 after a lost connection, are told apart by this one field.
+
+| `event.reason` | The request was answered this way because |
+|----------------|---------------------------------------------|
+| `negative_cache` | A proxy or a group answered 404 from its negative cache; the upstream was not asked. For a group it also means a member did. |
+| `upstream_status_<code>` | The upstream answered `<code>`: `upstream_status_404` is the upstream's own "not found", `upstream_status_403` its refusal, `upstream_status_503` its failure. |
+| `connection_closed`, `connection_refused`, `connect_timeout`, `read_timeout`, `idle_timeout`, `request_timeout`, `unknown_host`, `tls_error`, `egress_denied`, `request_rejected` | The call to the upstream failed that way. Also on a 404 of a Docker or file proxy, which answer 404 when they cannot fetch. |
+| `bulkhead_full` | The repository had no free permit within its wait bound (503). |
+| `circuit_open` | The circuit breaker of the upstream, or of every remaining group member, is open. |
+| `cooldown_active` | Cooldown blocks the artifact. |
+| `cache_write_failed`, `storage_unavailable`, `index_unavailable`, `deadline_exceeded`, `internal_error`, ... | A failure inside Pantera (the tokens of the 5xx cause records below). |
+| `not_found`, `authentication_required`, `forbidden`, `method_not_allowed`, `bad_request`, `conflict`, `rate_limited`, `client_error`, `bad_gateway`, `service_unavailable`, `gateway_timeout`, `server_error` | Nothing more specific is known: the token only names the status. `not_found` on a hosted repository is a path that is not in storage. On a 5xx it means the code that produced the answer did not say why; the cause record below may still have it. |
+
+When several things happened to one request, the one that explains most is reported: a failure, before a request Pantera refused to forward (`circuit_open`, `bulkhead_full`), before `cooldown_active`, before `negative_cache`, before an upstream 4xx, before `upstream_status_404`. So a group's 404 reads `negative_cache` if any of its members answered from its negative cache, and `upstream_status_404` only if every proxy member asked its upstream. A 401 or 403 that a group relays keeps the reason of the member that gave it.
+
+Reasons are specific for Maven and Gradle proxies, npm and PyPI proxies (negative cache and upstream 404), file proxies, Docker blob downloads, and groups of any of them. The other paths report the status name.
+
+```text
+# cached "not found" answers per repository
+event.action:"http_request" AND http.response.status_code:404 AND event.reason:"negative_cache"
+
+# everything that was not the upstream's own answer
+event.action:"http_request" AND http.response.status_code>=400 AND NOT event.reason:upstream_status_4*
+```
+
+### The cause record of a 5xx
+
+Besides `event.reason` on the access record, a 5xx has a cause record with the detail. The access record's `message` names the status: `Bad gateway` (502), `Service unavailable` (503), `Gateway timeout` (504), `Not implemented` (501), `Internal server error` (500 and any other 5xx). The cause is on a separate application record with the same `trace.id`, written where the 5xx was decided. Every 5xx Pantera answers has at least one such record; a group's 502 has one per failed member.
 
 | Field | Meaning |
 |-------|---------|

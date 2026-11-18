@@ -158,9 +158,21 @@ public final class StructuredLogger {
         private Fault fault;
         private Long durationMs;
         private String httpMethod;
+        private String reason;
 
         private AccessAt(final RequestContext rctx) {
             this.ctx = rctx;
+        }
+
+        /**
+         * Set {@code event.reason}: why the request was not answered 2xx
+         * (for example {@code negative_cache}, {@code upstream_status_404},
+         * {@code connection_closed}).
+         * @param token Reason token, or null for none.
+         */
+        public AccessAt reason(final String token) {
+            this.reason = token;
+            return this;
         }
 
         /** Set {@code http.response.status_code}. */
@@ -247,6 +259,9 @@ public final class StructuredLogger {
             }
             if (this.durationMs != null) {
                 payload.put("event.duration", this.durationMs);
+            }
+            if (this.reason != null && !this.reason.isEmpty()) {
+                payload.put("event.reason", this.reason);
             }
             if (this.body != null && !this.body.isEmpty()) {
                 payload.put("message", LogSanitizer.sanitizeText(this.body));

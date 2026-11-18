@@ -93,6 +93,11 @@ public class GetBlobsSlice extends DockerActionSlice {
                     )
                 )
                 .exceptionally(err -> {
+                    // The 404 below stands for a failed fetch, not for a blob
+                    // that does not exist: the access record says which.
+                    com.auto1.pantera.http.log.RequestReasons.instance().note(
+                        headers, new com.auto1.pantera.http.log.FailureCause(err).reason()
+                    );
                     EcsLogger.warn("com.auto1.pantera.docker")
                         .message("Blob GET failed with exception, returning 404")
                         .eventCategory("web")
