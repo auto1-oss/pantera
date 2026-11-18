@@ -50,6 +50,9 @@ jobs:
       - name: nginx CVE-2026-42945 trigger-pattern guard
         run: bash scripts/check-nginx-cve-2026-42945.sh
 
+      - name: JVM CVE-2026-114938 mitigation guard
+        run: bash scripts/check-jvm-cve-2026-114938.sh
+
       # Plain git-diff change detection — deliberately no third-party
       # action here: the org Actions policy allows GitHub-owned only, and
       # for a supply-chain product the smaller trust surface is a feature.

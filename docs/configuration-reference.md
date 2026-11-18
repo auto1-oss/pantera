@@ -2073,10 +2073,15 @@ Before starting Java, the command adds the start time and host name to a
 (`heapdump.hprof` becomes `heapdump-20261028-090100-<host>.hprof`), because the
 JVM never overwrites an existing dump.
 
+`-XX:-UseBASE64Intrinsics` is the mitigation for CVE-2026-114938 (the Base64
+decoder of OpenJDK 17.0.6 and later on x86-64 with AVX-512 VBMI). It follows
+`JVM_ARGS`, so a custom `JVM_ARGS` keeps it.
+
 ```
 java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \
   $JVM_ARGS \
+  -XX:-UseBASE64Intrinsics \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* \
