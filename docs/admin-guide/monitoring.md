@@ -284,6 +284,8 @@ The following alert rules are recommended for production Pantera deployments. Ad
 | `PANTERA_METRICS_MAX_REPOS` | `50` | Maximum distinct repository names in metrics labels |
 | `PANTERA_METRICS_PERCENTILES_HISTOGRAM` | `false` | Publish SLO-bucket histograms for latency timers - required for every p95/p99 dashboard panel (they query `_bucket` series and show "No data" without it) |
 
+The `method` label holds `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`, `CONNECT` and `TRACE`. Any other method is counted as `_other`, and the request itself is answered `405`.
+
 See [Environment Variables](environment-variables.md) for the complete list.
 
 ---
