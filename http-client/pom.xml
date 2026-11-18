@@ -42,19 +42,6 @@ SOFTWARE.
       <artifactId>pantera-core</artifactId>
       <version>2.2.12</version>
     </dependency>
-    <!-- Micrometer for Jetty metrics -->
-    <dependency>
-      <groupId>io.micrometer</groupId>
-      <artifactId>micrometer-core</artifactId>
-      <version>1.12.0</version>
-      <optional>true</optional>
-    </dependency>
-    <dependency>
-      <groupId>io.micrometer</groupId>
-      <artifactId>micrometer-registry-elastic</artifactId>
-      <version>1.12.0</version>
-      <optional>true</optional>
-    </dependency>
     <dependency>
       <groupId>org.eclipse.jetty</groupId>
       <artifactId>jetty-http</artifactId>
