@@ -1701,6 +1701,13 @@ public final class VertxMain {
                 )
             );
 
+            // The method tag of the HTTP server metrics is whatever token a
+            // client sends, credentials or not: keep it to the methods HTTP
+            // defines, or a client can grow the registry without bound.
+            registry.config().meterFilter(
+                new com.auto1.pantera.http.misc.HttpMethodMeterFilter()
+            );
+
             // Histogram buckets for Timer metrics, opt-in via
             // PANTERA_METRICS_PERCENTILES_HISTOGRAM (default: false).
             //
