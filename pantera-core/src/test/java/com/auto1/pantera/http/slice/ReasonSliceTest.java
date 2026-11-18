@@ -22,6 +22,7 @@ import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.fault.FaultTranslator;
 import com.auto1.pantera.http.log.AnswerReason;
 import com.auto1.pantera.http.log.RequestReasons;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import java.util.List;
@@ -256,6 +257,79 @@ final class ReasonSliceTest {
             ).get(10, TimeUnit.SECONDS)
         );
         MatcherAssert.assertThat(thrown.getCause().getMessage(), new IsEqual<>("boom"));
+    }
+
+    @Test
+    void recordsItsAnswerInTheTraceOfATracedRequest() throws Exception {
+        final RequestTrace traces = RequestTrace.instance();
+        final String trace = traces.open();
+        final Slice member = new ReasonSlice(
+            (line, headers, body) -> {
+                RequestReasons.instance().note(headers, "negative_cache");
+                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+            },
+            "maven-central", "maven-proxy"
+        );
+        final Slice group = new ReasonSlice(
+            (line, headers, body) -> member.response(line, headers, body),
+            "libs-release", "maven-group"
+        );
+        group.response(
+            new RequestLine(RqMethod.GET, "/a"),
+            Headers.from(RequestTrace.HEADER, trace), Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        final List<RequestTrace.Step> steps = traces.close(trace);
+        MatcherAssert.assertThat(
+            "the member answered first, then the group",
+            steps.stream().map(RequestTrace.Step::repository).toList(),
+            new IsEqual<>(List.of("maven-central", "libs-release"))
+        );
+        MatcherAssert.assertThat(
+            "each step has the type, the status and the reason",
+            steps.stream()
+                .map(step -> step.type() + " " + step.status() + " " + step.reason()).toList(),
+            new IsEqual<>(
+                List.of("maven-proxy 404 negative_cache", "maven-group 404 negative_cache")
+            )
+        );
+    }
+
+    @Test
+    void recordsASuccessfulAnswerWithoutAReason() throws Exception {
+        final RequestTrace traces = RequestTrace.instance();
+        final String trace = traces.open();
+        new ReasonSlice(
+            (line, headers, body) ->
+                CompletableFuture.completedFuture(ResponseBuilder.ok().build()),
+            "files", "file"
+        ).response(
+            new RequestLine(RqMethod.GET, "/a"),
+            Headers.from(RequestTrace.HEADER, trace), Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        final List<RequestTrace.Step> steps = traces.close(trace);
+        MatcherAssert.assertThat(
+            steps.size() == 1 && steps.get(0).status() == 200 && steps.get(0).reason() == null,
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void recordsARepositoryThatFailedWithoutAnAnswer() throws Exception {
+        final RequestTrace traces = RequestTrace.instance();
+        final String trace = traces.open();
+        new ReasonSlice(
+            (line, headers, body) ->
+                CompletableFuture.failedFuture(new java.net.ConnectException("Connection refused")),
+            "broken", "maven-proxy"
+        ).response(
+            new RequestLine(RqMethod.GET, "/a"),
+            Headers.from(RequestTrace.HEADER, trace), Content.EMPTY
+        ).handle((response, error) -> null).get(10, TimeUnit.SECONDS);
+        final List<RequestTrace.Step> steps = traces.close(trace);
+        MatcherAssert.assertThat(
+            steps.stream().map(step -> step.status() + " " + step.reason()).toList(),
+            new IsEqual<>(List.of("0 connection_refused"))
+        );
     }
 
     /**

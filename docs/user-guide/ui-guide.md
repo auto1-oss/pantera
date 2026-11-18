@@ -338,10 +338,14 @@ Every clear reports the number of entries actually removed from L1 and L2, then 
 
 The Troubleshoot page (`/admin/troubleshoot`) explains why a request fails or returns stale metadata. Enter a full client URL or `/<repo>/<path>` and click **Troubleshoot**. The page shows:
 
+- **Verdict** -- one sentence on what the client gets and why, with what to do about it: for example *HTTP 404: none of the repositories asked has this file. Nothing is cached wrongly and nothing failed*, *HTTP 404 from the negative cache of maven-central*, or *HTTP 502. maven-central: its upstream refused the connection*.
 - **Repository** -- name, type and mode; for a group, the members in walk order.
 - **Parsed request** -- package, version and kind (artifact or metadata), with a link to the cooldown inspector for the package.
 - **Response** -- the status, selected headers and the start of the body of an in-process request made as an administrator.
+- **Resolution trace** -- what each repository on the way of that request answered, in the order they answered: the members a group asked, then the repository the URL addresses. Each line has the repository, its type, the status, the reason in words with its `event.reason` token (the same token as in the access log), the upstream URL of a proxy, and the time it took. A group that answered from its own negative cache asked no member, and the trace says so.
 - **Checks** -- one line per layer (repository, group, negative cache, cooldown, metadata, upstream) with an ok, problem or info status and a message. A problem that has a known remedy offers a button (for example clearing the package from the negative cache or refreshing its metadata); after the fix runs the troubleshoot is repeated automatically.
+
+The request is replayed once. The negative cache is read before the replay: a "not found" the replay itself caches (as any client request for a missing file would) is not reported as a finding and is removed again, so running the check does not change what the next client gets and gives the same answer every time.
 
 The **Package** mode takes a repository type and package name and opens the cooldown inspector. Deep link: `/admin/troubleshoot?url=<url>`.
 

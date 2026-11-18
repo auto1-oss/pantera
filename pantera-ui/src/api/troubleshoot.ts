@@ -26,15 +26,43 @@ export interface TroubleshootCheck {
   fix?: TroubleshootFix | null
 }
 
+/** One sentence on what the client gets and why, with what to do about it. */
+export interface TroubleshootVerdict {
+  status: CheckStatus
+  summary: string
+  advice?: string
+}
+
+/**
+ * What one repository on the way of the replayed request answered. Steps
+ * come in the order the repositories answered: the members a group asked,
+ * then the group itself.
+ */
+export interface TroubleshootStep {
+  repository: string
+  type: string
+  mode?: string | null
+  /** 0 when the repository failed without an answer. */
+  status: number
+  /** The `event.reason` token of the answer, absent for a 2xx. */
+  reason?: string | null
+  explanation: string
+  durationMs: number
+  upstreams?: string[]
+}
+
 export interface TroubleshootResponse {
   url: string
   repo: { name: string; type: string; mode: string; members?: string[] } | null
   parsed: { package?: string | null; version?: string | null; kind?: 'artifact' | 'metadata' | string } | null
   request: {
     status: number
+    reason?: string | null
     headers?: Record<string, string>
     bodySnippet?: string
   } | null
+  verdict?: TroubleshootVerdict | null
+  trace?: TroubleshootStep[]
   checks: TroubleshootCheck[]
   node: string
 }
