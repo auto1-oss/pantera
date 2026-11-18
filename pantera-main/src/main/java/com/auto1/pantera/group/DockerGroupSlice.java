@@ -21,7 +21,6 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
