@@ -291,24 +291,24 @@ const RUNTIME_LABELS: Record<RuntimeSettingKey, string> = {
 
 const RUNTIME_HELP: Partial<Record<RuntimeSettingKey, string>> = {
   'http_client.bulkhead.adaptive':
-    'When on, each per-repo bulkhead AIMD-tunes its in-flight permit ceiling '
-    + 'on every evaluation window. When off, the ceiling stays at "Initial permits".',
+    'When on, the permits of each proxy repository grow from "Initial permits" to '
+    + '"Maximum permits". When off, they stay at "Initial permits". They never fall.',
   'http_client.bulkhead.min_permits':
-    'Lower bound on the dynamic permit ceiling. AIMD never shrinks below this.',
+    'Lower bound of "Initial permits". No other effect since 2.2.12: the permits no longer fall.',
   'http_client.bulkhead.max_permits':
-    'Hard cap on concurrent in-flight requests per repository. AIMD never grows above this.',
+    'Most requests of one proxy repository that run at the same time. '
+    + 'Further requests wait for a permit, up to 20 seconds.',
   'http_client.bulkhead.initial_permits':
-    'Starting permit ceiling when a bulkhead is (re)created. Must lie between min and max.',
+    'Permits of a repository when its bulkhead is created: at start and after a change '
+    + 'of these settings. Must lie between min and max.',
   'http_client.bulkhead.target_p99_ms':
-    'Upstream latency target. Windows whose peak latency exceeds 2× this trigger a soft ramp-down; '
-    + 'windows at or below this and free of errors trigger ramp-up.',
+    'No effect since 2.2.12: a slow request no longer lowers the permits.',
   'http_client.bulkhead.window_seconds':
-    'How often the AIMD controller evaluates the last window of outcomes.',
+    'How often the permits are raised.',
   'http_client.bulkhead.ramp_up_step':
-    'Permits added to the ceiling per healthy window (additive increase).',
+    'Permits added after a window in which the repository served requests and none failed.',
   'http_client.bulkhead.ramp_down_factor':
-    'Multiplier on the ceiling when a window contains errors (multiplicative decrease). '
-    + 'Lower = more aggressive back-off.',
+    'No effect since 2.2.12: the permits are no longer lowered.',
 }
 
 onMounted(async () => {
@@ -1811,11 +1811,12 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
           <SectionHeader id="bulkhead" :dirty="isDirtyBulkhead" />
         </template>
         <template #subtitle>
-          Per-repository in-flight concurrency budget. When adaptive mode is on
-          an AIMD controller grows the ceiling on healthy windows and halves it
-          on the first error or sustained high-latency window. Changes take
-          effect on the next bulkhead acquire (existing in-flight requests are
-          unaffected).
+          Number of requests each proxy repository runs at the same time.
+          Requests beyond it wait for a free permit and are served in turn;
+          one that waited 20 seconds is answered 503 with Retry-After. With
+          adaptive mode on the permits grow from the initial to the maximum
+          value and never fall. A change applies at once: requests in flight
+          finish, and each repository starts again at the initial permits.
         </template>
         <template #content>
           <div v-if="runtime.loading.value" class="text-sm text-gray-500">Loading…</div>

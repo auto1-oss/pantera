@@ -675,29 +675,30 @@ public class RepositorySlices {
     }
 
     /**
-     * Drop every cached per-repo bulkhead so the next
-     * {@link #getOrCreateBulkhead(String)} call rebuilds with the current
+     * Replace every per-repo bulkhead by one built from the current
      * {@link com.auto1.pantera.settings.runtime.BulkheadTuning} snapshot.
      *
-     * <p>Existing in-flight operations gated by the old bulkheads finish
-     * normally — only the controller's AIMD tick is cancelled. The
-     * registry is refreshed so subsequent acquires get the new bulkhead.
+     * <p>A repository serves through a cached slice that finds its bulkhead
+     * by name on each request, so the replacement is registered here, under
+     * the same name, before the old bulkhead is closed. Dropping it without a
+     * replacement would leave the repository without any limit until its
+     * slice is rebuilt. Operations admitted by the old bulkhead finish
+     * normally, and those still waiting for one of its permits are let
+     * through.
      *
      * <p>Called from the boot wiring's {@code RuntimeSettingsCache} listener
      * on every {@code http_client.bulkhead.*} change.
      */
     public void invalidateBulkheads() {
-        final java.util.List<com.auto1.pantera.http.resilience.RepoBulkhead> drained =
+        final java.util.List<com.auto1.pantera.http.resilience.RepoBulkhead> replaced =
             new java.util.ArrayList<>(this.repoBulkheads.values());
         this.repoBulkheads.clear();
-        for (final com.auto1.pantera.http.resilience.RepoBulkhead bh : drained) {
-            com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance()
-                .deregister(bh.repo());
+        for (final com.auto1.pantera.http.resilience.RepoBulkhead bh : replaced) {
+            this.getOrCreateBulkhead(bh.repo());
             bh.close();
         }
         EcsLogger.info("com.auto1.pantera")
-            .message("Per-repo bulkheads invalidated; " + drained.size()
-                + " entries dropped — next acquire will rebuild from current tuning")
+            .message("Per-repo bulkheads replaced from current tuning: " + replaced.size())
             .eventCategory("configuration")
             .eventAction("bulkhead_invalidate")
             .eventOutcome("success")
@@ -2488,10 +2489,28 @@ public class RepositorySlices {
                 // without a constructor-time dependency on pantera-main.
                 com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance()
                     .register(n, bh);
-                // Expose the AIMD-tuned permit ceiling as a Prometheus gauge.
+                // Expose the permit ceiling and the waiting requests as
+                // Prometheus gauges. A gauge is registered once per
+                // repository, so it reads whichever bulkhead is registered
+                // under the name now, not the instance created here: that
+                // one is replaced on a settings change.
                 if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                    final com.auto1.pantera.http.resilience.RepoBulkheadRegistry registry =
+                        com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance();
                     com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
-                        .registerBulkheadPermitsGauge(n, bh::currentPermits);
+                        .registerBulkheadPermitsGauge(
+                            n,
+                            () -> registry.bulkheadFor(n)
+                                .map(com.auto1.pantera.http.resilience.RepoBulkhead::currentPermits)
+                                .orElse(0)
+                        );
+                    com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                        .registerBulkheadWaitingGauge(
+                            n,
+                            () -> registry.bulkheadFor(n)
+                                .map(com.auto1.pantera.http.resilience.RepoBulkhead::waitingCount)
+                                .orElse(0)
+                        );
                 }
                 return bh;
             }

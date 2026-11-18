@@ -73,10 +73,11 @@ groups:
       # Alert: bulkhead overflow sustained > 0 for 1 minute.
       #
       # The per-repo bulkhead (T-P12) emits a 503 with Retry-After=1 when
-      # a repo's in-flight + queued requests exceed the configured cap.
-      # Sustained overflow means a single repo is saturating its own
-      # bulkhead — either a hot artifact is going through cold cache, a
-      # client is hammering us, or the bulkhead is sized too low.
+      # a request waited 20 s for a permit without getting one, or 1000
+      # requests of the repo were already waiting. A burst alone does not
+      # get here: its requests wait and are served. Sustained overflow
+      # means the repo cannot work its requests off — the upstream or the
+      # storage is slow, or the permits are too few for the load.
       # ------------------------------------------------------------------
       - alert: PanteraBulkheadOverflow
         expr: |
@@ -92,10 +93,10 @@ groups:
           summary: "Bulkhead overflow on repo {{ $labels.repo }}"
           description: |
             pantera_bulkhead_overflow_total{repo="{{ $labels.repo }}"} has been incrementing
-            > 1 minute, meaning concurrent requests exceeded the per-repo cap and were
-            shed with 503. Check pantera_http_requests_total{repo,status="503"} for the
-            request volume being shed, and pantera_proxy_phase_duration_seconds for which
-            phase is slow (so we know whether to raise the bulkhead or fix the slow phase).
+            > 1 minute, meaning requests waited 20 s for a permit of the repo without
+            getting one and were refused with 503. Check pantera_bulkhead_waiting{repo} for
+            the requests waiting, and pantera_proxy_phase_seconds for which
+            phase is slow (so we know whether to raise the permits or fix the slow phase).
           runbook_url: "https://github.com/auto1-oss/pantera/blob/master/docs/runbooks/bulkhead-overflow.md"
 
       # ------------------------------------------------------------------

@@ -12,12 +12,12 @@ package com.auto1.pantera.http.group;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.LocalRefusal;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.RsStatus;
-import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.Arrays;
@@ -269,8 +269,9 @@ public final class RaceSlice implements Slice {
                 // Failure paths: drain body, classify, race-continue.
                 final boolean isForbidden = code == RsStatus.FORBIDDEN.code();
                 final boolean is5xx = code >= 500;
-                final boolean circuitOpen = is5xx && !res.headers()
-                    .values(UpstreamCircuitOpenException.HEADER).isEmpty();
+                // Circuit open, or the remote's bulkhead had no permit:
+                // either way the remote was not asked.
+                final boolean circuitOpen = new LocalRefusal(res).present();
                 if (is5xx && !circuitOpen) {
                     anyServerError.set(true);
                 }
@@ -368,11 +369,12 @@ public final class RaceSlice implements Slice {
      *       outranks 404 (definitively absent) and 5xx (transient).</li>
      *   <li>If any target returned an unmarked 5xx (or threw) — return
      *       502, since at least one upstream's true state is unknown.</li>
-     *   <li>If a target's outbound circuit breaker fast-failed (5xx with the
-     *       {@link UpstreamCircuitOpenException#HEADER} marker) — relay that
-     *       response with its marker and {@code Retry-After}: the remote was
-     *       not asked, so this is neither a failure to convict on nor a
-     *       proof of absence.</li>
+     *   <li>If a target refused the request locally (see
+     *       {@link LocalRefusal}: its outbound circuit breaker fast-failed,
+     *       or its bulkhead had no permit) — relay that response with its
+     *       marker and {@code Retry-After}: the remote was not asked, so
+     *       this is neither a failure to convict on nor a proof of
+     *       absence.</li>
      *   <li>If EVERY target answered 405 — forward the first 405: the
      *       method is not supported (e.g. an upload to a read-only proxy),
      *       which a 404 would misreport as a missing path.</li>

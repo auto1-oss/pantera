@@ -253,6 +253,66 @@ final class RaceSliceTest {
         );
     }
 
+    @Test
+    void bulkheadRefusalIsRelayedAsItIsNotAsBadGateway() {
+        // 2026-11-17: a proxy whose bulkhead had no permit answered 503 with
+        // Retry-After, and this slice reported it as "502 All upstream
+        // remotes failed". A 503 with Retry-After is retried by Maven; a 502
+        // fails the build.
+        final Response res = new RaceSlice(bulkheadFull("1")).response(
+            new RequestLine(RqMethod.GET, "/org/acme/a/1.0/a-1.0.jar"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "the refusal keeps its status",
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "its marker survives the race",
+            res.headers().values("X-Pantera-Bulkhead-Overflow"),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("true"))
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "its Retry-After survives the race",
+            res.headers().values("Retry-After"),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("1"))
+        );
+    }
+
+    @Test
+    void bulkheadRefusalOutranksNotFound() {
+        final Response res = new RaceSlice(
+            slice(RsStatus.NOT_FOUND, "missing", Duration.ZERO),
+            bulkheadFull("1")
+        ).response(new RequestLine(RqMethod.GET, "/a"), Headers.EMPTY, Content.EMPTY).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "a remote that could not be asked is not proof of absence",
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+    }
+
+    @Test
+    void genuineServerErrorOutranksBulkheadRefusal() {
+        final Response res = new RaceSlice(
+            slice(RsStatus.INTERNAL_ERROR, "boom", Duration.ZERO),
+            bulkheadFull("1")
+        ).response(new RequestLine(RqMethod.GET, "/a"), Headers.EMPTY, Content.EMPTY).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "a genuine upstream failure is a 502",
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+    }
+
+    private static Slice bulkheadFull(final String retry) {
+        return (line, headers, body) -> CompletableFuture.completedFuture(
+            ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", retry)
+                .header("X-Pantera-Bulkhead-Overflow", "true")
+                .textBody("Per-repo bulkhead is full")
+                .build()
+        );
+    }
+
     private static Slice circuitOpen(final String retry) {
         return (line, headers, body) -> CompletableFuture.completedFuture(
             ResponseBuilder.badGateway()
