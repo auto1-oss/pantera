@@ -36,6 +36,11 @@ final class FakeFetch implements RepoFetch {
     private final List<String> seen = new CopyOnWriteArrayList<>();
 
     /**
+     * Side effect of every fetch.
+     */
+    private volatile java.util.function.Consumer<String> effect = target -> { };
+
+    /**
      * Answer a request with a JSON/text body.
      *
      * @param repo Repository
@@ -55,6 +60,38 @@ final class FakeFetch implements RepoFetch {
     }
 
     /**
+     * Answer a request with a status and the trace the serving path would
+     * record for it.
+     *
+     * @param repo Repository
+     * @param path Raw path
+     * @param status Status
+     * @param steps What each repository on the way answered
+     * @return This
+     */
+    FakeFetch traced(
+        final String repo, final String path, final int status,
+        final com.auto1.pantera.http.log.RequestTrace.Step... steps
+    ) {
+        this.answers.put(
+            repo + path,
+            new Fetched(status, List.of(), new byte[0], false, 0, List.of(steps))
+        );
+        return this;
+    }
+
+    /**
+     * Run something on every fetch, as the serving path has side effects.
+     *
+     * @param effect Side effect, given {@code repo + path} of the fetch
+     * @return This
+     */
+    FakeFetch onFetch(final java.util.function.Consumer<String> effect) {
+        this.effect = effect;
+        return this;
+    }
+
+    /**
      * Requests seen.
      *
      * @return Requests
@@ -69,6 +106,7 @@ final class FakeFetch implements RepoFetch {
         final String accept, final int maxBody
     ) {
         this.seen.add(repo + " " + path + " " + authorization);
+        this.effect.accept(repo + path);
         return CompletableFuture.completedFuture(this.answers.getOrDefault(
             repo + path, new Fetched(404, List.of(), new byte[0], false, 0)
         ));

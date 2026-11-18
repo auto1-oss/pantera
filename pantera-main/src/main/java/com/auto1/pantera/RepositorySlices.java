@@ -1785,7 +1785,8 @@ public class RepositorySlices {
         // or above leaves with the reason why it was given, for the access
         // record (and for a group that has this repository as a member).
         return new com.auto1.pantera.http.slice.ReasonSlice(
-            cfg.type().startsWith("docker") ? new OciErrorsSlice(gated) : gated
+            cfg.type().startsWith("docker") ? new OciErrorsSlice(gated) : gated,
+            cfg.name(), cfg.type()
         );
     }
 

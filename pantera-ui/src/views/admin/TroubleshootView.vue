@@ -172,7 +172,18 @@ function statusIcon(status: string): string {
   return 'pi pi-info-circle text-blue-400'
 }
 
+function verdictClass(status: string): string {
+  if (status === 'ok') {
+    return 'border-green-300 bg-green-50 text-green-900 dark:border-green-800 dark:bg-green-950/40 dark:text-green-200'
+  }
+  if (status === 'problem') {
+    return 'border-red-300 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200'
+  }
+  return 'border-blue-300 bg-blue-50 text-blue-900 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200'
+}
+
 function httpSeverity(status: number): string {
+  if (status === 0) return 'danger'
   if (status >= 200 && status < 300) return 'success'
   if (status >= 300 && status < 400) return 'info'
   if (status >= 400 && status < 500) return 'warn'
@@ -194,8 +205,9 @@ onMounted(() => {
       <div>
         <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Troubleshoot</h1>
         <p class="text-sm text-gray-500 mt-1">
-          Explain why a client cannot get an artifact or sees stale metadata: repository, group walk,
-          negative cache, cooldown, metadata visibility and upstream breaker, with one-click fixes.
+          Explain why a client cannot get an artifact or sees stale metadata. The request is replayed once
+          and traced: what each repository on its way answered and why, then negative cache, cooldown,
+          metadata visibility and upstream breakers, with one-click fixes.
         </p>
       </div>
 
@@ -285,6 +297,20 @@ onMounted(() => {
       </div>
 
       <template v-if="result">
+        <div
+          v-if="result.verdict"
+          class="p-4 rounded-lg border flex items-start gap-3"
+          :class="verdictClass(result.verdict.status)"
+          :data-status="result.verdict.status"
+          data-testid="troubleshoot-verdict"
+        >
+          <i :class="statusIcon(result.verdict.status)" class="text-xl mt-0.5" />
+          <div class="space-y-1">
+            <p class="font-semibold">{{ result.verdict.summary }}</p>
+            <p v-if="result.verdict.advice" class="text-sm">{{ result.verdict.advice }}</p>
+          </div>
+        </div>
+
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card class="shadow-sm">
             <template #title>Repository</template>
@@ -348,6 +374,44 @@ onMounted(() => {
             </template>
           </Card>
         </div>
+
+        <Card v-if="result.trace?.length" class="shadow-sm" data-testid="troubleshoot-trace">
+          <template #title>Resolution trace</template>
+          <template #subtitle>
+            What each repository answered to the replayed request, in the order they answered:
+            the members a group asked, then the repository the URL addresses.
+          </template>
+          <template #content>
+            <ol class="divide-y divide-gray-200 dark:divide-gray-800">
+              <li
+                v-for="(step, idx) in result.trace"
+                :key="`${idx}-${step.repository}`"
+                class="flex flex-wrap items-start gap-3 py-2"
+                :data-repository="step.repository"
+                data-testid="troubleshoot-step"
+              >
+                <span class="w-5 text-right text-sm text-gray-400 shrink-0">{{ idx + 1 }}</span>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span class="font-mono font-semibold text-sm text-gray-900 dark:text-white">{{ step.repository }}</span>
+                  <RepoTypeBadge :type="step.type" />
+                </div>
+                <Tag
+                  :value="step.status === 0 ? 'no answer' : `HTTP ${step.status}`"
+                  :severity="httpSeverity(step.status)"
+                  class="shrink-0"
+                />
+                <div class="flex-1 min-w-[14rem] text-sm text-gray-800 dark:text-gray-200">
+                  <span>{{ step.explanation }}</span>
+                  <span v-if="step.reason" class="ml-2 font-mono text-xs text-gray-400">{{ step.reason }}</span>
+                  <div v-if="step.upstreams?.length" class="font-mono text-xs text-gray-500 break-all">
+                    upstream: {{ step.upstreams.join(', ') }}
+                  </div>
+                </div>
+                <span class="text-xs text-gray-400 shrink-0">{{ step.durationMs }} ms</span>
+              </li>
+            </ol>
+          </template>
+        </Card>
 
         <Card class="shadow-sm">
           <template #title>

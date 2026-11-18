@@ -3705,9 +3705,10 @@ shared L2 (`null` without Valkey). `hitRate` is a 0-1 fraction.
 ### GET /api/v1/admin/troubleshoot
 
 Explain why a repository request fails or serves stale content. The request
-is replayed in-process through the addressed repository's slice with the
-caller's credentials (it answers what an authorized admin client would get),
-then each layer is checked.
+is replayed once, in-process, through the addressed repository's slice with
+the caller's credentials (it answers what an authorized admin client would
+get). The replay is traced: every repository on its way records what it
+answered and why. Then each layer is checked.
 
 **Query Parameters:** `url` (required) -- a full client URL (host, optional
 global prefix and `api/` segment) or a repository-relative path such as
@@ -3720,23 +3721,48 @@ global prefix and `api/` segment) or a repository-relative path such as
 
 ```json
 {
-  "url": "/npm_group/lodash/-/lodash-4.17.21.tgz",
+  "url": "/maven_group/com/acme/lib/1.0/lib-1.0.pom",
   "node": "pantera-1",
-  "repo": {"name": "npm_group", "type": "npm-group", "mode": "group", "members": ["npm_local", "npm_proxy"]},
-  "parsed": {"package": "lodash", "version": "4.17.21", "kind": "artifact", "path": "/lodash/-/lodash-4.17.21.tgz"},
-  "request": {"status": 404, "headers": {"content-length": "0"}, "bodySnippet": "", "bodyBytes": 0},
+  "repo": {"name": "maven_group", "type": "maven-group", "mode": "group", "members": ["maven", "maven_proxy"]},
+  "parsed": {"package": "com.acme:lib", "version": "1.0", "kind": "artifact", "path": "/com/acme/lib/1.0/lib-1.0.pom"},
+  "request": {"status": 404, "reason": "upstream_status_404", "headers": {"content-length": "0"}, "bodySnippet": "", "bodyBytes": 0},
+  "verdict": {
+    "status": "problem",
+    "summary": "HTTP 404: none of the repositories asked has this file. Nothing is cached wrongly and nothing failed.",
+    "advice": "Nothing is wrong in Pantera. Check the coordinates, and whether the artifact is published in a repository this one does not include."
+  },
+  "trace": [
+    {"repository": "maven", "type": "maven", "mode": "local", "status": 404, "reason": "not_found", "explanation": "does not have this path", "durationMs": 3},
+    {"repository": "maven_proxy", "type": "maven-proxy", "mode": "proxy", "status": 404, "reason": "upstream_status_404", "explanation": "its upstream answered 404: the upstream does not have this file", "durationMs": 350, "upstreams": ["https://repo1.maven.org/maven2"]},
+    {"repository": "maven_group", "type": "maven-group", "mode": "group", "status": 404, "reason": "upstream_status_404", "explanation": "no member has this file", "durationMs": 356}
+  ],
   "checks": [
-    {"id": "repository", "layer": "repository", "status": "ok", "message": "Repository npm_group exists (npm-group, group)"},
-    {"id": "request", "layer": "repository", "status": "problem", "message": "Request answers 404"},
-    {"id": "group-walk", "layer": "group", "status": "problem", "message": "Member walk npm_local:404 → npm_proxy:404 — no member serves this path", "members": [{"name": "npm_local", "status": 404}, {"name": "npm_proxy", "status": 404}]},
-    {"id": "negative-cache:npm_group", "layer": "negative-cache", "status": "problem", "message": "Cached 404 in npm_group for lodash 4.17.21/lodash-4.17.21.tgz (L2) — requests are answered 404 without asking the upstream",
-     "fix": {"action": "invalidate", "endpoint": "/api/v1/admin/neg-cache/invalidate", "body": {"scope": "npm_group", "repoType": "npm-group", "artifactName": "lodash", "version": "4.17.21/lodash-4.17.21.tgz"}}},
-    {"id": "cooldown", "layer": "cooldown", "status": "ok", "message": "Cooldown state of 4.17.21: none"},
-    {"id": "metadata", "layer": "metadata", "status": "ok", "message": "4.17.21 is listed by npm_group"},
-    {"id": "upstream-breaker:npm_proxy:https://registry.npmjs.org:443", "layer": "upstream", "status": "ok", "message": "Upstream breaker https://registry.npmjs.org:443 is closed"}
+    {"id": "repository", "layer": "repository", "status": "ok", "message": "Repository maven_group exists (maven-group, group)"},
+    {"id": "request", "layer": "repository", "status": "problem", "message": "Request answers 404: maven_group: no member has this file"},
+    {"id": "group-walk", "layer": "group", "status": "problem", "message": "Members asked: maven: 404 (does not have this path) → maven_proxy: 404 (its upstream answered 404: the upstream does not have this file) — no member served this path", "members": [{"name": "maven", "status": 404, "reason": "not_found", "explanation": "does not have this path"}, {"name": "maven_proxy", "status": 404, "reason": "upstream_status_404", "explanation": "its upstream answered 404: the upstream does not have this file"}]},
+    {"id": "negative-cache", "layer": "negative-cache", "status": "ok", "message": "No cached 404 shadowed this request (3 key(s) checked before the replay; what the replay itself cached was removed again)"},
+    {"id": "cooldown", "layer": "cooldown", "status": "ok", "message": "Cooldown state of 1.0: none"},
+    {"id": "upstream-breaker:maven_proxy:https://repo1.maven.org:443", "layer": "upstream", "status": "ok", "message": "Upstream breaker https://repo1.maven.org:443 is closed"}
   ]
 }
 ```
+
+`verdict` is the conclusion in one sentence: `status` (`ok`, `problem`, or
+`info` for an answer that is Pantera doing what it was told, such as a
+cooldown block or a refused account), `summary` and `advice` (may be empty).
+
+`trace` has one entry per repository, in the order they answered: the
+members a group asked, then the addressed repository. `status` is 0 when
+the repository failed without an answer; `reason` is the `event.reason`
+token of that answer's access record (absent for a 2xx, see
+[Logging](admin-guide/logging.md#why-a-request-was-not-answered-2xx));
+`explanation` says it in words; `upstreams` are the remote URLs of a proxy.
+A group that answered by itself (from its negative cache) has no member
+entries.
+
+The negative cache is read before the replay. A `negative-cache:<scope>`
+problem is an entry that was there before; what the replay itself cached
+is removed again and not reported.
 
 `checks[].status` is `ok`, `problem` or `info`; `layer` is one of
 `repository`, `group`, `negative-cache`, `cooldown`, `metadata`, `upstream`.

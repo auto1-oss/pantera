@@ -110,6 +110,55 @@ describe('TroubleshootView', () => {
     expect(checks[0].find('.pi-check-circle').exists()).toBe(true)
   })
 
+  it('shows the verdict and what every repository on the way answered, in order', async () => {
+    troubleshootMock.mockResolvedValue({
+      ...response(true),
+      verdict: {
+        status: 'problem',
+        summary: 'HTTP 404 from the negative cache of npm-proxy: an earlier "not found" is still remembered there, and the upstream was not asked.',
+        advice: 'Clear the cached entry with the fix below, then run the check again to see what the upstream answers now.',
+      },
+      trace: [
+        {
+          repository: 'npm-local', type: 'npm', mode: 'local', status: 404, reason: 'not_found',
+          explanation: 'does not have this path', durationMs: 2,
+        },
+        {
+          repository: 'npm-proxy', type: 'npm-proxy', mode: 'proxy', status: 404, reason: 'negative_cache',
+          explanation: 'answered from its negative cache: an earlier "not found" is still remembered, and the upstream was not asked',
+          durationMs: 1, upstreams: ['https://registry.npmjs.org'],
+        },
+        {
+          repository: 'npm-group', type: 'npm-group', mode: 'group', status: 404, reason: 'negative_cache',
+          explanation: 'answered from its negative cache: an earlier "not found" is still remembered, and the upstream was not asked',
+          durationMs: 5,
+        },
+      ],
+    })
+    const { w } = await mountAt(`/admin/troubleshoot?url=${encodeURIComponent(URL)}`)
+
+    const verdict = w.find('[data-testid="troubleshoot-verdict"]')
+    expect(verdict.attributes('data-status')).toBe('problem')
+    expect(verdict.text()).toContain('from the negative cache of npm-proxy')
+    expect(verdict.text()).toContain('Clear the cached entry')
+
+    const steps = w.findAll('[data-testid="troubleshoot-step"]')
+    expect(steps.map(s => s.attributes('data-repository'))).toEqual(['npm-local', 'npm-proxy', 'npm-group'])
+    expect(steps[0].text()).toContain('404')
+    expect(steps[0].text()).toContain('does not have this path')
+    expect(steps[1].text()).toContain('negative_cache')
+    expect(steps[1].text()).toContain('https://registry.npmjs.org')
+    expect(steps[1].text()).toContain('1 ms')
+  })
+
+  it('renders a report without verdict or trace as before', async () => {
+    troubleshootMock.mockResolvedValue(response(false))
+    const { w } = await mountAt(`/admin/troubleshoot?url=${encodeURIComponent(URL)}`)
+    expect(w.find('[data-testid="troubleshoot-verdict"]').exists()).toBe(false)
+    expect(w.find('[data-testid="troubleshoot-trace"]').exists()).toBe(false)
+    expect(w.findAll('[data-testid="troubleshoot-check"]')).toHaveLength(3)
+  })
+
   it('links the parsed package to the cooldown inspector', async () => {
     troubleshootMock.mockResolvedValue(response(true))
     const { w } = await mountAt(`/admin/troubleshoot?url=${encodeURIComponent(URL)}`)

@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.api.v1.admin;
 
+import com.auto1.pantera.http.log.RequestTrace;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
@@ -58,11 +59,14 @@ public interface RepoFetch {
      * @param body Kept body bytes
      * @param truncated Whether the body exceeded the kept bound
      * @param bytes Total body size seen
+     * @param trace What each repository on the way answered, in the order
+     *  the answers came: the members a group asked, then the repository
+     *  itself (see {@link RequestTrace})
      * @since 2.2.9
      */
     record Fetched(
         int status, List<Map.Entry<String, String>> headers, byte[] body,
-        boolean truncated, long bytes
+        boolean truncated, long bytes, List<RequestTrace.Step> trace
     ) {
 
         /**
@@ -73,10 +77,28 @@ public interface RepoFetch {
          * @param body Body
          * @param truncated Truncated flag
          * @param bytes Total size
+         * @param trace Trace of the request
          */
         public Fetched {
             headers = List.copyOf(headers);
             body = body.clone();
+            trace = List.copyOf(trace);
+        }
+
+        /**
+         * Response without a trace.
+         *
+         * @param status Status
+         * @param headers Headers
+         * @param body Body
+         * @param truncated Truncated flag
+         * @param bytes Total size
+         */
+        public Fetched(
+            final int status, final List<Map.Entry<String, String>> headers, final byte[] body,
+            final boolean truncated, final long bytes
+        ) {
+            this(status, headers, body, truncated, bytes, List.of());
         }
 
         /**

@@ -17,6 +17,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.AnswerReason;
 import com.auto1.pantera.http.log.RequestReasons;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.rq.RequestLine;
 import java.util.ArrayList;
 import java.util.List;
@@ -116,6 +117,20 @@ final class EcsLoggingSliceReasonTest {
         new EcsLoggingSlice(origin).response(
             new RequestLine("GET", "/repo/a.jar"),
             Headers.from(RequestReasons.SLOT_HEADER, "forged"), Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(seen.get(), new IsEqual<>(List.of()));
+    }
+
+    @Test
+    void aTraceIdSentByAClientIsDropped() {
+        final AtomicReference<List<String>> seen = new AtomicReference<>();
+        final Slice origin = (line, headers, body) -> {
+            seen.set(headers.values(RequestTrace.HEADER));
+            return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+        };
+        new EcsLoggingSlice(origin).response(
+            new RequestLine("GET", "/repo/a.jar"),
+            Headers.from(RequestTrace.HEADER, "forged"), Content.EMPTY
         ).join();
         MatcherAssert.assertThat(seen.get(), new IsEqual<>(List.of()));
     }

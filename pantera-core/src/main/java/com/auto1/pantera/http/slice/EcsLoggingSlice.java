@@ -25,6 +25,7 @@ import com.auto1.pantera.http.log.AnswerReason;
 import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.log.FailureCause;
 import com.auto1.pantera.http.log.RequestReasons;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.log.StatusReason;
 import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.observability.StructuredLogger;
@@ -223,7 +224,7 @@ public final class EcsLoggingSlice implements Slice {
             headers, INTERNAL_ROUTING_HEADER, AuthzSlice.LOGIN_HDR,
             CTX_TRACE_ID_HEADER, CTX_CLIENT_IP_HEADER,
             BaseCachedProxySlice.CACHE_ONLY_HEADER,
-            RequestReasons.SLOT_HEADER, AnswerReason.HEADER
+            RequestReasons.SLOT_HEADER, AnswerReason.HEADER, RequestTrace.HEADER
         );
         if (span.traceId() != null && !span.traceId().isEmpty()) {
             downstreamHeaders.add(new Header(CTX_TRACE_ID_HEADER, span.traceId()));

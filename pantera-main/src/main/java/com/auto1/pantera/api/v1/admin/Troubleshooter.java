@@ -11,11 +11,15 @@
 package com.auto1.pantera.api.v1.admin;
 
 import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.log.AnswerReason;
+import com.auto1.pantera.http.log.RequestTrace;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -23,12 +27,20 @@ import java.util.concurrent.CompletableFuture;
 /**
  * "Why can't I get this?" — explains a failing or stale repository request.
  *
- * <p>Resolves the URL to its repository, replays the request in-process with
- * the caller's credentials, then checks each layer that can make the answer
- * wrong: the group member walk, the negative-cache keys the request could be
+ * <p>Resolves the URL to its repository and replays the request once,
+ * in-process, with the caller's credentials. The replayed request is traced
+ * (see {@link RequestTrace}): every repository on its way records what it
+ * answered and why, so the report shows what happened to the request, member
+ * by member, and a verdict in one sentence. It then checks the layers that
+ * can make the answer wrong: the negative-cache keys the request could be
  * shadowed by, the package's cooldown state and metadata visibility, and the
  * breakers in front of the proxies. Every problem carries a concrete fix the
  * UI can run as one API call.</p>
+ *
+ * <p>The negative cache is read before the replay. Replaying a request for
+ * a file the upstream lacks caches that "not found", as any client request
+ * would; such an entry was not there when the client's request failed, so
+ * it is neither reported nor left behind.</p>
  *
  * @since 2.2.9
  */
@@ -144,14 +156,30 @@ public final class Troubleshooter {
             "Repository " + repo.name() + " exists (" + repo.type() + ", " + repo.mode() + ")",
             null
         ));
-        return this.diag.fetch().get(repo.name(), target.rawPath(), authorization, null, KEEP_BODY)
-            .handle((resp, err) -> {
-                report.put("request", Troubleshooter.requestJson(resp, err));
-                checks.add(Troubleshooter.requestCheck(resp, err));
-                return resp;
-            })
-            .thenCompose(resp -> this.groupCheck(repo, target, authorization, checks))
-            .thenCompose(ignored -> this.negativeCheck(repo, target, checks))
+        final List<DerivedNegativeKeys.Derived> keys =
+            new DerivedNegativeKeys(this.diag.topology()).keys(repo, target.path());
+        return this.cached(keys)
+            .thenCompose(
+                before -> this.diag.fetch()
+                    .get(repo.name(), target.rawPath(), authorization, null, KEEP_BODY)
+                    .handle((resp, err) -> {
+                        this.forget(keys, before);
+                        final List<RequestTrace.Step> steps = Troubleshooter.steps(repo, resp);
+                        report.put("request", Troubleshooter.requestJson(resp, err, steps));
+                        report.put("trace", this.traceJson(steps));
+                        report.put("verdict", Troubleshooter.verdict(repo, resp, err, steps));
+                        checks.add(
+                            Troubleshooter.requestCheck(
+                                resp, err,
+                                steps.isEmpty() ? "" : ": " + repo.name() + ": "
+                                    + this.explanation(steps.size() - 1, steps)
+                            )
+                        );
+                        Troubleshooter.groupCheck(repo, steps, checks);
+                        Troubleshooter.negativeCheck(keys, before, checks);
+                        return resp;
+                    })
+            )
             .thenCompose(ignored -> this.cooldownChecks(repo, req, authorization, checks))
             .thenApply(ignored -> {
                 this.upstreamChecks(repo, checks);
@@ -160,118 +188,316 @@ public final class Troubleshooter {
     }
 
     /**
-     * Group member walk: which member answers the path, in walk order.
+     * The steps of the replayed request. A fetch that recorded none (a
+     * fetch that is not the serving path) yields one step for the repository
+     * itself, from the status and the reason its answer carries.
      *
      * @param repo Repository
-     * @param target Target
-     * @param authorization Credentials
-     * @param checks Checks to append to
-     * @return Future completing when done
+     * @param resp Response, null on failure
+     * @return Steps, the addressed repository last
      */
-    private CompletableFuture<Void> groupCheck(
-        final RepoTopology.RepoInfo repo, final RequestTarget target,
-        final String authorization, final JsonArray checks
+    private static List<RequestTrace.Step> steps(
+        final RepoTopology.RepoInfo repo, final RepoFetch.Fetched resp
     ) {
-        if (!repo.group()) {
-            return CompletableFuture.completedFuture(null);
+        final List<RequestTrace.Step> steps;
+        if (resp == null) {
+            steps = List.of();
+        } else if (resp.trace().isEmpty()) {
+            steps = List.of(
+                new RequestTrace.Step(
+                    repo.name(), repo.type(), resp.status(),
+                    resp.status() < 400 ? null : resp.header(AnswerReason.HEADER), 0L
+                )
+            );
+        } else {
+            steps = resp.trace();
         }
-        final JsonArray walk = new JsonArray();
-        return this.walk(repo.members(), 0, target, authorization, walk).thenAccept(served -> {
-            final String message;
-            if (served.isPresent()) {
-                message = "Member walk " + Troubleshooter.walkText(walk) + " — served by "
-                    + served.get();
-            } else {
-                message = "Member walk " + Troubleshooter.walkText(walk)
-                    + " — no member serves this path";
+        return steps;
+    }
+
+    /**
+     * The trace as JSON: one entry per repository, in the order they
+     * answered, each with what it answered and why.
+     *
+     * @param steps Steps
+     * @return JSON array
+     */
+    private JsonArray traceJson(final List<RequestTrace.Step> steps) {
+        final JsonArray trace = new JsonArray();
+        for (final RequestTrace.Step step : steps) {
+            final Optional<RepoTopology.RepoInfo> info = this.diag.topology().repo(step.repository());
+            final JsonObject entry = new JsonObject()
+                .put("repository", step.repository())
+                .put("type", step.type())
+                .put("mode", info.map(RepoTopology.RepoInfo::mode).orElse(null))
+                .put("status", step.status())
+                .put("reason", step.reason())
+                .put("explanation", this.explanation(trace.size(), steps))
+                .put("durationMs", step.millis());
+            info.map(RepoTopology.RepoInfo::remotes).filter(remotes -> !remotes.isEmpty())
+                .ifPresent(remotes -> entry.put("upstreams", new JsonArray(remotes)));
+            trace.add(entry);
+        }
+        return trace;
+    }
+
+    /**
+     * What happened in the repository of one step, in words. A group has no
+     * upstream and no storage: its step is explained by the members that
+     * answered before it, unless the group decided by itself (its own
+     * negative cache).
+     *
+     * @param idx Index of the step
+     * @param steps Steps of the replayed request
+     * @return Explanation
+     */
+    private String explanation(final int idx, final List<RequestTrace.Step> steps) {
+        final RequestTrace.Step step = steps.get(idx);
+        final ReasonText own = new ReasonText(step.reason(), step.status());
+        final List<RequestTrace.Step> members = steps.subList(0, idx);
+        final boolean group = this.diag.topology().repo(step.repository())
+            .map(RepoTopology.RepoInfo::group).orElse(false);
+        final String text;
+        if (!group || members.isEmpty()) {
+            text = own.explanation();
+        } else if (step.status() >= 200 && step.status() < 400) {
+            text = members.stream()
+                .filter(member -> member.status() >= 200 && member.status() < 300)
+                .findFirst().map(member -> "served by member " + member.repository())
+                .orElseGet(own::explanation);
+        } else if (own.plainNotFound()) {
+            text = "no member has this file";
+        } else {
+            text = members.stream()
+                .filter(member -> java.util.Objects.equals(member.reason(), step.reason()))
+                .findFirst()
+                .map(member -> "member " + member.repository() + ": "
+                    + new ReasonText(member.reason(), member.status()).explanation())
+                .orElseGet(own::explanation);
+        }
+        return text;
+    }
+
+    /**
+     * What the members of a group answered, from the trace of the replayed
+     * request: the members the group asked, in the order it asked them.
+     *
+     * @param repo Repository
+     * @param steps Steps of the replayed request
+     * @param checks Checks to append to
+     */
+    private static void groupCheck(
+        final RepoTopology.RepoInfo repo, final List<RequestTrace.Step> steps,
+        final JsonArray checks
+    ) {
+        if (!repo.group() || steps.isEmpty()) {
+            return;
+        }
+        final RequestTrace.Step top = steps.get(steps.size() - 1);
+        final JsonArray members = new JsonArray();
+        final StringBuilder walk = new StringBuilder();
+        String served = null;
+        for (final RequestTrace.Step step : steps.subList(0, steps.size() - 1)) {
+            final String why = new ReasonText(step.reason(), step.status()).explanation();
+            members.add(new JsonObject()
+                .put("name", step.repository())
+                .put("status", step.status())
+                .put("reason", step.reason())
+                .put("explanation", why));
+            if (walk.length() > 0) {
+                walk.append(" → ");
             }
-            checks.add(Troubleshooter.check(
-                "group-walk", "group", served.isPresent() ? OK : PROBLEM, message, null
-            ).put("members", walk));
-        });
-    }
-
-    /**
-     * Sequential member walk, stopping at the first 2xx like the resolver.
-     *
-     * @param members Members in walk order
-     * @param idx Current index
-     * @param target Target
-     * @param authorization Credentials
-     * @param walk Walk record to append to
-     * @return Future of the serving member
-     */
-    private CompletableFuture<Optional<String>> walk(
-        final List<String> members, final int idx, final RequestTarget target,
-        final String authorization, final JsonArray walk
-    ) {
-        if (idx >= members.size()) {
-            return CompletableFuture.completedFuture(Optional.empty());
+            walk.append(step.repository()).append(": ").append(step.status())
+                .append(" (").append(why).append(')');
+            if (served == null && step.status() >= 200 && step.status() < 300) {
+                served = step.repository();
+            }
         }
-        final String member = members.get(idx);
-        return this.diag.fetch().get(member, target.rawPath(), authorization, null, 0)
-            .handle((resp, err) -> {
-                walk.add(new JsonObject()
-                    .put("name", member)
-                    .put("status", resp == null ? 0 : resp.status())
-                    .put("error", err == null ? null
-                        : String.valueOf(PackageInspector.cause(err).getMessage())));
-                return resp != null && resp.status() >= 200 && resp.status() < 300;
-            })
-            .thenCompose(ok -> ok
-                ? CompletableFuture.completedFuture(Optional.of(member))
-                : this.walk(members, idx + 1, target, authorization, walk));
+        final boolean fine = top.status() >= 200 && top.status() < 400;
+        final String message;
+        if (members.isEmpty()) {
+            message = "No member was asked: " + repo.name() + " "
+                + new ReasonText(top.reason(), top.status()).explanation();
+        } else if (served != null) {
+            message = "Members asked: " + walk + " — served by " + served;
+        } else {
+            message = "Members asked: " + walk + " — no member served this path";
+        }
+        checks.add(Troubleshooter.check(
+            "group-walk", "group", fine ? OK : PROBLEM, message, null
+        ).put("members", members));
     }
 
     /**
-     * Negative-cache keys the request could be shadowed by.
+     * Which of the negative-cache keys the request maps to hold a cached 404
+     * right now.
      *
-     * @param repo Repository
-     * @param target Target
-     * @param checks Checks to append to
-     * @return Future completing when done
+     * @param keys Keys the request maps to
+     * @return Future of flat key to tiers ({@code L1}, {@code L2}, {@code L1+L2})
      */
-    private CompletableFuture<Void> negativeCheck(
-        final RepoTopology.RepoInfo repo, final RequestTarget target, final JsonArray checks
+    private CompletableFuture<Map<String, String>> cached(
+        final List<DerivedNegativeKeys.Derived> keys
     ) {
-        final List<DerivedNegativeKeys.Derived> keys =
-            new DerivedNegativeKeys(this.diag.topology()).keys(repo, target.path());
         return this.negative.l2TtlMillis(
             keys.stream().map(der -> der.key().flat()).toList()
-        ).thenAccept(ttls -> {
-            boolean any = false;
+        ).thenApply(ttls -> {
+            final Map<String, String> present = new HashMap<>();
             for (final DerivedNegativeKeys.Derived der : keys) {
                 final boolean l1 = this.negative.inL1(der.key());
                 final boolean l2 = ttls.getOrDefault(der.key().flat(), -2L) != -2L;
                 if (l1 || l2) {
-                    any = true;
-                    checks.add(Troubleshooter.check(
-                        "negative-cache:" + der.key().scope(), "negative-cache", PROBLEM,
-                        "Cached 404 in " + der.key().scope() + " for "
-                            + der.key().artifactName()
-                            + (der.key().artifactVersion().isEmpty() ? ""
-                                : " " + der.key().artifactVersion())
-                            + " (" + (l1 ? "L1" : "") + (l1 && l2 ? "+" : "") + (l2 ? "L2" : "")
-                            + ") — requests are answered 404 without asking the upstream",
-                        new JsonObject()
-                            .put("action", "invalidate")
-                            .put("endpoint", "/api/v1/admin/neg-cache/invalidate")
-                            .put("body", new JsonObject()
-                                .put("scope", der.key().scope())
-                                .put("repoType", der.key().repoType())
-                                .put("artifactName", der.key().artifactName())
-                                .put("version", der.key().artifactVersion()))
-                    ));
+                    present.put(
+                        der.key().flat(),
+                        (l1 ? "L1" : "") + (l1 && l2 ? "+" : "") + (l2 ? "L2" : "")
+                    );
                 }
             }
-            if (!any) {
+            return present;
+        });
+    }
+
+    /**
+     * Drop the cached 404s the replayed request created: every key the
+     * request maps to that held none before. The check must not change what
+     * the next client request gets.
+     *
+     * @param keys Keys the request maps to
+     * @param before Keys that held a cached 404 before the replay
+     */
+    private void forget(
+        final List<DerivedNegativeKeys.Derived> keys, final Map<String, String> before
+    ) {
+        for (final DerivedNegativeKeys.Derived der : keys) {
+            if (!before.containsKey(der.key().flat())) {
+                this.negative.invalidate(der.key());
+            }
+        }
+    }
+
+    /**
+     * Negative-cache keys that shadowed the request before the check.
+     *
+     * @param keys Keys the request maps to
+     * @param before Keys that held a cached 404 before the replay
+     * @param checks Checks to append to
+     */
+    private static void negativeCheck(
+        final List<DerivedNegativeKeys.Derived> keys, final Map<String, String> before,
+        final JsonArray checks
+    ) {
+        boolean any = false;
+        for (final DerivedNegativeKeys.Derived der : keys) {
+            final String tiers = before.get(der.key().flat());
+            if (tiers != null) {
+                any = true;
                 checks.add(Troubleshooter.check(
-                    "negative-cache", "negative-cache", OK,
-                    "No cached 404 for any of the " + keys.size()
-                        + " key(s) this request maps to", null
+                    "negative-cache:" + der.key().scope(), "negative-cache", PROBLEM,
+                    "Cached 404 in " + der.key().scope() + " for "
+                        + der.key().artifactName()
+                        + (der.key().artifactVersion().isEmpty() ? ""
+                            : " " + der.key().artifactVersion())
+                        + " (" + tiers
+                        + ") — requests are answered 404 without asking the upstream",
+                    new JsonObject()
+                        .put("action", "invalidate")
+                        .put("endpoint", "/api/v1/admin/neg-cache/invalidate")
+                        .put("body", new JsonObject()
+                            .put("scope", der.key().scope())
+                            .put("repoType", der.key().repoType())
+                            .put("artifactName", der.key().artifactName())
+                            .put("version", der.key().artifactVersion()))
                 ));
             }
-        });
+        }
+        if (!any) {
+            checks.add(Troubleshooter.check(
+                "negative-cache", "negative-cache", OK,
+                "No cached 404 shadowed this request (" + keys.size()
+                    + " key(s) checked before the replay; what the replay itself cached "
+                    + "was removed again)",
+                null
+            ));
+        }
+    }
+
+    /**
+     * The conclusion: what the client gets, why, and what to do.
+     *
+     * @param repo Repository
+     * @param resp Response, null on failure
+     * @param err Failure
+     * @param steps Steps of the replayed request
+     * @return Verdict JSON: status, summary, advice
+     */
+    private static JsonObject verdict(
+        final RepoTopology.RepoInfo repo, final RepoFetch.Fetched resp, final Throwable err,
+        final List<RequestTrace.Step> steps
+    ) {
+        final JsonObject verdict = new JsonObject();
+        if (resp == null || steps.isEmpty()) {
+            verdict.put("status", PROBLEM)
+                .put("summary", "The request could not be replayed: "
+                    + PackageInspector.cause(err).getMessage())
+                .put("advice", "");
+        } else if (resp.status() >= 200 && resp.status() < 400) {
+            final Optional<String> served = steps.subList(0, steps.size() - 1).stream()
+                .filter(step -> step.status() >= 200 && step.status() < 300)
+                .map(RequestTrace.Step::repository).findFirst();
+            verdict.put("status", OK)
+                .put("summary", "The request is served (HTTP " + resp.status() + ")"
+                    + served.map(name -> ", served by " + name).orElse(""))
+                .put("advice", "");
+        } else {
+            final RequestTrace.Step top = steps.get(steps.size() - 1);
+            final RequestTrace.Step culprit = steps.stream()
+                .filter(step -> java.util.Objects.equals(step.reason(), top.reason()))
+                .findFirst().orElse(top);
+            final ReasonText text = new ReasonText(top.reason(), top.status());
+            verdict.put("status", Troubleshooter.expected(top.reason()) ? INFO : PROBLEM)
+                .put("summary", Troubleshooter.summary(repo, top, culprit, text))
+                .put("advice", text.advice());
+        }
+        return verdict;
+    }
+
+    /**
+     * Whether a reason is Pantera doing what it was told: cooldown and
+     * access control.
+     *
+     * @param reason Reason token
+     * @return True for an answer that is not a fault
+     */
+    private static boolean expected(final String reason) {
+        return "cooldown_active".equals(reason) || "authentication_required".equals(reason)
+            || "forbidden".equals(reason);
+    }
+
+    /**
+     * One sentence on a request that is not served.
+     *
+     * @param repo Repository addressed
+     * @param top Its step
+     * @param culprit The step that explains the answer
+     * @param text The reason in words
+     * @return Summary
+     */
+    private static String summary(
+        final RepoTopology.RepoInfo repo, final RequestTrace.Step top,
+        final RequestTrace.Step culprit, final ReasonText text
+    ) {
+        final String summary;
+        if (repo.group() && text.plainNotFound()) {
+            summary = "HTTP " + top.status() + ": none of the repositories asked has this "
+                + "file. Nothing is cached wrongly and nothing failed.";
+        } else if ("negative_cache".equals(top.reason())) {
+            summary = "HTTP " + top.status() + " from the negative cache of "
+                + culprit.repository() + ": an earlier \"not found\" is still remembered "
+                + "there, and the upstream was not asked.";
+        } else {
+            summary = "HTTP " + top.status() + ". " + culprit.repository() + ": "
+                + new ReasonText(culprit.reason(), culprit.status()).explanation() + ".";
+        }
+        return summary;
     }
 
     /**
@@ -351,9 +577,12 @@ public final class Troubleshooter {
      *
      * @param resp Response, null on failure
      * @param err Failure
+     * @param steps Steps of the replayed request
      * @return JSON
      */
-    private static JsonObject requestJson(final RepoFetch.Fetched resp, final Throwable err) {
+    private static JsonObject requestJson(
+        final RepoFetch.Fetched resp, final Throwable err, final List<RequestTrace.Step> steps
+    ) {
         if (resp == null) {
             return new JsonObject()
                 .put("status", 0)
@@ -368,6 +597,7 @@ public final class Troubleshooter {
         });
         return new JsonObject()
             .put("status", resp.status())
+            .put("reason", steps.isEmpty() ? null : steps.get(steps.size() - 1).reason())
             .put("headers", headers)
             .put("bodySnippet", Troubleshooter.snippet(resp))
             .put("bodyBytes", resp.bytes());
@@ -378,9 +608,13 @@ public final class Troubleshooter {
      *
      * @param resp Response, null on failure
      * @param err Failure
+     * @param why What happened in the addressed repository, as a suffix
+     *  starting with a colon; empty when unknown
      * @return Check
      */
-    private static JsonObject requestCheck(final RepoFetch.Fetched resp, final Throwable err) {
+    private static JsonObject requestCheck(
+        final RepoFetch.Fetched resp, final Throwable err, final String why
+    ) {
         final String status;
         final String message;
         if (resp == null) {
@@ -398,11 +632,11 @@ public final class Troubleshooter {
                 + " for your account — clients without read permission see the same";
         } else if (resp.status() == 503 && resp.header("Retry-After") != null) {
             status = PROBLEM;
-            message = "Request answers 503 — every member is unavailable (breakers open); retry in "
+            message = "Request answers 503" + why + "; retry in "
                 + resp.header("Retry-After") + "s";
         } else {
             status = PROBLEM;
-            message = "Request answers " + resp.status();
+            message = "Request answers " + resp.status() + why;
         }
         return Troubleshooter.check("request", "repository", status, message, null);
     }
@@ -440,24 +674,6 @@ public final class Troubleshooter {
             res = str.length() > SNIPPET ? str.substring(0, SNIPPET) : str;
         }
         return res;
-    }
-
-    /**
-     * Walk as text.
-     *
-     * @param walk Walk record
-     * @return e.g. {@code a:404 → b:200}
-     */
-    private static String walkText(final JsonArray walk) {
-        final StringBuilder out = new StringBuilder();
-        for (int idx = 0; idx < walk.size(); idx = idx + 1) {
-            if (idx > 0) {
-                out.append(" → ");
-            }
-            final JsonObject step = walk.getJsonObject(idx);
-            out.append(step.getString("name")).append(':').append(step.getInteger("status"));
-        }
-        return out.toString();
     }
 
     /**

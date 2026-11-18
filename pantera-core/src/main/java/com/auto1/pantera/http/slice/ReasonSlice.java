@@ -20,8 +20,10 @@ import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.fault.FaultTranslator;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.AnswerReason;
+import com.auto1.pantera.http.log.FailureCause;
 import com.auto1.pantera.http.log.ReasonWeight;
 import com.auto1.pantera.http.log.RequestReasons;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.log.StatusReason;
 import com.auto1.pantera.http.rq.RequestLine;
 import java.util.ArrayList;
@@ -29,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Puts on every answer of a repository with a status of 400 or above the
@@ -66,11 +69,33 @@ public final class ReasonSlice implements Slice {
     private final Slice origin;
 
     /**
-     * Ctor.
-     * @param origin Repository slice
+     * Repository name, for the trace of a traced request.
+     */
+    private final String name;
+
+    /**
+     * Repository type, for the trace of a traced request.
+     */
+    private final String type;
+
+    /**
+     * Ctor for a slice that is not a named repository.
+     * @param origin Slice
      */
     public ReasonSlice(final Slice origin) {
+        this(origin, "", "");
+    }
+
+    /**
+     * Ctor.
+     * @param origin Repository slice
+     * @param name Repository name
+     * @param type Repository type, such as {@code maven-proxy}
+     */
+    public ReasonSlice(final Slice origin, final String name, final String type) {
         this.origin = origin;
+        this.name = name;
+        this.type = type;
     }
 
     @Override
@@ -86,15 +111,56 @@ public final class ReasonSlice implements Slice {
             }
         }
         inner.add(new Header(RequestReasons.SLOT_HEADER, slot));
+        // Only a request the troubleshooter replays is traced: it then shows
+        // what this repository answered, why, and how long it took.
+        final boolean traced = RequestTrace.instance().traced(headers);
+        final long started = traced ? System.nanoTime() : 0L;
         return this.origin.response(line, new Headers(inner), body)
             .whenComplete(
                 (response, error) -> {
                     if (error != null) {
                         reasons.close(slot);
+                        if (traced) {
+                            this.traced(headers, 0, new FailureCause(error).reason(), started);
+                        }
                     }
                 }
             )
-            .thenApply(response -> ReasonSlice.explained(response, reasons.close(slot)));
+            .thenApply(
+                response -> {
+                    final Response explained =
+                        ReasonSlice.explained(response, reasons.close(slot));
+                    if (traced) {
+                        final int code = explained.status().code();
+                        this.traced(
+                            headers, code,
+                            code < ReasonSlice.ERRORS
+                                ? null : new AnswerReason(explained).token().orElse(null),
+                            started
+                        );
+                    }
+                    return explained;
+                }
+            );
+    }
+
+    /**
+     * Record this repository's answer in the trace of the request.
+     * @param headers Headers of the request
+     * @param status Status answered, 0 when the repository failed
+     * @param reason Reason of a status of 400 or above, or of the failure
+     * @param started When the repository was asked, {@link System#nanoTime()}
+     */
+    private void traced(
+        final Headers headers, final int status, final String reason, final long started
+    ) {
+        RequestTrace.instance().step(
+            headers,
+            new RequestTrace.Step(
+                this.name, this.type, status, reason,
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+            )
+        );
     }
 
     /**

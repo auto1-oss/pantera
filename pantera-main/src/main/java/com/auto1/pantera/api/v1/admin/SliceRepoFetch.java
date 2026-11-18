@@ -17,6 +17,7 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
@@ -86,6 +87,9 @@ public final class SliceRepoFetch implements RepoFetch {
         if (client != null && !client.isBlank()) {
             headers.add(new Header(EcsLoggingSlice.CTX_CLIENT_IP_HEADER, client));
         }
+        // Every repository on the way records what it answered and why.
+        final String steps = RequestTrace.instance().open();
+        headers.add(new Header(RequestTrace.HEADER, steps));
         final RequestLine line = new RequestLine(
             RqMethod.GET, URI.create("/" + repo + rel), "HTTP/1.1"
         );
@@ -115,8 +119,10 @@ public final class SliceRepoFetch implements RepoFetch {
                             hdr.getKey(), hdr.getValue()
                         ))
                         .collect(Collectors.<Map.Entry<String, String>>toList()),
-                    read.bytes(), read.truncated(), read.total()
+                    read.bytes(), read.truncated(), read.total(),
+                    RequestTrace.instance().close(steps)
                 )))
-            .orTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            .orTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .whenComplete((fetched, error) -> RequestTrace.instance().close(steps));
     }
 }
