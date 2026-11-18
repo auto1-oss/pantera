@@ -62,7 +62,7 @@ A local repository with the **Immutable artifacts** setting on (the default) nev
 | Cause | How to Verify | Fix |
 |-------|---------------|-----|
 | Package is in cooldown | Check the Cooldown panel in the UI or `GET /api/v1/cooldown/blocked?search=<name>` | Wait for cooldown to expire or request an admin unblock (see [Cooldown](cooldown.md)) |
-| Package version is in the negative cache | A specific version was requested before and upstream returned 404 | The entry clears automatically once that version is fetched or published; otherwise wait for the negative-cache TTL to expire or ask an admin to clear it. Package-level metadata (npm packument, `maven-metadata.xml`, PyPI simple index) is never negatively cached, and a rate-limited upstream (429/403) no longer produces a cached 404. |
+| File is in the negative cache | That file was requested before and upstream returned 404 | A 404 is remembered per file: another file of the same version is not affected. The entry clears automatically once the version is published; otherwise wait for the negative-cache TTL to expire or ask an admin to clear it. Package-level metadata (npm packument, `maven-metadata.xml`, PyPI simple index) is never negatively cached, and a rate-limited upstream (429/403) no longer produces a cached 404. |
 | Wrong repository URL | Verify the URL matches the repository name exactly | Check your client config against the repository list |
 | Upstream registry is down | Check the upstream registry status page | Wait for upstream to recover; cached artifacts remain available |
 
@@ -150,6 +150,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | `Return code is: 405` on deploy | Deploy to a local repo, not proxy/group |
 | `409 Conflict` on deploy | The release is already published with different content and the repository is immutable; bump the version or delete the published one first |
 | SNAPSHOT not updating | Run with `-U` flag: `mvn install -U` |
+| `was not found in ... during a previous attempt. This failure was cached in the local repository` | Maven remembers a failed download and does not ask again until the update interval has passed. Run once with `-U`, or delete the artifact's `*.lastUpdated` files from `~/.m2/repository` |
 | `503 Service Unavailable` on a download during a large build | The repository had more downloads to serve than it runs at once and this one waited too long. Maven 3.9 and later repeats the request by itself; if builds still fail on it, tell your Pantera administrator |
 | Certificate errors | Add `<insecure>true</insecure>` under `<server>` or configure TLS |
 

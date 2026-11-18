@@ -518,7 +518,7 @@ public final class CachedNpmProxySlice implements Slice {
      * Build a structured negative-cache key for a request path.
      */
     private com.auto1.pantera.http.cache.NegativeCacheKey negKey(final String path) {
-        return com.auto1.pantera.http.cache.NegativeCacheKey.fromPath(
+        return com.auto1.pantera.http.cache.NegativeCacheKey.forFile(
             this.repoName, this.repoType, path);
     }
 

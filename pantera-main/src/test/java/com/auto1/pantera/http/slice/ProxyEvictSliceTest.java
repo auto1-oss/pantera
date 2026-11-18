@@ -62,7 +62,7 @@ final class ProxyEvictSliceTest {
             .row(ProxyEvictSliceTest.REPO, "com/qa/lib/1.0")
             .row(ProxyEvictSliceTest.REPO, "com/qa/lib/2.0");
         final NegativeCache negative = new NegativeCache(new NegativeCacheConfig());
-        final NegativeCacheKey missing = NegativeCacheKey.fromPath(
+        final NegativeCacheKey missing = NegativeCacheKey.forFile(
             ProxyEvictSliceTest.REPO, ProxyEvictSliceTest.TYPE, "com/qa/lib/1.0/lib-1.0.jar"
         );
         negative.cacheNotFound(missing);

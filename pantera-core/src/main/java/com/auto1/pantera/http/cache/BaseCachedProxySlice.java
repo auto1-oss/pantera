@@ -1767,7 +1767,7 @@ public abstract class BaseCachedProxySlice implements Slice {
      * and gives operators meaningful scope/repoType columns in the admin UI.
      */
     private NegativeCacheKey negKey(final String path) {
-        return NegativeCacheKey.fromPath(this.repoName, this.repoType, path);
+        return NegativeCacheKey.forFile(this.repoName, this.repoType, path);
     }
 
     /**

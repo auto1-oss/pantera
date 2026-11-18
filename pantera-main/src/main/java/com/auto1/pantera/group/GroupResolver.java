@@ -804,11 +804,7 @@ public final class GroupResolver implements Slice {
      * @return {@code "<version>/<file>"}, or empty for version-less paths
      */
     static String negativeCacheVersion(final String parsedVersion, final String path) {
-        if (parsedVersion.isEmpty()) {
-            return "";
-        }
-        final String trimmed = path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
-        return parsedVersion + "/" + trimmed.substring(trimmed.lastIndexOf('/') + 1);
+        return NegativeCacheKey.fileVersion(parsedVersion, path);
     }
 
     /**
