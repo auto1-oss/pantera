@@ -83,7 +83,7 @@ SOFTWARE.
         <!-- Netty Proxy Protocol codec: required by Vert.x setUseProxyProtocol(true)
              when Pantera runs behind an AWS NLB with Proxy Protocol v2.
              Not bundled transitively by vertx-core. Version is managed by the
-             vertx-dependencies BOM so it stays aligned with the rest of Netty. -->
+             netty-bom import of the root POM so it stays aligned with the rest of Netty. -->
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-codec-haproxy</artifactId>
@@ -228,6 +228,18 @@ SOFTWARE.
             <groupId>org.quartz-scheduler</groupId>
             <artifactId>quartz</artifactId>
             <version>2.3.2</version>
+            <!-- Quartz runs on the HikariCP pool through PanteraQuartzConnectionProvider;
+                 its own c3p0 pool is never created and is not shipped. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>com.mchange</groupId>
+                    <artifactId>c3p0</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.mchange</groupId>
+                    <artifactId>mchange-commons-java</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>com.cronutils</groupId>
