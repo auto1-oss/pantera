@@ -1328,6 +1328,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      *   <li><b>404, 410</b> → propagate as 404 ({@code notFound}) so
      *       RaceSlice can try the next remote (e.g. {@code .module} on
      *       maven-central 404 → try plugins.gradle.org).</li>
+     *   <li><b>400</b> → 404: the upstream cannot parse the path, so no
+     *       artifact lives there. It is not a failure of the upstream.</li>
      *   <li><b>429</b> → propagate as 429 with the upstream's
      *       Retry-After preserved. M3's gate is now closed for this
      *       host so subsequent calls fail-fast; client backs off.</li>
@@ -1342,7 +1344,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      */
     private static Response mapUpstreamStatus(final UpstreamHttpException err) {
         final int status = err.status();
-        if (status == 404 || status == 410) {
+        // 400: the upstream cannot parse the path (Maven Central answers so
+        // to a version range sent in place of a version). No artifact lives
+        // there, and the upstream has not failed: a 502 would fail the build
+        // and count against this member in a group.
+        if (status == 404 || status == 410 || status == 400) {
             return ResponseBuilder.notFound().build();
         }
         if (status == 429) {

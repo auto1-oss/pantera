@@ -51,6 +51,7 @@ import org.junit.jupiter.api.Test;
  * <p>The fidelity matrix tested here:
  * <ul>
  *   <li>404 / 410 → 404 (genuine not-found; group fanout continues)</li>
+ *   <li>400 → 404 (a path the upstream cannot parse holds no artifact)</li>
  *   <li>429 → 429 + Retry-After preserved (M3's gate honours this)</li>
  *   <li>401 / 403 → propagate (authoritative auth signal)</li>
  *   <li>503 with Retry-After → 503 + Retry-After</li>
@@ -74,6 +75,18 @@ final class CachedProxySliceStatusFidelityTest {
     void upstream404PropagatesAs404() {
         MatcherAssert.assertThat(
             invoke(constantResponse(RsStatus.NOT_FOUND, null)).status(),
+            new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+    }
+
+    @Test
+    void upstream400MapsTo404() {
+        // Maven Central answers 400 to a path it cannot parse, such as a
+        // version range sent in place of a version ("[,8.2)"). No artifact
+        // lives at such a path: it is not found, and the upstream has not
+        // failed.
+        MatcherAssert.assertThat(
+            invoke(constantResponse(RsStatus.BAD_REQUEST, null)).status(),
             new IsEqual<>(RsStatus.NOT_FOUND)
         );
     }
