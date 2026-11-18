@@ -144,15 +144,28 @@ final class DiskCacheStorageLastModifiedTest {
         try (Stream<Path> files = Files.walk(this.dir)) {
             meta = files.filter(file -> file.toString().endsWith(".meta")).findFirst().orElseThrow();
         }
-        final List<String> lines = Files.readAllLines(meta).stream()
-            .filter(line -> !line.startsWith("lastModified")).toList();
-        Files.write(meta, lines);
         final int before = this.remote.metadataRequests();
-        final Content undated = this.cache.value(DiskCacheStorageLastModifiedTest.KEY)
-            .get(10, TimeUnit.SECONDS);
+        // The cache updates the sidecar after every hit, off the calling
+        // thread: an update still pending from an earlier read puts the time
+        // back. Remove it again until a hit sees the entry without it.
+        Content undated = null;
+        final long patience = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (undated == null && System.nanoTime() < patience) {
+            final List<String> lines = Files.readAllLines(meta).stream()
+                .filter(line -> !line.startsWith("lastModified")).toList();
+            Files.write(meta, lines);
+            final Content hit = this.cache.value(DiskCacheStorageLastModifiedTest.KEY)
+                .get(10, TimeUnit.SECONDS);
+            if (hit.lastModified().isEmpty()) {
+                undated = hit;
+            } else {
+                hit.asBytesFuture().get(10, TimeUnit.SECONDS);
+                TimeUnit.MILLISECONDS.sleep(10);
+            }
+        }
         MatcherAssert.assertThat(
-            "the first hit on such an entry is not dated",
-            undated.lastModified(), new IsEqual<>(Optional.empty())
+            "a hit on such an entry is not dated",
+            undated == null, new IsEqual<>(false)
         );
         undated.asBytesFuture().get(10, TimeUnit.SECONDS);
         // The time is learned in the background: poll for the dated hit.
