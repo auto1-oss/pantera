@@ -169,7 +169,7 @@ curl -X POST http://localhost:8086/api/v1/auth/token \
 
 **Symptoms:** Proxy repositories return HTTP 502 Bad Gateway or 504 Gateway Timeout.
 
-**Diagnosis:** the cause of each 5xx is on the application record that shares the access-log line's `trace.id`. Its `event.reason` names the cause (`upstream_status_503`, `connect_timeout`, `circuit_open`, ...) and `url.full` / `destination.address` name the upstream. See [Logging: Why a Request Got a 5xx](logging.md#why-a-request-got-a-5xx).
+**Diagnosis:** the access-log line of the request says why in `event.reason` (`upstream_status_503`, `connect_timeout`, `connection_closed`, `circuit_open`, `bulkhead_full`, ...). The application record that shares its `trace.id` adds the detail: `url.full` / `destination.address` name the upstream, `error.*` the exception. See [Logging: Why a Request Was Not Answered 2xx](logging.md#why-a-request-was-not-answered-2xx).
 
 ```bash
 # Causes of recent 5xx answers, most frequent first
@@ -453,6 +453,8 @@ Registries that serve archives without a content-coding (Maven Central, npmjs, P
 **Symptoms:** A newly published artifact returns 404 from a proxy repository even though it exists upstream.
 
 **Cause:** The artifact was previously cached as "not found" in the negative cache.
+
+**Diagnosis:** the access-log line of such a 404 has `event.reason: negative_cache`. A 404 the upstream itself gave has `upstream_status_404`.
 
 **Resolution:**
 

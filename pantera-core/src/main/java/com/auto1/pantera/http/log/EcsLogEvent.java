@@ -74,6 +74,16 @@ public final class EcsLogEvent {
      * @param action Event action
      * @return this
      */
+    /**
+     * Set {@code event.reason}: why the request was not answered 2xx.
+     * @param token Reason token
+     * @return this
+     */
+    public EcsLogEvent reason(final String token) {
+        fields.put("event.reason", token);
+        return this;
+    }
+
     public EcsLogEvent action(final String action) {
         fields.put("event.action", action);
         return this;

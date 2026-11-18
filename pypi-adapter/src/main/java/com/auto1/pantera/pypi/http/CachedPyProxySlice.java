@@ -251,6 +251,9 @@ public final class CachedPyProxySlice implements Slice {
                 .field("package.name", key.string())
                 .field("log.source", "application")
                 .log();
+            com.auto1.pantera.http.log.RequestReasons.instance().note(
+                headers, com.auto1.pantera.http.log.RequestReasons.NEGATIVE_CACHE
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.notFound().build()
             );
@@ -366,6 +369,9 @@ public final class CachedPyProxySlice implements Slice {
                         .field("package.name", key.string())
                         .field("log.source", "application")
                         .log();
+                    com.auto1.pantera.http.log.RequestReasons.instance().note(
+                        headers, com.auto1.pantera.http.log.RequestReasons.upstream(404)
+                    );
                     // Cache 404 to avoid repeated upstream requests
                     this.negativeCache.cacheNotFound(
                         com.auto1.pantera.http.cache.NegativeCacheKey.forFile(

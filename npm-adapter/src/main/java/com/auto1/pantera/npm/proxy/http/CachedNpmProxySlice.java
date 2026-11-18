@@ -175,6 +175,9 @@ public final class CachedNpmProxySlice implements Slice {
         final Key key = new KeyFromPath(path);
         // Check negative cache first (404s)
         if (this.negativeCache.isKnown404(this.negKey(path))) {
+            com.auto1.pantera.http.log.RequestReasons.instance().note(
+                headers, com.auto1.pantera.http.log.RequestReasons.NEGATIVE_CACHE
+            );
             return CompletableFuture.completedFuture(
                 CachedNpmProxySlice.notFoundBuilder(path).build()
             );
@@ -296,6 +299,9 @@ public final class CachedNpmProxySlice implements Slice {
                     // GET populated (line ~152 above).
                     if (line.method() != RqMethod.HEAD) {
                         this.negativeCache.cacheNotFound(this.negKey(key.string()));
+                        com.auto1.pantera.http.log.RequestReasons.instance().note(
+                            headers, com.auto1.pantera.http.log.RequestReasons.upstream(404)
+                        );
                     }
                     this.recordProxyMetric("not_found", duration);
                     return new UpstreamOutcome(FetchSignal.NOT_FOUND, response.status().code());

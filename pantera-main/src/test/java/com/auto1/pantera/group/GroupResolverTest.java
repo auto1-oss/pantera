@@ -1091,6 +1091,82 @@ final class GroupResolverTest {
     }
 
     @Test
+    void groupNotFoundSaysWhenAMemberAnsweredFromItsNegativeCache() {
+        // Every member answers 404. One of them did not ask its upstream:
+        // the access record of the group's 404 must say so.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, reasonedSlice(RsStatus.NOT_FOUND, "negative_cache"));
+        slices.put(PROXY_B, reasonedSlice(RsStatus.NOT_FOUND, "upstream_status_404"));
+        final Response answer = new com.auto1.pantera.http.slice.ReasonSlice(
+            buildResolver(
+                idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+                buildNegativeCache(), slices
+            )
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "the group answers 404",
+            answer.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "and names the cached answer of its member as the reason",
+            new com.auto1.pantera.http.log.AnswerReason(answer).token(),
+            new IsEqual<>(Optional.of("negative_cache"))
+        );
+    }
+
+    @Test
+    void groupFailureIsExplainedByTheMemberThatFailed() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, reasonedSlice(RsStatus.BAD_GATEWAY, "connection_closed"));
+        slices.put(PROXY_B, reasonedSlice(RsStatus.NOT_FOUND, "upstream_status_404"));
+        final Response answer = new com.auto1.pantera.http.slice.ReasonSlice(
+            buildResolver(
+                idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+                buildNegativeCache(), slices
+            )
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "the group does not answer 2xx or 404",
+            answer.status().serverError(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "and the reason is how the member's upstream call failed",
+            new com.auto1.pantera.http.log.AnswerReason(answer).token(),
+            new IsEqual<>(Optional.of("connection_closed"))
+        );
+    }
+
+    @Test
+    void groupNegativeCacheHitIsNamed() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, reasonedSlice(RsStatus.NOT_FOUND, "upstream_status_404"));
+        final Slice group = new com.auto1.pantera.http.slice.ReasonSlice(
+            buildResolver(
+                idx, List.of(PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+            )
+        );
+        final Response first = group.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        final Response second = group.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the first 404 is the member's upstream answer",
+            new com.auto1.pantera.http.log.AnswerReason(first).token(),
+            new IsEqual<>(Optional.of("upstream_status_404"))
+        );
+        MatcherAssert.assertThat(
+            "the second is the group's own negative cache",
+            new com.auto1.pantera.http.log.AnswerReason(second).token(),
+            new IsEqual<>(Optional.of("negative_cache"))
+        );
+    }
+
+    @Test
     void blockedMember_cacheOnlyProbe_servesWarmCache() {
         final java.util.concurrent.atomic.AtomicBoolean sawCacheOnly =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -1226,6 +1302,17 @@ final class GroupResolverTest {
             Set.of(PROXY_A, PROXY_B),
             negCache,
             java.util.concurrent.ForkJoinPool.commonPool()
+        );
+    }
+
+    /**
+     * A member answering with a status and the reason its own
+     * {@code ReasonSlice} would have put on the answer.
+     */
+    private static Slice reasonedSlice(final RsStatus status, final String reason) {
+        return (line, headers, body) -> CompletableFuture.completedFuture(
+            new com.auto1.pantera.http.log.AnswerReason(ResponseBuilder.from(status).build())
+                .stamped(reason)
         );
     }
 

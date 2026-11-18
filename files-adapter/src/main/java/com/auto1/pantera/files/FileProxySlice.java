@@ -266,7 +266,7 @@ public final class FileProxySlice implements Slice {
         }
         // CRITICAL FIX: Check cache FIRST before any network calls (cooldown/inspector)
         // This ensures offline mode works - serve cached content even when upstream is down
-        return this.checkCacheFirst(line, key, artifact, user, rshdr);
+        return this.checkCacheFirst(line, key, artifact, user, rshdr, rqheaders);
     }
 
     /**
@@ -327,11 +327,12 @@ public final class FileProxySlice implements Slice {
         final KeyFromPath key,
         final String artifact,
         final String user,
-        final AtomicReference<Headers> rshdr
+        final AtomicReference<Headers> rshdr,
+        final Headers headers
     ) {
         // If no storage is configured, skip cache-first check and go directly to cooldown
         if (this.storage.isEmpty()) {
-            return this.evaluateCooldownAndFetch(line, key, artifact, user, rshdr);
+            return this.evaluateCooldownAndFetch(line, key, artifact, user, rshdr, headers);
         }
         // Check storage cache FIRST before any network calls
         // Use FromStorageCache pattern: check storage directly, serve if present
@@ -346,7 +347,7 @@ public final class FileProxySlice implements Slice {
                     );
                 }
                 // Cache MISS - now we need network, evaluate cooldown first
-                return this.evaluateCooldownAndFetch(line, key, artifact, user, rshdr);
+                return this.evaluateCooldownAndFetch(line, key, artifact, user, rshdr, headers);
             }).toCompletableFuture();
     }
 
@@ -366,7 +367,8 @@ public final class FileProxySlice implements Slice {
         final KeyFromPath key,
         final String artifact,
         final String user,
-        final AtomicReference<Headers> rshdr
+        final AtomicReference<Headers> rshdr,
+        final Headers headers
     ) {
         final CooldownRequest request = new CooldownRequest(
             this.rtype,
@@ -439,6 +441,12 @@ public final class FileProxySlice implements Slice {
                                         }
                                     } else {
                                         // CRITICAL: Consume body to prevent Vert.x request leak
+                                        com.auto1.pantera.http.log.RequestReasons.instance().note(
+                                            headers,
+                                            com.auto1.pantera.http.log.RequestReasons.upstream(
+                                                response.status().code()
+                                            )
+                                        );
                                         response.body().asBytesFuture().whenComplete((ignored, error) -> {
                                             final String metricResult = response.status().code() == 404 ? "not_found" :
                                                 (response.status().code() >= 500 ? "error" : "client_error");
@@ -454,6 +462,10 @@ public final class FileProxySlice implements Slice {
                                 })
                             .exceptionally(error -> {
                                 final long duration = System.currentTimeMillis() - startTime;
+                                com.auto1.pantera.http.log.RequestReasons.instance().note(
+                                    headers,
+                                    new com.auto1.pantera.http.log.FailureCause(error).reason()
+                                );
                                 this.recordProxyMetric("exception", duration);
                                 this.recordUpstreamErrorMetric(error);
                                 promise.complete(Optional.empty());

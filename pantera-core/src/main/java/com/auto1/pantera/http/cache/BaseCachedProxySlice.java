@@ -37,6 +37,7 @@ import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestReasons;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.misc.ConfigDefaults;
@@ -439,6 +440,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         if (this.negativeCache != null
             && this.negativeCache.isKnown404(this.negKey(path))) {
             this.logDebug("Negative cache hit", path);
+            RequestReasons.instance().note(headers, RequestReasons.NEGATIVE_CACHE);
             recordProxyPhase("negative_cache_short_circuit", entryNs);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
@@ -1216,6 +1218,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 final int code = resp.status().code();
                 if (code == 404) {
+                    RequestReasons.instance().note(headers, RequestReasons.upstream(code));
                     return this.handle404(resp, key, duration).thenApply(signal -> {
                         if (!leaderGate.isDone()) {
                             leaderGate.complete(null);
@@ -1316,6 +1319,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             .thenCompose(resp -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (resp.status().code() == 404) {
+                    RequestReasons.instance().note(headers, RequestReasons.upstream(404));
                     return this.handle404(resp, key, duration)
                         .thenCompose(signal ->
                             this.signalToResponse(signal, line, key, store, headers, null));
@@ -1679,6 +1683,8 @@ public abstract class BaseCachedProxySlice implements Slice {
                 if (!resp.status().success()) {
                     final int code = resp.status().code();
                     if (code == 404) {
+                        RequestReasons.instance()
+                            .note(incomingHeaders, RequestReasons.upstream(code));
                         this.recordProxyMetric("not_found", duration);
                         // Single drain of the single-subscriber upstream body:
                         // seed the negative cache AND build the 404 response from
@@ -1716,6 +1722,8 @@ public abstract class BaseCachedProxySlice implements Slice {
                     // 4xx (non-404): propagate verbatim — preserves 429
                     // status + Retry-After, 403 auth signal, 410 Gone, etc.
                     // Crucially does not write NegativeCache for these.
+                    RequestReasons.instance()
+                        .note(incomingHeaders, RequestReasons.upstream(code));
                     this.recordProxyMetric("client_error", duration);
                     return CompletableFuture.completedFuture(resp);
                 }
@@ -1810,6 +1818,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 )
             );
         }
+        RequestReasons.instance().note(headers, RequestReasons.upstream(code));
         this.recordProxyMetric("client_error", duration);
         return CompletableFuture.completedFuture(resp);
     }
