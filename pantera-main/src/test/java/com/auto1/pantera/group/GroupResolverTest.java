@@ -1028,6 +1028,69 @@ final class GroupResolverTest {
     }
 
     @Test
+    void memberWithoutAFreePermitIsSkippedWithoutConviction() {
+        // 2026-11-17: the refusals of a proxy's bulkhead were counted as
+        // failures of that member and opened its breaker twice.
+        final AutoBlockRegistry registry = new AutoBlockRegistry(
+            new AutoBlockSettings(
+                0.5, 1, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+        final MemberSlice busy = new MemberSlice(
+            PROXY_A, bulkheadFullSlice("17"), registry, true
+        );
+        final NegativeCache negCache = buildNegativeCache();
+        final GroupResolver resolver = new GroupResolver(
+            GROUP,
+            List.of(new MemberSlice(HOSTED, notFoundSlice(), false), busy),
+            Collections.emptyList(),
+            Optional.of(new RecordingIndex(Optional.of(List.of()))),
+            REPO_TYPE,
+            Set.of(PROXY_A),
+            negCache,
+            java.util.concurrent.ForkJoinPool.commonPool()
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "a member that could not be asked makes the artifact temporarily unavailable",
+            resp.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the member's Retry-After reaches the client",
+            resp.headers().values("Retry-After"), new IsEqual<>(List.of("17"))
+        );
+        MatcherAssert.assertThat(
+            "nothing is negative-cached",
+            negCache.isKnown404(new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION)),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the member is not convicted for having no free permit",
+            busy.isCircuitOpen(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void memberWithoutAFreePermitIsSkippedAndTheNextMemberServes() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, bulkheadFullSlice("17"));
+        slices.put(PROXY_B, okSlice());
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+            buildNegativeCache(), slices
+        );
+        MatcherAssert.assertThat(
+            resolver.response(
+                new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+            ).join().status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+    }
+
+    @Test
     void blockedMember_cacheOnlyProbe_servesWarmCache() {
         final java.util.concurrent.atomic.AtomicBoolean sawCacheOnly =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -1191,6 +1254,16 @@ final class GroupResolverTest {
             negCache == null ? buildNegativeCache() : negCache,
             java.util.concurrent.ForkJoinPool.commonPool()
         );
+    }
+
+    private static Slice bulkheadFullSlice(final String retryAfter) {
+        return (line, headers, body) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", retryAfter)
+                    .header("X-Pantera-Bulkhead-Overflow", "true")
+                    .build()
+            );
     }
 
     private static Slice circuitOpenSlice(final String retryAfter) {

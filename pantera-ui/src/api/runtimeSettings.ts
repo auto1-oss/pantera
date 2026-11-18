@@ -140,9 +140,9 @@ export const SPEC_DEFAULTS: Record<RuntimeSettingKey, RuntimeValue> = {
   'http_client.bulkhead.adaptive': true,
   'http_client.bulkhead.min_permits': 5,
   'http_client.bulkhead.max_permits': 100,
-  'http_client.bulkhead.initial_permits': 10,
+  'http_client.bulkhead.initial_permits': 40,
   'http_client.bulkhead.target_p99_ms': 500,
   'http_client.bulkhead.window_seconds': 5,
-  'http_client.bulkhead.ramp_up_step': 1,
+  'http_client.bulkhead.ramp_up_step': 4,
   'http_client.bulkhead.ramp_down_factor': 0.5,
 }

@@ -13,6 +13,7 @@ package com.auto1.pantera.group;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.LocalRefusal;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
@@ -717,7 +718,7 @@ public final class GroupResolver implements Slice {
             return next;
         }
         final boolean nextFailed = next.status().serverError()
-            && next.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty();
+            && !new LocalRefusal(next).present();
         if (nextFailed || miss == PinnedMiss.SKIPPED && next.status().serverError()) {
             return next;
         }
@@ -770,7 +771,7 @@ public final class GroupResolver implements Slice {
                 } else {
                     miss = UNVERIFIED;
                 }
-            } else if (resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+            } else if (!new LocalRefusal(resp).present()) {
                 miss = FAILED;
             } else {
                 miss = SKIPPED;
@@ -1035,7 +1036,7 @@ public final class GroupResolver implements Slice {
         final Response resp, final WalkState walk, final RequestLine line,
         final Headers headers
     ) {
-        if (!resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+        if (new LocalRefusal(resp).present()) {
             return resp;
         }
         drainBody(resp.body());
@@ -1198,8 +1199,7 @@ public final class GroupResolver implements Slice {
         // header behaviour of the legacy parallel path.
         return querySequentially(fanoutMembers, line, headers, body, false, pinKey)
             .thenApply(resp -> {
-                if (resp.status().serverError()
-                    && !resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+                if (new LocalRefusal(resp).present()) {
                     // Circuit-skip terminal (503 + Retry-After + marker) or a
                     // member's marked fast-fail: pass through verbatim. It is
                     // neither an AllProxiesFailed fault (nothing actually
@@ -1586,14 +1586,23 @@ public final class GroupResolver implements Slice {
             // the call locally. Skip WITHOUT recordFailure(): counting
             // these convicted every member of a group on one upstream 5xx
             // (breaker-cascade RCA, fabricated-evidence amplification).
-            if (status.serverError() && !resp.headers()
-                .values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+            // The same holds when the member's bulkhead had no free permit
+            // (X-Pantera-Bulkhead-Overflow): backpressure Pantera applied
+            // itself is not a failure of the member.
+            final LocalRefusal refusal = new LocalRefusal(resp);
+            if (refusal.present()) {
                 drainBody(resp.body());
                 walk.skippedOpen.set(true);
                 walk.noteRetryAfter(parseRetryAfterSeconds(resp));
-                recordMemberOutcome(member, "circuit_open", -1L);
+                recordMemberOutcome(
+                    member, refusal.bulkhead() ? "bulkhead_full" : "circuit_open", -1L
+                );
                 EcsLogger.info("com.auto1.pantera.group")
-                    .message("Member's upstream circuit is open, skipping without conviction")
+                    .message(
+                        refusal.bulkhead()
+                            ? "Member's bulkhead had no free permit, skipping without conviction"
+                            : "Member's upstream circuit is open, skipping without conviction"
+                    )
                     .eventCategory("network")
                     .eventAction("group_member_circuit_skip")
                     .field("repository.name", this.group)
@@ -1713,7 +1722,7 @@ public final class GroupResolver implements Slice {
         return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
             .header("Retry-After", Long.toString(retry))
             .header(UpstreamCircuitOpenException.HEADER, "true")
-            .textBody("All group members are temporarily unavailable (upstream circuit open)")
+            .textBody("All group members are temporarily unavailable")
             .build();
     }
 
@@ -1722,7 +1731,7 @@ public final class GroupResolver implements Slice {
     ) {
         EcsLogger.warn("com.auto1.pantera.group")
             .message(
-                "All remaining group members circuit-open — returning 503, Retry-After "
+                "All remaining group members circuit-open or without a free permit — returning 503, Retry-After "
                     + retry + "s"
             )
             .eventCategory("network")

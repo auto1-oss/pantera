@@ -11,9 +11,14 @@
 package com.auto1.pantera.settings.runtime;
 
 import java.io.StringReader;
+import java.util.HashMap;
+import java.util.Map;
 import javax.json.Json;
+import javax.json.JsonObject;
 import javax.json.JsonReader;
 import javax.json.JsonValue;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -32,5 +37,24 @@ final class SettingsKeyTest {
                     "defaultRepr for " + k.key() + " did not parse to a non-null JsonValue");
             }
         }
+    }
+
+    @Test
+    void catalogDefaultsAreTheOnesTheBulkheadRunsWith() {
+        // The API reports the catalog default for a key without a row, and a
+        // reset to the default removes the row; the bulkhead then runs with
+        // BulkheadTuning.defaults(). The two must not differ.
+        final Map<String, JsonObject> rows = new HashMap<>();
+        for (final SettingsKey key : SettingsKey.values()) {
+            try (JsonReader reader = Json.createReader(new StringReader(key.defaultRepr()))) {
+                rows.put(
+                    key.key(),
+                    Json.createObjectBuilder().add("value", reader.readValue()).build()
+                );
+            }
+        }
+        MatcherAssert.assertThat(
+            BulkheadTuning.fromMap(rows), new IsEqual<>(BulkheadTuning.defaults())
+        );
     }
 }

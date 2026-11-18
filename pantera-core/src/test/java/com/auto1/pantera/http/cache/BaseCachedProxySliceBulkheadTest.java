@@ -19,7 +19,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.resilience.BulkheadLimits;
+import com.auto1.pantera.http.resilience.AdaptiveBulkheadLimits;
 import com.auto1.pantera.http.resilience.RepoBulkhead;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -34,27 +34,31 @@ import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
 /**
- * T-P12 acceptance test — a {@link BaseCachedProxySlice} fronted by a
- * {@link RepoBulkhead} with {@code maxConcurrent=2} should accept 2
- * concurrent requests and reject the next 3 with a 503 carrying
- * {@code Retry-After} and {@code X-Pantera-Bulkhead-Overflow: true}.
+ * A {@link BaseCachedProxySlice} fronted by a {@link RepoBulkhead} serves a
+ * burst beyond its permits by letting the surplus wait for a permit. Only a
+ * request that gets none within the wait bound is refused, with a 503
+ * carrying {@code Retry-After} and {@code X-Pantera-Bulkhead-Overflow: true}.
  *
  * @since 2.2.0
  */
 final class BaseCachedProxySliceBulkheadTest {
 
     @Test
-    void overflowReturnsFiveOhThreeWithRetryAfter() throws Exception {
+    void burstBeyondThePermitsIsServedNotRefused() throws Exception {
+        // 2026-11-17: the requests beyond the permits were refused on the
+        // spot; a Maven Central proxy answered 17,000 of them 502 in 50
+        // minutes while its upstream was healthy.
         final Storage storage = new InMemoryStorage();
-        final SlowUpstream upstream = new SlowUpstream(Duration.ofMillis(400));
-        final BulkheadLimits tight = new BulkheadLimits(2, 8, Duration.ofSeconds(1));
+        final SlowUpstream upstream = new SlowUpstream(Duration.ofMillis(100));
         final RepoBulkhead bulkhead = new RepoBulkhead(
-            "overflow-test-repo", tight, ForkJoinPool.commonPool()
+            "overflow-test-repo",
+            AdaptiveBulkheadLimits.fixed(2, 100, Duration.ofSeconds(1)),
+            ForkJoinPool.commonPool()
         );
         final BulkheadTestSlice slice = new BulkheadTestSlice(upstream, storage);
         slice.setBulkhead(bulkhead);
 
-        final int fired = 5;
+        final int fired = 12;
         @SuppressWarnings("unchecked")
         final CompletableFuture<Response>[] futures = new CompletableFuture[fired];
         for (int i = 0; i < fired; i++) {
@@ -63,40 +67,71 @@ final class BaseCachedProxySliceBulkheadTest {
                 Headers.EMPTY, Content.EMPTY
             );
         }
+        CompletableFuture.allOf(futures).get(30, TimeUnit.SECONDS);
 
-        CompletableFuture.allOf(futures).get(10, TimeUnit.SECONDS);
-
-        int ok = 0;
-        int overload = 0;
-        for (final CompletableFuture<Response> f : futures) {
-            final Response r = f.get();
-            if (r.status() == RsStatus.OK) {
-                ok++;
-            } else if (r.status() == RsStatus.SERVICE_UNAVAILABLE) {
-                overload++;
-                MatcherAssert.assertThat(
-                    "overflow responses carry the bulkhead marker header",
-                    r.headers().single("X-Pantera-Bulkhead-Overflow").getValue(),
-                    new IsEqual<>("true")
-                );
-                MatcherAssert.assertThat(
-                    "overflow responses carry Retry-After",
-                    r.headers().single("Retry-After").getValue(),
-                    new IsEqual<>("1")
-                );
+        int served = 0;
+        for (final CompletableFuture<Response> future : futures) {
+            if (future.get().status() == RsStatus.OK) {
+                served += 1;
             }
         }
         MatcherAssert.assertThat(
-            "exactly maxConcurrent (2) requests succeed",
-            ok, new IsEqual<>(2)
+            "every request of the burst is served",
+            served, new IsEqual<>(fired)
         );
         MatcherAssert.assertThat(
-            "the remaining 3 are overflowed with 503",
-            overload, new IsEqual<>(3)
+            "each one reached the upstream",
+            upstream.calls.get(), new IsEqual<>(fired)
         );
         MatcherAssert.assertThat(
-            "upstream slice was only called for the admitted requests",
-            upstream.calls.get(), new IsEqual<>(2)
+            "never more of them at once than there are permits",
+            upstream.peak.get() <= 2, new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void refusalAfterTheWaitBoundIsFiveOhThreeWithRetryAfter() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final SlowUpstream upstream = new SlowUpstream(Duration.ofMillis(1500));
+        final RepoBulkhead bulkhead = new RepoBulkhead(
+            "overflow-test-repo",
+            AdaptiveBulkheadLimits.fixed(1, 100, Duration.ofSeconds(1)),
+            ForkJoinPool.commonPool(),
+            Duration.ofMillis(20)
+        );
+        final BulkheadTestSlice slice = new BulkheadTestSlice(upstream, storage);
+        slice.setBulkhead(bulkhead);
+
+        final CompletableFuture<Response> admitted = slice.response(
+            new RequestLine(RqMethod.GET, "/com/example/foo/1.0/foo-1.0-a.jar"),
+            Headers.EMPTY, Content.EMPTY
+        );
+        final Response refused = slice.response(
+            new RequestLine(RqMethod.GET, "/com/example/foo/1.0/foo-1.0-b.jar"),
+            Headers.EMPTY, Content.EMPTY
+        ).get(30, TimeUnit.SECONDS);
+
+        MatcherAssert.assertThat(
+            "a request that got no permit within the wait bound is answered 503",
+            refused.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "with the bulkhead marker header",
+            refused.headers().single("X-Pantera-Bulkhead-Overflow").getValue(),
+            new IsEqual<>("true")
+        );
+        MatcherAssert.assertThat(
+            "and Retry-After",
+            refused.headers().single("Retry-After").getValue(),
+            new IsEqual<>("1")
+        );
+        MatcherAssert.assertThat(
+            "the request that holds the permit is served",
+            admitted.get(30, TimeUnit.SECONDS).status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the upstream was asked for it alone",
+            upstream.calls.get(), new IsEqual<>(1)
         );
     }
 
@@ -153,6 +188,16 @@ final class BaseCachedProxySliceBulkheadTest {
 
         private final AtomicInteger calls = new AtomicInteger();
 
+        /**
+         * Calls in progress.
+         */
+        private final AtomicInteger running = new AtomicInteger();
+
+        /**
+         * Most calls in progress at one time.
+         */
+        private final AtomicInteger peak = new AtomicInteger();
+
         SlowUpstream(final Duration delay) {
             this.delay = delay;
         }
@@ -167,14 +212,11 @@ final class BaseCachedProxySliceBulkheadTest {
                     ResponseBuilder.ok().body("ok".getBytes()).build()
                 );
             }
-            return CompletableFuture.supplyAsync(() -> {
-                try {
-                    Thread.sleep(this.delay.toMillis());
-                } catch (final InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                }
-                return ResponseBuilder.ok().body("ok".getBytes()).build();
-            });
+            this.peak.accumulateAndGet(this.running.incrementAndGet(), Math::max);
+            return CompletableFuture.supplyAsync(
+                () -> ResponseBuilder.ok().body("ok".getBytes()).build(),
+                CompletableFuture.delayedExecutor(this.delay.toMillis(), TimeUnit.MILLISECONDS)
+            ).whenComplete((response, error) -> this.running.decrementAndGet());
         }
     }
 }

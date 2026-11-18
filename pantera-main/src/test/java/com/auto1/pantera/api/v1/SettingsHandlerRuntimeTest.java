@@ -232,11 +232,11 @@ final class SettingsHandlerRuntimeTest {
                     );
                 }
                 // Lock the value-as-JSON-literal-string contract: an integer
-                // key surfaces as the JSON literal "10", not the integer 10.
+                // key surfaces as the JSON literal "40", not the integer 40.
                 final JsonObject initialEntry =
                     body.getJsonObject("http_client.bulkhead.initial_permits");
                 MatcherAssert.assertThat(initialEntry.getString("value"),
-                    Matchers.is("10"));
+                    Matchers.is("40"));
                 // Boolean-typed keys surface as the JSON literal "true".
                 final JsonObject adaptiveEntry =
                     body.getJsonObject("http_client.bulkhead.adaptive");

@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -93,7 +94,9 @@ final class AdaptivePermitControllerTest {
     }
 
     @Test
-    void errorWindowRampsDownByFactor() {
+    void failedRequestsDoNotShrinkThePermits() {
+        // A failed request says nothing about how many requests the
+        // repository can carry at once.
         final ScheduledExecutorService sched = quietScheduler();
         try {
             final AdaptivePermitController c =
@@ -101,9 +104,8 @@ final class AdaptivePermitControllerTest {
             c.observe(100L, true);
             c.observe(100L, false);
             c.evaluateWindow();
-            assertEquals(10, c.currentPermits(), "20 * 0.5 = 10");
-            assertEquals(1L, c.rampDownEvents(), "one down event");
-            assertEquals(0L, c.rampUpEvents(), "no up events");
+            assertEquals(20, c.currentPermits(), "the permits are held, not cut");
+            assertEquals(0L, c.rampDownEvents(), "no down event");
             c.close();
         } finally {
             sched.shutdownNow();
@@ -111,18 +113,21 @@ final class AdaptivePermitControllerTest {
     }
 
     @Test
-    void highLatencyWindowSoftRampsDown() {
+    void slowRequestsDoNotShrinkThePermits() {
+        // The cold fetch of a large artifact takes seconds on a healthy
+        // upstream. On 2026-11-17 one such request per window cut the
+        // permits of a Maven Central proxy 266 times, down to 5, and the
+        // requests beyond them were refused: waves of 502 with no error
+        // anywhere.
         final ScheduledExecutorService sched = quietScheduler();
         try {
             final AdaptivePermitController c =
                 new AdaptivePermitController("r", limits(1, 100, 16, 500L, 0.5, 1), sched);
-            // No errors, but max latency > 2 × target (500 ms) → soft ramp-down
-            c.observe(1500L, true);
+            c.observe(6092L, true);
             c.observe(200L, true);
             c.evaluateWindow();
-            // Soft factor = floor(16 * sqrt(0.5)) ≈ floor(11.31) = 11
-            assertEquals(11, c.currentPermits(), "soft ramp-down: floor(16 * sqrt(0.5)) = 11");
-            assertEquals(1L, c.rampDownEvents(), "one down event");
+            assertEquals(17, c.currentPermits(), "a window without failures grows the permits");
+            assertEquals(0L, c.rampDownEvents(), "no down event");
             c.close();
         } finally {
             sched.shutdownNow();
@@ -130,18 +135,16 @@ final class AdaptivePermitControllerTest {
     }
 
     @Test
-    void modestLatencyWindowHoldsSteady() {
+    void latencyPlaysNoPartInTheNextPermits() {
         final ScheduledExecutorService sched = quietScheduler();
         try {
             final AdaptivePermitController c =
                 new AdaptivePermitController("r", limits(1, 100, 20, 500L, 0.5, 1), sched);
-            // latency above target (500) but below 2× target (1000): hold steady
             c.observe(700L, true);
             c.observe(600L, true);
             c.evaluateWindow();
-            assertEquals(20, c.currentPermits(), "hold steady on lukewarm latency");
-            assertEquals(0L, c.rampUpEvents(), "no up events");
-            assertEquals(0L, c.rampDownEvents(), "no down events");
+            assertEquals(21, c.currentPermits(), "grown as after any window without failures");
+            assertEquals(1L, c.rampUpEvents(), "one up event");
             c.close();
         } finally {
             sched.shutdownNow();
@@ -164,14 +167,16 @@ final class AdaptivePermitControllerTest {
     }
 
     @Test
-    void rampDownClampsAtMinPermits() {
+    void permitsNeverShrinkHoweverBadTheWindow() {
         final ScheduledExecutorService sched = quietScheduler();
         try {
             final AdaptivePermitController c =
-                new AdaptivePermitController("r", limits(3, 100, 4, 500L, 0.1, 1), sched);
-            c.observe(100L, false);
-            c.evaluateWindow();
-            assertEquals(3, c.currentPermits(), "4 * 0.1 = 0 but floored at minPermits=3");
+                new AdaptivePermitController("r", limits(3, 100, 40, 500L, 0.1, 1), sched);
+            for (int window = 0; window < 20; window += 1) {
+                c.observe(30_000L, false);
+                c.evaluateWindow();
+            }
+            assertEquals(40, c.currentPermits(), "still the initial permits");
             c.close();
         } finally {
             sched.shutdownNow();
@@ -226,6 +231,134 @@ final class AdaptivePermitControllerTest {
             c.close();
             assertFalse(c.tryAcquire(), "acquire after close blocked");
             c.release();
+        } finally {
+            sched.shutdownNow();
+        }
+    }
+
+    @Test
+    void acquireWaitsForAPermitInsteadOfRefusing() throws Exception {
+        final ScheduledExecutorService sched = quietScheduler();
+        try {
+            final AdaptivePermitController c = new AdaptivePermitController(
+                "r", AdaptiveBulkheadLimits.fixed(1, 100, Duration.ofSeconds(1)), sched
+            );
+            final CompletableFuture<Boolean> first = c.acquire(Duration.ofSeconds(30));
+            final CompletableFuture<Boolean> second = c.acquire(Duration.ofSeconds(30));
+            assertTrue(first.isDone() && first.get(), "a free permit is granted at once");
+            assertFalse(second.isDone(), "the next request waits");
+            assertEquals(1, c.waitingCount(), "one request is waiting");
+            c.release();
+            assertTrue(second.get(10, TimeUnit.SECONDS), "and gets the permit when it is released");
+            assertEquals(1, c.inFlightCount(), "the permit moved to the waiting request");
+            assertEquals(0, c.waitingCount(), "nobody is waiting any more");
+            c.release();
+            c.close();
+        } finally {
+            sched.shutdownNow();
+        }
+    }
+
+    @Test
+    void acquireServesWaitingRequestsInArrivalOrder() throws Exception {
+        final ScheduledExecutorService sched = quietScheduler();
+        try {
+            final AdaptivePermitController c = new AdaptivePermitController(
+                "r", AdaptiveBulkheadLimits.fixed(1, 100, Duration.ofSeconds(1)), sched
+            );
+            c.acquire(Duration.ofSeconds(30));
+            final CompletableFuture<Boolean> older = c.acquire(Duration.ofSeconds(30));
+            final CompletableFuture<Boolean> newer = c.acquire(Duration.ofSeconds(30));
+            c.release();
+            assertTrue(older.get(10, TimeUnit.SECONDS), "the request that waited longest goes first");
+            assertFalse(newer.isDone(), "the newer one still waits");
+            c.release();
+            assertTrue(newer.get(10, TimeUnit.SECONDS), "and goes next");
+            c.release();
+            c.close();
+        } finally {
+            sched.shutdownNow();
+        }
+    }
+
+    @Test
+    void acquireGivesUpAfterTheWaitBound() throws Exception {
+        final ScheduledExecutorService sched = quietScheduler();
+        try {
+            final AdaptivePermitController c = new AdaptivePermitController(
+                "r", AdaptiveBulkheadLimits.fixed(1, 100, Duration.ofSeconds(1)), sched
+            );
+            c.acquire(Duration.ofSeconds(30));
+            final CompletableFuture<Boolean> waiter = c.acquire(Duration.ofMillis(20));
+            assertFalse(waiter.get(10, TimeUnit.SECONDS), "no permit within the bound");
+            assertEquals(0, c.waitingCount(), "the request left the queue");
+            c.release();
+            assertEquals(0, c.inFlightCount(), "the released permit went to nobody");
+            assertTrue(
+                c.acquire(Duration.ofSeconds(30)).isDone(),
+                "and is free for the next request"
+            );
+            c.release();
+            c.close();
+        } finally {
+            sched.shutdownNow();
+        }
+    }
+
+    @Test
+    void acquireRefusesAtOnceWhenTheQueueIsFull() throws Exception {
+        final ScheduledExecutorService sched = quietScheduler();
+        try {
+            final AdaptivePermitController c = new AdaptivePermitController(
+                "r", AdaptiveBulkheadLimits.fixed(1, 2, Duration.ofSeconds(1)), sched
+            );
+            c.acquire(Duration.ofSeconds(30));
+            final CompletableFuture<Boolean> one = c.acquire(Duration.ofSeconds(30));
+            final CompletableFuture<Boolean> two = c.acquire(Duration.ofSeconds(30));
+            final CompletableFuture<Boolean> three = c.acquire(Duration.ofSeconds(30));
+            assertFalse(one.isDone() || two.isDone(), "two requests fit in the queue");
+            assertTrue(three.isDone() && !three.get(), "the third is refused without waiting");
+            c.close();
+        } finally {
+            sched.shutdownNow();
+        }
+    }
+
+    @Test
+    void growingPermitsAdmitWaitingRequests() throws Exception {
+        final ScheduledExecutorService sched = quietScheduler();
+        try {
+            final AdaptivePermitController c =
+                new AdaptivePermitController("r", limits(1, 3, 1, 500L, 0.5, 1), sched);
+            c.acquire(Duration.ofSeconds(30));
+            final CompletableFuture<Boolean> waiter = c.acquire(Duration.ofSeconds(30));
+            assertFalse(waiter.isDone(), "one permit, one request waits");
+            c.observe(100L, true);
+            c.evaluateWindow();
+            assertTrue(waiter.get(10, TimeUnit.SECONDS), "the second permit goes to it");
+            c.close();
+        } finally {
+            sched.shutdownNow();
+        }
+    }
+
+    @Test
+    void closingLetsWaitingRequestsThrough() throws Exception {
+        // A closed controller belongs to a bulkhead that was replaced after
+        // a settings change: requests still queued on it must not fail.
+        final ScheduledExecutorService sched = quietScheduler();
+        try {
+            final AdaptivePermitController c = new AdaptivePermitController(
+                "r", AdaptiveBulkheadLimits.fixed(1, 100, Duration.ofSeconds(1)), sched
+            );
+            c.acquire(Duration.ofSeconds(30));
+            final CompletableFuture<Boolean> waiter = c.acquire(Duration.ofSeconds(30));
+            c.close();
+            assertTrue(waiter.get(10, TimeUnit.SECONDS), "the waiting request is let through");
+            assertTrue(
+                c.acquire(Duration.ofSeconds(30)).get(10, TimeUnit.SECONDS),
+                "and so is a request that arrives after the close"
+            );
         } finally {
             sched.shutdownNow();
         }

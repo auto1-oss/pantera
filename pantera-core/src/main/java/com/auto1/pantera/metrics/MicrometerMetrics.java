@@ -846,9 +846,9 @@ public final class MicrometerMetrics {
      */
     public void recordBulkheadOverflow(final String repo) {
         Counter.builder("pantera.bulkhead.overflow.total")
-            .description("Per-repo bulkhead rejections — a 503 was returned because "
-                + "the repo's concurrency semaphore was full. Sustained non-zero "
-                + "means the repo is saturated and clients are seeing back-pressure.")
+            .description("Per-repo bulkhead refusals: a 503 with Retry-After was returned "
+                + "because no permit came free within the wait bound, or too many requests "
+                + "were already waiting. Non-zero means the repository is overloaded.")
             .tags("repo", repo)
             .register(registry)
             .increment();
@@ -884,12 +884,43 @@ public final class MicrometerMetrics {
                 permitsSupplier,
                 IntSupplier::getAsInt
             )
-            .description("Current AIMD-tuned permit ceiling for the per-repo bulkhead. "
-                + "Tracks how aggressively the controller is letting traffic through right now. "
-                + "Sustained min = upstream is unhealthy; sustained max = upstream is healthy and "
-                + "demand exceeds the cap (consider raising max_permits).")
+            .description("Current permit ceiling of the per-repo bulkhead: the number of "
+                + "requests of the repository that run at the same time. Grows from "
+                + "initial_permits to max_permits and does not fall.")
             .tags("repo", repo)
             .register(registry);
+    }
+
+    /**
+     * Strong references to the per-repo suppliers of the waiting-request
+     * gauge; Micrometer holds gauges weakly.
+     */
+    private final Map<String, IntSupplier> bulkheadWaitingSuppliers = new ConcurrentHashMap<>();
+
+    /**
+     * Register a polling gauge {@code pantera_bulkhead_waiting{repo}}: the
+     * requests of a repository that wait for a bulkhead permit right now.
+     * Idempotent per repo — the first registration wins.
+     *
+     * @param repo Repository name.
+     * @param waitingSupplier Supplier returning the number of waiting requests.
+     * @since 2.2.12
+     */
+    public void registerBulkheadWaitingGauge(
+        final String repo, final IntSupplier waitingSupplier
+    ) {
+        if (this.bulkheadWaitingSuppliers.putIfAbsent(repo, waitingSupplier) == null) {
+            Gauge.builder(
+                    "pantera.bulkhead.waiting",
+                    waitingSupplier,
+                    IntSupplier::getAsInt
+                )
+                .description("Requests waiting for a permit of the per-repo bulkhead. "
+                    + "Above zero means the repository gets more concurrent requests than "
+                    + "it has permits; they are served as permits come free.")
+                .tags("repo", repo)
+                .register(registry);
+        }
     }
 
     /**
@@ -902,9 +933,9 @@ public final class MicrometerMetrics {
      */
     public void recordBulkheadRampEvent(final String repo, final String direction) {
         Counter.builder("pantera.bulkhead.ramp.events.total")
-            .description("Per-repo AIMD permit-ceiling adjustments. Up = healthy window "
-                + "increased the ceiling; down = error or high-latency window halved it. "
-                + "A sustained ramp-down rate indicates upstream instability or under-provisioned max.")
+            .description("Per-repo permit-ceiling adjustments. Up = a window without failed "
+                + "requests raised the ceiling. The ceiling is not lowered, so no \"down\" "
+                + "event is recorded since 2.2.12.")
             .tags("repo", repo, "direction", direction)
             .register(registry)
             .increment();

@@ -109,9 +109,11 @@ Pantera 2.2.0 introduced a per-host upstream circuit breaker and a per-repo conc
 | `pantera_circuit_breaker_state` | Gauge | `upstream_host` | 1 = open (fast-fail mode), 0 = closed (normal). Polled from the breaker's wall-clock `isOpen()`. |
 | `pantera_circuit_breaker_trips_total` | Counter | `upstream_host` | Incremented on every closed → open transition. |
 | `pantera_circuit_breaker_fastfail_total` | Counter | `upstream_host` | Incremented on every synthesised 502 returned while the breaker is open. |
-| `pantera_bulkhead_overflow_total` | Counter | `repo_name` | Incremented on every 503 returned by the per-repo semaphore. |
+| `pantera_bulkhead_overflow_total` | Counter | `repo` | Incremented on every 503 a proxy repository's bulkhead answers: no permit came free within 20 s, or 1000 requests were already waiting. |
+| `pantera_bulkhead_waiting` | Gauge | `repo` | Requests of a proxy repository waiting for a permit right now (v2.2.12+). Above zero: more concurrent requests than permits; they are served in turn. |
+| `pantera_bulkhead_permits_current` | Gauge | `repo` | Permits of a proxy repository: the requests it runs at the same time. Grows from `initial_permits` to `max_permits`, never falls. |
 | `pantera_proxy_429_total` | Counter | `upstream_host` | Upstream 429 responses (already in the repo since 2.1.x). |
-| `proxy_phase_duration_seconds` | Histogram | `phase`, `repo` | Latency per logical proxy phase (negative-cache, preProcess, cacheFirst, cooldown, fetchDirect, store). |
+| `pantera_proxy_phase_seconds` | Histogram | `phase`, `repo_name` | Latency per phase of a proxy request (`cache_first_flow`, `cache_load`, `cooldown_and_fetch_miss`, `metadata_load_on_hit`, `negative_cache_short_circuit`, `pre_process_branch`, `serve_checksum_sidecar`, ...). |
 
 **Alerting hooks:** The v2.2.0 release ships Prometheus alert rules
 (`pantera-main/src/main/resources/prometheus/alert-rules.yml` — importable
@@ -178,7 +180,7 @@ The Docker Compose stack includes pre-configured Grafana with dashboards for:
 Two dashboards new in v2.2.0 ship under `pantera-main/src/main/resources/grafana/` (importable into any Grafana 10+ instance):
 
 - **Upstream Circuit Breaker** (`upstream-circuit-breaker.json`) — per-host breaker state, trip frequency, fast-fail rate, time-since-last-trip. Open this first when the `upstream-circuit-breaker-open` alert fires.
-- **Proxy Phase Latency** (`proxy-phase-latency.json`) — stacked p99 of `proxy_phase_duration_seconds` per `(phase, repo)`. The dominant phase identifies the bottleneck — read this before launching any further performance work.
+- **Proxy Phase Latency** (`proxy-phase-latency.json`) — stacked p99 of `pantera_proxy_phase_seconds` per `(phase, repo_name)`. The dominant phase identifies the bottleneck — read this before launching any further performance work.
 
 See [Grafana Dashboards](../observability/dashboards.md) for import instructions and metric coverage detail.
 

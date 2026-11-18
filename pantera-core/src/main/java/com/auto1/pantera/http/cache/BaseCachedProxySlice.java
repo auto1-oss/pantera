@@ -505,7 +505,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .debug("Per-repo bulkhead is full, request refused");
             return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
                 .header("Retry-After", Long.toString(secs))
-                .header("X-Pantera-Bulkhead-Overflow", "true")
+                .header(com.auto1.pantera.http.LocalRefusal.BULKHEAD, "true")
                 .textBody("Per-repo bulkhead is full")
                 .build();
         }

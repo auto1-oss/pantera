@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.cooldown.response.CooldownResponseFactory;
 import com.auto1.pantera.group.SliceResolver;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.LocalRefusal;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
@@ -218,8 +219,7 @@ final class ComposerMemberWalk {
         if (code == RsStatus.NOT_FOUND.code() || code == 410) {
             return;
         }
-        final boolean marker = !resp.headers()
-            .values(UpstreamCircuitOpenException.HEADER).isEmpty();
+        final boolean marker = new LocalRefusal(resp).present();
         state.fail(marker, ComposerMemberWalk.retryAfter(resp));
         this.memberFailed(member, line, "HTTP " + code);
     }

@@ -255,19 +255,30 @@ A conservative estimate: `(concurrent_users * 4) + db_pool + s3_concurrency + 10
 
 ## Per-Repo Bulkhead (v2.2.0+)
 
-Every `*-proxy` repository sits behind its own bounded semaphore. Saturation in one repo can no longer steal concurrency budget from another — refusals are local to the saturated repo, return `503` with a `Retry-After` header, and increment the `pantera_bulkhead_overflow_total{repo_name}` counter.
+Every `*-proxy` repository has its own limit on the requests it runs at the same time (its *permits*), so a burst on one repository cannot take the capacity of another. Maven proxies are the repositories gated by it.
+
+A request that finds every permit in use **waits** for one and is served when a permit comes free, oldest request first (v2.2.12+). A burst of cold downloads is thereby spread over the permits. A request is refused only when no permit came free within 20 seconds, or when 1000 requests of the repository are already waiting. The refusal is `503` with `Retry-After: 1` and the header `X-Pantera-Bulkhead-Overflow: true`; it increments `pantera_bulkhead_overflow_total{repo}`. Maven's HTTP transport repeats a request answered `503` and obeys `Retry-After` (`aether.connector.http.retryHandler.*`, three attempts by default).
+
+The refusal keeps its `503` and its `Retry-After` on the way out: a proxy with several remotes relays it instead of answering `502 All upstream remotes failed`, and a group skips the member without counting a failure against it and, when no other member serves the path, answers `503` with `Retry-After`.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Concurrent permits | 200 | Maximum in-flight requests per proxy repo. |
-| Queue depth | 1000 | Requests waiting on a permit before refusing with 503. |
-| `Retry-After` (seconds) | 1 | Header value returned on refusal. |
+| `http_client.bulkhead.initial_permits` | 40 | Permits of a repository when its bulkhead is created. |
+| `http_client.bulkhead.max_permits` | 100 | Upper bound of the permits. |
+| `http_client.bulkhead.adaptive` | `true` | When on, the permits grow from the initial value to the maximum: by `ramp_up_step` (4) after each `window_seconds` (5 s) window in which the repository served requests and none ended in an exception. When off, they stay at the initial value. |
+| Longest wait for a permit | 20 s | Fixed. Shorter than the 30 s Gradle waits for a response by default. |
+| Waiting requests per repository | 1000 | Fixed. A request beyond it is refused at once. |
+| `Retry-After` (seconds) | 1 | Fixed. Header value returned on refusal. |
+
+The keys are runtime settings: see [Configuration Reference](../configuration-reference.md#runtime-tunable-http-client-keys-db-backed-hot-reloaded). A change replaces the bulkhead of every proxy repository at once: requests in flight finish, requests waiting for a permit are let through, and the new bulkhead starts at `initial_permits`.
+
+The permits **never fall** (v2.2.12+). Up to v2.2.11 one request slower than twice `target_p99_ms` lowered them by 30 %, and one failed request halved them, down to `min_permits`; a burst of slow cold downloads through a healthy upstream thereby reduced a repository to 5 permits and every request beyond them was refused at once. `target_p99_ms` and `ramp_down_factor` are still accepted and have no effect; `min_permits` is only the lower bound of `initial_permits`.
 
 **Tuning guidance:**
 
-- The defaults are sized for a single Pantera node handling roughly 500–1000 concurrent users against any single proxy repo. Scale horizontally (more nodes behind the LB) before raising the per-repo limits.
-- If `pantera_bulkhead_overflow_total{repo_name="..."}` is climbing for one specific repo while the others are quiet, that upstream is slow — check the [Bulkhead Overflow runbook](../runbooks/bulkhead-overflow.md) for the diagnostic walk.
-- If the same counter is climbing across **all** repos at once, the JVM is CPU- or thread-saturated and the bulkhead is doing its job by shedding load uniformly. Look at the named worker pools and the event-loop block diagnostics before touching the bulkhead numbers.
+- `pantera_bulkhead_waiting{repo}` above zero means the repository gets more concurrent requests than it has permits. The requests are served, later. If it stays above zero, raise `max_permits` and `initial_permits`.
+- `pantera_bulkhead_overflow_total{repo}` growing means requests were refused. Follow the [Bulkhead Overflow runbook](../runbooks/bulkhead-overflow.md).
+- A permit is held until the response headers are ready, which for a cold download is after the artifact has been fetched from the upstream. The permits therefore bound the concurrent upstream fetches of the repository. Keep `max_permits` below `max_connections_per_destination` + `max_requests_queued_per_destination` of `meta.http_client` (64 + 256 by default): the HTTP client rejects a request to an upstream host beyond them (`event.reason: request_rejected`), and no waiting helps that request.
 
 ---
 
