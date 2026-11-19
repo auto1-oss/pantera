@@ -35,6 +35,13 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class GuardedHttpServerResponse {
 
     /**
+     * HTTP/2 error code {@code INTERNAL_ERROR}, sent with the reset of a
+     * stream whose body failed. HTTP/1.x has no such code: the connection
+     * is closed.
+     */
+    private static final long INTERNAL_ERROR = 2L;
+
+    /**
      * The underlying Vert.x response.
      */
     private final HttpServerResponse delegate;
@@ -216,6 +223,48 @@ public final class GuardedHttpServerResponse {
                 .log();
             return false;
         }
+    }
+
+    /**
+     * Breaks off a response whose head is already with the client and whose
+     * body cannot be completed: an HTTP/2 stream is reset, an HTTP/1.x
+     * connection is closed. Ending such a response normally would leave an
+     * HTTP/1.1 client waiting for the rest of a declared
+     * {@code Content-Length} until an idle timeout, and would show any other
+     * client a truncated body as a complete one.
+     *
+     * @param caller Identifier for the calling code path
+     * @return True if this call broke off the response, false if it was
+     *  terminated before
+     */
+    public boolean safeAbort(final String caller) {
+        final boolean first = this.terminated.compareAndSet(false, true);
+        boolean aborted = false;
+        if (first) {
+            this.terminatedBy.set(caller);
+            try {
+                if (!this.delegate.ended()) {
+                    this.delegate.reset(GuardedHttpServerResponse.INTERNAL_ERROR);
+                }
+                aborted = true;
+            } catch (final IllegalStateException err) {
+                EcsLogger.debug("com.auto1.pantera.vertx")
+                    .message(String.format("Response reset failed (likely already closed), caller=%s", caller))
+                    .eventCategory("web")
+                    .eventAction("response_abort")
+                    .error(err)
+                    .field("log.source", "application")
+                    .log();
+            }
+        } else {
+            EcsLogger.warn("com.auto1.pantera.vertx")
+                .message(String.format("End has already been called: '%s', caller=%s, terminatedBy=%s", this.requestId, caller, this.terminatedBy.get()))
+                .eventCategory("web")
+                .eventAction("response_abort_duplicate")
+                .field("log.source", "application")
+                .log();
+        }
+        return aborted;
     }
 
     /**
