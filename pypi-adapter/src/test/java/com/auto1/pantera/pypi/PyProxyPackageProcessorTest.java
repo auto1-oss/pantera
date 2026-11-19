@@ -18,10 +18,10 @@ import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import java.time.Instant;
-import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.hamcrest.MatcherAssert;
@@ -75,8 +75,8 @@ class PyProxyPackageProcessorTest {
     @BeforeEach
     void init() throws SchedulerException {
         this.asto = new InMemoryStorage();
-        this.events = new LinkedList<>();
-        this.packages = new LinkedList<>();
+        this.events = new ConcurrentLinkedQueue<>();
+        this.packages = new ConcurrentLinkedQueue<>();
         this.scheduler = new StdSchedulerFactory().getScheduler();
         this.data = new JobDataMap();
         this.data.put("events", this.events);
