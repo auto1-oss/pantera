@@ -37,13 +37,13 @@ import java.util.function.Supplier;
 final class ImmutableVersionGuard {
 
     /**
-     * Storage holding the packages.
-     */
-    /**
      * Lock key below the package: publishes of one package are serialised.
      */
     private static final String LOCK = ".publish.lock";
 
+    /**
+     * Storage holding the packages.
+     */
     private final Storage storage;
 
     /**
@@ -54,15 +54,6 @@ final class ImmutableVersionGuard {
         this.storage = storage;
     }
 
-    /**
-     * Check that a publish overwrites nothing.
-     * @param pkg Package key
-     * @param version Version the publish writes, {@code null} when unknown
-     *  (left to the publish itself to reject)
-     * @param tarballs Tarball keys the publish writes
-     * @return Completion, failed with {@link VersionExistsException} when the
-     *  version is already published
-     */
     /**
      * Run a publish under this guard: the check and the write happen inside
      * one storage-backed lock on the package, so two publishes of the same
@@ -93,6 +84,15 @@ final class ImmutableVersionGuard {
             );
     }
 
+    /**
+     * Check that a publish overwrites nothing.
+     * @param pkg Package key
+     * @param version Version the publish writes, {@code null} when unknown
+     *  (left to the publish itself to reject)
+     * @param tarballs Tarball keys the publish writes
+     * @return Completion, failed with {@link VersionExistsException} when the
+     *  version is already published
+     */
     CompletableFuture<Void> check(
         final Key pkg, final String version, final Collection<Key> tarballs
     ) {

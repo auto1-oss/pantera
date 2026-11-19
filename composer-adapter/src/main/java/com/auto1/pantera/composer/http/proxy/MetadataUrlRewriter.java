@@ -15,6 +15,7 @@ import javax.json.JsonArray;
 import javax.json.JsonArrayBuilder;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
+import javax.json.JsonString;
 import javax.json.JsonValue;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
@@ -64,6 +65,112 @@ public final class MetadataUrlRewriter {
         }
 
         return builder.build().toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Rewrite every top-level URL field in a Composer repository root
+     * document ({@code /packages.json} / {@code /repo.json}) to a
+     * Pantera-local equivalent, so a client that follows any URL the
+     * root advertises stays inside Pantera's cache / cooldown / auth
+     * boundary rather than escaping straight to the upstream.
+     *
+     * <p>Known fields are rewritten to their Pantera-local shape;
+     * {@code notify} / {@code notify-batch} are dropped outright (no
+     * publish callback ever escapes to upstream); any other top-level
+     * field whose value is an absolute {@code http(s)://} URL is
+     * dropped fail-closed rather than passed through, since it is by
+     * definition a field this rewriter does not understand. Every
+     * other field (e.g. {@code packages}, {@code providers}, informational
+     * flags) is passed through unchanged. The nested {@code packages}
+     * object still goes through the existing {@link #rewritePackages}
+     * dist-URL rewrite — idempotent when the packages were already
+     * rewritten upstream of this call (e.g. by a group member).</p>
+     *
+     * @param metadata Original root JSON string
+     * @param repoBaseUrl Pantera-local base to anchor rewritten URLs to
+     *  (an absolute URL for a proxy repository, or a host-absolute path
+     *  for a group repository — both compose correctly by concatenation)
+     * @return Rewritten root JSON, UTF-8 encoded
+     */
+    public byte[] rewriteRoot(final String metadata, final String repoBaseUrl) {
+        final JsonObject original = Json.createReader(new StringReader(metadata)).readObject();
+        final JsonObjectBuilder builder = Json.createObjectBuilder();
+        for (final Map.Entry<String, JsonValue> entry : original.entrySet()) {
+            final String key = entry.getKey();
+            final JsonValue value = entry.getValue();
+            if ("packages".equals(key)) {
+                // The lazy-providers scheme (the common Packagist-mirror
+                // shape) advertises an EMPTY ARRAY here, not an object —
+                // only inline-packages (Satis) roots use an object. Only
+                // route through the object-shaped dist rewrite when it
+                // actually is one; anything else (array) passes through.
+                if (value.getValueType() == JsonValue.ValueType.OBJECT) {
+                    builder.add(key, this.rewritePackages(value.asJsonObject()));
+                } else {
+                    builder.add(key, value);
+                }
+            } else if ("metadata-url".equals(key) || "providers-url".equals(key)) {
+                builder.add(key, repoBaseUrl + "/p2/%package%.json");
+            } else if ("available-packages-url".equals(key)) {
+                builder.add(key, repoBaseUrl + "/p2/available-packages.json");
+            } else if ("search".equals(key)) {
+                builder.add(key, repoBaseUrl + "/packages/list.json?q=%query%&type=%type%");
+            } else if ("list".equals(key)) {
+                builder.add(key, repoBaseUrl + "/packages/list.json");
+            } else if ("notify".equals(key) || "notify-batch".equals(key)) {
+                // Dropped intentionally: no publish callback escapes to upstream.
+                continue;
+            } else if ("security-advisories".equals(key)) {
+                builder.add(key, rewriteSecurityAdvisories(value, repoBaseUrl));
+            } else if (isAbsoluteUrl(value)) {
+                // Fail-closed: an unrecognised top-level field pointing at an
+                // absolute URL is dropped rather than leaked to the client.
+                continue;
+            } else {
+                builder.add(key, value);
+            }
+        }
+        return builder.build().toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Rewrite the {@code security-advisories.api-url} sub-field to a
+     * Pantera-local endpoint; every other sub-field (e.g. {@code metadata})
+     * is preserved unchanged. Non-object values (Composer allows
+     * {@code "security-advisories": false} to disable the feature) are
+     * passed through unchanged.
+     */
+    private static JsonValue rewriteSecurityAdvisories(
+        final JsonValue value, final String repoBaseUrl
+    ) {
+        if (value.getValueType() != JsonValue.ValueType.OBJECT) {
+            return value;
+        }
+        final JsonObject advisories = value.asJsonObject();
+        if (!advisories.containsKey("api-url")) {
+            return value;
+        }
+        final JsonObjectBuilder out = Json.createObjectBuilder();
+        for (final Map.Entry<String, JsonValue> entry : advisories.entrySet()) {
+            if ("api-url".equals(entry.getKey())) {
+                out.add("api-url", repoBaseUrl + "/api/security-advisories/");
+            } else {
+                out.add(entry.getKey(), entry.getValue());
+            }
+        }
+        return out.build();
+    }
+
+    /**
+     * True iff {@code value} is a JSON string holding an absolute
+     * {@code http://} or {@code https://} URL.
+     */
+    private static boolean isAbsoluteUrl(final JsonValue value) {
+        if (value.getValueType() != JsonValue.ValueType.STRING) {
+            return false;
+        }
+        final String str = ((JsonString) value).getString();
+        return str.startsWith("http://") || str.startsWith("https://");
     }
 
     /**

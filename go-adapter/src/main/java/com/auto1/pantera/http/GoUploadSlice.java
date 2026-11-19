@@ -350,7 +350,8 @@ final class GoUploadSlice implements Slice {
      * Post-publish steps for a zip: upsert the index row (every accepted
      * PUT, so a retry repairs a missing row), enqueue the publish event
      * (first store only) and update {@code @v/list}; then invalidate
-     * negative caches.
+     * negative caches and any go-proxy member's cached {@code @v/list} /
+     * {@code @latest} base documents for the module.
      * @param outcome Store outcome
      * @param headers Request headers
      * @param module Module path
@@ -375,20 +376,27 @@ final class GoUploadSlice implements Slice {
         // (or its parent paths, e.g. Go's parent-path probing) BEFORE
         // we tell the client the upload succeeded. Otherwise an earlier
         // probe-against-group that cached a 404 keeps shadowing the
-        // newly-published artifact and `go get` returns 404.
-        return extra.whenComplete((ignored, error) -> {
-            if (error == null) {
-                NegativeCacheRegistry.instance()
-                    .invalidateAfterUpload("go-proxy", module);
-                // Group 404s are keyed by the real module path.
-                final String real = new com.auto1.pantera.goproxy.ModulePath(module).decoded();
-                if (!real.equals(module)) {
-                    NegativeCacheRegistry.instance().invalidateAfterUpload("go-proxy", real);
-                }
-                com.auto1.pantera.cooldown.metadata
-                    .FilteredMetadataCacheRegistry.instance()
-                    .invalidateAfterUpload("go-proxy", module);
+        // newly-published artifact and `go get` returns 404. Also evict
+        // any go-proxy member's cached @v/list / @latest base document
+        // for this module (WS4-go.2) — a hosted publish inside a
+        // go-group must not stay hidden behind the proxy's 12h TTL.
+        // A failed publish skips the invalidation and propagates its error.
+        return extra.thenCompose(ignored -> {
+            NegativeCacheRegistry.instance()
+                .invalidateAfterUpload("go-proxy", module);
+            // Group 404s are keyed by the real module path.
+            final String real = new com.auto1.pantera.goproxy.ModulePath(module).decoded();
+            if (!real.equals(module)) {
+                NegativeCacheRegistry.instance().invalidateAfterUpload("go-proxy", real);
             }
+            com.auto1.pantera.cooldown.metadata
+                .FilteredMetadataCacheRegistry.instance()
+                .invalidateAfterUpload("go-proxy", module);
+            // The proxy caches its base documents under the escaped wire
+            // path, so the eviction key is the escaped module as well.
+            return GoMetadataCacheRegistry.instance()
+                .invalidateAfterUpload(module)
+                .exceptionally(err -> null);
         });
     }
 

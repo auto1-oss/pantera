@@ -1,4 +1,12 @@
-import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import {
+  createRouter,
+  createWebHistory,
+  type LocationQueryRaw,
+  type RouteLocationNormalized,
+  type RouteLocationRaw,
+  type RouteRecordRaw,
+  type RouterHistory,
+} from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 export const routes: RouteRecordRaw[] = [
@@ -151,15 +159,35 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAdmin: true },
   },
   {
+    path: '/admin/pgp-keyring',
+    name: 'admin-pgp-keyring',
+    component: () => import('@/views/admin/PgpKeyringView.vue'),
+    meta: { requiresAdmin: true },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     component: () => import('@/views/NotFoundView.vue'),
   },
 ]
 
-export function createAppRouter() {
+/**
+ * Where a visitor who is not signed in is sent. `iss` is what an identity
+ * provider adds when it opens the UI from its own dashboard (OpenID Connect
+ * Core, "Initiating Login from a Third Party"); it is handed to the sign-in
+ * page, which starts the sign-in at that provider.
+ */
+function signInPage(to: RouteLocationNormalized): RouteLocationRaw {
+  const query: LocationQueryRaw = { redirect: to.fullPath }
+  if (typeof to.query.iss === 'string') {
+    query.iss = to.query.iss
+  }
+  return { name: 'login', query }
+}
+
+export function createAppRouter(history: RouterHistory = createWebHistory()) {
   const router = createRouter({
-    history: createWebHistory(),
+    history,
     routes,
   })
 
@@ -167,7 +195,7 @@ export function createAppRouter() {
     if (to.meta.public) return true
     const auth = useAuthStore()
     if (!auth.isAuthenticated) {
-      return { name: 'login', query: { redirect: to.fullPath } }
+      return signInPage(to)
     }
     // On page refresh the token survives in localStorage but user data is lost.
     // Re-fetch it so permissions, admin status, and profile info are available.
@@ -175,7 +203,7 @@ export function createAppRouter() {
       await auth.fetchUser()
       // fetchUser calls logout() on 401 (expired JWT), which clears the token.
       if (!auth.isAuthenticated) {
-        return { name: 'login', query: { redirect: to.fullPath } }
+        return signInPage(to)
       }
     }
     // Force password change gate: if the backend flagged must_change_password,

@@ -47,7 +47,7 @@ class YamlSettingsTest {
     @Test
     void shouldBuildFileStorageFromSettings() throws Exception {
         final YamlSettings settings = new YamlSettings(
-            this.config("some/path"), this.temp, new QuartzService()
+            this.config("some/path"), this.temp
         );
         MatcherAssert.assertThat(
             settings.configStorage(),
@@ -59,7 +59,7 @@ class YamlSettingsTest {
     void returnsRepoConfigs(@TempDir final Path tmp) {
         MatcherAssert.assertThat(
             new YamlSettings(
-                this.config(tmp.toString()), tmp, new QuartzService()
+                this.config(tmp.toString()), tmp
             ).repoConfigsStorage(),
             new IsInstanceOf(SubStorage.class)
         );
@@ -69,7 +69,7 @@ class YamlSettingsTest {
     @MethodSource("badYamls")
     void shouldFailProvideStorageFromBadYaml(final String yaml) throws IOException {
         final YamlSettings settings = new YamlSettings(
-            Yaml.createYamlInput(yaml).readYamlMapping(), this.temp, new QuartzService()
+            Yaml.createYamlInput(yaml).readYamlMapping(), this.temp
         );
         Assertions.assertThrows(RuntimeException.class, settings::configStorage);
     }
@@ -80,7 +80,7 @@ class YamlSettingsTest {
         Assertions.assertThrows(
             IllegalStateException.class,
             () -> new YamlSettings(
-                Yaml.createYamlInput(yaml).readYamlMapping(), this.temp, new QuartzService()
+                Yaml.createYamlInput(yaml).readYamlMapping(), this.temp
             ).meta()
         );
     }
@@ -88,7 +88,7 @@ class YamlSettingsTest {
     @Test
     void initializesEnvAuth() throws IOException {
         final YamlSettings authz = new YamlSettings(
-            Yaml.createYamlInput(this.envCreds()).readYamlMapping(), this.temp, new QuartzService()
+            Yaml.createYamlInput(this.envCreds()).readYamlMapping(), this.temp
         );
         MatcherAssert.assertThat(
             "Env credentials are initialized",
@@ -109,8 +109,7 @@ class YamlSettingsTest {
     @Test
     void initializesGithubAuth() throws IOException {
         final YamlSettings authz = new YamlSettings(
-            Yaml.createYamlInput(this.githubCreds()).readYamlMapping(), this.temp,
-            new QuartzService()
+            Yaml.createYamlInput(this.githubCreds()).readYamlMapping(), this.temp
         );
         MatcherAssert.assertThat(
             "Github auth created",
@@ -131,8 +130,7 @@ class YamlSettingsTest {
     @Test
     void initializesKeycloakAuth() throws IOException {
         final YamlSettings authz = new YamlSettings(
-            Yaml.createYamlInput(this.keycloakCreds()).readYamlMapping(), this.temp,
-            new QuartzService()
+            Yaml.createYamlInput(this.keycloakCreds()).readYamlMapping(), this.temp
         );
         MatcherAssert.assertThat(
             "Keycloak storage created",
@@ -153,8 +151,7 @@ class YamlSettingsTest {
     @Test
     void initializesPanteraAuth() throws IOException {
         final YamlSettings authz = new YamlSettings(
-            Yaml.createYamlInput(this.panteraCreds()).readYamlMapping(), this.temp,
-            new QuartzService()
+            Yaml.createYamlInput(this.panteraCreds()).readYamlMapping(), this.temp
         );
         MatcherAssert.assertThat(
             "Auth from storage initiated",
@@ -175,8 +172,7 @@ class YamlSettingsTest {
     @Test
     void initializesPanteraAuthAndPolicy() throws IOException {
         final YamlSettings authz = new YamlSettings(
-            Yaml.createYamlInput(this.panteraCredsWithPolicy()).readYamlMapping(), this.temp,
-            new QuartzService()
+            Yaml.createYamlInput(this.panteraCredsWithPolicy()).readYamlMapping(), this.temp
         );
         MatcherAssert.assertThat(
             "Auth from storage initiated",
@@ -197,8 +193,7 @@ class YamlSettingsTest {
     @Test
     void initializesAllAuths() throws IOException {
         final YamlSettings authz = new YamlSettings(
-            Yaml.createYamlInput(this.panteraGithubKeycloakEnvCreds()).readYamlMapping(), this.temp,
-            new QuartzService()
+            Yaml.createYamlInput(this.panteraGithubKeycloakEnvCreds()).readYamlMapping(), this.temp
         );
         MatcherAssert.assertThat(
             "Auth from storage, github, env and keycloak initiated",
@@ -225,7 +220,7 @@ class YamlSettingsTest {
     void initializesAllAuthsAndPolicy() throws IOException {
         final YamlSettings settings = new YamlSettings(
             Yaml.createYamlInput(this.panteraGithubKeycloakEnvCredsAndPolicy()).readYamlMapping(),
-            this.temp, new QuartzService()
+            this.temp
         );
         MatcherAssert.assertThat(
             "Auth from storage, github, env and keycloak initiated",
@@ -348,7 +343,7 @@ class YamlSettingsTest {
     @Test
     void closeIsIdempotent() throws Exception {
         final YamlSettings settings = new YamlSettings(
-            this.config("some/path"), this.temp, new QuartzService()
+            this.config("some/path"), this.temp
         );
         settings.close();
         Assertions.assertDoesNotThrow(
@@ -360,7 +355,7 @@ class YamlSettingsTest {
     @Test
     void closeWithNoDatabaseOrValkey() throws Exception {
         final YamlSettings settings = new YamlSettings(
-            this.config("some/path"), this.temp, new QuartzService()
+            this.config("some/path"), this.temp
         );
         Assertions.assertDoesNotThrow(
             settings::close,

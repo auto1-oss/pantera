@@ -12,7 +12,6 @@ package com.auto1.pantera.maven.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
-import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.fs.FileStorage;
@@ -37,7 +36,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.text.MatchesPattern;
@@ -49,9 +47,6 @@ import org.junit.jupiter.api.io.TempDir;
  * the Jenkins tool installer downloads
  * {@code apache-maven-<version>-bin.zip} through a Maven proxy and refuses a
  * response without it.
- *
- * <p>The proxy dates the response itself, so the hot cache-hit path costs no
- * storage read beyond the one that tells it the artifact is cached.</p>
  *
  * @since 2.2.12
  */
@@ -75,10 +70,10 @@ final class CachedProxySliceLastModifiedTest {
         "(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \\d{2} [A-Z][a-z]{2} \\d{4} \\d{2}:\\d{2}:\\d{2} GMT";
 
     @Test
-    void cacheHitIsDatedWithStorageTimeAtNoExtraStorageRead(@TempDir final Path dir)
+    void cacheHitIsDatedWithStorageTime(@TempDir final Path dir)
         throws Exception {
         final Key key = new Key.From(CachedProxySliceLastModifiedTest.PATH.substring(1));
-        final CountingStorage storage = new CountingStorage(new FileStorage(dir));
+        final Storage storage = new FileStorage(dir);
         storage.save(key, new Content.From(CachedProxySliceLastModifiedTest.DATA))
             .get(30, TimeUnit.SECONDS);
         Files.setLastModifiedTime(
@@ -105,10 +100,6 @@ final class CachedProxySliceLastModifiedTest {
             "the body is the cached artifact",
             response.body().asBytesFuture().get(30, TimeUnit.SECONDS),
             new IsEqual<>(CachedProxySliceLastModifiedTest.DATA)
-        );
-        MatcherAssert.assertThat(
-            "presence and date come from one storage lookup",
-            storage.lookups(), new IsEqual<>(1)
         );
     }
 
@@ -184,37 +175,5 @@ final class CachedProxySliceLastModifiedTest {
             },
             Optional.of(storage)
         );
-    }
-
-    /**
-     * Storage counting existence and metadata lookups.
-     */
-    private static final class CountingStorage extends Storage.Wrap {
-
-        /**
-         * Lookups made.
-         */
-        private final AtomicInteger count;
-
-        CountingStorage(final Storage origin) {
-            super(origin);
-            this.count = new AtomicInteger();
-        }
-
-        @Override
-        public CompletableFuture<Boolean> exists(final Key key) {
-            this.count.incrementAndGet();
-            return super.exists(key);
-        }
-
-        @Override
-        public CompletableFuture<? extends Meta> metadata(final Key key) {
-            this.count.incrementAndGet();
-            return super.metadata(key);
-        }
-
-        int lookups() {
-            return this.count.get();
-        }
     }
 }

@@ -11,7 +11,7 @@
 package com.auto1.pantera.settings.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.cache.CacheInvalidationPubSub;
+import com.auto1.pantera.cache.CacheBroadcast;
 import com.auto1.pantera.http.filter.Filters;
 import java.util.Optional;
 
@@ -31,7 +31,7 @@ public final class PublishingFiltersCache implements FiltersCache {
     /**
      * Pub/sub channel.
      */
-    private final CacheInvalidationPubSub pubsub;
+    private final CacheBroadcast pubsub;
 
     /**
      * Ctor.
@@ -39,7 +39,7 @@ public final class PublishingFiltersCache implements FiltersCache {
      * @param pubsub Redis pub/sub channel
      */
     public PublishingFiltersCache(final FiltersCache inner,
-        final CacheInvalidationPubSub pubsub) {
+        final CacheBroadcast pubsub) {
         this.inner = inner;
         this.pubsub = pubsub;
     }

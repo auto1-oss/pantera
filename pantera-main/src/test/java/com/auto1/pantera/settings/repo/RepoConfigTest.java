@@ -13,6 +13,8 @@ package com.auto1.pantera.settings.repo;
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blob.DownloadMode;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.http.client.RemoteConfig;
@@ -195,6 +197,49 @@ public final class RepoConfigTest {
     }
 
     @Test
+    public void downloadModeDefaultsToStreamWhenNotConfigured() throws Exception {
+        Assertions.assertEquals(DownloadMode.STREAM, readMin().downloadMode());
+    }
+
+    @Test
+    public void downloadModeParsesRedirect() {
+        Assertions.assertEquals(DownloadMode.REDIRECT, repoWithDownloadMode("redirect").downloadMode());
+    }
+
+    @Test
+    public void downloadModeParsesAuto() {
+        Assertions.assertEquals(DownloadMode.AUTO, repoWithDownloadMode("auto").downloadMode());
+    }
+
+    @Test
+    public void downloadModeIsCaseInsensitive() {
+        Assertions.assertEquals(DownloadMode.REDIRECT, repoWithDownloadMode("REDIRECT").downloadMode());
+    }
+
+    @Test
+    public void downloadModeDefaultsToStreamForUnrecognizedValue() {
+        Assertions.assertEquals(DownloadMode.STREAM, repoWithDownloadMode("bogus").downloadMode());
+    }
+
+    @Test
+    public void presignTtlSecondsDefaultsWhenNotConfigured() throws Exception {
+        Assertions.assertEquals(DownloadPolicy.DEFAULT_PRESIGN_TTL_SECONDS, readMin().presignTtlSeconds());
+    }
+
+    @Test
+    public void presignTtlSecondsReadsConfiguredValue() {
+        Assertions.assertEquals(120L, repoCustomWithSettings(builder -> builder.add("presign-ttl-seconds", "120")).presignTtlSeconds());
+    }
+
+    @Test
+    public void presignTtlSecondsFallsBackWhenNonPositive() {
+        Assertions.assertEquals(
+            DownloadPolicy.DEFAULT_PRESIGN_TTL_SECONDS,
+            repoCustomWithSettings(builder -> builder.add("presign-ttl-seconds", "0")).presignTtlSeconds()
+        );
+    }
+
+    @Test
     void immutableByDefault() throws Exception {
         Assertions.assertTrue(readMin().immutable());
     }
@@ -218,6 +263,35 @@ public final class RepoConfigTest {
     }
 
     @Test
+    public void downloadPolicyBundlesModeAndTtl() {
+        final RepoConfig cfg = repoCustomWithSettings(
+            builder -> builder.add("download-mode", "redirect").add("presign-ttl-seconds", "300")
+        );
+        Assertions.assertEquals(new DownloadPolicy(DownloadMode.REDIRECT, 300L), cfg.downloadPolicy());
+    }
+
+    private RepoConfig repoWithDownloadMode(final String mode) {
+        return repoCustomWithSettings(builder -> builder.add("download-mode", mode));
+    }
+
+    private RepoConfig repoCustomWithSettings(
+        final java.util.function.UnaryOperator<com.amihaiemil.eoyaml.YamlMappingBuilder> extra
+    ) {
+        return RepoConfig.from(
+            Yaml.createYamlMappingBuilder().add(
+                "repo", extra.apply(
+                    Yaml.createYamlMappingBuilder()
+                        .add("type", "maven")
+                        .add("url", "http://host:8080/correct")
+                )
+                    .build()
+            ).build(),
+            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
+            new Key.From("repo-download-mode.yml"), cache, false
+        );
+    }
+
+    @Test
     void immutableReadsDatabaseJsonBooleans() {
         Assertions.assertAll(
             () -> Assertions.assertFalse(
@@ -231,6 +305,40 @@ public final class RepoConfigTest {
             () -> Assertions.assertTrue(
                 fromJson("{\"repo\":{\"type\":\"file\"}}").immutable(),
                 "missing key is immutable"
+            )
+        );
+    }
+
+    @Test
+    void releaseImmutableIsADeprecatedAliasWhenImmutableIsAbsent() {
+        Assertions.assertAll(
+            () -> Assertions.assertFalse(
+                fromJson("{\"repo\":{\"type\":\"maven\",\"releaseImmutable\":false}}")
+                    .immutable(),
+                "releaseImmutable: false alone makes the repository mutable"
+            ),
+            () -> Assertions.assertTrue(
+                fromJson("{\"repo\":{\"type\":\"maven\",\"releaseImmutable\":true}}")
+                    .immutable(),
+                "releaseImmutable: true alone keeps it immutable"
+            )
+        );
+    }
+
+    @Test
+    void immutableTakesPrecedenceOverReleaseImmutable() {
+        Assertions.assertAll(
+            () -> Assertions.assertTrue(
+                fromJson(
+                    "{\"repo\":{\"type\":\"maven\",\"immutable\":true,\"releaseImmutable\":false}}"
+                ).immutable(),
+                "immutable: true wins over releaseImmutable: false"
+            ),
+            () -> Assertions.assertFalse(
+                fromJson(
+                    "{\"repo\":{\"type\":\"maven\",\"immutable\":false,\"releaseImmutable\":true}}"
+                ).immutable(),
+                "immutable: false wins over releaseImmutable: true"
             )
         );
     }

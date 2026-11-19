@@ -212,8 +212,7 @@ public final class ScriptSchedulerTest {
                 )
             )
             .readYamlMapping(),
-            this.temp,
-            this.service
+            this.temp
         );
         final String filename = this.temp.resolve(ScriptSchedulerTest.RESULTS_PATH).toString();
         final String script = String.format(cronscript, filename.replace("\\", "\\\\"));

@@ -10,7 +10,7 @@
  */
 package com.auto1.pantera.scheduling;
 
-import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.goproxy.GoProxyPackageProcessor;
 
 import com.auto1.pantera.maven.MavenProxyPackageProcessor;
@@ -21,31 +21,39 @@ import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.http.log.EcsLogger;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
-import org.quartz.JobDataMap;
-import org.quartz.JobKey;
-import org.quartz.SchedulerException;
 
 /**
  * Artifacts metadata events queues.
  * <p>
  * 1) This class holds events queue {@link MetadataEventQueues#eventQueue()} for all the adapters,
  * this queue is passed to adapters, adapters adds packages metadata on upload/delete to the queue.
- * Queue is periodically processed by {@link com.auto1.pantera.scheduling.EventsProcessor} and consumed
- * by {@link com.auto1.pantera.db.DbConsumer}.
+ * The queue is drained by a per-node {@code LocalEventDrainScheduler} (never through Quartz — see
+ * the WS2.2 fix, 2.3.0) and consumed by {@link com.auto1.pantera.db.DbConsumer}.
  * <p>
- * 2) This class also holds queues for proxy adapters (maven, npm, pypi). Each proxy repository
- * has its own queue with packages metadata ({@link MetadataEventQueues#queues}) and its own quartz
- * job to process this queue. The queue and job for concrete proxy repository are created/started
- * on the first queue request. If proxy repository is removed, jobs are stopped
- * and queue is removed.
+ * 2) This class also holds queues for proxy adapters (maven, npm, pypi, go, composer). Each proxy
+ * repository has its own queue with packages metadata ({@link MetadataEventQueues#queues}) and its
+ * own per-node {@link LocalEventDrainScheduler} draining it (WS2.2b fix, 2.3.0). The queue and
+ * scheduler for a concrete proxy repository are created/started on the first queue request. If the
+ * proxy repository is removed, the scheduler is stopped and the queue is removed.
+ * <p>
+ * Prior to the WS2.2b fix, the per-repository proxy-package-processor queues were drained through
+ * the cluster-shared Quartz job store (RAM or JDBC mode): a {@code JobDataRegistry}-resolved queue
+ * scheduled via {@code QuartzService.schedulePeriodicJob}. Under JDBC clustering, Quartz does not
+ * pin a repeating trigger to the node that created it — any node's scheduler thread can acquire
+ * and fire it. A node other than the one that registered a given repository's queue would find
+ * nothing in its own {@code JobDataRegistry} to resolve, and every firing that landed on the
+ * "wrong" node was a wasted drain opportunity for the node that actually owned the queue — the
+ * same class of bug the WS2.2 artifact-events-drain fix addressed. This class now schedules each
+ * proxy repository's processor directly on a per-node {@link LocalEventDrainScheduler}, so it only
+ * ever runs on, and drains, the node that owns the queue.
  * @since 0.31
  */
 public final class MetadataEventQueues {
@@ -61,19 +69,14 @@ public final class MetadataEventQueues {
     private final Map<String, Queue<ProxyArtifactEvent>> queues;
 
     /**
-     * Map with proxy adapters name and corresponding quartz jobs keys.
+     * Map with proxy adapters name and their per-node drain scheduler.
      */
-    private final Map<String, Set<JobKey>> keys;
+    private final Map<String, LocalEventDrainScheduler<ProxyArtifactEvent>> schedulers;
 
     /**
      * Artifact events queue.
      */
     private final Queue<ArtifactEvent> queue;
-
-    /**
-     * Quartz service.
-     */
-    private final QuartzService quartz;
 
     /**
      * Optional meter registry for metrics.
@@ -84,29 +87,23 @@ public final class MetadataEventQueues {
      * Ctor.
      *
      * @param queue Artifact events queue
-     * @param quartz Quartz service
      */
-    public MetadataEventQueues(
-        final Queue<ArtifactEvent> queue, final QuartzService quartz
-    ) {
-        this(queue, quartz, Optional.empty());
+    public MetadataEventQueues(final Queue<ArtifactEvent> queue) {
+        this(queue, Optional.empty());
     }
 
     /**
      * Ctor.
      *
      * @param queue Artifact events queue
-     * @param quartz Quartz service
      * @param registry Optional meter registry for queue depth metrics
      */
     public MetadataEventQueues(
-        final Queue<ArtifactEvent> queue, final QuartzService quartz,
-        final Optional<MeterRegistry> registry
+        final Queue<ArtifactEvent> queue, final Optional<MeterRegistry> registry
     ) {
         this.queue = queue;
         this.queues = new ConcurrentHashMap<>();
-        this.quartz = quartz;
-        this.keys = new ConcurrentHashMap<>();
+        this.schedulers = new ConcurrentHashMap<>();
         this.registry = registry;
         this.registry.ifPresent(
             reg -> Gauge.builder("pantera.events.queue.size", queue, Queue::size)
@@ -132,8 +129,8 @@ public final class MetadataEventQueues {
      * exactly once per key. The initial {@code this.queues.get()} check is a fast-path
      * optimization; if two threads both see null, both enter the if-block, but only one
      * thread's lambda will execute inside computeIfAbsent. The other thread receives the
-     * already-created queue. The {@code this.keys.put()} call inside the lambda also
-     * executes exactly once per key, so no duplicate jobs are scheduled.
+     * already-created queue. The {@code this.schedulers.put()} call inside the lambda also
+     * executes exactly once per key, so no duplicate per-node schedulers are started.
      * </p>
      * @param config Repository config
      * @return Queue for proxy events
@@ -144,66 +141,10 @@ public final class MetadataEventQueues {
         if (result.isEmpty() && config.storageOpt().isPresent()) {
             try {
                 final Queue<ProxyArtifactEvent> events = this.queues.computeIfAbsent(
-                    config.name(),
-                    key -> {
-                        final Queue<ProxyArtifactEvent> res =
-                            new LinkedBlockingQueue<>(10_000);
-                        final JobDataMap data = new JobDataMap();
-                        final ProxyRepoType type = ProxyRepoType.type(config.type());
-                        if (this.quartz.isClustered()) {
-                            final String prefix = config.name() + "-proxy-";
-                            final String pkgKey = prefix + "packages";
-                            final String stoKey = prefix + "storage";
-                            final String evtKey = prefix + "events";
-                            JobDataRegistry.register(pkgKey, res);
-                            JobDataRegistry.register(stoKey, config.storage());
-                            JobDataRegistry.register(evtKey, this.queue);
-                            data.put("packages_key", pkgKey);
-                            data.put("storage_key", stoKey);
-                            data.put("events_key", evtKey);
-                            if (type == ProxyRepoType.NPM_PROXY) {
-                                data.put(MetadataEventQueues.HOST, panteraHost(config));
-                            }
-                        } else {
-                            data.put("packages", res);
-                            data.put("storage", config.storage());
-                            data.put("events", this.queue);
-                            if (type == ProxyRepoType.NPM_PROXY) {
-                                data.put(MetadataEventQueues.HOST, panteraHost(config));
-                            }
-                        }
-                        final int threads = Math.max(1, settingsIntValue(config, "threads_count"));
-                        final int interval = Math.max(
-                            1, settingsIntValue(config, "interval_seconds")
-                        );
-                        try {
-                            this.keys.put(
-                                config.name(),
-                                this.quartz.schedulePeriodicJob(interval, threads, type.job(), data)
-                            );
-                            EcsLogger.info("com.auto1.pantera.scheduling")
-                                .message("Initialized proxy metadata job and queue")
-                                .eventCategory("process")
-                                .eventAction("metadata_job_init")
-                                .eventOutcome("success")
-                                .field("repository.name", config.name())
-                                .field("log.source", "application")
-                                .log();
-                        } catch (final SchedulerException err) {
-                            throw new PanteraException(err);
-                        }
-                        this.registry.ifPresent(
-                            reg -> Gauge.builder(
-                                "pantera.proxy.queue.size", res, Queue::size
-                            ).tag("repo", config.name())
-                                .description("Size of proxy artifact event queue")
-                                .register(reg)
-                        );
-                        return res;
-                    }
+                    config.name(), key -> this.startProxyProcessing(config)
                 );
                 result = Optional.of(events);
-            } catch (final Exception err) {
+            } catch (final RuntimeException err) {
                 EcsLogger.error("com.auto1.pantera.scheduling")
                     .message("Failed to initialize events queue processing")
                     .eventCategory("process")
@@ -220,13 +161,52 @@ public final class MetadataEventQueues {
     }
 
     /**
+     * Create the proxy-events queue for {@code config} and start its per-node
+     * {@link LocalEventDrainScheduler}, one tick-task per configured thread.
+     * @param config Repository config
+     * @return The newly created queue
+     */
+    private Queue<ProxyArtifactEvent> startProxyProcessing(final RepoConfig config) {
+        final Queue<ProxyArtifactEvent> res = new LinkedBlockingQueue<>(10_000);
+        final ProxyRepoType type = ProxyRepoType.type(config.type());
+        final String host = type == ProxyRepoType.NPM_PROXY ? panteraHost(config) : null;
+        final ProxyTaskContext ctx = new ProxyTaskContext(res, config.storage(), this.queue, host);
+        final int threads = Math.max(1, settingsIntValue(config, "threads_count"));
+        final int interval = Math.max(1, settingsIntValue(config, "interval_seconds"));
+        final List<Runnable> tasks = new ArrayList<>(threads);
+        for (int idx = 0; idx < threads; idx = idx + 1) {
+            tasks.add(type.task(ctx));
+        }
+        this.schedulers.put(
+            config.name(), new LocalEventDrainScheduler<>(tasks, interval)
+        );
+        EcsLogger.info("com.auto1.pantera.scheduling")
+            .message("Initialized proxy metadata local scheduler and queue")
+            .eventCategory("process")
+            .eventAction("metadata_job_init")
+            .eventOutcome("success")
+            .field("repository.name", config.name())
+            .field("log.source", "application")
+            .log();
+        this.registry.ifPresent(
+            reg -> Gauge.builder(
+                "pantera.proxy.queue.size", res, Queue::size
+            ).tag("repo", config.name())
+                .description("Size of proxy artifact event queue")
+                .register(reg)
+        );
+        return res;
+    }
+
+    /**
      * Stops proxy repository events processing and removes corresponding queue.
      * @param name Repository name
      */
     public void stopProxyMetadataProcessing(final String name) {
-        final Set<JobKey> set = this.keys.remove(name);
-        if (set != null) {
-            set.forEach(this.quartz::deleteJob);
+        final LocalEventDrainScheduler<ProxyArtifactEvent> scheduler = // NOPMD CloseResource - closed on the next line when present; null means no scheduler was ever started for this repo
+            this.schedulers.remove(name);
+        if (scheduler != null) {
+            scheduler.close();
         }
         this.queues.remove(name);
     }
@@ -253,6 +233,22 @@ public final class MetadataEventQueues {
     }
 
     /**
+     * Bundles the node-local references a proxy package-processor tick needs: the shared
+     * per-repository packages queue, repository storage, the shared artifact-events queue,
+     * and (npm only) the external host. Passed as one object so
+     * {@link ProxyRepoType#task(ProxyTaskContext)} overrides that don't need every field
+     * (e.g. Maven never needs {@code host}) don't trip PMD's unused-parameter check.
+     * @param packages Per-repository proxy-events queue
+     * @param storage Repository storage
+     * @param events Shared artifact-events queue
+     * @param host Pantera external host (npm proxy only), or {@code null}
+     */
+    private record ProxyTaskContext(
+        Queue<ProxyArtifactEvent> packages, Storage storage, Queue<ArtifactEvent> events,
+        String host
+    ) { }
+
+    /**
      * Repository types.
      * @since 0.31
      */
@@ -260,51 +256,94 @@ public final class MetadataEventQueues {
 
         MAVEN_PROXY {
             @Override
-            Class<? extends QuartzJob> job() {
-                return MavenProxyPackageProcessor.class;
+            Runnable task(final ProxyTaskContext ctx) {
+                return () -> {
+                    final MavenProxyPackageProcessor processor = new MavenProxyPackageProcessor();
+                    processor.setPackages(ctx.packages());
+                    processor.setStorage(ctx.storage());
+                    processor.setEvents(ctx.events());
+                    processor.run();
+                };
             }
         },
 
         PYPI_PROXY {
             @Override
-            Class<? extends QuartzJob> job() {
-                return PyProxyPackageProcessor.class;
+            Runnable task(final ProxyTaskContext ctx) {
+                return () -> {
+                    final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
+                    processor.setPackages(ctx.packages());
+                    processor.setStorage(ctx.storage());
+                    processor.setEvents(ctx.events());
+                    processor.run();
+                };
             }
         },
 
         NPM_PROXY {
             @Override
-            Class<? extends QuartzJob> job() {
-                return NpmProxyPackageProcessor.class;
+            Runnable task(final ProxyTaskContext ctx) {
+                return () -> {
+                    final NpmProxyPackageProcessor processor = new NpmProxyPackageProcessor();
+                    processor.setPackages(ctx.packages());
+                    processor.setStorage(ctx.storage());
+                    processor.setEvents(ctx.events());
+                    processor.setHost(ctx.host());
+                    processor.run();
+                };
             }
         },
 
         GRADLE_PROXY {
             @Override
-            Class<? extends QuartzJob> job() {
-                return MavenProxyPackageProcessor.class;
+            Runnable task(final ProxyTaskContext ctx) {
+                return () -> {
+                    final MavenProxyPackageProcessor processor = new MavenProxyPackageProcessor();
+                    processor.setPackages(ctx.packages());
+                    processor.setStorage(ctx.storage());
+                    processor.setEvents(ctx.events());
+                    processor.run();
+                };
             }
         },
 
         GO_PROXY {
             @Override
-            Class<? extends QuartzJob> job() {
-                return GoProxyPackageProcessor.class;
+            Runnable task(final ProxyTaskContext ctx) {
+                return () -> {
+                    final GoProxyPackageProcessor processor = new GoProxyPackageProcessor();
+                    processor.setPackages(ctx.packages());
+                    processor.setStorage(ctx.storage());
+                    processor.setEvents(ctx.events());
+                    processor.run();
+                };
             }
         },
 
         PHP_PROXY {
             @Override
-            Class<? extends QuartzJob> job() {
-                return ComposerProxyPackageProcessor.class;
+            Runnable task(final ProxyTaskContext ctx) {
+                return () -> {
+                    final ComposerProxyPackageProcessor processor =
+                        new ComposerProxyPackageProcessor();
+                    processor.setPackages(ctx.packages());
+                    processor.setStorage(ctx.storage());
+                    processor.setEvents(ctx.events());
+                    processor.run();
+                };
             }
         };
 
         /**
-         * Class of the corresponding quartz job.
-         * @return Class of the quartz job
+         * Build the per-tick task for this repo type. Constructs a fresh processor instance
+         * per invocation, matching the fresh-instance-per-firing semantics the pre-WS2.2b
+         * Quartz-based scheduling had (Quartz instantiates a new {@code Job} on every
+         * execution), so this scheduling-layer change carries no change to per-tick instance
+         * state (e.g. {@code MavenProxyPackageProcessor}'s retry-count map).
+         * @param ctx Node-local references the task needs
+         * @return Runnable tick body
          */
-        abstract Class<? extends QuartzJob> job();
+        abstract Runnable task(ProxyTaskContext ctx);
 
         /**
          * Get enum item by string repo type.

@@ -216,6 +216,24 @@ The `mfa_code` field is only required when the Okta organization enforces MFA. I
 4. Create Okta groups (e.g., `pantera_readers`, `pantera_admins`) and assign users.
 5. Copy the client ID, client secret, and issuer URL to your Pantera environment.
 
+### Sign-in from the Okta Dashboard
+
+A user who opens Pantera from the Okta dashboard is signed in without a further click (v2.2.13+).
+
+In the Okta application, under **General**, edit the **Login** settings:
+
+1. Set **Login initiated by** to *Either Okta or App* and display the application icon to users.
+2. Set **Login flow** to *Redirect to app to initiate login (OIDC Compliant)*.
+3. Set **Initiate login URI** to the address of the Pantera UI, for example `https://pantera-ui.example.com/`.
+
+With the Okta Terraform provider these are `login_mode = "SPEC"`, `login_uri`, `hide_web = false` and `hide_ios = false` on `okta_app_oauth`.
+
+Okta opens that address with an `iss` parameter that names its issuer. The UI then starts the sign-in the **Continue with okta** button starts, and the user arrives signed in. Details:
+
+- The sign-in starts only when the configured Okta provider is the issuer named: its authorize URL has the same scheme, host and port as `iss`. With any other value the sign-in page is shown and waits for a click.
+- A user who already has a Pantera session in that browser gets the UI at once.
+- The flow is the authorization code flow Pantera always uses, with its own `state` and `nonce`. No implicit grant is needed, and nothing changes on the server.
+
 ---
 
 ## JWT-as-Password (type: jwt-password)

@@ -3,6 +3,20 @@ import { ref, computed } from 'vue'
 import type { UserInfo, AuthProvider } from '@/types'
 import * as authApi from '@/api/auth'
 
+/**
+ * Whether two URLs have the same scheme, host and port. A value that is not
+ * a URL, or one without an origin of its own (`javascript:`, `data:`),
+ * matches nothing.
+ */
+function sameOrigin(url: string, other: string): boolean {
+  try {
+    const origin = new URL(url).origin
+    return origin !== 'null' && origin === new URL(other).origin
+  } catch {
+    return false
+  }
+}
+
 export const useAuthStore = defineStore('auth', () => {
   // Migrate away from legacy HS256 jwt key — those tokens are invalid under the new RS256 scheme
   localStorage.removeItem('jwt')
@@ -63,13 +77,30 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function ssoRedirect(providerName: string) {
+  /**
+   * Leaves for the sign-in page of an SSO provider.
+   *
+   * With `issuer` the redirect only happens when the provider's authorize
+   * URL is on that issuer's origin. An identity provider that opens the UI
+   * from its own dashboard names itself in `iss` (OpenID Connect Core,
+   * "Initiating Login from a Third Party"). That value comes from the
+   * address bar, so it only selects among the configured providers and is
+   * never itself navigated to.
+   *
+   * @returns false when the provider is not the named issuer; the caller
+   *  stays on the page
+   */
+  async function ssoRedirect(providerName: string, issuer?: string): Promise<boolean> {
     const callbackUrl = window.location.origin + '/auth/callback'
     const resp = await authApi.getProviderRedirect(providerName, callbackUrl)
+    if (issuer !== undefined && !sameOrigin(resp.url, issuer)) {
+      return false
+    }
     sessionStorage.setItem('sso_state', resp.state)
     sessionStorage.setItem('sso_provider', providerName)
     sessionStorage.setItem('sso_callback_url', callbackUrl)
     window.location.href = resp.url
+    return true
   }
 
   async function handleOAuthCallback(code: string, state: string) {

@@ -20,12 +20,12 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.LastModified;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.rq.RequestLine;
 
-import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -145,7 +145,8 @@ final class HeadProxySlice implements Slice {
                     // recorded with it, else its storage time, read from the
                     // metadata already fetched for Content-Length.
                     resp.header(
-                        recorded.orElseGet(() -> new LastModified(meta, Instant.now()))
+                        recorded.map(Header.class::cast)
+                            .orElseGet(() -> LastModifiedHeader.from(meta))
                     );
                     return resp.build();
                 }

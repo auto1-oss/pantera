@@ -14,7 +14,8 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.Blob;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Layers;
-import com.auto1.pantera.docker.asto.TrustedBlobSource;
+import com.auto1.pantera.docker.asto.CheckedBlobSource;
+import com.auto1.pantera.docker.error.InvalidDigestException;
 import com.auto1.pantera.http.log.EcsLogger;
 import io.reactivex.Flowable;
 
@@ -40,6 +41,13 @@ import java.util.concurrent.atomic.AtomicLong;
  * for large blobs. The fix: doOnCancel checks whether all expected bytes were
  * already written to the temp file; if so it saves to cache exactly like
  * doOnComplete. An AtomicBoolean guards against double-execution.</p>
+ *
+ * <p>Cache-store integrity: bytes are re-hashed on save via {@link CheckedBlobSource}
+ * (not {@link com.auto1.pantera.docker.asto.TrustedBlobSource} — that stays reserved for
+ * hosted-write paths where content is already Pantera-computed and trusted). A truncated
+ * or corrupted upstream body therefore fails the cache write instead of being cached and
+ * re-served under a digest it does not actually match; the client still receives the
+ * tee'd bytes and verifies them independently.</p>
  */
 final class CachingBlob implements Blob {
 
@@ -47,9 +55,16 @@ final class CachingBlob implements Blob {
 
     private final Layers cache;
 
-    CachingBlob(final Blob origin, final Layers cache) {
+    private final String repoName;
+
+    CachingBlob(final Blob origin, final Layers cache, final String repoName) {
         this.origin = origin;
         this.cache = cache;
+        this.repoName = repoName;
+    }
+
+    CachingBlob(final Blob origin, final Layers cache) {
+        this(origin, cache, "unknown");
     }
 
     @Override
@@ -138,19 +153,24 @@ final class CachingBlob implements Blob {
                 final Content fileContent = new Content.From(
                     size, streamFromFile(tmp)
                 );
+                final Digest digest = this.origin.digest();
                 this.cache.put(
-                    new TrustedBlobSource(fileContent, this.origin.digest())
+                    new CheckedBlobSource(fileContent, digest)
                 ).whenComplete((d, ex) -> {
                     safeDelete(tmp);
                     if (ex != null) {
-                        logWarn("Failed to save blob to cache", ex);
+                        if (isDigestMismatch(ex)) {
+                            this.logDigestMismatch(digest, ex);
+                        } else {
+                            logWarn("Failed to save blob to cache", ex);
+                        }
                     } else {
                         EcsLogger.info("com.auto1.pantera.docker")
                             .message("Blob cached via streaming")
                             .eventCategory("web")
                             .eventAction("blob_cache")
                             .eventOutcome("success")
-                            .field("package.checksum", this.origin.digest().string())
+                            .field("package.checksum", digest.string())
                             .field("package.size", size)
                             .field("log.source", "application")
                             .log();
@@ -165,6 +185,46 @@ final class CachingBlob implements Blob {
             logWarn("Unexpected error in cache save", err);
             return null;
         });
+    }
+
+    /**
+     * Logs the proxy-blob-cache digest-mismatch state transition: a corrupt or
+     * truncated upstream body was rejected instead of being cached and re-served
+     * under a digest it does not actually match.
+     */
+    private void logDigestMismatch(final Digest digest, final Throwable ex) {
+        EcsLogger.warn("com.auto1.pantera.docker")
+            .message("Rejected proxy blob cache write: computed digest did not match declared digest")
+            .eventCategory("web")
+            .eventAction("blob_digest_mismatch")
+            .eventOutcome("failure")
+            .field("package.checksum", digest.string())
+            .field("repository.name", this.repoName)
+            .error(rootCause(ex))
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * Whether the failure chain contains an {@link InvalidDigestException}, i.e. the
+     * cache write was rejected because the re-hashed bytes did not match the declared
+     * digest, as opposed to an unrelated I/O failure.
+     */
+    private static boolean isDigestMismatch(final Throwable ex) {
+        return rootCause(ex) instanceof InvalidDigestException;
+    }
+
+    /**
+     * Unwraps nested {@link java.util.concurrent.CompletionException}/{@link
+     * java.util.concurrent.ExecutionException} layers to find the originating cause.
+     */
+    private static Throwable rootCause(final Throwable ex) {
+        Throwable cause = ex;
+        while (cause.getCause() != null
+            && cause.getCause() != cause) { // NOPMD CompareObjectsWithEquals - intentional identity check (cycle guard for self-causing exception)
+            cause = cause.getCause();
+        }
+        return cause;
     }
 
     /**

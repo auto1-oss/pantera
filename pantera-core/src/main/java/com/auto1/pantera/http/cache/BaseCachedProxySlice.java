@@ -1623,7 +1623,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         // ProxyCacheWriter's file content ignores such a late request; reading
         // the closed file there failed the save of any artifact larger than a
         // few chunks.
-        final Content content = ProxyCacheWriter.contentFromFile(tempFile, size);
+        final Content content = ProxyCacheWriter.streamingFileContent(tempFile, size);
         if (this.storage.isPresent()) {
             return this.storage.get().save(key, content);
         }

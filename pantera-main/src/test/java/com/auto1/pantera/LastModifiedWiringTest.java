@@ -168,9 +168,13 @@ final class LastModifiedWiringTest {
             new IsEqual<>(List.of(LastModifiedWiringTest.STORED_DATE))
         );
         if ("GET".equals(method)) {
+            // The hosted Maven adapter reads the artifact's metadata itself:
+            // it needs the date before the body, for its 304 answer. No
+            // other format, and no request, pays a metadata read for the date.
+            final int own = "maven".equals(type) || "gradle".equals(type) ? 1 : 0;
             MatcherAssert.assertThat(
-                "a download is dated without a storage metadata request",
-                storages.metadataRequests(), new IsEqual<>(0)
+                "a download is dated without an extra storage metadata request",
+                storages.metadataRequests() <= own, new IsEqual<>(true)
             );
         } else if ("maven".equals(type) || "file".equals(type)) {
             // These adapters answer HEAD from the storage metadata, which

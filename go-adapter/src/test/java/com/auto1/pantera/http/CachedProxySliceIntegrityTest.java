@@ -20,18 +20,14 @@ import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -39,15 +35,18 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Integration tests that the go-adapter's {@code CachedProxySlice} routes
- * primary {@code *.zip} writes through
- * {@link com.auto1.pantera.http.cache.ProxyCacheWriter} (WI-07 §9.5,
- * WI-post-07).
+ * Regression tests for the go-adapter's {@code CachedProxySlice} primary
+ * ({@code *.zip}) stream-through path (WI-07 §9.5, T-P08).
+ *
+ * <p>WS4-go.1: the GOPROXY protocol has no checksum sidecar for module
+ * archives, so this path streams + caches + single-flights but performs
+ * <strong>no</strong> integrity verification — there is deliberately no
+ * assertion here about a {@code .ziphash} sidecar (removed inert claim).
+ * Genuine {@code h1:} dirhash verification against the sumdb returns as a
+ * separate, deferred workstream once the sumdb proxy lands.
  *
  * @since 2.2.0
  */
@@ -66,50 +65,11 @@ final class CachedProxySliceIntegrityTest {
         new Key.From("example.com/test/@v/v1.0.0.zip");
 
     @Test
-    @DisplayName("upstream .ziphash mismatch → bytes streamed; cache stays empty; integrity metric increments (T-P08)")
-    void ziphashMismatch_streamsButDoesNotCache() throws Exception {
+    @DisplayName("zip streams to the client, caches on disk, and makes zero .ziphash requests")
+    void streamsAndCachesWithoutSidecarRequests() throws Exception {
         final Storage storage = new InMemoryStorage();
         final MeterRegistry registry = new SimpleMeterRegistry();
-        final FakeGoUpstream origin = new FakeGoUpstream(
-            MODULE_ZIP,
-            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-        );
-        final CachedProxySlice slice = buildSlice(origin, storage, registry);
-
-        final Response response = slice.response(
-            new RequestLine(RqMethod.GET, MODULE_PATH),
-            Headers.EMPTY,
-            Content.EMPTY
-        ).join();
-
-        // Stream-through (T-P08): bytes already in flight when verify runs,
-        // so the client sees 200; cache stays empty so the next request
-        // re-fetches cleanly. Integrity metric still fires for observability.
-        assertEquals(RsStatus.OK, response.status(), "200 (bytes streamed to client)");
-        assertArrayEquals(
-            MODULE_ZIP,
-            response.body().asBytesFuture().join(),
-            "module bytes streamed to client"
-        );
-        Thread.sleep(200);
-        assertFalse(storage.exists(MODULE_KEY).join(), "primary NOT in storage");
-        assertFalse(
-            storage.exists(new Key.From(MODULE_KEY.string() + ".sha256")).join(),
-            "sidecar NOT in storage"
-        );
-        final Counter counter = registry.find("pantera.proxy.cache.integrity_failure")
-            .tags(Tags.of("repo", "go-proxy-test", "algo", "sha256"))
-            .counter();
-        assertNotNull(counter, "integrity-failure counter registered");
-        assertEquals(1.0, counter.count(), "counter incremented once");
-    }
-
-    @Test
-    @DisplayName("matching .ziphash → primary + sidecar persisted; second GET served from cache")
-    void matchingZiphash_persistsAndServesFromCache() throws Exception {
-        final Storage storage = new InMemoryStorage();
-        final MeterRegistry registry = new SimpleMeterRegistry();
-        final FakeGoUpstream origin = new FakeGoUpstream(MODULE_ZIP, sha256Hex(MODULE_ZIP));
+        final FakeGoUpstream origin = new FakeGoUpstream(MODULE_ZIP);
         final CachedProxySlice slice = buildSlice(origin, storage, registry);
 
         final Response first = slice.response(
@@ -122,13 +82,36 @@ final class CachedProxySliceIntegrityTest {
         assertArrayEquals(
             MODULE_ZIP,
             first.body().asBytesFuture().join(),
+            "first request streams module bytes to the client"
+        );
+        Thread.sleep(200);
+        assertTrue(storage.exists(MODULE_KEY).join(), "primary cached on disk");
+        assertEquals(
+            0, origin.ziphashCalls(),
+            "no .ziphash sidecar was ever requested (inert claim removed)"
+        );
+    }
+
+    @Test
+    @DisplayName("second GET is served from cache, no additional upstream call")
+    void secondRequestServedFromCache() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final MeterRegistry registry = new SimpleMeterRegistry();
+        final FakeGoUpstream origin = new FakeGoUpstream(MODULE_ZIP);
+        final CachedProxySlice slice = buildSlice(origin, storage, registry);
+
+        final Response first = slice.response(
+            new RequestLine(RqMethod.GET, MODULE_PATH),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        assertEquals(RsStatus.OK, first.status(), "first request 200");
+        assertArrayEquals(
+            MODULE_ZIP,
+            first.body().asBytesFuture().join(),
             "first request serves module bytes"
         );
-        assertTrue(storage.exists(MODULE_KEY).join(), "primary in storage");
-        assertTrue(
-            storage.exists(new Key.From(MODULE_KEY.string() + ".sha256")).join(),
-            "sha256 sidecar in storage (written from .ziphash upstream)"
-        );
+
         final int upstreamCallsBefore = origin.primaryCalls();
         final Response second = slice.response(
             new RequestLine(RqMethod.GET, MODULE_PATH),
@@ -139,12 +122,16 @@ final class CachedProxySliceIntegrityTest {
         assertArrayEquals(
             MODULE_ZIP,
             second.body().asBytesFuture().join(),
-            "second request cached bytes"
+            "second request serves cached bytes"
         );
         assertEquals(
             upstreamCallsBefore,
             origin.primaryCalls(),
             "second request did not hit upstream"
+        );
+        assertEquals(
+            0, origin.ziphashCalls(),
+            "no .ziphash sidecar was ever requested (inert claim removed)"
         );
     }
 
@@ -153,7 +140,7 @@ final class CachedProxySliceIntegrityTest {
     void concurrentColdFetches_singleFlightCollapses() throws Exception {
         final Storage storage = new InMemoryStorage();
         final MeterRegistry registry = new SimpleMeterRegistry();
-        final FakeGoUpstream origin = new FakeGoUpstream(MODULE_ZIP, sha256Hex(MODULE_ZIP));
+        final FakeGoUpstream origin = new FakeGoUpstream(MODULE_ZIP);
         origin.holdPrimary(true);
         final CachedProxySlice slice = buildSlice(origin, storage, registry);
 
@@ -180,6 +167,10 @@ final class CachedProxySliceIntegrityTest {
         assertEquals(
             1, origin.primaryCalls(),
             "single-flight collapsed " + callers + " concurrent cold fetches to one upstream call"
+        );
+        assertEquals(
+            0, origin.ziphashCalls(),
+            "no .ziphash sidecar was ever requested (inert claim removed)"
         );
     }
 
@@ -231,34 +222,29 @@ final class CachedProxySliceIntegrityTest {
         };
     }
 
-    private static String sha256Hex(final byte[] body) {
-        try {
-            final MessageDigest md = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(md.digest(body));
-        } catch (final Exception ex) {
-            throw new AssertionError(ex);
-        }
-    }
-
     /**
-     * Minimal fake Go upstream: serves primary zip on artifact paths, and
-     * the SHA-256 hex on {@code .ziphash} paths. Counts primary GETs so
-     * tests can confirm the second request is cache-only.
+     * Minimal fake Go upstream: serves the primary zip on artifact paths
+     * and counts calls, distinguishing genuine primary-artifact requests
+     * from any {@code .ziphash} request so tests can assert the latter
+     * never happens (WS4-go.1: no sidecar exists in GOPROXY).
      */
     private static final class FakeGoUpstream implements Slice {
         private final byte[] primary;
-        private final String sha256Hex;
         private final AtomicInteger primaryCalls = new AtomicInteger();
+        private final AtomicInteger ziphashCalls = new AtomicInteger();
         private final java.util.concurrent.atomic.AtomicBoolean hold =
             new java.util.concurrent.atomic.AtomicBoolean();
 
-        FakeGoUpstream(final byte[] primary, final String sha256Hex) {
+        FakeGoUpstream(final byte[] primary) {
             this.primary = primary;
-            this.sha256Hex = sha256Hex;
         }
 
         int primaryCalls() {
             return this.primaryCalls.get();
+        }
+
+        int ziphashCalls() {
+            return this.ziphashCalls.get();
         }
 
         void holdPrimary(final boolean hold) {
@@ -271,11 +257,8 @@ final class CachedProxySliceIntegrityTest {
         ) {
             final String path = line.uri().getPath();
             if (path.endsWith(".ziphash")) {
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.ok()
-                        .body(this.sha256Hex.getBytes(StandardCharsets.UTF_8))
-                        .build()
-                );
+                this.ziphashCalls.incrementAndGet();
+                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
             }
             this.primaryCalls.incrementAndGet();
             if (this.hold.get()) {

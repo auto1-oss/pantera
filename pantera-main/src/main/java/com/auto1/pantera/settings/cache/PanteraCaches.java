@@ -12,9 +12,6 @@ package com.auto1.pantera.settings.cache;
 
 import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.cache.StoragesCache;
-import com.auto1.pantera.security.policy.CachedDbPolicy;
-import com.auto1.pantera.security.policy.CachedYamlPolicy;
-import com.auto1.pantera.security.policy.Policy;
 
 /**
  * Encapsulates caches which are possible to use in settings of Pantera server.
@@ -67,9 +64,14 @@ public interface PanteraCaches {
         private final StoragesCache strgcache;
 
         /**
-         * Pantera policy.
+         * Cache for user policy — already resolved by the caller to either
+         * the raw policy (single-instance) or a {@code PublishingCleanable}
+         * wrapper broadcasting invalidations cross-node (WS2.3, 2.3.0). A
+         * no-op {@link Cleanable} when the policy isn't itself
+         * {@link Cleanable} (e.g. a policy implementation with no local
+         * cache to invalidate).
          */
-        private final Policy<?> policy;
+        private final Cleanable<String> policyCache;
 
         /**
          * Cache for configurations of filters.
@@ -80,18 +82,19 @@ public interface PanteraCaches {
          * Ctor with all initialized caches.
          * @param users Users cache
          * @param strgcache Storages cache
-         * @param policy Pantera policy
+         * @param policyCache Pantera policy cache — pre-wrapped by the
+         *     caller when cross-node broadcast is available
          * @param filtersCache Filters cache
                          */
         public All(
             final Cleanable<String> users,
             final StoragesCache strgcache,
-            final Policy<?> policy,
+            final Cleanable<String> policyCache,
             final FiltersCache filtersCache
         ) {
             this.authcache = users;
             this.strgcache = strgcache;
-            this.policy = policy;
+            this.policyCache = policyCache;
             this.filtersCache = filtersCache;
         }
 
@@ -107,25 +110,7 @@ public interface PanteraCaches {
 
         @Override
         public Cleanable<String> policyCache() {
-            final Cleanable<String> res;
-            if (this.policy instanceof CachedYamlPolicy) {
-                res = (CachedYamlPolicy) this.policy;
-            } else if (this.policy instanceof CachedDbPolicy) {
-                res = (CachedDbPolicy) this.policy;
-            } else {
-                res = new Cleanable<>() {
-                    @Override
-                    public void invalidate(final String any) {
-                        //do nothing
-                    }
-
-                    @Override
-                    public void invalidateAll() {
-                        //do nothing
-                    }
-                };
-            }
-            return res;
+            return this.policyCache;
         }
 
         @Override
