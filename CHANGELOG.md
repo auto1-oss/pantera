@@ -41,6 +41,12 @@
 - **Authorization and resilience-threshold changes propagate across the cluster** — role/permission, publishing-filter and circuit-breaker threshold edits made on one node invalidate every peer's cache over pub/sub, with the cache TTL as the backstop. ([@aydasraf](https://github.com/aydasraf))
 - **Removed a non-functional Go archive integrity claim** — the proxy no longer writes a `.ziphash` sidecar the GOPROXY protocol does not define; genuine verification is the proxied `sumdb`. ([@aydasraf](https://github.com/aydasraf))
 
+## Version 2.2.13
+
+### 🌟 New features
+
+- **Opening Pantera from the Okta dashboard signs the user in.** When an identity provider opens the UI with an `iss` parameter, as the Okta dashboard tile does, the UI starts the sign-in at the configured provider by itself. Until now it showed the sign-in page and waited for a click on **Continue with okta**. The sign-in starts only when that provider is the issuer named; any other value leaves the sign-in page as it is. See [Authentication](docs/admin-guide/authentication.md#sign-in-from-the-okta-dashboard) for the Okta application settings. ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.12
 
 ### 🌟 New features
