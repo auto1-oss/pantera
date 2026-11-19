@@ -138,7 +138,7 @@ Use `handle()` when you need access to both the result and the exception.
 
 ### Framework
 
-- **JUnit 5** for all tests.
+- **JUnit 6** (Jupiter) for all tests.
 - **Hamcrest** for assertions.
 - **Vert.x JUnit 5 extension** (`vertx-junit5`) for tests involving the Vert.x event loop.
 

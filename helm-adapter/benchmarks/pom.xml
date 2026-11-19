@@ -34,7 +34,7 @@ SOFTWARE.
   <groupId>benchmarks</groupId>
   <version>2.2.12</version>
   <properties>
-    <jmh.version>1.29</jmh.version>
+    <jmh.version>1.37</jmh.version>
     <header.license>${project.basedir}/../../LICENSE.header</header.license>
   </properties>
   <dependencies>
@@ -86,7 +86,7 @@ SOFTWARE.
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
-        <version>3.2.0</version>
+        <version>3.6.2</version>
         <executions>
           <execution>
             <phase>package</phase>
@@ -95,6 +95,7 @@ SOFTWARE.
             </goals>
             <configuration>
               <finalName>benchmarks</finalName>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>org.openjdk.jmh.Main</mainClass>

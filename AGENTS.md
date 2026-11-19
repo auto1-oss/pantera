@@ -21,7 +21,7 @@ Use Java 21 and UTF-8. Java code uses 4-space indentation, descriptive PascalCas
 
 ## Testing Guidelines
 
-Use JUnit 5 and Hamcrest for Java tests. Unit tests must be isolated from external services and named `*Test.java`. Integration tests must be named `*IT.java` or `*ITCase.java` and use TestContainers when Docker services are needed. UI tests use Vitest and usually sit beside features in `__tests__`.
+Use JUnit 6 and Hamcrest for Java tests. Unit tests must be isolated from external services and named `*Test.java`. Integration tests must be named `*IT.java` or `*ITCase.java` and use TestContainers when Docker services are needed. UI tests use Vitest and usually sit beside features in `__tests__`.
 
 ## Commit & Pull Request Guidelines
 

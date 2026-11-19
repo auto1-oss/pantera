@@ -56,7 +56,11 @@ SOFTWARE.
         </exclusion>
       </exclusions>
     </dependency>
-    <!-- JRuby -->
+    <!--
+      JRuby is pinned to 9.4.2.0. Later releases bundle RubyGems 3.5 or newer,
+      which moved rubygems/indexer into the gem rubygems-generate_index; the
+      gem index update fails with "cannot load such file" without it.
+    -->
     <dependency>
       <groupId>org.jruby</groupId>
       <artifactId>jruby-complete</artifactId>
@@ -75,7 +79,7 @@ SOFTWARE.
     <dependency>
       <groupId>org.yaml</groupId>
       <artifactId>snakeyaml</artifactId>
-      <version>2.0</version>
+      <version>2.7</version>
     </dependency>
     <dependency>
       <groupId>org.glassfish</groupId>
@@ -133,7 +137,7 @@ SOFTWARE.
       <plugins>
         <plugin>
           <artifactId>maven-clean-plugin</artifactId>
-          <version>3.1.0</version>
+          <version>3.5.0</version>
           <configuration>
             <filesets>
               <fileset>
@@ -151,7 +155,7 @@ SOFTWARE.
       <plugin>
         <groupId>com.jcabi</groupId>
         <artifactId>jcabi-maven-plugin</artifactId>
-        <version>0.17.0</version>
+        <version>0.17.2</version>
         <executions>
           <execution>
             <id>jcabi-versionalize-packages</id>

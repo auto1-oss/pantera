@@ -44,7 +44,7 @@ https://github.com/auto1-oss/pantera/blob/master/LICENSE.txt
     <dependency>
       <groupId>co.elastic.apm</groupId>
       <artifactId>apm-agent-api</artifactId>
-      <version>1.55.1</version>
+      <version>1.57.1</version>
     </dependency>
     <!-- Test only dependencies -->
     <dependency>
