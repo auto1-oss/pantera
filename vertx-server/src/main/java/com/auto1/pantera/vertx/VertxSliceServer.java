@@ -1989,8 +1989,9 @@ public final class VertxSliceServer implements Closeable {
                     .error(error)
                     .field("log.source", "application")
                     .log();
-                // CRITICAL: Must end response even on error to decrement counter
-                // Use guarded response to prevent double-end race conditions
+                // The response is terminated on this path too: with an error
+                // status while the head is unsent, by breaking it off after.
+                // The guarded response keeps a second termination out.
                 if (!this.guardedResponse.isTerminated()) {
                     try {
                         // Only set error status if headers haven't been sent yet
@@ -2021,8 +2022,14 @@ public final class VertxSliceServer implements Closeable {
                                 errorMsg
                             );
                         } else {
-                            // Headers already sent, just end the response
-                            this.guardedResponse.safeEnd("ResponseTerminator.fail");
+                            // The head is with the client already, so the
+                            // status cannot say that the body is incomplete.
+                            // Break off the exchange instead: ending it
+                            // normally leaves an HTTP/1.1 client waiting for
+                            // the rest of the declared Content-Length until
+                            // the idle timeout, and completes a chunked body
+                            // that is in fact truncated.
+                            this.guardedResponse.safeAbort("ResponseTerminator.fail");
                         }
                     } catch (Exception e) {
                         EcsLogger.warn("com.auto1.pantera.vertx")
