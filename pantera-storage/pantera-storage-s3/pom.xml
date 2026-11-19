@@ -44,29 +44,29 @@ SOFTWARE.
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>s3</artifactId>
-      <version>2.41.29</version>
+      <version>2.59.3</version>
     </dependency>
     <!-- AWS SDK v2 SSO modules for profile-based SSO credentials -->
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>sso</artifactId>
-      <version>2.41.29</version>
+      <version>2.59.3</version>
     </dependency>
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>ssooidc</artifactId>
-      <version>2.41.29</version>
+      <version>2.59.3</version>
     </dependency>
     <!-- Netty async HTTP client for AWS SDK v2 -->
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>netty-nio-client</artifactId>
-      <version>2.41.29</version>
+      <version>2.59.3</version>
     </dependency>
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>sts</artifactId>
-      <version>2.41.29</version>
+      <version>2.59.3</version>
     </dependency>
     <!-- tests -->
     <!-- Testcontainers for S3Mock - avoids Jetty 12 classpath conflicts -->
@@ -81,7 +81,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.amazonaws</groupId>
       <artifactId>aws-java-sdk-s3</artifactId>
-      <version>1.12.529</version>
+      <version>1.12.797</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

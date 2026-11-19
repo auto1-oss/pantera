@@ -227,12 +227,12 @@ BACKFILL_IT_DB_PASSWORD=artipie \
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Apache Commons CLI | 1.5.0 | CLI argument parsing |
-| PostgreSQL JDBC | 42.7.1 | Database driver |
-| HikariCP | 5.1.0 | Connection pooling |
+| Apache Commons CLI | 1.11.0 | CLI argument parsing |
+| PostgreSQL JDBC | 42.7.14 | Database driver |
+| HikariCP | 7.1.0 | Connection pooling |
 | javax.json | — | JSON parsing (NPM, Composer, Go) |
-| SnakeYAML | 2.0 | YAML parsing (Helm) |
-| SLF4J + Log4j2 | 2.0.17 / 2.24.3 | Logging |
+| SnakeYAML | 2.7 | YAML parsing (Helm) |
+| SLF4J + Log4j2 | 2.0.20 / 2.26.1 | Logging |
 
 ## License
 

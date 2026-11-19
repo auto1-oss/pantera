@@ -36,7 +36,7 @@ SOFTWARE.
   <description>Debian adapter</description>
   <inceptionYear>2020</inceptionYear>
   <properties>
-    <jmh.version>1.29</jmh.version>
+    <jmh.version>1.37</jmh.version>
     <header.license>${project.basedir}/../LICENSE.header</header.license>
   </properties>
   <dependencies>
@@ -68,13 +68,13 @@ SOFTWARE.
     <dependency>
       <groupId>org.tukaani</groupId>
       <artifactId>xz</artifactId>
-      <version>1.8</version>
+      <version>1.12</version>
       <scope>runtime</scope>
     </dependency>
     <dependency>
       <groupId>com.github.luben</groupId>
       <artifactId>zstd-jni</artifactId>
-      <version>1.5.5-4</version>
+      <version>1.5.7-28</version>
     </dependency>
     <!-- Dependency for PGP and GPG Encryption-Decryption -->
     <dependency>

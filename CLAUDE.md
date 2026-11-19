@@ -15,7 +15,7 @@ This file is the durable operating reference for agents and humans. Rules for th
 
 Pantera is a multi-format binary artifact registry (Maven, Docker, npm, PyPI, Go, Composer, Helm, NuGet, Debian, RPM, Conda, Conan, Hex, Gem, generic files), based on Artipie. Java 21 + Maven multi-module backend, Vue 3 + Vite UI in `pantera-ui/`.
 
-Tech stack: Vert.x 4.5 (HTTP server), Jetty 12 (HTTP client), PostgreSQL + HikariCP + Flyway, Valkey via Lettuce (optional, HA), Quartz, Log4j2 with ECS JSON layout, Micrometer/Prometheus, RxJava inside adapter internals, JUnit 5 + Hamcrest + TestContainers, PMD via `build-tools`.
+Tech stack: Vert.x 4.5 (HTTP server), Jetty 12 (HTTP client), PostgreSQL + HikariCP + Flyway, Valkey via Lettuce (optional, HA), Quartz, Log4j2 with ECS JSON layout, Micrometer/Prometheus, RxJava inside adapter internals, JUnit 6 + Hamcrest + TestContainers, PMD via `build-tools`.
 
 ## Definition of done
 
@@ -168,7 +168,7 @@ Dependabot: weekly grouped updates (maven, npm in `pantera-ui/`, github-actions)
   - *Behavior*: invocation counts — "`calls == 1`" proves no upstream call; recording fakes prove propagation.
   - *Regression guards*: if a duration bound is genuinely wanted, set it ≥10× the idle-laptop value (order-of-magnitude guard) and say so in a comment.
   - *Shared resources*: retry briefly on transient contention (the bounded `HandlerExecutor` queue, freshly-started listeners/TLS handshakes, fire-and-forget cleanup) — poll for the eventual state instead of asserting instantly.
-- JUnit 5 + Hamcrest with **matcher objects, not static factories**: `new IsEqual<>(y)`, not `Matchers.equalTo(y)`. Single assertion: no reason string; multiple assertions: every one gets a reason string.
+- JUnit 6 + Hamcrest with **matcher objects, not static factories**: `new IsEqual<>(y)`, not `Matchers.equalTo(y)`. Single assertion: no reason string; multiple assertions: every one gets a reason string.
 - No `Files.createFile` in tests — use `@TempDir`.
 - Vert.x API tests share server state across methods in a class (rate-limiter windows, pools) — write tests tolerant of pre-consumed shared state.
 

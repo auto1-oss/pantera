@@ -45,7 +45,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.jcabi</groupId>
       <artifactId>jcabi-xml</artifactId>
-      <version>0.22.2</version>
+      <version>0.37.3</version>
     </dependency>
     <dependency>
       <groupId>com.auto1.pantera</groupId>

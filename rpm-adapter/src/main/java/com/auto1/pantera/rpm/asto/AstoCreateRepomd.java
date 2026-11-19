@@ -22,7 +22,6 @@ import com.auto1.pantera.rpm.RepoConfig;
 import com.auto1.pantera.rpm.meta.XmlPackage;
 import com.auto1.pantera.rpm.meta.XmlRepomd;
 import com.auto1.pantera.rpm.pkg.Checksum;
-import com.jcabi.aspects.Tv;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Observable;
 import io.reactivex.Single;
@@ -71,7 +70,7 @@ public final class AstoCreateRepomd {
                     .process(
                         (opt, out) -> {
                             try (XmlRepomd repomd = new XmlRepomd(out)) {
-                                repomd.begin(System.currentTimeMillis() / Tv.THOUSAND);
+                                repomd.begin(System.currentTimeMillis() / 1000L);
                                 new XmlPackage.Stream(this.cnfg.filelists()).get()
                                     .filter(
                                         item -> gziped.containsKey(item) && open.containsKey(item)
