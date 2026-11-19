@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { formatAuthError } from '@/utils/authError'
 import InputText from 'primevue/inputtext'
@@ -8,6 +8,7 @@ import Password from 'primevue/password'
 import Button from 'primevue/button'
 import Message from 'primevue/message'
 
+const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
@@ -25,7 +26,34 @@ const ssoProviders = computed(() =>
   auth.providers.filter(p => !directGrantTypes.has(p.type))
 )
 
-onMounted(() => { auth.fetchProviders() })
+onMounted(async () => {
+  await auth.fetchProviders()
+  const issuer = route.query.iss
+  if (typeof issuer === 'string' && issuer !== '') {
+    await startAtIssuer(issuer)
+  }
+})
+
+/**
+ * An identity provider that opens the UI from its own dashboard (the Okta
+ * tile) names itself in `iss`. Start the sign-in at the configured provider
+ * that is this issuer, so the visitor does not have to click its button.
+ * Any other value leaves the page as it is.
+ */
+async function startAtIssuer(issuer: string) {
+  for (const provider of ssoProviders.value.filter(p => p.enabled)) {
+    ssoLoading.value = provider.type
+    try {
+      if (await auth.ssoRedirect(provider.type, issuer)) {
+        return
+      }
+    } catch (e: unknown) {
+      errorMsg.value = formatAuthError(e).message
+      break
+    }
+  }
+  ssoLoading.value = null
+}
 
 function clearError() {
   errorMsg.value = ''
