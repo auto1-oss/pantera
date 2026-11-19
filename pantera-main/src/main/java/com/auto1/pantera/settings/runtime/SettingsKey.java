@@ -29,10 +29,10 @@ public enum SettingsKey {
     BULKHEAD_ADAPTIVE("http_client.bulkhead.adaptive", "true"),
     BULKHEAD_MIN_PERMITS("http_client.bulkhead.min_permits", "5"),
     BULKHEAD_MAX_PERMITS("http_client.bulkhead.max_permits", "100"),
-    BULKHEAD_INITIAL_PERMITS("http_client.bulkhead.initial_permits", "10"),
+    BULKHEAD_INITIAL_PERMITS("http_client.bulkhead.initial_permits", "40"),
     BULKHEAD_TARGET_P99_MS("http_client.bulkhead.target_p99_ms", "500"),
     BULKHEAD_WINDOW_SECONDS("http_client.bulkhead.window_seconds", "5"),
-    BULKHEAD_RAMP_UP_STEP("http_client.bulkhead.ramp_up_step", "1"),
+    BULKHEAD_RAMP_UP_STEP("http_client.bulkhead.ramp_up_step", "4"),
     BULKHEAD_RAMP_DOWN_FACTOR("http_client.bulkhead.ramp_down_factor", "0.5");
 
     private static final Set<String> ALL_KEYS = Arrays.stream(values())

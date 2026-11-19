@@ -30,6 +30,9 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.time.Instant;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -138,8 +141,14 @@ public final class FileSystemArtifactSlice implements Slice {
                 }
 
                 // Stream file content directly from filesystem
-                final long fileSize = Files.size(filePath);
-                final Content fileContent = streamFromFilesystem(filePath, fileSize);
+                // One attribute read gives the size and the modification
+                // time; the content carries both.
+                final BasicFileAttributes attrs =
+                    Files.readAttributes(filePath, BasicFileAttributes.class);
+                final long fileSize = attrs.size();
+                final Content fileContent = streamFromFilesystem(
+                    filePath, fileSize, attrs.lastModifiedTime().toInstant()
+                );
 
                 final long elapsed = System.currentTimeMillis() - startTime;
                 EcsLogger.debug("com.auto1.pantera.http")
@@ -180,10 +189,17 @@ public final class FileSystemArtifactSlice implements Slice {
      *
      * @param filePath Filesystem path to file
      * @param fileSize File size in bytes
+     * @param modified Time the file was last modified
      * @return Streaming content with backpressure support
      */
-    private static Content streamFromFilesystem(final Path filePath, final long fileSize) {
-        return new Content.From(fileSize, new BackpressureFilePublisher(filePath, fileSize, CHUNK_SIZE, BLOCKING_EXECUTOR));
+    private static Content streamFromFilesystem(
+        final Path filePath, final long fileSize, final Instant modified
+    ) {
+        return new Content.From(
+            Optional.of(fileSize),
+            new BackpressureFilePublisher(filePath, fileSize, CHUNK_SIZE, BLOCKING_EXECUTOR),
+            Optional.of(modified)
+        );
     }
 
     /**

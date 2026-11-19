@@ -142,9 +142,15 @@ public final class OptimizedStorageCache {
                     throw new java.io.IOException("File not found: " + key.string());
                 }
 
-                // Stream using NIO FileChannel
-                final long fileSize = java.nio.file.Files.size(filePath);
-                return streamFileContent(filePath, fileSize);
+                // Stream using NIO FileChannel. Size and modification time
+                // come from one attribute read; the content carries both.
+                final java.nio.file.attribute.BasicFileAttributes attrs =
+                    java.nio.file.Files.readAttributes(
+                        filePath, java.nio.file.attribute.BasicFileAttributes.class
+                    );
+                return streamFileContent(
+                    filePath, attrs.size(), attrs.lastModifiedTime().toInstant()
+                );
 
             } catch (Exception e) {
                 throw new RuntimeException("Failed to read file: " + key.string(), e);
@@ -160,11 +166,13 @@ public final class OptimizedStorageCache {
      *
      * @param filePath File path
      * @param fileSize File size
-     * @return Content with size information
+     * @param modified Time the file was last modified
+     * @return Content with size and modification time
      */
     private static Content streamFileContent(
         final java.nio.file.Path filePath,
-        final long fileSize
+        final long fileSize,
+        final java.time.Instant modified
     ) {
         final Publisher<ByteBuffer> publisher = subscriber -> {
             subscriber.onSubscribe(new CacheFileSubscription(subscriber, filePath, fileSize));
@@ -172,7 +180,9 @@ public final class OptimizedStorageCache {
 
         // CRITICAL: Include file size so Content-Length header can be set
         // This enables download progress in browsers and multi-connection downloads
-        return new Content.From(fileSize, publisher);
+        return new Content.From(
+            java.util.Optional.of(fileSize), publisher, java.util.Optional.of(modified)
+        );
     }
 
     /**

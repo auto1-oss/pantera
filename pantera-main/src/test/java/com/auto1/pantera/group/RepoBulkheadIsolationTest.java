@@ -12,6 +12,7 @@ package com.auto1.pantera.group;
 
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Result;
+import com.auto1.pantera.http.resilience.AdaptiveBulkheadLimits;
 import com.auto1.pantera.http.resilience.BulkheadLimits;
 import com.auto1.pantera.http.resilience.RepoBulkhead;
 import org.junit.jupiter.api.Test;
@@ -40,14 +41,16 @@ final class RepoBulkheadIsolationTest {
     @Test
     void saturatedRepoADoesNotBlockRepoB() throws Exception {
         final int maxConcurrent = 5;
-        final BulkheadLimits limits = new BulkheadLimits(
+        final AdaptiveBulkheadLimits limits = AdaptiveBulkheadLimits.fixed(
             maxConcurrent, 100, Duration.ofSeconds(1)
         );
+        // A short wait bound: a saturated bulkhead refuses only after it.
+        final Duration wait = Duration.ofMillis(50);
         final RepoBulkhead bulkheadA = new RepoBulkhead(
-            "repo-A", limits, ForkJoinPool.commonPool()
+            "repo-A", limits, ForkJoinPool.commonPool(), wait
         );
         final RepoBulkhead bulkheadB = new RepoBulkhead(
-            "repo-B", limits, ForkJoinPool.commonPool()
+            "repo-B", limits, ForkJoinPool.commonPool(), wait
         );
 
         // Saturate repo A: hold all permits with uncompleted futures
@@ -60,12 +63,13 @@ final class RepoBulkheadIsolationTest {
         assertEquals(maxConcurrent, bulkheadA.activeCount(),
             "Repo A must be fully saturated");
 
-        // Repo A is now full - next request to A must be rejected
+        // Repo A is now full - the next request to A waits for a permit and
+        // is refused when none comes within the wait bound
         final Result<String> rejectedA = bulkheadA.run(
             () -> CompletableFuture.completedFuture(Result.ok("should-not-reach"))
         ).toCompletableFuture().get(5, TimeUnit.SECONDS);
         assertInstanceOf(Result.Err.class, rejectedA,
-            "Repo A must reject when saturated");
+            "Repo A must refuse when it stays saturated");
         final Fault faultA = ((Result.Err<String>) rejectedA).fault();
         assertInstanceOf(Fault.Overload.class, faultA,
             "Rejection must be Overload");

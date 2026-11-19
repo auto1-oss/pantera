@@ -26,22 +26,22 @@ SOFTWARE.
   <parent>
     <groupId>com.auto1.pantera</groupId>
     <artifactId>pantera</artifactId>
-    <version>2.2.11</version>
+    <version>2.2.12</version>
     <relativePath>/../../pom.xml</relativePath>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>conda-bench</artifactId>
-  <version>2.2.11</version>
+  <version>2.2.12</version>
   <packaging>jar</packaging>
   <properties>
-    <jmh.version>1.29</jmh.version>
+    <jmh.version>1.37</jmh.version>
     <header.license>${project.basedir}/../../LICENSE.header</header.license>
   </properties>
   <dependencies>
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>conda-adapter</artifactId>
-      <version>2.2.11</version>
+      <version>2.2.12</version>
     </dependency>
     <dependency>
       <groupId>org.openjdk.jmh</groupId>
@@ -70,7 +70,7 @@ SOFTWARE.
     <plugins>
       <plugin>
         <artifactId>maven-surefire-plugin</artifactId>
-        <version>3.0.0-M5</version>
+        <version>3.5.6</version>
         <configuration>
           <useFile>false</useFile>
           <trimStackTrace>false</trimStackTrace>
@@ -96,7 +96,7 @@ SOFTWARE.
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
-        <version>3.2.0</version>
+        <version>3.6.2</version>
         <executions>
           <execution>
             <phase>package</phase>
@@ -105,6 +105,7 @@ SOFTWARE.
             </goals>
             <configuration>
               <finalName>benchmarks</finalName>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>org.openjdk.jmh.Main</mainClass>

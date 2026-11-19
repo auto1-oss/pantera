@@ -18,6 +18,7 @@ import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.http.client.HttpServer;
 import com.auto1.pantera.http.client.ProxySettings;
 import com.auto1.pantera.http.client.ratelimit.RateLimitedClientSlice;
+import com.auto1.pantera.http.client.retry.RetryingClientSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
@@ -74,10 +75,11 @@ final class JettyClientSlicesTest {
     @Test
     void shouldProduceHttpWithPort() {
         final int custom = 8080;
-        // localhost bypasses the rate limiter — raw Jetty slice.
+        // localhost bypasses the rate limiter and the breaker: only the
+        // transport, with its retry of a connection closed unanswered.
         MatcherAssert.assertThat(
             new JettyClientSlices().http("localhost", custom),
-            new IsInstanceOf(JettyClientSlice.class)
+            new IsInstanceOf(RetryingClientSlice.class)
         );
     }
 

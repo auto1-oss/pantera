@@ -14,7 +14,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.auto1.pantera</groupId>
   <artifactId>pantera</artifactId>
-  <version>2.2.11</version>
+  <version>2.2.12</version>
   <packaging>pom</packaging>
   <name>pantera</name>
   <modules>
@@ -69,17 +69,21 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
     <maven.compiler.release>21</maven.compiler.release>
     <!-- Tests enabled by default; set -Dmaven.test.skip=true to skip locally -->
     <header.license>LICENSE.header</header.license>
-    <junit-platform.version>5.10.0</junit-platform.version>
-    <vertx.version>4.5.26</vertx.version>
-    <guava.version>33.5.0-jre</guava.version>
+    <junit-platform.version>6.1.3</junit-platform.version>
+    <vertx.version>4.5.36</vertx.version>
+    <!-- Netty of the HTTP server (Vert.x), the Valkey client and the S3 client. Managed
+         here, ahead of the Vert.x BOM, so that a Netty security release does not wait
+         for a Vert.x release; stays on the 4.1 line Vert.x 4.5 is built for. -->
+    <netty.version>4.1.141.Final</netty.version>
+    <guava.version>33.8.0-jre</guava.version>
     <javax.json.version>1.1.4</javax.json.version>
-    <jetty.version>12.1.8</jetty.version>
-    <s3mock.version>3.5.2</s3mock.version>
-    <bouncycastle-lts.version>2.73.9</bouncycastle-lts.version>
-    <httpclient.version>5.5</httpclient.version>
-    <httpcore5.version>5.3.4</httpcore5.version>
-    <httpcore5-h2.version>5.3.4</httpcore5-h2.version>
-    <fasterxml.jackson.version>2.18.6</fasterxml.jackson.version>
+    <jetty.version>12.1.15</jetty.version>
+    <s3mock.version>3.12.0</s3mock.version>
+    <bouncycastle-lts.version>2.73.13</bouncycastle-lts.version>
+    <httpclient.version>5.6.5</httpclient.version>
+    <httpcore5.version>5.4.4</httpcore5.version>
+    <httpcore5-h2.version>5.4.4</httpcore5-h2.version>
+    <fasterxml.jackson.version>2.23.0</fasterxml.jackson.version>
     <!--
       Micrometer is pinned to 1.12.x because 1.13.0 moved
       PrometheusMeterRegistry from io.micrometer.prometheus to
@@ -87,8 +91,8 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
       requires updating MicrometerMetrics.java imports. 1.12.13
       is the last patch in the old-package line.
     -->
-    <micrometer.version>1.12.13</micrometer.version>
-    <testcontainers.version>2.0.4</testcontainers.version>
+    <micrometer.version>1.17.2</micrometer.version>
+    <testcontainers.version>2.0.5</testcontainers.version>
   </properties>
   <developers>
     <!-- Required for publishing to central -->
@@ -125,6 +129,22 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
   </repositories>
   <dependencyManagement>
   <dependencies>
+      <!-- Of several imported BOMs the first one that manages an artifact wins, so Netty
+           and Jackson are imported before the Vert.x BOM, which pins both. -->
+      <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-bom</artifactId>
+        <version>${netty.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${fasterxml.jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
       <dependency>
         <groupId>io.vertx</groupId>
         <artifactId>vertx-dependencies</artifactId>
@@ -139,6 +159,24 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
         <type>pom</type>
         <scope>import</scope>
       </dependency>
+      <!-- Transitive libraries held at a release without published vulnerabilities:
+           Jersey 1.x comes with jcabi-http (GitHub authentication), commons-lang3 with
+           several libraries at different versions. -->
+      <dependency>
+        <groupId>com.sun.jersey</groupId>
+        <artifactId>jersey-core</artifactId>
+        <version>1.19.4</version>
+      </dependency>
+      <dependency>
+        <groupId>com.sun.jersey</groupId>
+        <artifactId>jersey-client</artifactId>
+        <version>1.19.4</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-lang3</artifactId>
+        <version>3.22.0</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
   <dependencies>
@@ -147,6 +185,11 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
       <artifactId>reactive-streams</artifactId>
       <version>1.0.4</version>
     </dependency>
+    <!--
+      eo-yaml stays on 7.x: the writer of 8.x no longer quotes scalars, which
+      changes the user and role YAML files Pantera writes (ManageRolesTest,
+      ManageUsersTest).
+    -->
     <dependency>
       <groupId>com.amihaiemil.web</groupId>
       <artifactId>eo-yaml</artifactId>
@@ -158,11 +201,12 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
       <version>0.24.3</version>
     </dependency>
     <!--
-      commons-compress is pinned to 1.27.x because 1.28.0 made
-      ArchiveException extend IOException, which breaks multi-catch
-      statements in nuget-adapter and debian-adapter that catch both.
-      1.27.1 is post-CVE-2024-26308 and is the last patch in the
-      old class-hierarchy line.
+      commons-compress is pinned to 1.27.x. The gzip reader of 1.28.0 rejects
+      the header of archives made by `helm package` ("Extra subfield lenght
+      exceeds remaining bytes", COMPRESS-705), so the helm adapter cannot
+      read charts. 1.28.0 also made ArchiveException extend IOException,
+      which breaks multi-catch statements in nuget-adapter, pypi-adapter and
+      debian-adapter that catch both. 1.27.1 is post-CVE-2024-26308.
     -->
     <dependency>
       <groupId>org.apache.commons</groupId>
@@ -172,56 +216,56 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
     <dependency>
       <groupId>commons-cli</groupId>
       <artifactId>commons-cli</artifactId>
-      <version>1.9.0</version>
+      <version>1.11.0</version>
     </dependency>
     <dependency>
       <groupId>commons-io</groupId>
       <artifactId>commons-io</artifactId>
-      <version>2.18.0</version>
+      <version>2.22.0</version>
     </dependency>
     <dependency>
       <groupId>com.github.jknack</groupId>
       <artifactId>handlebars</artifactId>
-      <version>4.5.2</version>
+      <version>4.5.8</version>
     </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
-      <version>2.0.17</version>
+      <version>2.0.20</version>
     </dependency>
     <!-- Log4j2 with SLF4J bridge for structured JSON logging -->
     <dependency>
       <groupId>org.apache.logging.log4j</groupId>
       <artifactId>log4j-api</artifactId>
-      <version>2.25.5</version>
+      <version>2.26.1</version>
     </dependency>
     <dependency>
       <groupId>org.apache.logging.log4j</groupId>
       <artifactId>log4j-core</artifactId>
-      <version>2.25.5</version>
+      <version>2.26.1</version>
     </dependency>
     <dependency>
       <groupId>org.apache.logging.log4j</groupId>
       <artifactId>log4j-slf4j2-impl</artifactId>
-      <version>2.25.5</version>
+      <version>2.26.1</version>
     </dependency>
     <!-- Elastic ECS JSON layout for Elasticsearch/Kibana -->
     <dependency>
       <groupId>co.elastic.logging</groupId>
       <artifactId>log4j2-ecs-layout</artifactId>
-      <version>1.7.0</version>
+      <version>1.8.0</version>
     </dependency>
     <!-- Test scope-->
     <dependency>
       <groupId>org.hamcrest</groupId>
       <artifactId>hamcrest</artifactId>
-      <version>2.2</version>
+      <version>3.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>com.jcabi</groupId>
       <artifactId>jcabi-matchers</artifactId>
-      <version>1.7.0</version>
+      <version>1.9.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -285,7 +329,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
     <dependency>
       <groupId>io.vertx</groupId>
       <artifactId>vertx-maven-service-factory</artifactId>
-      <version>4.5.22</version>
+      <version>4.5.36</version>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -297,7 +341,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
     <dependency>
       <groupId>org.awaitility</groupId>
       <artifactId>awaitility</artifactId>
-      <version>4.2.0</version>
+      <version>4.3.0</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -306,7 +350,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
-        <version>3.13.0</version>
+        <version>3.16.0</version>
         <configuration>
           <release>${maven.compiler.release}</release>
         </configuration>
@@ -326,7 +370,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-enforcer-plugin</artifactId>
-        <version>3.5.0</version>
+        <version>3.7.0</version>
         <executions>
           <execution>
             <id>enforce-maven</id>
@@ -346,7 +390,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
       <plugin>
         <groupId>com.mycila</groupId>
         <artifactId>license-maven-plugin</artifactId>
-        <version>4.3</version>
+        <version>5.1.2</version>
         <configuration>
           <licenseSets>
             <licenseSet>
@@ -444,24 +488,30 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
-          <version>3.13.0</version>
+          <version>3.16.0</version>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-dependency-plugin</artifactId>
-          <version>3.8.1</version>
+          <version>3.11.0</version>
         </plugin>
         <plugin>
           <groupId>org.jacoco</groupId>
           <artifactId>jacoco-maven-plugin</artifactId>
-          <version>0.8.13</version>
+          <version>0.8.16</version>
           <configuration>
             <skip>false</skip>
           </configuration>
         </plugin>
+        <!--
+          Surefire and Failsafe stay on 3.5.x: 3.6 runs every framework
+          through one JUnit Platform provider, which then discovers the
+          TestNG TCK classes of pantera-core (no default constructor) and
+          the test fork fails.
+        -->
         <plugin>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>3.5.2</version>
+          <version>3.5.6</version>
           <configuration>
             <useFile>false</useFile>
             <trimStackTrace>false</trimStackTrace>
@@ -470,7 +520,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
         </plugin>
         <plugin>
           <artifactId>maven-jar-plugin</artifactId>
-          <version>3.4.2</version>
+          <version>3.5.1</version>
           <configuration>
             <archive>
               <manifest>
@@ -487,16 +537,16 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
         </plugin>
         <plugin>
           <artifactId>maven-install-plugin</artifactId>
-          <version>3.1.3</version>
+          <version>3.2.0</version>
         </plugin>
         <plugin>
           <artifactId>maven-deploy-plugin</artifactId>
-          <version>3.1.3</version>
+          <version>3.2.0</version>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-javadoc-plugin</artifactId>
-          <version>3.11.2</version>
+          <version>3.12.0</version>
           <configuration>
             <!--
             ignore javadoc lint, since `checkstyle` and `todo`
@@ -536,7 +586,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
         <plugins>
           <plugin>
             <artifactId>maven-failsafe-plugin</artifactId>
-            <version>3.5.2</version>
+            <version>3.5.6</version>
             <configuration>
               <parallel>none</parallel>
               <trimStackTrace>false</trimStackTrace>
@@ -600,7 +650,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
           <plugin>
             <groupId>org.sonatype.plugins</groupId>
             <artifactId>nexus-staging-maven-plugin</artifactId>
-            <version>1.6.13</version>
+            <version>1.7.0</version>
             <extensions>true</extensions>
             <configuration>
               <serverId>oss.sonatype.org</serverId>
@@ -634,7 +684,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-gpg-plugin</artifactId>
-            <version>3.1.0</version>
+            <version>3.2.8</version>
             <executions>
               <execution>
                 <id>sign-artifacts</id>

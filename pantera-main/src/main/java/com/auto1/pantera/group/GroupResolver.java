@@ -13,6 +13,7 @@ package com.auto1.pantera.group;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.LocalRefusal;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
@@ -25,7 +26,9 @@ import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.FaultTranslator;
 import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.AnswerReason;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestReasons;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -538,6 +541,7 @@ public final class GroupResolver implements Slice {
                 .field("url.path", path)
                 .field("log.source", "application")
                 .log();
+            RequestReasons.instance().note(headers, RequestReasons.NEGATIVE_CACHE);
             recordPhase("resolve_total", resolveStartNs);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
@@ -717,7 +721,7 @@ public final class GroupResolver implements Slice {
             return next;
         }
         final boolean nextFailed = next.status().serverError()
-            && next.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty();
+            && !new LocalRefusal(next).present();
         if (nextFailed || miss == PinnedMiss.SKIPPED && next.status().serverError()) {
             return next;
         }
@@ -770,7 +774,7 @@ public final class GroupResolver implements Slice {
                 } else {
                     miss = UNVERIFIED;
                 }
-            } else if (resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+            } else if (!new LocalRefusal(resp).present()) {
                 miss = FAILED;
             } else {
                 miss = SKIPPED;
@@ -803,11 +807,7 @@ public final class GroupResolver implements Slice {
      * @return {@code "<version>/<file>"}, or empty for version-less paths
      */
     static String negativeCacheVersion(final String parsedVersion, final String path) {
-        if (parsedVersion.isEmpty()) {
-            return "";
-        }
-        final String trimmed = path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
-        return parsedVersion + "/" + trimmed.substring(trimmed.lastIndexOf('/') + 1);
+        return NegativeCacheKey.fileVersion(parsedVersion, path);
     }
 
     /**
@@ -1035,7 +1035,7 @@ public final class GroupResolver implements Slice {
         final Response resp, final WalkState walk, final RequestLine line,
         final Headers headers
     ) {
-        if (!resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+        if (new LocalRefusal(resp).present()) {
             return resp;
         }
         drainBody(resp.body());
@@ -1198,8 +1198,7 @@ public final class GroupResolver implements Slice {
         // header behaviour of the legacy parallel path.
         return querySequentially(fanoutMembers, line, headers, body, false, pinKey)
             .thenApply(resp -> {
-                if (resp.status().serverError()
-                    && !resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+                if (new LocalRefusal(resp).present()) {
                     // Circuit-skip terminal (503 + Retry-After + marker) or a
                     // member's marked fast-fail: pass through verbatim. It is
                     // neither an AllProxiesFailed fault (nothing actually
@@ -1586,14 +1585,23 @@ public final class GroupResolver implements Slice {
             // the call locally. Skip WITHOUT recordFailure(): counting
             // these convicted every member of a group on one upstream 5xx
             // (breaker-cascade RCA, fabricated-evidence amplification).
-            if (status.serverError() && !resp.headers()
-                .values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+            // The same holds when the member's bulkhead had no free permit
+            // (X-Pantera-Bulkhead-Overflow): backpressure Pantera applied
+            // itself is not a failure of the member.
+            final LocalRefusal refusal = new LocalRefusal(resp);
+            if (refusal.present()) {
                 drainBody(resp.body());
                 walk.skippedOpen.set(true);
                 walk.noteRetryAfter(parseRetryAfterSeconds(resp));
-                recordMemberOutcome(member, "circuit_open", -1L);
+                recordMemberOutcome(
+                    member, refusal.bulkhead() ? "bulkhead_full" : "circuit_open", -1L
+                );
                 EcsLogger.info("com.auto1.pantera.group")
-                    .message("Member's upstream circuit is open, skipping without conviction")
+                    .message(
+                        refusal.bulkhead()
+                            ? "Member's bulkhead had no free permit, skipping without conviction"
+                            : "Member's upstream circuit is open, skipping without conviction"
+                    )
                     .eventCategory("network")
                     .eventAction("group_member_circuit_skip")
                     .field("repository.name", this.group)
@@ -1605,7 +1613,12 @@ public final class GroupResolver implements Slice {
                     isTargetedLocalRead, walk, result, pinArtifactName);
                 return;
             }
-            // Other 4xx or any 5xx -> record failure, cascade.
+            if (this.skipOnClientError(member, resp, line, walk, memberLatency)) {
+                tryNextSequentialMember(iter, line, headers, requestBytes,
+                    isTargetedLocalRead, walk, result, pinArtifactName);
+                return;
+            }
+            // 429 or any 5xx -> record failure, cascade.
             drainBody(resp.body());
             member.recordFailure();
             walk.noteFailure(member);
@@ -1626,6 +1639,44 @@ public final class GroupResolver implements Slice {
             tryNextSequentialMember(iter, line, headers, requestBytes,
                 isTargetedLocalRead, walk, result, pinArtifactName);
         });
+    }
+
+    /**
+     * A member 4xx (409, 400, 401, 422, …; 403 and 404 are handled before
+     * this) is the member refusing the request, not the member failing:
+     * skip it WITHOUT {@code recordFailure()} — the same rule as the
+     * upstream HTTP breaker, which never trips on 4xx. Convicting on a 4xx
+     * let a handful of upstream 409s keep a member blocked and turned every
+     * group miss into a 503 for the whole block window. The walk is marked
+     * unverified so a terminal 404 is not negative-cached. 429 is excluded:
+     * it is a capacity signal and keeps the failure path.
+     *
+     * @return {@code true} when the member was skipped and the walk must
+     *     continue with the next member.
+     */
+    private boolean skipOnClientError(
+        final MemberSlice member, final Response resp, final RequestLine line,
+        final WalkState walk, final long memberLatency
+    ) {
+        final RsStatus status = resp.status();
+        if (!status.clientError() || status == RsStatus.TOO_MANY_REQUESTS) {
+            return false;
+        }
+        drainBody(resp.body());
+        walk.anyUnverified.set(true);
+        recordMemberOutcome(member, "client_error", memberLatency);
+        EcsLogger.debug("com.auto1.pantera.group")
+            .message("Group member answered " + status.code()
+                + " (client error), trying next without conviction")
+            .eventCategory("web")
+            .eventAction("group_member_fallthrough")
+            .field("repository.name", this.group)
+            .field("member.name", member.name())
+            .field("http.response.status_code", status.code())
+            .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
+            .log();
+        return true;
     }
 
     /**
@@ -1651,7 +1702,9 @@ public final class GroupResolver implements Slice {
             .add(new Header(
                 com.auto1.pantera.http.cache.BaseCachedProxySlice.CACHE_ONLY_HEADER, "true"
             ));
-        return member.slice().response(rewritten, memberHeaders, memberBody);
+        return GroupResolver.noted(
+            member.slice().response(rewritten, memberHeaders, memberBody), headers
+        );
     }
 
     /**
@@ -1670,7 +1723,7 @@ public final class GroupResolver implements Slice {
         return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
             .header("Retry-After", Long.toString(retry))
             .header(UpstreamCircuitOpenException.HEADER, "true")
-            .textBody("All group members are temporarily unavailable (upstream circuit open)")
+            .textBody("All group members are temporarily unavailable")
             .build();
     }
 
@@ -1679,7 +1732,7 @@ public final class GroupResolver implements Slice {
     ) {
         EcsLogger.warn("com.auto1.pantera.group")
             .message(
-                "All remaining group members circuit-open — returning 503, Retry-After "
+                "All remaining group members circuit-open or without a free permit — returning 503, Retry-After "
                     + retry + "s"
             )
             .eventCategory("network")
@@ -1853,7 +1906,38 @@ public final class GroupResolver implements Slice {
         final Headers memberHeaders = sanitizeMemberHeaders(headers)
             .copy()
             .add(new Header(EcsLoggingSlice.INTERNAL_ROUTING_HEADER, "true"));
-        return member.slice().response(rewritten, memberHeaders, memberBody);
+        return GroupResolver.noted(
+            member.slice().response(rewritten, memberHeaders, memberBody), headers
+        );
+    }
+
+    /**
+     * Note for the group's request why a member did not answer 2xx: the
+     * reason its answer carries (every repository puts one on a non-2xx
+     * answer, see {@code ReasonSlice}), or how the call to it failed. The
+     * answer the group then gives, a 404 after every member or a 5xx after a
+     * failed one, is explained by what its members said.
+     *
+     * @param answer Answer of the member
+     * @param headers Headers of the group's request
+     * @return The member's answer, unchanged
+     */
+    private static CompletableFuture<Response> noted(
+        final CompletableFuture<Response> answer, final Headers headers
+    ) {
+        return answer.whenComplete(
+            (response, error) -> {
+                if (error != null) {
+                    RequestReasons.instance().note(
+                        headers, new com.auto1.pantera.http.log.FailureCause(error).reason()
+                    );
+                } else if (response.status().code() >= 400) {
+                    new AnswerReason(response).token().ifPresent(
+                        reason -> RequestReasons.instance().note(headers, reason)
+                    );
+                }
+            }
+        );
     }
 
     /**

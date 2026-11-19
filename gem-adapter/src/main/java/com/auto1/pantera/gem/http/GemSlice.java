@@ -26,6 +26,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.HeadAsGetSlice;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -230,14 +231,19 @@ public final class GemSlice extends Slice.Wrap {
                         )
                     )
                 ),
+                // HEAD is answered like the matching GET, without the body:
+                // bound to GET alone this route answered 404 to `curl -I`
+                // for a file that exists.
                 new RtRulePath(
-                    MethodRule.GET,
-                    GemSlice.createAuthSlice(
-                        new StorageArtifactSlice(storage),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
+                    new HeadAsGetSlice(
+                        GemSlice.createAuthSlice(
+                            new StorageArtifactSlice(storage),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),

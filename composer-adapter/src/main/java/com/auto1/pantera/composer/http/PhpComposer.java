@@ -22,6 +22,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.HeadAsGetSlice;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
@@ -36,6 +37,15 @@ import java.util.regex.Pattern;
  * @since 0.1
  */
 public final class PhpComposer extends Slice.Wrap {
+
+    /**
+     * Methods of a read route. {@code HEAD} is answered like the matching
+     * {@code GET}, without the body ({@link HeadAsGetSlice}): a read route
+     * bound to {@code GET} alone answers 404 to {@code curl -I} or a CI
+     * installer probing a file that exists.
+     */
+    private static final RtRule READ = new RtRule.Any(MethodRule.GET, MethodRule.HEAD);
+
     /**
      * Ctor.
      * @param repository Repository
@@ -129,42 +139,48 @@ public final class PhpComposer extends Slice.Wrap {
                             new RtRule.ByPath(PackageMetadataSlice.PACKAGE),
                             new RtRule.ByPath(PackageMetadataSlice.ALL_PACKAGES)
                         ),
-                        MethodRule.GET
+                        PhpComposer.READ
                     ),
-                    PhpComposer.createAuthSlice(
-                        new PackageMetadataSlice(repository, base),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    new HeadAsGetSlice(
+                        PhpComposer.createAuthSlice(
+                            new PackageMetadataSlice(repository, base),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),
                 new RtRulePath(
                     new RtRule.All(
                         new RtRule.ByPath(Pattern.compile("^/?artifacts/.*\\.(zip|tar\\.gz|tgz)$")),
-                        MethodRule.GET
+                        PhpComposer.READ
                     ),
-                    PhpComposer.createAuthSlice(
-                        new DownloadArchiveSlice(repository),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    new HeadAsGetSlice(
+                        PhpComposer.createAuthSlice(
+                            new DownloadArchiveSlice(repository),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),
                 new RtRulePath(
                     new RtRule.All(
                         new RtRule.ByPath(Pattern.compile("^/.*\\.(zip|tar\\.gz|tgz)$")),
-                        MethodRule.GET
+                        PhpComposer.READ
                     ),
-                    PhpComposer.createAuthSlice(
-                        new DownloadArchiveSlice(repository),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    new HeadAsGetSlice(
+                        PhpComposer.createAuthSlice(
+                            new DownloadArchiveSlice(repository),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),

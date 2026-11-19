@@ -30,6 +30,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /**
  * Tests for {@link PhpComposer}.
@@ -87,6 +89,55 @@ class PhpComposerTest {
         ).join();
         Assertions.assertEquals(RsStatus.OK, response.status());
         Assertions.assertArrayEquals(data, response.body().asBytes());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "p2/vendor/package.json, /p2/vendor/package.json",
+        "artifacts/vendor/package/1.0.0/vendor-package-1.0.0.zip, /artifacts/vendor/package/1.0.0/vendor-package-1.0.0.zip",
+        "vendor-package-1.0.0.zip, /vendor-package-1.0.0.zip"
+    })
+    void shouldAnswerHeadLikeGetWithoutBody(final String key, final String path)
+        throws Exception {
+        // curl -I, a CI installer validating a download URL: HEAD of a file
+        // that exists must not answer 404.
+        final byte[] data = "stored bytes".getBytes();
+        new BlockingStorage(this.storage).save(new Key.From(key), data);
+        final Response get = this.php.response(
+            new RequestLine(RqMethod.GET, path), this.authorization, Content.EMPTY
+        ).join();
+        final Response head = this.php.response(
+            new RequestLine(RqMethod.HEAD, path), this.authorization, Content.EMPTY
+        ).join();
+        Assertions.assertEquals(RsStatus.OK, get.status(), "GET serves the file");
+        Assertions.assertEquals(RsStatus.OK, head.status(), "HEAD answers like GET");
+        Assertions.assertEquals(
+            get.headers().values("Content-Length"), head.headers().values("Content-Length"),
+            "HEAD announces the length of the GET body"
+        );
+        Assertions.assertEquals(0, head.body().asBytes().length, "HEAD has no body");
+        get.body().asBytes();
+    }
+
+    @Test
+    void shouldAnswerHeadOfRootIndex() {
+        Assertions.assertEquals(
+            RsStatus.OK,
+            this.php.response(
+                new RequestLine(RqMethod.HEAD, "/packages.json"), this.authorization, Content.EMPTY
+            ).join().status()
+        );
+    }
+
+    @Test
+    void shouldAnswerHeadOfMissingFileNotFound() {
+        Assertions.assertEquals(
+            RsStatus.NOT_FOUND,
+            this.php.response(
+                new RequestLine(RqMethod.HEAD, "/artifacts/vendor/none/1.0.0/none-1.0.0.zip"),
+                this.authorization, Content.EMPTY
+            ).join().status()
+        );
     }
 
     @Test

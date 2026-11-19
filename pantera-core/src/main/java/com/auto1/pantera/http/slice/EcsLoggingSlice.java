@@ -21,7 +21,12 @@ import com.auto1.pantera.http.cache.BaseCachedProxySlice;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.AnswerReason;
 import com.auto1.pantera.http.log.EcsLogEvent;
+import com.auto1.pantera.http.log.FailureCause;
+import com.auto1.pantera.http.log.RequestReasons;
+import com.auto1.pantera.http.log.RequestTrace;
+import com.auto1.pantera.http.log.StatusReason;
 import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.observability.StructuredLogger;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -89,6 +94,11 @@ public final class EcsLoggingSlice implements Slice {
      * {@link #CTX_TRACE_ID_HEADER}; see that field for the rationale.
      */
     public static final String CTX_CLIENT_IP_HEADER = "X-Pantera-Ctx-Client-Ip";
+
+    /**
+     * Lowest status whose access record carries {@code event.reason}.
+     */
+    private static final int ERRORS = 400;
 
     /**
      * Internal RESPONSE header on which the authz slices report the verified
@@ -203,7 +213,9 @@ public final class EcsLoggingSlice implements Slice {
         // - pantera_login names the authenticated principal (audit user.name,
         //   artifact owner) and only the authorization slices may set it;
         // - the X-Pantera-Ctx-* headers feed client.ip / trace.id of audit
-        //   records, so only the server-derived values below may carry them.
+        //   records, so only the server-derived values below may carry them;
+        // - the reason slot names where the cause of a non-2xx answer is
+        //   noted, and only ReasonSlice may set it.
         // The context headers thread trace.id + client.ip forward so slices
         // and async package-processors that build ArtifactEvents can read
         // them WITHOUT relying on per-thread MDC, which is dropped on every
@@ -211,7 +223,8 @@ public final class EcsLoggingSlice implements Slice {
         final Headers downstreamHeaders = EcsLoggingSlice.without(
             headers, INTERNAL_ROUTING_HEADER, AuthzSlice.LOGIN_HDR,
             CTX_TRACE_ID_HEADER, CTX_CLIENT_IP_HEADER,
-            BaseCachedProxySlice.CACHE_ONLY_HEADER
+            BaseCachedProxySlice.CACHE_ONLY_HEADER,
+            RequestReasons.SLOT_HEADER, AnswerReason.HEADER, RequestTrace.HEADER
         );
         if (span.traceId() != null && !span.traceId().isEmpty()) {
             downstreamHeaders.add(new Header(CTX_TRACE_ID_HEADER, span.traceId()));
@@ -224,7 +237,15 @@ public final class EcsLoggingSlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 final VerifiedPrincipal principal = new VerifiedPrincipal(stamped);
                 final String userName = principal.user().orElse(null);
-                final Response response = principal.stripped();
+                // The repository put the reason of a non-2xx answer on it
+                // (see ReasonSlice); it goes to the access record and not
+                // to the client.
+                final AnswerReason answer = new AnswerReason(principal.stripped());
+                final Response response = answer.stripped();
+                final int status = response.status().code();
+                final String reason = status < EcsLoggingSlice.ERRORS
+                    ? null
+                    : answer.token().orElseGet(() -> new StatusReason(status).token());
 
                 // WI-03 §4.1: emit the access log via the Tier-1 builder.
                 // The legacy EcsLogEvent emission that used to run alongside
@@ -240,9 +261,10 @@ public final class EcsLoggingSlice implements Slice {
                 final RequestContext rctx = buildRequestContext(
                     span, clientIp, userName, line);
                 StructuredLogger.access().forRequest(rctx)
-                    .status(response.status().code())
+                    .status(status)
                     .method(line.method().value())
                     .duration(duration)
+                    .reason(reason)
                     .log();
 
                 // Add traceparent response header for downstream correlation
@@ -278,6 +300,7 @@ public final class EcsLoggingSlice implements Slice {
                     .userAgent(headers)
                     .duration(duration)
                     .outcome("failure")
+                    .reason(new FailureCause(error).reason())
                     .error(error)
                     .message("Request processing failed")
                     .log();

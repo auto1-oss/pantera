@@ -37,6 +37,7 @@ import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestReasons;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.misc.ConfigDefaults;
@@ -439,6 +440,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         if (this.negativeCache != null
             && this.negativeCache.isKnown404(this.negKey(path))) {
             this.logDebug("Negative cache hit", path);
+            RequestReasons.instance().note(headers, RequestReasons.NEGATIVE_CACHE);
             recordProxyPhase("negative_cache_short_circuit", entryNs);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
@@ -505,7 +507,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .debug("Per-repo bulkhead is full, request refused");
             return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
                 .header("Retry-After", Long.toString(secs))
-                .header("X-Pantera-Bulkhead-Overflow", "true")
+                .header(com.auto1.pantera.http.LocalRefusal.BULKHEAD, "true")
                 .textBody("Per-repo bulkhead is full")
                 .build();
         }
@@ -1216,6 +1218,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 final int code = resp.status().code();
                 if (code == 404) {
+                    RequestReasons.instance().note(headers, RequestReasons.upstream(code));
                     return this.handle404(resp, key, duration).thenApply(signal -> {
                         if (!leaderGate.isDone()) {
                             leaderGate.complete(null);
@@ -1316,6 +1319,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             .thenCompose(resp -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (resp.status().code() == 404) {
+                    RequestReasons.instance().note(headers, RequestReasons.upstream(404));
                     return this.handle404(resp, key, duration)
                         .thenCompose(signal ->
                             this.signalToResponse(signal, line, key, store, headers, null));
@@ -1614,77 +1618,21 @@ public abstract class BaseCachedProxySlice implements Slice {
     private CompletableFuture<?> saveFromTempFile(
         final Key key, final Path tempFile, final long size
     ) {
+        // The storage writer asks its source for more chunks while it still
+        // has writes queued, so the source is asked again after it completed.
+        // ProxyCacheWriter's file content ignores such a late request; reading
+        // the closed file there failed the save of any artifact larger than a
+        // few chunks.
+        final Content content = ProxyCacheWriter.contentFromFile(tempFile, size);
         if (this.storage.isPresent()) {
-            final Content content = new Content.From(
-                Optional.of(size), filePublisher(tempFile)
-            );
             return this.storage.get().save(key, content);
         }
         // Fallback: use cache.load (non-storage-backed mode)
-        final Content content = new Content.From(
-            Optional.of(size), filePublisher(tempFile)
-        );
         return this.cache.load(
             key,
             () -> CompletableFuture.completedFuture(Optional.of(content)),
             CacheControl.Standard.ALWAYS
         ).toCompletableFuture();
-    }
-
-    /**
-     * Create a reactive-streams {@link org.reactivestreams.Publisher} that reads
-     * a temp file in 64 KB chunks. Replaces the previous {@code Flowable.using}
-     * pattern so this class no longer imports {@code io.reactivex.Flowable}.
-     *
-     * @param tempFile Temp file to read
-     * @return Publisher of ByteBuffer chunks
-     */
-    private static org.reactivestreams.Publisher<ByteBuffer> filePublisher(final Path tempFile) {
-        return subscriber -> {
-            final FileChannel[] holder = new FileChannel[1];
-            try {
-                holder[0] = FileChannel.open(tempFile, StandardOpenOption.READ);
-            } catch (final IOException ex) {
-                subscriber.onSubscribe(new org.reactivestreams.Subscription() {
-                    @Override public void request(final long n) { }
-                    @Override public void cancel() { }
-                });
-                subscriber.onError(ex);
-                return;
-            }
-            final FileChannel chan = holder[0];
-            subscriber.onSubscribe(new org.reactivestreams.Subscription() {
-                private volatile boolean cancelled;
-
-                @Override
-                public void request(final long n) {
-                    try {
-                        long remaining = n;
-                        while (remaining > 0 && !this.cancelled) {
-                            final ByteBuffer buf = ByteBuffer.allocate(65_536);
-                            final int read = chan.read(buf);
-                            if (read < 0) {
-                                chan.close();
-                                subscriber.onComplete();
-                                return;
-                            }
-                            buf.flip();
-                            subscriber.onNext(buf);
-                            remaining--;
-                        }
-                    } catch (final Exception ex) {
-                        closeChannelQuietly(chan);
-                        subscriber.onError(ex);
-                    }
-                }
-
-                @Override
-                public void cancel() {
-                    this.cancelled = true;
-                    closeChannelQuietly(chan);
-                }
-            });
-        };
     }
 
     /**
@@ -1735,6 +1683,8 @@ public abstract class BaseCachedProxySlice implements Slice {
                 if (!resp.status().success()) {
                     final int code = resp.status().code();
                     if (code == 404) {
+                        RequestReasons.instance()
+                            .note(incomingHeaders, RequestReasons.upstream(code));
                         this.recordProxyMetric("not_found", duration);
                         // Single drain of the single-subscriber upstream body:
                         // seed the negative cache AND build the 404 response from
@@ -1772,6 +1722,8 @@ public abstract class BaseCachedProxySlice implements Slice {
                     // 4xx (non-404): propagate verbatim — preserves 429
                     // status + Retry-After, 403 auth signal, 410 Gone, etc.
                     // Crucially does not write NegativeCache for these.
+                    RequestReasons.instance()
+                        .note(incomingHeaders, RequestReasons.upstream(code));
                     this.recordProxyMetric("client_error", duration);
                     return CompletableFuture.completedFuture(resp);
                 }
@@ -1823,7 +1775,7 @@ public abstract class BaseCachedProxySlice implements Slice {
      * and gives operators meaningful scope/repoType columns in the admin UI.
      */
     private NegativeCacheKey negKey(final String path) {
-        return NegativeCacheKey.fromPath(this.repoName, this.repoType, path);
+        return NegativeCacheKey.forFile(this.repoName, this.repoType, path);
     }
 
     /**
@@ -1866,6 +1818,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 )
             );
         }
+        RequestReasons.instance().note(headers, RequestReasons.upstream(code));
         this.recordProxyMetric("client_error", duration);
         return CompletableFuture.completedFuture(resp);
     }

@@ -12,7 +12,11 @@ package com.auto1.pantera.http.resilience;
 
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.metrics.MicrometerMetrics;
+import java.time.Duration;
 import java.util.Objects;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -22,12 +26,14 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * AIMD-tuned permit controller backing one {@link RepoBulkhead}.
+ * Permit controller backing one {@link RepoBulkhead}.
  *
- * <p>Holds two integer counters: the current permit ceiling (volatile, AIMD-tuned)
- * and the in-flight count (CAS-incremented on acquire, decremented on release).
- * Outcomes observed per operation feed into per-window accumulators that the
- * scheduled tick reads, resets, and uses to derive the next permit value.
+ * <p>Holds the current permit ceiling and the in-flight count
+ * (CAS-incremented on acquire, decremented on release). A request that finds
+ * every permit taken waits for one ({@link #acquire(Duration)}); it is not
+ * refused. Outcomes observed per operation feed into per-window accumulators
+ * that the scheduled tick reads, resets, and uses to raise the ceiling from
+ * its initial value towards the maximum. The ceiling never falls.
  *
  * <p>All public methods are safe to call from any thread. The window tick
  * runs on a process-wide daemon scheduler — one tick task per controller —
@@ -66,6 +72,10 @@ public final class AdaptivePermitController {
     private final AdaptiveBulkheadLimits limits;
     private final AtomicInteger permits;
     private final AtomicInteger inFlight;
+    /** Requests waiting for a permit, oldest first. */
+    private final Queue<CompletableFuture<Boolean>> waiters;
+    /** Number of requests in {@link #waiters} that have not given up. */
+    private final AtomicInteger waiting;
     private final LongAdder windowOk;
     private final LongAdder windowErr;
     private final AtomicLong windowLatencyMaxMillis;
@@ -93,6 +103,8 @@ public final class AdaptivePermitController {
         this.limits = Objects.requireNonNull(limits, "limits");
         this.permits = new AtomicInteger(limits.initialPermits());
         this.inFlight = new AtomicInteger(0);
+        this.waiters = new ConcurrentLinkedQueue<>();
+        this.waiting = new AtomicInteger(0);
         this.windowOk = new LongAdder();
         this.windowErr = new LongAdder();
         this.windowLatencyMaxMillis = new AtomicLong(0);
@@ -139,9 +151,100 @@ public final class AdaptivePermitController {
         }
     }
 
-    /** Release one previously-acquired permit. */
+    /**
+     * Reserve a permit, waiting for one when all are in use.
+     *
+     * <p>A request that finds every permit taken is not refused: it joins a
+     * queue and gets the next permit that is released, oldest request first.
+     * It gives up only when {@code wait} has passed, or at once when
+     * {@link AdaptiveBulkheadLimits#maxQueueDepth()} requests are already
+     * waiting. A burst of requests is thereby spread over the permits
+     * instead of being failed.</p>
+     *
+     * <p>A closed controller admits every request: it belongs to a bulkhead
+     * that was replaced, and the requests still holding it must not fail.</p>
+     *
+     * @param wait Longest time to wait for a permit
+     * @return Completes with {@code true} once a permit is reserved (the
+     *  caller must call {@link #release()}), with {@code false} when none
+     *  came within {@code wait} or the queue was full. Already complete when
+     *  a permit was free.
+     */
+    public CompletableFuture<Boolean> acquire(final Duration wait) {
+        final CompletableFuture<Boolean> permit;
+        if (this.waiters.isEmpty() && this.reserve()) {
+            permit = CompletableFuture.completedFuture(Boolean.TRUE);
+        } else if (this.waiting.incrementAndGet() > this.limits.maxQueueDepth()) {
+            this.waiting.decrementAndGet();
+            permit = CompletableFuture.completedFuture(Boolean.FALSE);
+        } else {
+            permit = new CompletableFuture<>();
+            permit.whenComplete(
+                (granted, err) -> {
+                    this.waiting.decrementAndGet();
+                    if (!Boolean.TRUE.equals(granted)) {
+                        this.waiters.remove(permit);
+                    }
+                }
+            );
+            this.waiters.add(permit);
+            permit.completeOnTimeout(Boolean.FALSE, wait.toMillis(), TimeUnit.MILLISECONDS);
+            // A permit may have been released between the failed reservation
+            // and the request joining the queue.
+            this.handOver();
+        }
+        return permit;
+    }
+
+    /** @return Requests waiting for a permit. */
+    public int waitingCount() {
+        return this.waiting.get();
+    }
+
+    /**
+     * Release one previously-acquired permit. It goes to the request that
+     * has waited longest, if any.
+     */
     public void release() {
         this.inFlight.decrementAndGet();
+        this.handOver();
+    }
+
+    /**
+     * Give free permits to waiting requests, oldest first. Called whenever a
+     * permit may have become free: on a release, when the ceiling grows,
+     * when a request joins the queue, and on close.
+     */
+    private void handOver() {
+        while (!this.waiters.isEmpty() && this.reserve()) {
+            final CompletableFuture<Boolean> next = this.waiters.poll();
+            if (next == null || !next.complete(Boolean.TRUE)) {
+                // Nobody took the permit: the queue emptied meanwhile, or
+                // the request had already given up. Put it back and look
+                // again, a request may have joined in between.
+                this.inFlight.decrementAndGet();
+            }
+        }
+    }
+
+    /**
+     * Count one more request in flight if the ceiling allows it. A closed
+     * controller allows every request.
+     * @return Whether the request was counted
+     */
+    private boolean reserve() {
+        boolean reserved = false;
+        boolean settled = false;
+        while (!settled) {
+            final int now = this.inFlight.get();
+            if (!this.closed && now >= this.permits.get()) {
+                settled = true;
+            } else if (this.inFlight.compareAndSet(now, now + 1)) {
+                reserved = true;
+                settled = true;
+            }
+        }
+        return reserved;
     }
 
     /**
@@ -194,28 +297,28 @@ public final class AdaptivePermitController {
     }
 
     /**
-     * Cancel the window tick and prevent further acquisitions. Idempotent.
-     * Existing in-flight operations are unaffected — they still call
-     * {@link #release()} normally.
+     * Cancel the window tick and stop limiting. Idempotent. Existing
+     * in-flight operations are unaffected — they still call
+     * {@link #release()} normally. Requests waiting for a permit are let
+     * through, and so is every later {@link #acquire(Duration)}: a closed
+     * controller belongs to a bulkhead that was replaced. {@link #tryAcquire()}
+     * answers {@code false} from then on.
      */
     public void close() {
         this.closed = true;
         if (this.tick != null) {
             this.tick.cancel(false);
         }
+        this.handOver();
     }
 
     /**
      * Run the AIMD step over the previous window. Package-private so unit
      * tests can drive it deterministically without waiting on the scheduler.
      *
-     * <p>The math:
-     * <ul>
-     *   <li>any error → {@code newPermits = floor(old * rampDownFactor)}, clamped at {@code minPermits}</li>
-     *   <li>max latency in window {@code > 2 × targetP99Millis} → softer decrease using {@code sqrt(rampDownFactor)}</li>
-     *   <li>max latency {@code &le; targetP99Millis} and no errors → {@code newPermits = old + rampUpStep}, clamped at {@code maxPermits}</li>
-     *   <li>otherwise hold steady</li>
-     * </ul>
+     * <p>A window with at least one request and no failed one raises the
+     * ceiling by {@code rampUpStep}, up to {@code maxPermits}. Nothing lowers
+     * it: see {@link #computeNextPermits(int, long)}.
      */
     void evaluateWindow() {
         final long ok = this.windowOk.sumThenReset();
@@ -225,11 +328,12 @@ public final class AdaptivePermitController {
             return;
         }
         final int oldPermits = this.permits.get();
-        final int newPermits = computeNextPermits(oldPermits, err, maxLat);
+        final int newPermits = computeNextPermits(oldPermits, err);
         if (newPermits == oldPermits) {
             return;
         }
         this.permits.set(newPermits);
+        this.handOver();
         final String direction;
         if (newPermits > oldPermits) {
             this.rampUpCount.increment();
@@ -258,35 +362,32 @@ public final class AdaptivePermitController {
             .log();
     }
 
-    /** Pure function: compute the next permit value from the window outcome. */
-    int computeNextPermits(final int oldPermits, final long err, final long maxLat) {
+    /**
+     * Pure function: the permit ceiling after a window.
+     *
+     * <p>The ceiling only ever grows. It used to be cut by any failed request
+     * and by any request slower than twice the latency target. Neither says
+     * that the repository carries too many requests: the cold fetch of a
+     * large artifact takes seconds on a healthy upstream. Under a burst of
+     * such fetches the ceiling fell to the minimum within a minute and the
+     * requests beyond it were refused.</p>
+     *
+     * @param oldPermits Current ceiling
+     * @param err Failed requests in the window
+     * @return The ceiling raised by one step after a window without failed
+     *  requests, unchanged otherwise
+     */
+    int computeNextPermits(final int oldPermits, final long err) {
+        final int next;
         if (err > 0L) {
-            return Math.max(
-                this.limits.minPermits(),
-                (int) Math.floor(oldPermits * this.limits.rampDownFactor())
-            );
-        }
-        final long badLatencyThreshold = saturatingDouble(this.limits.targetP99Millis());
-        if (maxLat > badLatencyThreshold) {
-            return Math.max(
-                this.limits.minPermits(),
-                (int) Math.floor(oldPermits * Math.sqrt(this.limits.rampDownFactor()))
-            );
-        }
-        if (maxLat <= this.limits.targetP99Millis()) {
-            return Math.min(
+            next = oldPermits;
+        } else {
+            next = Math.min(
                 this.limits.maxPermits(),
                 oldPermits + this.limits.rampUpStep()
             );
         }
-        return oldPermits;
-    }
-
-    private static long saturatingDouble(final long value) {
-        if (value > Long.MAX_VALUE / 2L) {
-            return Long.MAX_VALUE;
-        }
-        return value * 2L;
+        return next;
     }
 
     private void evaluateWindowSafe() {

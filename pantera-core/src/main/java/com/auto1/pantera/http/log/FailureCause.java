@@ -117,6 +117,7 @@ public final class FailureCause {
         } else if (err instanceof RejectedExecutionException) {
             reason = "request_rejected";
         } else if (err instanceof java.nio.channels.ClosedChannelException
+            || err instanceof java.io.EOFException
             || name.endsWith("EofException")
             || msg.contains("connection reset") || msg.contains("broken pipe")) {
             reason = "connection_closed";

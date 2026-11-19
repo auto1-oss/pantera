@@ -204,9 +204,9 @@ These knobs override the per-repo proxy slice's local cache behaviour. They live
 | `cache.conditional_requests` | `true` | Enable `If-None-Match`/`If-Modified-Since` to upstream. |
 | `cache.stale_while_revalidate.enabled` | `true` | Serve stale cached bytes on upstream failure (`X-Pantera-Stale: true`). |
 | `cache.stale_while_revalidate.max_age` | `PT1H` | Max age of stale bytes acceptable. |
-| `cache.retry.max_retries` | `0` | Max retries on upstream errors. |
-| `cache.retry.initial_delay` | `PT0.1S` | Initial retry backoff. |
-| `cache.retry.backoff_multiplier` | `2.0` | Exponential backoff multiplier. |
+| `cache.retry.max_retries` | `0` | Parsed, but not applied by any proxy. The retry that exists is fixed and not configurable: see [Upstream Connection Retry](performance-tuning.md#upstream-connection-retry-v2212). |
+| `cache.retry.initial_delay` | `PT0.1S` | Parsed, not applied. |
+| `cache.retry.backoff_multiplier` | `2.0` | Parsed, not applied. |
 | `cache.metrics` | `true` | Emit per-repo cache metrics. |
 
 ---

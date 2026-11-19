@@ -16,11 +16,11 @@ import com.auto1.pantera.docker.error.PaginationNumberInvalidException;
 import com.auto1.pantera.docker.misc.ImageRepositoryName;
 import com.auto1.pantera.docker.misc.Pagination;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.LocalRefusal;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -224,9 +224,10 @@ public final class DockerGroupSlice implements Slice {
             } else {
                 res = this.failed(member, "unparseable catalog", status.code());
             }
-        } else if (status.serverError()
-            && !resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
-            this.metric(member, "circuit_open");
+        } else if (new LocalRefusal(resp).present()) {
+            this.metric(
+                member, new LocalRefusal(resp).bulkhead() ? "bulkhead_full" : "circuit_open"
+            );
             res = new MemberCatalog(
                 Optional.empty(), Outcome.SKIPPED, GroupResolver.parseRetryAfterSeconds(resp)
             );

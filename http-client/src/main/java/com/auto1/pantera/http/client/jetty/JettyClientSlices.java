@@ -20,6 +20,7 @@ import com.auto1.pantera.http.client.circuitbreaker.UpstreamCircuitBreaker;
 import com.auto1.pantera.http.client.circuitbreaker.UpstreamCircuitBreakerRegistry;
 import com.auto1.pantera.http.client.ratelimit.RateLimitedClientSlice;
 import com.auto1.pantera.http.client.ratelimit.UpstreamRateLimiter;
+import com.auto1.pantera.http.client.retry.RetryingClientSlice;
 import java.time.Clock;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -447,10 +448,12 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     /**
      * Create slice backed by client. The returned slice is wrapped in
      * (outer-to-inner) {@link RateLimitedClientSlice} → {@link
-     * CircuitBreakingClientSlice} → raw Jetty slice, so every outbound
-     * request funnels through both the per-host reactive 429 gate AND
-     * the per-host 5xx / IO circuit breaker. Loopback hosts
-     * ({@code localhost}, {@code 127.x.x.x}, {@code ::1}) bypass both —
+     * CircuitBreakingClientSlice} → {@link RetryingClientSlice} → raw
+     * Jetty slice, so every outbound request funnels through both the
+     * per-host reactive 429 gate AND the per-host 5xx / IO circuit
+     * breaker, and a GET or HEAD whose connection the upstream closed
+     * before answering is sent again. Loopback hosts ({@code localhost},
+     * {@code 127.x.x.x}, {@code ::1}) bypass the gate and the breaker —
      * these are exclusively dev / test fixtures.
      *
      * <p>Ordering rationale: gate-closed (rate-limit) and circuit-open
@@ -482,8 +485,15 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     }
 
     private Slice slice(final boolean secure, final String host, final int port) {
-        final JettyClientSlice raw = new JettyClientSlice(
-            this.clnt, secure, host, port, this.acquireTimeoutMillis
+        // Directly on the transport, inside the breaker: a connection the
+        // upstream closed before answering is retried here, so the breaker
+        // sees one outcome per request and a recovered close does not count
+        // against the upstream.
+        final Slice raw = new RetryingClientSlice(
+            new JettyClientSlice(
+                this.clnt, secure, host, port, this.acquireTimeoutMillis
+            ),
+            host
         );
         if (isLoopback(host)) {
             return raw;

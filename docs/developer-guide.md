@@ -40,17 +40,17 @@ Pantera is a universal binary artifact registry supporting 15+ package formats. 
 |-------------------|-------------------------|-----------|
 | Language          | Java (Temurin JDK)      | 21+       |
 | Build Tool        | Apache Maven            | 3.4+      |
-| HTTP Server       | Eclipse Vert.x          | 4.5.22    |
-| HTTP Client       | Eclipse Jetty           | 12.1.4    |
-| JSON Processing   | Jackson                 | 2.17.3    |
-| Database          | PostgreSQL + HikariCP   | 16+ / 5.x |
+| HTTP Server       | Eclipse Vert.x          | 4.5.36    |
+| HTTP Client       | Eclipse Jetty           | 12.1.15   |
+| JSON Processing   | Jackson                 | 2.23.0    |
+| Database          | PostgreSQL + HikariCP   | 16+ / 7.x |
 | Distributed Cache | Valkey (via Lettuce)     | 8.x       |
 | JWT Library       | Auth0 java-jwt          | 4.x       |
-| Scheduling        | Quartz Scheduler        | 2.3.2     |
-| Metrics           | Micrometer              | 1.12.13   |
-| Logging           | Log4j 2                 | 2.24.3    |
-| Testing           | JUnit 5                 | 5.10.0    |
-| Test Containers   | TestContainers          | 2.0.2     |
+| Scheduling        | Quartz Scheduler        | 2.5.2     |
+| Metrics           | Micrometer              | 1.17.2    |
+| Logging           | Log4j 2                 | 2.26.1    |
+| Testing           | JUnit 6                 | 6.1.3     |
+| Test Containers   | TestContainers          | 2.0.5     |
 
 ### Supported Repository Types
 

@@ -10,7 +10,7 @@ deployment uses a different name.
 | Dashboard                               | File                                                                      | Purpose                                                                              |
 |-----------------------------------------|---------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
 | **Upstream Circuit Breaker** (T-O01)    | `grafana/upstream-circuit-breaker.json`                                   | Per-host breaker state, trip frequency, fast-fail rate, time-since-last-trip.        |
-| **Proxy Phase Latency** (T-O04)         | `grafana/proxy-phase-latency.json`                                        | Stacked p99 of `proxy_phase_duration_seconds` per repo. Drives cold-bench debugging. |
+| **Proxy Phase Latency** (T-O04)         | `grafana/proxy-phase-latency.json`                                        | Stacked p99 of `pantera_proxy_phase_seconds` per repo. Drives cold-bench debugging.   |
 
 ## Importing
 
@@ -39,8 +39,8 @@ The Upstream Circuit Breaker dashboard consumes three metrics produced by
 - `pantera_circuit_breaker_fastfail_total{upstream_host}` — counter,
   incremented on every synthetic 502 returned by the fast-fail path.
 
-The Proxy Phase Latency dashboard consumes `proxy_phase_duration_seconds`,
-a histogram broken out by `(phase, repo)` recorded by
+The Proxy Phase Latency dashboard consumes `pantera_proxy_phase_seconds`,
+a histogram broken out by `(phase, repo_name)` recorded by
 `BaseCachedProxySlice.recordProxyPhase(...)`.
 
 ## Operational use

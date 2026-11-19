@@ -74,6 +74,7 @@ import com.auto1.pantera.http.filter.Filters;
 import com.auto1.pantera.http.timeout.AutoBlockRegistry;
 import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import com.auto1.pantera.http.slice.DeleteRoutingSlice;
+import com.auto1.pantera.http.slice.LastModifiedSlice;
 import com.auto1.pantera.http.slice.PathPrefixStripSlice;
 import com.auto1.pantera.http.slice.ReservedPathSlice;
 import com.auto1.pantera.http.slice.NativeDeleteCascadeSlice;
@@ -674,29 +675,30 @@ public class RepositorySlices {
     }
 
     /**
-     * Drop every cached per-repo bulkhead so the next
-     * {@link #getOrCreateBulkhead(String)} call rebuilds with the current
+     * Replace every per-repo bulkhead by one built from the current
      * {@link com.auto1.pantera.settings.runtime.BulkheadTuning} snapshot.
      *
-     * <p>Existing in-flight operations gated by the old bulkheads finish
-     * normally — only the controller's AIMD tick is cancelled. The
-     * registry is refreshed so subsequent acquires get the new bulkhead.
+     * <p>A repository serves through a cached slice that finds its bulkhead
+     * by name on each request, so the replacement is registered here, under
+     * the same name, before the old bulkhead is closed. Dropping it without a
+     * replacement would leave the repository without any limit until its
+     * slice is rebuilt. Operations admitted by the old bulkhead finish
+     * normally, and those still waiting for one of its permits are let
+     * through.
      *
      * <p>Called from the boot wiring's {@code RuntimeSettingsCache} listener
      * on every {@code http_client.bulkhead.*} change.
      */
     public void invalidateBulkheads() {
-        final java.util.List<com.auto1.pantera.http.resilience.RepoBulkhead> drained =
+        final java.util.List<com.auto1.pantera.http.resilience.RepoBulkhead> replaced =
             new java.util.ArrayList<>(this.repoBulkheads.values());
         this.repoBulkheads.clear();
-        for (final com.auto1.pantera.http.resilience.RepoBulkhead bh : drained) {
-            com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance()
-                .deregister(bh.repo());
+        for (final com.auto1.pantera.http.resilience.RepoBulkhead bh : replaced) {
+            this.getOrCreateBulkhead(bh.repo());
             bh.close();
         }
         EcsLogger.info("com.auto1.pantera")
-            .message("Per-repo bulkheads invalidated; " + drained.size()
-                + " entries dropped — next acquire will rebuild from current tuning")
+            .message("Per-repo bulkheads replaced from current tuning: " + replaced.size())
             .eventCategory("configuration")
             .eventAction("bulkhead_invalidate")
             .eventOutcome("success")
@@ -1741,7 +1743,20 @@ public class RepositorySlices {
         Optional<Filters> opt = settings.caches()
             .filtersCache()
             .filters(cfg.name(), cfg.repoYaml());
-        Slice filtered = opt.isPresent() ? new FilterSlice(origin, opt.get()) : origin;
+        // Every served representation carries Last-Modified: generic HTTP
+        // clients (CI tool installers, curl -z, wget -N) fail or re-download
+        // without it. An adapter that dates its own response keeps its
+        // value; the rest get the storage time of the requested object.
+        // Docker is left out: registry clients never read the header and a
+        // blob path is not a storage key, so every pull would pay a storage
+        // lookup for nothing.
+        final Slice dated = cfg.type().startsWith("docker")
+            ? origin
+            : new LastModifiedSlice(
+                origin, cfg.storageOpt(),
+                new RepoStorageKey(cfg.type(), cfg.port().isPresent())
+            );
+        Slice filtered = opt.isPresent() ? new FilterSlice(dated, opt.get()) : dated;
 
         // Wrap with repository metrics to add repo_name and repo_type labels
         final Slice withMetrics = new com.auto1.pantera.http.slice.RepoMetricsSlice(
@@ -1766,7 +1781,13 @@ public class RepositorySlices {
         // Docker clients parse OCI error bodies and the adapter advertises
         // a Basic+Bearer challenge: give the body-less 401/413 produced by
         // the generic gates above the same shape.
-        return cfg.type().startsWith("docker") ? new OciErrorsSlice(gated) : gated;
+        // Outermost: every answer of this repository with a status of 400
+        // or above leaves with the reason why it was given, for the access
+        // record (and for a group that has this repository as a member).
+        return new com.auto1.pantera.http.slice.ReasonSlice(
+            cfg.type().startsWith("docker") ? new OciErrorsSlice(gated) : gated,
+            cfg.name(), cfg.type()
+        );
     }
 
     /**
@@ -2474,10 +2495,28 @@ public class RepositorySlices {
                 // without a constructor-time dependency on pantera-main.
                 com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance()
                     .register(n, bh);
-                // Expose the AIMD-tuned permit ceiling as a Prometheus gauge.
+                // Expose the permit ceiling and the waiting requests as
+                // Prometheus gauges. A gauge is registered once per
+                // repository, so it reads whichever bulkhead is registered
+                // under the name now, not the instance created here: that
+                // one is replaced on a settings change.
                 if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                    final com.auto1.pantera.http.resilience.RepoBulkheadRegistry registry =
+                        com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance();
                     com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
-                        .registerBulkheadPermitsGauge(n, bh::currentPermits);
+                        .registerBulkheadPermitsGauge(
+                            n,
+                            () -> registry.bulkheadFor(n)
+                                .map(com.auto1.pantera.http.resilience.RepoBulkhead::currentPermits)
+                                .orElse(0)
+                        );
+                    com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                        .registerBulkheadWaitingGauge(
+                            n,
+                            () -> registry.bulkheadFor(n)
+                                .map(com.auto1.pantera.http.resilience.RepoBulkhead::waitingCount)
+                                .orElse(0)
+                        );
                 }
                 return bh;
             }

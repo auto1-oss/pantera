@@ -367,10 +367,10 @@ Global settings for the outbound HTTP client used by all proxy repositories.
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `proxy_timeout` | int | No | `120` | Upstream request timeout in seconds |
+| `proxy_timeout` | int | No | `60` | Upstream request timeout in seconds |
 | `connection_timeout` | int | No | `15000` | TCP connection timeout in milliseconds |
-| `max_connections_per_destination` | int | No | `512` | Maximum pooled connections per upstream host |
-| `max_requests_queued_per_destination` | int | No | `2048` | Maximum queued requests per upstream host |
+| `max_connections_per_destination` | int | No | `64` | Maximum pooled connections per upstream host |
+| `max_requests_queued_per_destination` | int | No | `256` | Maximum requests waiting for a connection per upstream host; a request beyond it is rejected (`event.reason: request_rejected`) |
 | `idle_timeout` | int | No | `30000` | Connection idle timeout in milliseconds |
 | `follow_redirects` | boolean | No | `true` | Follow HTTP 3xx redirects |
 | `connection_acquire_timeout` | int | No | `30000` | Milliseconds to wait for a pooled connection before failing. Bounds only connection acquisition, never the response-body transfer (large downloads stream for as long as they make progress; stalls are caught by `idle_timeout`). |
@@ -393,14 +393,14 @@ The following keys live in the `settings` table and are editable from the admin 
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `http_client.bulkhead.adaptive` | boolean | `true` | When `true` the per-repo bulkhead permit count grows/shrinks based on observed p99 latency; when `false` the bulkhead is fixed at `initial_permits`. |
-| `http_client.bulkhead.min_permits` | int | `5` | Floor for the adaptive permit count — the controller will never shrink below this. |
-| `http_client.bulkhead.max_permits` | int | `100` | Ceiling for the adaptive permit count. |
-| `http_client.bulkhead.initial_permits` | int | `10` | Permit count on cold start; also the fixed value when `adaptive=false`. |
-| `http_client.bulkhead.target_p99_ms` | int | `500` | Latency target. p99 above this triggers a permit-down step; p99 below triggers a permit-up step. |
-| `http_client.bulkhead.window_seconds` | int | `5` | Length of the rolling latency window the controller samples. |
-| `http_client.bulkhead.ramp_up_step` | int | `1` | Permits added per up-step. |
-| `http_client.bulkhead.ramp_down_factor` | float | `0.5` | Fraction the controller multiplies the current permit count by on a down-step (e.g. `0.5` halves). |
+| `http_client.bulkhead.adaptive` | boolean | `true` | When `true` the permit count of a proxy repository grows from `initial_permits` to `max_permits`; when `false` it stays at `initial_permits`. It never falls (v2.2.12+). |
+| `http_client.bulkhead.min_permits` | int | `5` | Lower bound of `initial_permits`. No other effect since v2.2.12: the permit count no longer falls. |
+| `http_client.bulkhead.max_permits` | int | `100` | Upper bound of the permit count: the most requests of one proxy repository that run at the same time. Further requests wait for a permit. |
+| `http_client.bulkhead.initial_permits` | int | `40` | Permit count when a bulkhead is created (at start and after a change of these keys); also the fixed value when `adaptive=false`. |
+| `http_client.bulkhead.target_p99_ms` | int | `500` | No effect since v2.2.12: a slow request no longer lowers the permit count. The key is still accepted. |
+| `http_client.bulkhead.window_seconds` | int | `5` | Interval at which the permit count is raised. |
+| `http_client.bulkhead.ramp_up_step` | int | `4` | Permits added after a window in which the repository served requests and none ended in an exception. |
+| `http_client.bulkhead.ramp_down_factor` | float | `0.5` | No effect since v2.2.12: the permit count is no longer lowered. The key is still accepted. |
 
 The three permit keys must satisfy `min_permits <= initial_permits <= max_permits`. A `PATCH` (or a `DELETE` back to the default) that would break this is refused with `400` and nothing is written; to move the range, change the keys in an order that keeps it valid (raise `max_permits` before `min_permits`, lower `min_permits` before `max_permits`). The admin UI saves them in that order.
 
@@ -1869,10 +1869,15 @@ Before starting Java, the command adds the start time and host name to a
 (`heapdump.hprof` becomes `heapdump-20261028-090100-<host>.hprof`), because the
 JVM never overwrites an existing dump.
 
+`-XX:-UseBASE64Intrinsics` is the mitigation for CVE-2026-114938 (the Base64
+decoder of OpenJDK 17.0.6 and later on x86-64 with AVX-512 VBMI). It follows
+`JVM_ARGS`, so a custom `JVM_ARGS` keeps it.
+
 ```
 java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \
   $JVM_ARGS \
+  -XX:-UseBASE64Intrinsics \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* \

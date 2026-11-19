@@ -106,7 +106,7 @@ public final class ProxyPathCaches {
                 if (folder) {
                     cache.invalidateMatching(key -> this.repo.equals(key.scope()));
                 } else {
-                    cache.invalidate(NegativeCacheKey.fromPath(this.repo, this.type, path));
+                    cache.invalidate(NegativeCacheKey.forFile(this.repo, this.type, path));
                 }
             }
         );

@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.api.v1.admin;
 
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.cooldown.CooldownPackageRow;
 import com.auto1.pantera.http.cache.NegativeCache;
@@ -23,6 +24,7 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.StringContains;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -46,7 +48,11 @@ final class TroubleshooterTest {
         negative.cacheNotFound(new NegativeCacheKey(
             "npm_group", "npm-group", "lodash", "4.17.21/lodash-4.17.21.tgz"
         ));
-        final JsonObject report = this.troubleshooter(new FakeFetch(), negative, CooldownLookup.NONE)
+        final FakeFetch fetch = new FakeFetch().traced(
+            "npm_group", "/lodash/-/lodash-4.17.21.tgz", 404,
+            new RequestTrace.Step("npm_group", "npm-group", 404, "negative_cache", 1L)
+        );
+        final JsonObject report = this.troubleshooter(fetch, negative, CooldownLookup.NONE)
             .explain("http://h/prefix/api/npm_group/lodash/-/lodash-4.17.21.tgz", "Bearer t")
             .get(10, TimeUnit.SECONDS);
         final JsonObject check = TroubleshooterTest.check(report, "negative-cache:npm_group");
@@ -72,10 +78,169 @@ final class TroubleshooterTest {
             new IsEqual<>(List.of("lodash", "4.17.21", "artifact"))
         );
         MatcherAssert.assertThat(
-            "the group walk records the member's answer",
-            TroubleshooterTest.check(report, "group-walk").getJsonArray("members")
-                .getJsonObject(0).getInteger("status"),
-            new IsEqual<>(404)
+            "the verdict names the negative cache of the group",
+            report.getJsonObject("verdict").getString("summary"),
+            new StringContains("negative cache of npm_group")
+        );
+        MatcherAssert.assertThat(
+            "the entry that was there before the check is left alone",
+            negative.inL1(new NegativeCacheKey(
+                "npm_group", "npm-group", "lodash", "4.17.21/lodash-4.17.21.tgz"
+            )),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "no member was asked",
+            TroubleshooterTest.check(report, "group-walk").getString("message"),
+            new StringContains("No member was asked")
+        );
+    }
+
+    @Test
+    void doesNotBlameACachedNotFoundTheCheckItselfCreated() throws Exception {
+        // Replaying a request for a file the upstream lacks caches the 404,
+        // as any client request would. That entry is no finding: it was not
+        // there when the client's request failed.
+        final NegativeCache negative = new NegativeCache(new NegativeCacheConfig());
+        final NegativeCacheKey group = new NegativeCacheKey(
+            "npm_group", "npm-group", "lodash", "9.9.9/lodash-9.9.9.tgz"
+        );
+        final NegativeCacheKey proxy = new NegativeCacheKey(
+            "npm_proxy", "npm-proxy", "lodash", "9.9.9/lodash-9.9.9.tgz"
+        );
+        final FakeFetch fetch = new FakeFetch()
+            .traced(
+                "npm_group", "/lodash/-/lodash-9.9.9.tgz", 404,
+                new RequestTrace.Step("npm_proxy", "npm-proxy", 404, "upstream_status_404", 120L),
+                new RequestTrace.Step("npm_group", "npm-group", 404, "upstream_status_404", 125L)
+            )
+            .onFetch(target -> {
+                if (target.endsWith("lodash-9.9.9.tgz")) {
+                    negative.cacheNotFound(group);
+                    negative.cacheNotFound(proxy);
+                }
+            });
+        final JsonObject report = this.troubleshooter(fetch, negative, CooldownLookup.NONE)
+            .explain("/npm_group/lodash/-/lodash-9.9.9.tgz", "Bearer t")
+            .get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "no negative-cache problem is reported",
+            TroubleshooterTest.statuses(report, "negative-cache"), new IsEqual<>(List.of("ok"))
+        );
+        MatcherAssert.assertThat(
+            "the verdict is what the upstream said",
+            report.getJsonObject("verdict").getString("summary"),
+            new StringContains("none of the repositories asked has this file")
+        );
+        MatcherAssert.assertThat(
+            "the check leaves no cached 404 behind",
+            negative.inL1(group) || negative.inL1(proxy), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the group's own step speaks of its members, a group has no upstream",
+            report.getJsonArray("trace").getJsonObject(1).getString("explanation"),
+            new IsEqual<>("no member has this file")
+        );
+        MatcherAssert.assertThat(
+            "and so does the line about the request",
+            TroubleshooterTest.check(report, "request").getString("message"),
+            new IsEqual<>("Request answers 404: npm_group: no member has this file")
+        );
+        MatcherAssert.assertThat(
+            "the request was replayed once, not once more per member",
+            fetch.seen().stream().filter(seen -> seen.contains("lodash-9.9.9.tgz")).count(),
+            new IsEqual<>(1L)
+        );
+    }
+
+    @Test
+    void tracesWhatEveryRepositoryAnsweredAndWhy() throws Exception {
+        final FakeFetch fetch = new FakeFetch().traced(
+            "npm_group", "/lodash/-/lodash-9.9.9.tgz", 502,
+            new RequestTrace.Step("npm_proxy", "npm-proxy", 502, "connection_refused", 4L),
+            new RequestTrace.Step("npm_group", "npm-group", 502, "connection_refused", 6L)
+        );
+        final JsonObject report = this.troubleshooter(
+            fetch, new NegativeCache(new NegativeCacheConfig()), CooldownLookup.NONE
+        ).explain("/npm_group/lodash/-/lodash-9.9.9.tgz", "Bearer t").get(10, TimeUnit.SECONDS);
+        final JsonArray trace = report.getJsonArray("trace");
+        MatcherAssert.assertThat(
+            "one step per repository, the member first",
+            List.of(
+                trace.getJsonObject(0).getString("repository"),
+                trace.getJsonObject(1).getString("repository")
+            ),
+            new IsEqual<>(List.of("npm_proxy", "npm_group"))
+        );
+        MatcherAssert.assertThat(
+            "the member's step says how its upstream call failed",
+            trace.getJsonObject(0).getString("explanation"),
+            new StringContains("refused the connection")
+        );
+        MatcherAssert.assertThat(
+            "the member's step is marked as the one a proxy answers for",
+            trace.getJsonObject(0).getString("mode"), new IsEqual<>("proxy")
+        );
+        MatcherAssert.assertThat(
+            "the group's step names the member that failed and how",
+            trace.getJsonObject(1).getString("explanation"),
+            new IsEqual<>("member npm_proxy: its upstream refused the connection")
+        );
+        MatcherAssert.assertThat(
+            "the verdict names the member and the failure",
+            report.getJsonObject("verdict").getString("summary"),
+            new StringContains("npm_proxy")
+        );
+        MatcherAssert.assertThat(
+            "and it is a problem",
+            report.getJsonObject("verdict").getString("status"), new IsEqual<>("problem")
+        );
+    }
+
+    @Test
+    void saysWhichMemberServedTheRequest() throws Exception {
+        final FakeFetch fetch = new FakeFetch().traced(
+            "npm_group", "/lodash/-/lodash-4.17.21.tgz", 200,
+            new RequestTrace.Step("npm_proxy", "npm-proxy", 200, null, 30L),
+            new RequestTrace.Step("npm_group", "npm-group", 200, null, 31L)
+        );
+        final JsonObject report = this.troubleshooter(
+            fetch, new NegativeCache(new NegativeCacheConfig()), CooldownLookup.NONE
+        ).explain("/npm_group/lodash/-/lodash-4.17.21.tgz", "Bearer t").get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "the verdict is fine",
+            report.getJsonObject("verdict").getString("status"), new IsEqual<>("ok")
+        );
+        MatcherAssert.assertThat(
+            "and names the member that served",
+            report.getJsonObject("verdict").getString("summary"),
+            new StringContains("served by npm_proxy")
+        );
+        MatcherAssert.assertThat(
+            "the group's step says which member served",
+            report.getJsonArray("trace").getJsonObject(1).getString("explanation"),
+            new IsEqual<>("served by member npm_proxy")
+        );
+    }
+
+    @Test
+    void explainsARequestRefusedForLackOfAPermit() throws Exception {
+        final FakeFetch fetch = new FakeFetch().traced(
+            "npm_proxy", "/lodash/-/lodash-4.17.21.tgz", 503,
+            new RequestTrace.Step("npm_proxy", "npm-proxy", 503, "bulkhead_full", 20_000L)
+        );
+        final JsonObject report = this.troubleshooter(
+            fetch, new NegativeCache(new NegativeCacheConfig()), CooldownLookup.NONE
+        ).explain("/npm_proxy/lodash/-/lodash-4.17.21.tgz", "Bearer t").get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "the verdict says the repository had no free permit",
+            report.getJsonObject("verdict").getString("summary"),
+            new StringContains("no free permit")
+        );
+        MatcherAssert.assertThat(
+            "and points at the setting",
+            report.getJsonObject("verdict").getString("advice"),
+            new StringContains("Bulkhead")
         );
     }
 
@@ -182,6 +347,24 @@ final class TroubleshooterTest {
         return new Troubleshooter(
             diag, negative, new PackageInspector(diag, negative, Optional::empty, rows)
         );
+    }
+
+    /**
+     * Statuses of the checks of a layer.
+     *
+     * @param report Report
+     * @param layer Layer
+     * @return Statuses in order
+     */
+    private static List<String> statuses(final JsonObject report, final String layer) {
+        final JsonArray checks = report.getJsonArray("checks");
+        final List<String> out = new java.util.ArrayList<>();
+        for (int idx = 0; idx < checks.size(); idx = idx + 1) {
+            if (layer.equals(checks.getJsonObject(idx).getString("layer"))) {
+                out.add(checks.getJsonObject(idx).getString("status"));
+            }
+        }
+        return out;
     }
 
     /**

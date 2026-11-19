@@ -213,6 +213,9 @@ public final class ServerErrorLog {
      */
     private void emit(final EcsLogger log, final String message) {
         final String cause = this.cause();
+        // Whatever the level of this record, the access record of the
+        // request says the cause (see RequestReasons).
+        RequestReasons.instance().note(this.headers, cause);
         final StringBuilder text = new StringBuilder(message);
         if (this.status > 0) {
             text.append("; answering ").append(this.status);

@@ -85,6 +85,15 @@ public final class VertxSliceServer implements Closeable {
     private static final String INTERNAL_ERROR_BODY = "Internal Server Error";
 
     /**
+     * The request methods a handler exists for, in the order the
+     * {@code Allow} header lists them. A request with any other method
+     * token is refused before it reaches a slice.
+     */
+    private static final java.util.List<String> METHODS = java.util.Arrays.stream(
+        com.auto1.pantera.http.rq.RqMethod.values()
+    ).map(com.auto1.pantera.http.rq.RqMethod::value).toList();
+
+    /**
      * Body returned when an upstream stream dies mid-response.
      */
     private static final String BAD_GATEWAY_BODY =
@@ -744,6 +753,31 @@ public final class VertxSliceServer implements Closeable {
     }
 
     /**
+     * Answer a request whose method no handler exists for with 405 and the
+     * methods that are served.
+     *
+     * @param req Request
+     */
+    private static void refuseMethod(final HttpServerRequest req) {
+        final String method = req.method().name();
+        EcsLogger.info("com.auto1.pantera.vertx")
+            .message("Request with an unknown HTTP method refused; answering 405")
+            .eventCategory("web")
+            .eventAction("http_request")
+            .eventOutcome("failure")
+            .field("event.reason", "method_not_allowed")
+            .field("http.request.method", method.length() > 32 ? method.substring(0, 32) : method)
+            .field("http.response.status_code", HttpURLConnection.HTTP_BAD_METHOD)
+            .field("url.path", req.path())
+            .field("log.source", "application")
+            .log();
+        req.response()
+            .setStatusCode(HttpURLConnection.HTTP_BAD_METHOD)
+            .putHeader("Allow", String.join(", ", VertxSliceServer.METHODS))
+            .end();
+    }
+
+    /**
      * A handler which proxy incoming requests to encapsulated slice.
      * @return The request handler.
      */
@@ -758,6 +792,14 @@ public final class VertxSliceServer implements Closeable {
                     .setStatusCode(200)
                     .putHeader("Content-Type", "application/json;charset=utf-8")
                     .end("{\"status\":\"ok\"}");
+                return;
+            }
+            if (!VertxSliceServer.METHODS.contains(req.method().name())) {
+                // A method no handler exists for, including any made-up
+                // token. It used to fail further down as a 500 with a stack
+                // trace in the log; it is refused here, before a transaction,
+                // a slice or a log record of more than one line is spent.
+                VertxSliceServer.refuseMethod(req);
                 return;
             }
             this.inFlightRequests.incrementAndGet();
@@ -1947,8 +1989,9 @@ public final class VertxSliceServer implements Closeable {
                     .error(error)
                     .field("log.source", "application")
                     .log();
-                // CRITICAL: Must end response even on error to decrement counter
-                // Use guarded response to prevent double-end race conditions
+                // The response is terminated on this path too: with an error
+                // status while the head is unsent, by breaking it off after.
+                // The guarded response keeps a second termination out.
                 if (!this.guardedResponse.isTerminated()) {
                     try {
                         // Only set error status if headers haven't been sent yet
@@ -1979,8 +2022,14 @@ public final class VertxSliceServer implements Closeable {
                                 errorMsg
                             );
                         } else {
-                            // Headers already sent, just end the response
-                            this.guardedResponse.safeEnd("ResponseTerminator.fail");
+                            // The head is with the client already, so the
+                            // status cannot say that the body is incomplete.
+                            // Break off the exchange instead: ending it
+                            // normally leaves an HTTP/1.1 client waiting for
+                            // the rest of the declared Content-Length until
+                            // the idle timeout, and completes a chunked body
+                            // that is in fact truncated.
+                            this.guardedResponse.safeAbort("ResponseTerminator.fail");
                         }
                     } catch (Exception e) {
                         EcsLogger.warn("com.auto1.pantera.vertx")

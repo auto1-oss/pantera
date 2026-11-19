@@ -12,6 +12,7 @@ package com.auto1.pantera.http.resilience;
 
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Result;
+import org.apache.logging.log4j.ThreadContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -20,8 +21,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -30,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Tests for {@link RepoBulkhead}. Covers the WI-09 DoD requirements:
  * <ul>
- *   <li>{@link #rejectsWhenSaturated()} - acquire maxConcurrent permits; next run() returns Fault.Overload</li>
+ *   <li>{@link #waitsWhenSaturatedAndRunsOnceAPermitIsFree()} - acquire maxConcurrent permits; next run() waits for one</li>
  *   <li>{@link #releasesPermitOnSuccess()} - acquire, complete, next run() succeeds</li>
  *   <li>{@link #releasesPermitOnFailure()} - acquire, op throws, permit still released</li>
  *   <li>{@link #activeCountTracksPermits()} - activeCount reflects held permits</li>
@@ -41,38 +44,177 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RepoBulkheadTest {
 
     @Test
-    void rejectsWhenSaturated() throws Exception {
+    void waitsWhenSaturatedAndRunsOnceAPermitIsFree() throws Exception {
+        // A burst beyond the permits used to be refused on the spot, which a
+        // proxy with several remotes reported as 502. The request now waits.
         final int maxConcurrent = 3;
-        final BulkheadLimits limits = new BulkheadLimits(
-            maxConcurrent, 100, Duration.ofSeconds(1)
-        );
         final RepoBulkhead bulkhead = new RepoBulkhead(
-            "repo-a", limits, ForkJoinPool.commonPool()
+            "repo-a",
+            AdaptiveBulkheadLimits.fixed(maxConcurrent, 100, Duration.ofSeconds(1)),
+            ForkJoinPool.commonPool()
         );
-        // Hold maxConcurrent permits with uncompleted futures
         final List<CompletableFuture<Result<String>>> blockers = new ArrayList<>();
         for (int i = 0; i < maxConcurrent; i++) {
             final CompletableFuture<Result<String>> blocker = new CompletableFuture<>();
             bulkhead.run(() -> blocker);
             blockers.add(blocker);
         }
-        assertEquals(maxConcurrent, bulkhead.activeCount(),
-            "All permits should be held");
-        // Next run must be rejected
-        final Result<String> rejected = bulkhead.run(
+        final CompletableFuture<Result<String>> queued = bulkhead.run(
+            () -> CompletableFuture.completedFuture(Result.ok("served"))
+        ).toCompletableFuture();
+        assertEquals(maxConcurrent, bulkhead.activeCount(), "All permits are held");
+        assertEquals(1, bulkhead.waitingCount(), "The next request waits");
+        assertTrue(!queued.isDone(), "and is not answered yet");
+        blockers.get(0).complete(Result.ok("done"));
+        final Result<String> served = queued.get(10, TimeUnit.SECONDS);
+        assertInstanceOf(Result.Ok.class, served, "It runs once a permit is free");
+        assertEquals("served", ((Result.Ok<String>) served).value(), "with its own result");
+        for (final CompletableFuture<Result<String>> b : blockers) {
+            b.complete(Result.ok("done"));
+        }
+    }
+
+    @Test
+    void refusesWithOverloadWhenNoPermitComesWithinTheWaitBound() throws Exception {
+        final RepoBulkhead bulkhead = new RepoBulkhead(
+            "repo-a",
+            AdaptiveBulkheadLimits.fixed(1, 100, Duration.ofSeconds(1)),
+            ForkJoinPool.commonPool(),
+            Duration.ofMillis(20)
+        );
+        final CompletableFuture<Result<String>> blocker = new CompletableFuture<>();
+        bulkhead.run(() -> blocker);
+        final Result<String> refused = bulkhead.run(
             () -> CompletableFuture.completedFuture(Result.ok("should-not-reach"))
-        ).toCompletableFuture().get(5, TimeUnit.SECONDS);
-        assertInstanceOf(Result.Err.class, rejected, "Must be rejected");
-        final Fault fault = ((Result.Err<String>) rejected).fault();
+        ).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        assertInstanceOf(Result.Err.class, refused, "Must be refused");
+        final Fault fault = ((Result.Err<String>) refused).fault();
         assertInstanceOf(Fault.Overload.class, fault, "Must be Overload fault");
         final Fault.Overload overload = (Fault.Overload) fault;
         assertEquals("repo-a", overload.resource(), "Fault must carry the repo name");
         assertEquals(Duration.ofSeconds(1), overload.retryAfter(),
             "Fault must carry the configured retry-after");
-        // Clean up blockers
-        for (final CompletableFuture<Result<String>> b : blockers) {
-            b.complete(Result.ok("done"));
+        blocker.complete(Result.ok("done"));
+    }
+
+    @Test
+    void refusalAfterTheWaitBoundIsHandedToTheResumeExecutor() throws Exception {
+        // The wait bound expires on the single timer thread of the JDK. What
+        // follows a refusal (the 503, the walk to the next group member) must
+        // not run there: one slow continuation would delay every other bound.
+        final AtomicInteger handed = new AtomicInteger();
+        final Executor counting = task -> {
+            handed.incrementAndGet();
+            ForkJoinPool.commonPool().execute(task);
+        };
+        final RepoBulkhead bulkhead = new RepoBulkhead(
+            "repo-a",
+            AdaptiveBulkheadLimits.fixed(1, 100, Duration.ofSeconds(1)),
+            counting,
+            Duration.ofMillis(20)
+        );
+        final CompletableFuture<Result<String>> blocker = new CompletableFuture<>();
+        bulkhead.run(() -> blocker);
+        bulkhead.run(
+            () -> CompletableFuture.completedFuture(Result.ok("should-not-reach"))
+        ).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        assertEquals(1, handed.get());
+        blocker.complete(Result.ok("done"));
+    }
+
+    @Test
+    void refusesAtOnceWhenTheQueueIsFull() throws Exception {
+        final RepoBulkhead bulkhead = new RepoBulkhead(
+            "repo-a",
+            AdaptiveBulkheadLimits.fixed(1, 1, Duration.ofSeconds(1)),
+            ForkJoinPool.commonPool()
+        );
+        final CompletableFuture<Result<String>> blocker = new CompletableFuture<>();
+        bulkhead.run(() -> blocker);
+        final CompletableFuture<Result<String>> waiting = bulkhead.run(
+            () -> CompletableFuture.completedFuture(Result.ok("second"))
+        ).toCompletableFuture();
+        final CompletableFuture<Result<String>> beyond = bulkhead.run(
+            () -> CompletableFuture.completedFuture(Result.ok("should-not-reach"))
+        ).toCompletableFuture();
+        assertTrue(beyond.isDone(), "A request beyond the queue is answered at once");
+        assertInstanceOf(
+            Fault.Overload.class, ((Result.Err<String>) beyond.get()).fault(),
+            "and it is refused as overload"
+        );
+        blocker.complete(Result.ok("done"));
+        assertEquals(
+            "second", ((Result.Ok<String>) waiting.get(10, TimeUnit.SECONDS)).value(),
+            "The request inside the queue is still served"
+        );
+    }
+
+    @Test
+    void queuedOperationRunsUnderTheLoggingContextOfItsCaller() throws Exception {
+        // The permit is released on a thread that serves another request:
+        // the queued operation must not run under that request's context.
+        final RepoBulkhead bulkhead = new RepoBulkhead(
+            "repo-a",
+            AdaptiveBulkheadLimits.fixed(1, 100, Duration.ofSeconds(1)),
+            ForkJoinPool.commonPool()
+        );
+        final CompletableFuture<Result<String>> blocker = new CompletableFuture<>();
+        bulkhead.run(() -> blocker);
+        ThreadContext.put("trace.id", "queued-request");
+        final CompletableFuture<Result<String>> queued;
+        try {
+            queued = bulkhead.run(
+                () -> CompletableFuture.completedFuture(
+                    Result.ok(String.valueOf(ThreadContext.get("trace.id")))
+                )
+            ).toCompletableFuture();
+        } finally {
+            ThreadContext.clearMap();
         }
+        final Thread releaser = new Thread(
+            () -> {
+                ThreadContext.put("trace.id", "another-request");
+                blocker.complete(Result.ok("done"));
+            },
+            "releaser"
+        );
+        releaser.start();
+        releaser.join(TimeUnit.SECONDS.toMillis(10));
+        final Result<String> seen = queued.get(10, TimeUnit.SECONDS);
+        assertEquals("queued-request", ((Result.Ok<String>) seen).value());
+    }
+
+    @Test
+    void aLongQueueOfInstantOperationsAllRun() throws Exception {
+        // Each finished operation hands its permit to the next one. Run
+        // inline, two thousand of them would nest two thousand frames deep.
+        final RepoBulkhead bulkhead = new RepoBulkhead(
+            "repo-a",
+            AdaptiveBulkheadLimits.fixed(1, 5000, Duration.ofSeconds(1)),
+            ForkJoinPool.commonPool()
+        );
+        final CompletableFuture<Result<String>> blocker = new CompletableFuture<>();
+        bulkhead.run(() -> blocker);
+        final List<CompletableFuture<Result<Integer>>> queued = new ArrayList<>();
+        for (int i = 0; i < 2000; i++) {
+            final int number = i;
+            queued.add(
+                bulkhead.<Integer>run(
+                    () -> CompletableFuture.completedFuture(Result.ok(number))
+                ).toCompletableFuture()
+            );
+        }
+        blocker.complete(Result.ok("done"));
+        CompletableFuture.allOf(queued.toArray(new CompletableFuture[0]))
+            .get(20, TimeUnit.SECONDS);
+        int served = 0;
+        for (final CompletableFuture<Result<Integer>> one : queued) {
+            if (one.get() instanceof Result.Ok<Integer>) {
+                served += 1;
+            }
+        }
+        assertEquals(2000, served, "Every queued operation ran");
+        assertEquals(0, bulkhead.activeCount(), "and every permit came back");
     }
 
     @Test

@@ -21,6 +21,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.HeadAsGetSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.perms.Action;
@@ -113,19 +114,24 @@ public final class HexSlice extends Slice.Wrap {
                         )
                     )
                 ),
+                // HEAD is answered like the matching GET, without the body:
+                // bound to GET alone this route answered 404 to `curl -I`
+                // for a file that exists.
                 new RtRulePath(
                     new RtRule.All(
-                        MethodRule.GET,
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                         new RtRule.Any(
                             new RtRule.ByPath(DownloadSlice.PACKAGES_PTRN),
                             new RtRule.ByPath(DownloadSlice.TARBALLS_PTRN)
                         )
                     ),
-                    new BasicAuthzSlice(
-                        new DownloadSlice(storage, name, signer),
-                        users,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    new HeadAsGetSlice(
+                        new BasicAuthzSlice(
+                            new DownloadSlice(storage, name, signer),
+                            users,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),

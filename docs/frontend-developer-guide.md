@@ -30,14 +30,14 @@ The Pantera Management UI is a standalone single-page application that communica
 | Component | Technology | Version |
 |-----------|-----------|---------|
 | Framework | Vue 3 (Composition API, `<script setup>`) | 3.5 |
-| Language | TypeScript (strict mode) | 5.7 |
-| Build Tool | Vite | 6.2 |
-| Components | PrimeVue (Aura theme preset) | 4.3 |
-| Styling | Tailwind CSS | 4.1 |
-| State | Pinia | 2.3 |
-| HTTP Client | Axios | 1.7 |
-| Testing | Vitest + happy-dom | 3.0 |
-| Linting | ESLint (flat config) | 9.0 |
+| Language | TypeScript (strict mode) | 6.0 |
+| Build Tool | Vite | 8.3 |
+| Components | PrimeVue (Aura theme preset) | 4.5 |
+| Styling | Tailwind CSS | 4.3 |
+| State | Pinia | 4.1 |
+| HTTP Client | Axios | 1.21 |
+| Testing | Vitest + happy-dom | 5.1 |
+| Linting | ESLint (flat config) | 10.15 |
 
 For quick-start commands and Docker setup, see the [pantera-ui README](../pantera-ui/README.md).
 
@@ -496,7 +496,7 @@ describe('usePermission', () => {
 - **TypeScript strict** -- All variables and function parameters must be typed.
 - **Path alias** -- `@/` resolves to `src/`. Use it in all imports.
 - **File naming** -- PascalCase for `.vue` files (e.g., `RepoListView.vue`). camelCase for `.ts` files (e.g., `usePermission.ts`). Views end with `View.vue`. Composables start with `use`.
-- **Linting** -- Run `npm run lint` before committing. ESLint 9.x flat config is used.
+- **Linting** -- Run `npm run lint` before committing. ESLint 10.x flat config is used.
 - **No Options API** -- Do not introduce `defineComponent()` or options-style code in new files.
 
 ---

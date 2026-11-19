@@ -12,6 +12,7 @@ package com.auto1.pantera.group;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.LocalRefusal;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
@@ -260,9 +261,9 @@ public final class GoGroupSlice implements Slice {
             this.metric(member, status == RsStatus.NOT_FOUND ? "not_found" : "redirect", latency);
             return new MemberList(Optional.empty(), Outcome.ANSWERED, 0L);
         }
-        if (status.serverError()
-            && !resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
-            this.metric(member, "circuit_open", -1L);
+        final LocalRefusal refusal = new LocalRefusal(resp);
+        if (refusal.present()) {
+            this.metric(member, refusal.bulkhead() ? "bulkhead_full" : "circuit_open", -1L);
             return new MemberList(
                 Optional.empty(), Outcome.SKIPPED, GroupResolver.parseRetryAfterSeconds(resp)
             );

@@ -1028,6 +1028,145 @@ final class GroupResolverTest {
     }
 
     @Test
+    void memberWithoutAFreePermitIsSkippedWithoutConviction() {
+        // 2026-11-17: the refusals of a proxy's bulkhead were counted as
+        // failures of that member and opened its breaker twice.
+        final AutoBlockRegistry registry = new AutoBlockRegistry(
+            new AutoBlockSettings(
+                0.5, 1, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+        final MemberSlice busy = new MemberSlice(
+            PROXY_A, bulkheadFullSlice("17"), registry, true
+        );
+        final NegativeCache negCache = buildNegativeCache();
+        final GroupResolver resolver = new GroupResolver(
+            GROUP,
+            List.of(new MemberSlice(HOSTED, notFoundSlice(), false), busy),
+            Collections.emptyList(),
+            Optional.of(new RecordingIndex(Optional.of(List.of()))),
+            REPO_TYPE,
+            Set.of(PROXY_A),
+            negCache,
+            java.util.concurrent.ForkJoinPool.commonPool()
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "a member that could not be asked makes the artifact temporarily unavailable",
+            resp.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the member's Retry-After reaches the client",
+            resp.headers().values("Retry-After"), new IsEqual<>(List.of("17"))
+        );
+        MatcherAssert.assertThat(
+            "nothing is negative-cached",
+            negCache.isKnown404(new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION)),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the member is not convicted for having no free permit",
+            busy.isCircuitOpen(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void memberWithoutAFreePermitIsSkippedAndTheNextMemberServes() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, bulkheadFullSlice("17"));
+        slices.put(PROXY_B, okSlice());
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+            buildNegativeCache(), slices
+        );
+        MatcherAssert.assertThat(
+            resolver.response(
+                new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+            ).join().status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+    }
+
+    @Test
+    void groupNotFoundSaysWhenAMemberAnsweredFromItsNegativeCache() {
+        // Every member answers 404. One of them did not ask its upstream:
+        // the access record of the group's 404 must say so.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, reasonedSlice(RsStatus.NOT_FOUND, "negative_cache"));
+        slices.put(PROXY_B, reasonedSlice(RsStatus.NOT_FOUND, "upstream_status_404"));
+        final Response answer = new com.auto1.pantera.http.slice.ReasonSlice(
+            buildResolver(
+                idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+                buildNegativeCache(), slices
+            )
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "the group answers 404",
+            answer.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "and names the cached answer of its member as the reason",
+            new com.auto1.pantera.http.log.AnswerReason(answer).token(),
+            new IsEqual<>(Optional.of("negative_cache"))
+        );
+    }
+
+    @Test
+    void groupFailureIsExplainedByTheMemberThatFailed() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, reasonedSlice(RsStatus.BAD_GATEWAY, "connection_closed"));
+        slices.put(PROXY_B, reasonedSlice(RsStatus.NOT_FOUND, "upstream_status_404"));
+        final Response answer = new com.auto1.pantera.http.slice.ReasonSlice(
+            buildResolver(
+                idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+                buildNegativeCache(), slices
+            )
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "the group does not answer 2xx or 404",
+            answer.status().serverError(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "and the reason is how the member's upstream call failed",
+            new com.auto1.pantera.http.log.AnswerReason(answer).token(),
+            new IsEqual<>(Optional.of("connection_closed"))
+        );
+    }
+
+    @Test
+    void groupNegativeCacheHitIsNamed() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, reasonedSlice(RsStatus.NOT_FOUND, "upstream_status_404"));
+        final Slice group = new com.auto1.pantera.http.slice.ReasonSlice(
+            buildResolver(
+                idx, List.of(PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+            )
+        );
+        final Response first = group.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        final Response second = group.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the first 404 is the member's upstream answer",
+            new com.auto1.pantera.http.log.AnswerReason(first).token(),
+            new IsEqual<>(Optional.of("upstream_status_404"))
+        );
+        MatcherAssert.assertThat(
+            "the second is the group's own negative cache",
+            new com.auto1.pantera.http.log.AnswerReason(second).token(),
+            new IsEqual<>(Optional.of("negative_cache"))
+        );
+    }
+
+    @Test
     void blockedMember_cacheOnlyProbe_servesWarmCache() {
         final java.util.concurrent.atomic.AtomicBoolean sawCacheOnly =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -1075,6 +1214,108 @@ final class GroupResolverTest {
             "Cache-only miss on a blocked member must NOT poison the negative cache");
     }
 
+    // ---- Member 4xx is a refusal, not an outage ----
+
+    @Test
+    void member409_skipsWithoutConviction_nextMemberServes() {
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        final GroupResolver resolver = resolverWithRegistry(
+            registry, staticSlice(RsStatus.CONFLICT), okSlice(), buildNegativeCache()
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(200, resp.status().code(),
+            "A member answering 409 must be skipped and the next member must serve");
+        assertFalse(registry.isBlocked(PROXY_A),
+            "A member 4xx must not convict the member on the group breaker");
+    }
+
+    @Test
+    void member409_restNotFound_unverified404_notNegativeCached() {
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        final NegativeCache negCache = buildNegativeCache();
+        final GroupResolver resolver = resolverWithRegistry(
+            registry, staticSlice(RsStatus.CONFLICT), notFoundSlice(), negCache
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(404, resp.status().code(),
+            "A 409 plus 404s is a miss, not a 502 outage");
+        assertFalse(
+            resp.headers().values(NegativeCache.SKIP_HEADER).isEmpty(),
+            "The 404 must carry the negative-cache skip marker");
+        assertFalse(registry.isBlocked(PROXY_A),
+            "A member 4xx must not convict the member on the group breaker");
+        assertFalse(
+            negCache.isKnown404(new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION)),
+            "A walk that saw a member 4xx must NOT poison the negative cache");
+    }
+
+    @Test
+    void member5xx_stillConvicts() {
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        final GroupResolver resolver = resolverWithRegistry(
+            registry, staticSlice(RsStatus.INTERNAL_ERROR), notFoundSlice(),
+            buildNegativeCache()
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(502, resp.status().code(),
+            "A genuine member 5xx still yields a 502 terminal");
+        assertTrue(registry.isBlocked(PROXY_A),
+            "A genuine member 5xx still convicts the member");
+    }
+
+    /**
+     * Registry that blocks a member on its first recorded failure.
+     */
+    private static AutoBlockRegistry tripOnFirstFailureRegistry() {
+        return new AutoBlockRegistry(
+            new AutoBlockSettings(
+                0.5, 1, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+    }
+
+    /**
+     * Two-proxy resolver (PROXY_A then PROXY_B) sharing one registry.
+     */
+    private static GroupResolver resolverWithRegistry(
+        final AutoBlockRegistry registry, final Slice first, final Slice second,
+        final NegativeCache negCache
+    ) {
+        return new GroupResolver(
+            GROUP,
+            List.of(
+                new MemberSlice(PROXY_A, first, registry, true),
+                new MemberSlice(PROXY_B, second, registry, true)
+            ),
+            Collections.emptyList(),
+            Optional.of(new RecordingIndex(Optional.of(List.of()))),
+            REPO_TYPE,
+            Set.of(PROXY_A, PROXY_B),
+            negCache,
+            java.util.concurrent.ForkJoinPool.commonPool()
+        );
+    }
+
+    /**
+     * A member answering with a status and the reason its own
+     * {@code ReasonSlice} would have put on the answer.
+     */
+    private static Slice reasonedSlice(final RsStatus status, final String reason) {
+        return (line, headers, body) -> CompletableFuture.completedFuture(
+            new com.auto1.pantera.http.log.AnswerReason(ResponseBuilder.from(status).build())
+                .stamped(reason)
+        );
+    }
+
     /**
      * Build a resolver whose single proxy member has its group-layer
      * circuit BLOCKED (one failure against a min-calls=1 registry).
@@ -1100,6 +1341,16 @@ final class GroupResolverTest {
             negCache == null ? buildNegativeCache() : negCache,
             java.util.concurrent.ForkJoinPool.commonPool()
         );
+    }
+
+    private static Slice bulkheadFullSlice(final String retryAfter) {
+        return (line, headers, body) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", retryAfter)
+                    .header("X-Pantera-Bulkhead-Overflow", "true")
+                    .build()
+            );
     }
 
     private static Slice circuitOpenSlice(final String retryAfter) {

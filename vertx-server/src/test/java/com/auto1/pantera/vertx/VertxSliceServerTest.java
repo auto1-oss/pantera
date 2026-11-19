@@ -203,6 +203,39 @@ public final class VertxSliceServerTest {
     }
 
     @Test
+    void anUnknownMethodIsAnswered405WithoutReachingTheSlice() {
+        // A method token no handler exists for used to fail inside the
+        // request handler: 500, an ERROR record with a stack trace, and a new
+        // set of metric series per token.
+        final java.util.concurrent.atomic.AtomicInteger calls =
+            new java.util.concurrent.atomic.AtomicInteger();
+        this.start(
+            (line, headers, body) -> {
+                calls.incrementAndGet();
+                return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+            }
+        );
+        final HttpResponse<Buffer> response = this.client
+            .request(
+                io.vertx.core.http.HttpMethod.valueOf("ZZTOP"),
+                this.port, VertxSliceServerTest.HOST, "/hello"
+            )
+            .rxSend().blockingGet();
+        MatcherAssert.assertThat(
+            "the request is refused as a method that is not allowed",
+            response.statusCode(), Matchers.equalTo(405)
+        );
+        MatcherAssert.assertThat(
+            "the answer names the methods that are",
+            response.getHeader("Allow"), Matchers.containsString("GET")
+        );
+        MatcherAssert.assertThat(
+            "and the slice is not called",
+            calls.get(), Matchers.equalTo(0)
+        );
+    }
+
+    @Test
     public void basicGetRequest() {
         final String expected = "Hello World!!!";
         this.start(

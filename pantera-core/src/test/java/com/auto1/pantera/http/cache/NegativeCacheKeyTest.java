@@ -58,6 +58,34 @@ final class NegativeCacheKeyTest {
     }
 
     @Test
+    void forFileKeepsTheFilesOfOneMavenVersionApart() {
+        final String dir = "/org/spring/spring-core/5.3.0/";
+        final NegativeCacheKey pom = NegativeCacheKey.forFile(
+            "maven-central", "maven-proxy", dir + "spring-core-5.3.0.pom"
+        );
+        final NegativeCacheKey site = NegativeCacheKey.forFile(
+            "maven-central", "maven-proxy", dir + "spring-core-5.3.0-site.xml"
+        );
+        assertEquals("org/spring/spring-core", pom.artifactName(), "the artifact is named as before");
+        assertEquals(
+            "5.3.0/spring-core-5.3.0.pom", pom.artifactVersion(),
+            "the version names the file"
+        );
+        assertEquals(
+            "5.3.0/spring-core-5.3.0-site.xml", site.artifactVersion(),
+            "so another file of the version has another key"
+        );
+    }
+
+    @Test
+    void forFileKeepsAVersionLessPathVersionLess() {
+        final NegativeCacheKey key = NegativeCacheKey.forFile(
+            "maven-central", "maven-proxy", "/org/spring/spring-core/maven-metadata.xml"
+        );
+        assertEquals("", key.artifactVersion());
+    }
+
+    @Test
     void fromPathParsesGoIntoNameAndVersion() {
         final NegativeCacheKey key = NegativeCacheKey.fromPath(
             "go_proxy", "go", "/example.com/hello/@v/v1.0.1.mod"

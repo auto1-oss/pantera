@@ -148,6 +148,55 @@ public record NegativeCacheKey(
         );
     }
 
+    /**
+     * Build the key of one file from a raw URL path.
+     *
+     * <p>{@link #fromPath(String, String, String)} names an artifact version.
+     * A version can have many files (a Maven POM, jar, sources jar,
+     * signatures, a site descriptor; the wheels and the sdist of a PyPI
+     * release), and that one of them is missing says nothing about the
+     * others. A 404 must therefore be remembered under this key, never under
+     * the version's: remembered for the version, the 404 of a
+     * {@code -site.xml} that no artifact has would hide the POM next to it
+     * for the negative-cache TTL.</p>
+     *
+     * @param scope Repository name
+     * @param repoType Adapter type
+     * @param path Request path (raw, may include leading slash)
+     * @return Key whose version is {@code "<version>/<file>"}; the key of
+     *  {@link #fromPath(String, String, String)} when the path has no
+     *  version
+     */
+    public static NegativeCacheKey forFile(
+        final String scope, final String repoType, final String path
+    ) {
+        final NegativeCacheKey version = NegativeCacheKey.fromPath(scope, repoType, path);
+        return new NegativeCacheKey(
+            scope, repoType, version.artifactName(),
+            NegativeCacheKey.fileVersion(version.artifactVersion(), path)
+        );
+    }
+
+    /**
+     * Version component of a file's key: the version and the file name.
+     *
+     * @param version Version parsed from the path, may be empty
+     * @param path Request path
+     * @return {@code "<version>/<file>"}, or empty for a version-less path,
+     *  which {@link NegativeCache#cacheNotFound} never caches
+     */
+    public static String fileVersion(final String version, final String path) {
+        final String result;
+        if (version.isEmpty()) {
+            result = "";
+        } else {
+            final String trimmed =
+                path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
+            result = version + "/" + trimmed.substring(trimmed.lastIndexOf('/') + 1);
+        }
+        return result;
+    }
+
     private static String[] parseByType(final String repoType, final String path) {
         if (path.isEmpty()) {
             return new String[]{"", ""};

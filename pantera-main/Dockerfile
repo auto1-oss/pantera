@@ -1,6 +1,6 @@
 FROM eclipse-temurin:21-jre-alpine
 ARG JAR_FILE
-ARG APM_VERSION=1.55.4
+ARG APM_VERSION=1.57.1
 
 # Install curl for downloading Elastic APM agent + jattach for programmatic attachment (jmap + jstack + jcmd + jinfo)
 RUN apk add --no-cache curl jattach
@@ -22,12 +22,12 @@ RUN addgroup -g 2020 -S pantera && \
     adduser -u 2021 -S -G pantera -s /sbin/nologin pantera && \
     mkdir -p /etc/pantera /usr/lib/pantera /var/pantera/logs/dumps /var/pantera/cache/tmp /opt/apm && \
     chown -R pantera:pantera /etc/pantera /usr/lib/pantera /var/pantera && \
-    curl -L "https://repo1.maven.org/maven2/co/elastic/apm/elastic-apm-agent/${APM_VERSION}/elastic-apm-agent-${APM_VERSION}.jar" \
+    curl -fsSL "https://repo1.maven.org/maven2/co/elastic/apm/elastic-apm-agent/${APM_VERSION}/elastic-apm-agent-${APM_VERSION}.jar" \
     -o /opt/apm/elastic-apm-agent.jar && \
     chown pantera:pantera /opt/apm/elastic-apm-agent.jar
 
 ENV TMPDIR=/var/pantera/cache/tmp
-ENV PANTERA_VERSION=2.2.11
+ENV PANTERA_VERSION=2.2.12
 
 USER 2021:2020
 
@@ -50,9 +50,14 @@ CMD [ "sh", "-c", "\
   echo 'Ulimits - nofile: '$(ulimit -n)' nproc: '$(ulimit -u) && \
   # Unique heap dump name per container start: the JVM never overwrites an existing dump \n\
   JVM_ARGS=$(printf '%s' \"$JVM_ARGS\" | sed -E \"s#(-XX:HeapDumpPath=[^ ]*)[.]hprof#\\1-$(date +%Y%m%d-%H%M%S)-$(hostname).hprof#\") && \
+  # CVE-2026-114938: the Base64 decoder intrinsic of OpenJDK 17.0.6+ writes past its buffer on \n\
+  # x86-64 with AVX-512 VBMI. Pantera decodes Base64 from every Authorization header, before \n\
+  # authentication. The flag turns the intrinsic off; it comes after JVM_ARGS so that an \n\
+  # override of JVM_ARGS cannot drop it. Remove it once the base image has a fixed JDK. \n\
   exec java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \
   $JVM_ARGS \
+  -XX:-UseBASE64Intrinsics \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* \

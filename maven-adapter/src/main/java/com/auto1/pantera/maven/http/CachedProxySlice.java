@@ -26,6 +26,7 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.BaseCachedProxySlice;
 import com.auto1.pantera.http.cache.DigestComputer;
+import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.cache.ProxyCacheConfig;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
 import com.auto1.pantera.http.cache.SidecarFile;
@@ -33,6 +34,7 @@ import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
 import com.auto1.pantera.http.fault.Result;
+import com.auto1.pantera.http.headers.LastModified;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.ServerErrorLog;
@@ -51,9 +53,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -831,9 +830,9 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     }
 
     private static String httpDate(final Instant when) {
-        return DateTimeFormatter.RFC_1123_DATE_TIME.format(
-            ZonedDateTime.ofInstant(when, ZoneOffset.UTC)
-        );
+        // Fixed-length HTTP date: RFC_1123_DATE_TIME drops the leading zero
+        // of the day ("Tue, 3 Nov 2026"), which strict clients reject.
+        return new LastModified(when).getValue();
     }
 
     private static String firstHeader(final Headers headers, final String name) {
@@ -897,7 +896,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @return {@code true} if we should route this request through
      *         {@link ProxyCacheWriter}.
      */
-    private static boolean isPrimaryArtifact(final String path) {
+    static boolean isPrimaryArtifact(final String path) {
         if (path.endsWith("/") || path.contains("maven-metadata.xml")) {
             return false;
         }
@@ -938,9 +937,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         // reflects THIS request's correlation context.
         final com.auto1.pantera.audit.AuditContext auditCtx = this.captureAuditContext(headers);
         final Storage storage = this.rawStorage.orElseThrow();
-        return storage.exists(key).thenCompose(presentInStorage -> {
-            if (presentInStorage) {
-                return this.serveFromCache(storage, key, auditCtx, path, headers);
+        return CachedProxySlice.storedAt(storage, key).thenCompose(stored -> {
+            if (stored.isPresent()) {
+                return this.serveFromCache(
+                    storage, key, auditCtx, path, headers, stored.get()
+                );
             }
             // Cooldown gate moved into fetchVerifyAndCache (post-headers).
             // The pre-fetch HEAD probe via MavenHeadSource was the dominant
@@ -1149,7 +1150,13 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     auditCtx, path, inboundHeaders, artifact.body().size().orElse(0L),
                     com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
                 );
-                return ResponseBuilder.ok().body(artifact.body()).build();
+                // The copy is being stored now; the next request is dated
+                // with its storage time. Generic HTTP clients (CI tool
+                // installers) refuse a download without Last-Modified.
+                return ResponseBuilder.ok()
+                    .header(new LastModified(Instant.now()))
+                    .body(artifact.body())
+                    .build();
             });
             })
         ).exceptionally(err -> {
@@ -1288,6 +1295,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final String path, final String upstreamUri
     ) {
         final Response response = CachedProxySlice.mapUpstreamStatus(err);
+        if (!response.status().serverError()) {
+            // The 5xx branch below notes its cause through ServerErrorLog;
+            // what the upstream answered is the reason of a 4xx as well.
+            com.auto1.pantera.http.log.RequestReasons.instance().note(
+                inboundHeaders,
+                com.auto1.pantera.http.log.RequestReasons.upstream(err.status())
+            );
+        }
         if (response.status().serverError()) {
             // Plain upstream answer, no throwable: event.reason carries the
             // upstream status (or circuit_open for the breaker's fast-fail),
@@ -1308,6 +1323,21 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     "Upstream answered " + err.status() + " for primary artifact"
                 );
             }
+        } else if (!response.headers().values(NegativeCache.SKIP_HEADER).isEmpty()) {
+            EcsLogger.info(CachedProxySlice.LOGGER)
+                .message("Upstream answered " + err.status()
+                    + " for primary artifact; answering non-authoritative 404")
+                .eventCategory("web")
+                .eventAction("proxy_upstream_miss")
+                .eventOutcome("failure")
+                .field("event.reason", "upstream_status_" + err.status())
+                .field("http.response.status_code", err.status())
+                .field("repository.name", this.repoName())
+                .field("url.path", path)
+                .field("url.full", upstreamUri)
+                .requestContext(inboundHeaders)
+                .field("log.source", "application")
+                .log();
         }
         return response;
     }
@@ -1329,6 +1359,12 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      *       (transient cooldown).</li>
      *   <li><b>401, 403</b> → propagate verbatim (auth is authoritative,
      *       not a fallthrough signal).</li>
+     *   <li><b>Any other 4xx</b> (409, 400, 422, …) → 404 carrying
+     *       {@link NegativeCache#SKIP_HEADER}: the upstream refused this
+     *       path (e.g. a release-only repository answering 409 to a
+     *       SNAPSHOT request), it did not fail. A 502 here convicted the
+     *       member on the group breaker; the skip marker keeps the miss
+     *       out of every negative cache.</li>
      *   <li><b>5xx (no Retry-After)</b> → 502 badGateway; group fanout
      *       will try the next member. Index cache MUST NOT write a
      *       negative-cache entry for these.</li>
@@ -1362,6 +1398,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 .textBody("Upstream auth required")
                 .build();
         }
+        if (status >= 400 && status < 500) {
+            return ResponseBuilder.notFound()
+                .header(NegativeCache.SKIP_HEADER, "true")
+                .build();
+        }
         // Outbound-breaker fast-fail: keep the marker (and Retry-After)
         // on the re-synthesised 502 so the group resolver skips this
         // member instead of convicting it on the breaker's own output.
@@ -1372,8 +1413,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             err.retryAfter().ifPresent(ra -> rb.header("Retry-After", ra));
             return rb.build();
         }
-        // 5xx and any other unclassified non-2xx — transient,
-        // surface as bad-gateway so group fanout retries another member.
+        // 5xx (and any non-4xx stray) — transient, surface as
+        // bad-gateway so group fanout retries another member.
         return ResponseBuilder.badGateway()
             .textBody("Upstream temporarily unavailable")
             .build();
@@ -1528,15 +1569,63 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private CompletableFuture<Response> serveFromCache(
         final Storage storage, final Key key,
         final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String path, final Headers headers
+        final String path, final Headers headers, final LastModified modified
     ) {
         return storage.value(key).thenApply(content -> {
             this.auditPrimaryAccess(
                 auditCtx, path, headers, content.size().orElse(0L),
                 com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
             );
-            return ResponseBuilder.ok().body(content).build();
+            return ResponseBuilder.ok().header(modified).body(content).build();
         });
+    }
+
+    /**
+     * The date of a cached artifact: its storage time; empty when the
+     * artifact is not cached. One metadata read answers both "is it cached"
+     * and "when was it stored" (on an object store the same {@code HEAD} an
+     * existence check costs), so dating a cache hit adds no storage round
+     * trip to the hot path.
+     *
+     * @param storage Cache storage
+     * @param key Artifact key
+     * @return Date of the cached artifact, empty when absent; fails like an
+     *  existence check would on any other storage error
+     */
+    private static CompletableFuture<Optional<LastModified>> storedAt(
+        final Storage storage, final Key key
+    ) {
+        return storage.metadata(key).handle(
+            (meta, err) -> {
+                final Optional<LastModified> stored;
+                if (err == null) {
+                    stored = Optional.of(new LastModified(meta, Instant.now()));
+                } else if (CachedProxySlice.notStored(err)) {
+                    stored = Optional.empty();
+                } else {
+                    throw new java.util.concurrent.CompletionException(
+                        CachedProxySlice.unwrap(err)
+                    );
+                }
+                return stored;
+            }
+        );
+    }
+
+    /**
+     * Whether a metadata failure only says the key is not in storage,
+     * however many wrappers the storage stack put around it.
+     * @param err Failure
+     * @return True for a missing key
+     */
+    private static boolean notStored(final Throwable err) {
+        Throwable cause = err;
+        boolean missing = false;
+        while (cause != null && !missing) {
+            missing = cause instanceof com.auto1.pantera.asto.ValueNotFoundException;
+            cause = cause.getCause();
+        }
+        return missing;
     }
 
     /**

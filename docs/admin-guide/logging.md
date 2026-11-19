@@ -191,9 +191,36 @@ Audit-log entries inherit the originating HTTP request's `trace.id` so an artifa
 
 ---
 
-## Why a Request Got a 5xx
+## Why a Request Was Not Answered 2xx
 
-The access-log line (logger `http.access`) only says that a request was answered with a 5xx. Its `message` names the status: `Bad gateway` (502), `Service unavailable` (503), `Gateway timeout` (504), `Not implemented` (501), `Internal server error` (500 and any other 5xx). The cause is on a separate application record with the same `trace.id`, written where the 5xx was decided. Every 5xx Pantera answers has at least one such record; a group's 502 has one per failed member.
+Every access record (logger `http.access`, `event.action: http_request`) with a status of 400 or above carries `event.reason`: a short token saying why (v2.2.12+). It is on the access record itself, so it needs no second record, no matching `trace.id` and no debug logging. A 404 from the negative cache and a 404 of the upstream, or a 503 for a full bulkhead and a 502 after a lost connection, are told apart by this one field.
+
+| `event.reason` | The request was answered this way because |
+|----------------|---------------------------------------------|
+| `negative_cache` | A proxy or a group answered 404 from its negative cache; the upstream was not asked. For a group it also means a member did. |
+| `upstream_status_<code>` | The upstream answered `<code>`: `upstream_status_404` is the upstream's own "not found", `upstream_status_403` its refusal, `upstream_status_503` its failure. |
+| `connection_closed`, `connection_refused`, `connect_timeout`, `read_timeout`, `idle_timeout`, `request_timeout`, `unknown_host`, `tls_error`, `egress_denied`, `request_rejected` | The call to the upstream failed that way. Also on a 404 of a Docker or file proxy, which answer 404 when they cannot fetch. |
+| `bulkhead_full` | The repository had no free permit within its wait bound (503). |
+| `circuit_open` | The circuit breaker of the upstream, or of every remaining group member, is open. |
+| `cooldown_active` | Cooldown blocks the artifact. |
+| `cache_write_failed`, `storage_unavailable`, `index_unavailable`, `deadline_exceeded`, `internal_error`, ... | A failure inside Pantera (the tokens of the 5xx cause records below). |
+| `not_found`, `authentication_required`, `forbidden`, `method_not_allowed`, `bad_request`, `conflict`, `rate_limited`, `client_error`, `bad_gateway`, `service_unavailable`, `gateway_timeout`, `server_error` | Nothing more specific is known: the token only names the status. `not_found` on a hosted repository is a path that is not in storage. On a 5xx it means the code that produced the answer did not say why; the cause record below may still have it. |
+
+When several things happened to one request, the one that explains most is reported: a failure, before a request Pantera refused to forward (`circuit_open`, `bulkhead_full`), before `cooldown_active`, before `negative_cache`, before an upstream 4xx, before `upstream_status_404`. So a group's 404 reads `negative_cache` if any of its members answered from its negative cache, and `upstream_status_404` only if every proxy member asked its upstream. A 401 or 403 that a group relays keeps the reason of the member that gave it.
+
+Reasons are specific for Maven and Gradle proxies, npm and PyPI proxies (negative cache and upstream 404), file proxies, Docker blob downloads, and groups of any of them. The other paths report the status name.
+
+```text
+# cached "not found" answers per repository
+event.action:"http_request" AND http.response.status_code:404 AND event.reason:"negative_cache"
+
+# everything that was not the upstream's own answer
+event.action:"http_request" AND http.response.status_code>=400 AND NOT event.reason:upstream_status_4*
+```
+
+### The cause record of a 5xx
+
+Besides `event.reason` on the access record, a 5xx has a cause record with the detail. The access record's `message` names the status: `Bad gateway` (502), `Service unavailable` (503), `Gateway timeout` (504), `Not implemented` (501), `Internal server error` (500 and any other 5xx). The cause is on a separate application record with the same `trace.id`, written where the 5xx was decided. Every 5xx Pantera answers has at least one such record; a group's 502 has one per failed member.
 
 | Field | Meaning |
 |-------|---------|
@@ -208,24 +235,30 @@ The access-log line (logger `http.access`) only says that a request was answered
 | Token | Cause |
 |-------|-------|
 | `upstream_status_<code>` | The upstream answered `<code>` (e.g. `upstream_status_503`). |
-| `circuit_open` | The outbound circuit breaker fast-failed the call (`X-Pantera-Circuit-Open`), or every remaining group member is skipped with an open breaker. |
+| `circuit_open` | The outbound circuit breaker fast-failed the call (`X-Pantera-Circuit-Open`), or every remaining group member was skipped: its breaker is open, or its bulkhead had no free permit. |
 | `connection_refused`, `connect_timeout`, `read_timeout`, `idle_timeout`, `request_timeout`, `unknown_host`, `tls_error`, `connection_closed`, `egress_denied` | Transport failure of the upstream call. |
 | `request_rejected` | The HTTP client refused the request locally (e.g. Jetty's per-destination request queue is full). |
 | `upstream_request_failed` | npm proxy: the coalesced upstream fetch threw; the throwable is on the `proxy_request` record of the request that led the fetch. |
 | `cache_write_failed` | The upstream answered 200 but the body could not be cached (no throwable captured); when the throwable is known its own token is used instead. |
 | `storage_unavailable` | A local temp file or storage write failed. |
-| `bulkhead_full` | The per-repository bulkhead is full (503 + `Retry-After`). |
+| `bulkhead_full` | No permit of the repository's bulkhead came free within 20 s, or 1000 requests were already waiting for one (503 + `Retry-After` + `X-Pantera-Bulkhead-Overflow`). A request that merely waits is not logged. |
 | `index_timeout`, `index_unavailable` | The group's artifact-index query timed out or failed (500). |
 | `member_status_<code>` | A group member answered `<code>` and the walk moved on. |
 | `route_pattern_mismatch` | A request path did not match its route (500, a routing misconfiguration). |
 | `io_error`, `internal_error` | Another I/O failure / any other exception. |
 | `internal_error`, `unavailable`, `not_implemented` | REST API 5xx answered with a fixed message (the lower-cased `error.code`); an API 5xx caused by an exception carries that exception's token instead. |
 
-**`event.action` of the cause records:** `proxy_upstream` (proxy fetch), `cache_write` (cache commit / verify-and-serve), `proxy_cache` and `proxy_fetch_coalesced_error` (Maven-style cache fill), `proxy_request` (npm), `bulkhead_dispatch`, `group_member_fallthrough` (per failed group member), `group_sibling_pin_failed`, `group_targeted_read_failed`, `group_all_members_circuit_open`, `group_index_timeout`, `group_index_error`, `group_race` (a remote of a multi-remote proxy threw), `http_request_send` (outbound HTTP client), `response_stream` (body failed while streaming to the client), `request_routing`, `artifact_upload`, `package_search`, `metadata_merge`, `import_artifact`, `api_request` (REST API).
+**`event.action` of the cause records:** `proxy_upstream` (proxy fetch), `cache_write` (cache commit / verify-and-serve), `proxy_cache` and `proxy_fetch_coalesced_error` (Maven-style cache fill), `proxy_request` (npm), `bulkhead_dispatch` (per refused request), `bulkhead_overflow` (per repository, see Levels), `group_member_fallthrough` (per failed group member), `group_sibling_pin_failed`, `group_targeted_read_failed`, `group_all_members_circuit_open`, `group_index_timeout`, `group_index_error`, `group_race` (a remote of a multi-remote proxy threw), `http_request_send` (outbound HTTP client), `response_stream` (body failed while streaming to the client), `request_routing`, `artifact_upload`, `package_search`, `metadata_merge`, `import_artifact`, `api_request` (REST API).
 
-**Levels.** Upstream and transient causes are `WARN`; unexpected internal failures are `ERROR`. Two per-request causes are `DEBUG`, because their state transitions are logged on their own: `circuit_open` (the breaker logs `circuit_breaker_trip` / `circuit_breaker_probe` / `circuit_breaker_close` at `WARN`/`INFO`) and `bulkhead_full` (counted by `pantera_bulkhead_overflow_total`). Enable `DEBUG` on the adapter logger to see each refused request. Group-level records that name `circuit_open` (`group_sibling_pin_failed`, `group_all_members_circuit_open`) stay at `WARN`.
+**Levels.** Upstream and transient causes are `WARN`; unexpected internal failures are `ERROR`. Two per-request causes are `DEBUG`, because their state transitions are logged on their own: `circuit_open` (the breaker logs `circuit_breaker_trip` / `circuit_breaker_probe` / `circuit_breaker_close` at `WARN`/`INFO`) and `bulkhead_full` (the bulkhead logs `bulkhead_overflow` at `WARN`, at most once in 10 s per repository, with the number of requests refused since its previous record; each one is counted by `pantera_bulkhead_overflow_total`). Enable `DEBUG` on the adapter logger to see each refused request. Group-level records that name `circuit_open` (`group_sibling_pin_failed`, `group_all_members_circuit_open`) stay at `WARN`.
 
 **One stack trace per failure.** A transport failure produces two records: the outbound client's single-line `http_request_send` record (`WARN`, `url.full`, `destination.address`, `event.reason`, `error.type` and `error.message`, no stack trace) and the answering slice's record with the full `error.stack_trace`. Both carry the same `trace.id`.
+
+**Repeated upstream requests.** When an upstream closes a connection before answering, the outbound client sends a `GET` or `HEAD` again (see [Upstream Connection Retry](performance-tuning.md#upstream-connection-retry-v2212)). The failed attempt leaves its `http_request_send` record (`WARN`, `event.reason: connection_closed`), followed by one `INFO` record per repeat: `event.action: http_request_retry`, with `destination.address`, `http.request.method` and `url.path`, under the same logging context as the first attempt. When a repeat succeeds there is no 5xx and no further record. To see how often an upstream drops connections:
+
+```
+event.action: "http_request_retry"
+```
 
 To find the cause of a 502, take the `trace.id` of its access-log line and search the application logs for it:
 

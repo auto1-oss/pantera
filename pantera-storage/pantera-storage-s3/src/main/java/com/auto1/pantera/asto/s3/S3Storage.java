@@ -22,6 +22,7 @@ import com.auto1.pantera.asto.UnderLockOperation;
 import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.asto.lock.storage.StorageLock;
 import java.nio.ByteBuffer;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -471,7 +472,11 @@ public final class S3Storage implements ManagedStorage {
                             this.parallelConc,
                             this.parallelConc
                         );
-                    promise.complete(new Content.From(Optional.of(size), stream));
+                    promise.complete(
+                        new Content.From(
+                            Optional.of(size), stream, Optional.ofNullable(head.lastModified())
+                        )
+                    );
                 } else {
                     this.client.getObject(
                         GetObjectRequest.builder()
@@ -729,6 +734,11 @@ public final class S3Storage implements ManagedStorage {
         private Long length;
 
         /**
+         * Time the object was last modified, received in response.
+         */
+        private Instant modified;
+
+        /**
          * Ctor.
          *
          * @param promise Promise of response body.
@@ -745,11 +755,20 @@ public final class S3Storage implements ManagedStorage {
         @Override
         public void onResponse(final GetObjectResponse response) {
             this.length = response.contentLength();
+            // The read returns the object's modification time with its
+            // bytes: the content carries it, so serving the object with a
+            // Last-Modified header costs no extra HEAD.
+            this.modified = response.lastModified();
         }
 
         @Override
         public void onStream(final SdkPublisher<ByteBuffer> publisher) {
-            this.promise.complete(new Content.From(Optional.ofNullable(this.length), publisher));
+            this.promise.complete(
+                new Content.From(
+                    Optional.ofNullable(this.length), publisher,
+                    Optional.ofNullable(this.modified)
+                )
+            );
         }
 
         @Override

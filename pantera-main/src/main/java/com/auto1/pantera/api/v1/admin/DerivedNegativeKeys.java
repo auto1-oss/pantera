@@ -21,7 +21,7 @@ import java.util.Set;
 /**
  * Every negative-cache key the serving path could have written for one
  * request path: the group resolver's key for each group on the walk, and the
- * proxy slice's {@link NegativeCacheKey#fromPath} key for each leaf, each
+ * proxy slice's {@link NegativeCacheKey#forFile} key for each leaf, each
  * computed from the path exactly as that slice sees it (after its own
  * prefix stripping).
  *
@@ -70,7 +70,7 @@ public final class DerivedNegativeKeys {
                     }
                 });
             } else {
-                final NegativeCacheKey key = NegativeCacheKey.fromPath(
+                final NegativeCacheKey key = NegativeCacheKey.forFile(
                     info.name(), info.type(), DerivedNegativeKeys.sliceView(info.type(), path)
                 );
                 if (seen.add(key)) {

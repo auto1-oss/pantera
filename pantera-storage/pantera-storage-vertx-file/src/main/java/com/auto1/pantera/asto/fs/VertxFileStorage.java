@@ -445,12 +445,16 @@ public final class VertxFileStorage implements Storage {
                 new PanteraIOException("Unable to load from root")
             ).get();
         } else {
-            res = VertxFileStorage.size(this.path(key)).thenApply(
-                size ->
+            // One attribute read gives the size and the modification time;
+            // the content carries both, so serving the file with a
+            // Last-Modified header costs no second read.
+            res = VertxFileStorage.attributes(this.path(key)).thenApply(
+                attrs ->
                     new Content.OneTime(
                         new Content.From(
-                            size,
-                            new VertxRxFile(this.path(key), this.vertx).flow()
+                            Optional.of(attrs.size()),
+                            new VertxRxFile(this.path(key), this.vertx).flow(),
+                            Optional.of(attrs.lastModifiedTime().toInstant())
                         )
                     )
             );
@@ -568,10 +572,21 @@ public final class VertxFileStorage implements Storage {
      * @return Size
      */
     private static CompletableFuture<Long> size(final Path path) {
+        return VertxFileStorage.attributes(path).thenApply(BasicFileAttributes::size);
+    }
+
+    /**
+     * File attributes.
+     *
+     * @param path File path
+     * @return Attributes; fails with {@link ValueNotFoundException} when the
+     *  file does not exist
+     */
+    private static CompletableFuture<BasicFileAttributes> attributes(final Path path) {
         return CompletableFuture.supplyAsync(
             () -> {
                 try {
-                    return Files.size(path);
+                    return Files.readAttributes(path, BasicFileAttributes.class);
                 } catch (final NoSuchFileException fex) {
                     throw new ValueNotFoundException(Key.ROOT, fex);
                 } catch (final IOException iex) {

@@ -136,8 +136,8 @@ The built-in nginx config (`nginx/default.conf`) handles:
 ## Tech Stack
 
 - **Vue 3.5** -- Composition API with `<script setup>`
-- **TypeScript 5** -- Strict mode
-- **Vite 6** -- Build toolchain
+- **TypeScript 6** -- Strict mode
+- **Vite 8** -- Build toolchain
 - **PrimeVue 4** -- Component library (Aura theme preset)
 - **Tailwind CSS 4** -- Utility-first styling
 - **Pinia** -- State management

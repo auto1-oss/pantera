@@ -239,6 +239,13 @@ final class ServerErrorLogTest {
             "request_rejected"
         );
         cases.put(new IOException("Connection reset by peer"), "connection_closed");
+        // What the HTTP client reports when the upstream closes a connection
+        // before answering (Jetty "early EOF"): the text is the connection's
+        // state dump, so only the type identifies it.
+        cases.put(
+            new java.io.EOFException("HttpConnectionOverHTTP@52fa41e9::SslEndPoint[OPEN,fill=-]"),
+            "connection_closed"
+        );
         cases.put(new IOException("disk full"), "io_error");
         cases.put(new UpstreamCircuitOpenException(5L), "circuit_open");
         cases.put(

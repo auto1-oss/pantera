@@ -119,6 +119,34 @@ class S3StorageTest {
     }
 
     @Test
+    @Timeout(30)
+    void shouldCarryModificationTimeOfDownloadedObject() throws Exception {
+        final Key key = new Key.From("dated/object");
+        final Storage storage = this.storage();
+        storage.save(key, new Content.From("dated".getBytes())).join();
+        final Content content = storage.value(key).join();
+        final java.util.Optional<java.time.Instant> carried = content.lastModified();
+        // The body is read so the connection is released.
+        MatcherAssert.assertThat(
+            "the object is downloaded",
+            content.asBytesFuture().join(), Matchers.equalTo("dated".getBytes())
+        );
+        MatcherAssert.assertThat(
+            "the read returns the modification time with the bytes",
+            carried.isPresent(), Matchers.equalTo(true)
+        );
+        MatcherAssert.assertThat(
+            "it is the time a metadata read reports",
+            carried.map(java.time.Instant::getEpochSecond),
+            Matchers.equalTo(
+                storage.metadata(key).join().read(com.auto1.pantera.asto.Meta.OP_UPDATED_AT)
+                    .map(java.time.Instant.class::cast)
+                    .map(java.time.Instant::getEpochSecond)
+            )
+        );
+    }
+
+    @Test
     void shouldUploadObjectWhenSave() throws Exception {
         final byte[] data = "data2".getBytes();
         final String key = "a/b/c";

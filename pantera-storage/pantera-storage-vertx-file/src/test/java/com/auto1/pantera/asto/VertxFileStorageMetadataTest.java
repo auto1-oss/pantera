@@ -13,7 +13,10 @@ package com.auto1.pantera.asto;
 import com.auto1.pantera.asto.fs.VertxFileStorage;
 import io.vertx.reactivex.core.Vertx;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletionException;
 import org.hamcrest.MatcherAssert;
@@ -47,6 +50,27 @@ final class VertxFileStorageMetadataTest {
         MatcherAssert.assertThat(
             storage.metadata(key).join().read(Meta.OP_SIZE),
             new IsEqual<>(Optional.of(12L))
+        );
+    }
+
+    @Test
+    void valueCarriesTheModificationTimeOfTheFile() throws Exception {
+        final Storage storage = new VertxFileStorage(this.temp, VERTX);
+        final Key key = new Key.From("com/acme/tool-1.0.zip");
+        storage.save(
+            key, new Content.From("zip".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        final Instant modified = Instant.parse("2018-06-17T18:35:49Z");
+        Files.setLastModifiedTime(this.temp.resolve(key.string()), FileTime.from(modified));
+        final Content content = storage.value(key).join();
+        MatcherAssert.assertThat(
+            "the content is dated with the file's modification time",
+            content.lastModified(), new IsEqual<>(Optional.of(modified))
+        );
+        MatcherAssert.assertThat(
+            "the content is the file",
+            new String(content.asBytesFuture().join(), StandardCharsets.UTF_8),
+            new IsEqual<>("zip")
         );
     }
 
