@@ -16,8 +16,8 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
-import java.util.LinkedList;
 import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import org.awaitility.Awaitility;
 import org.hamcrest.MatcherAssert;
@@ -65,8 +65,8 @@ class MavenProxyPackageProcessorTest {
     @BeforeEach
     void init() {
         this.asto = new InMemoryStorage();
-        this.events = new LinkedList<>();
-        this.packages = new LinkedList<>();
+        this.events = new ConcurrentLinkedQueue<>();
+        this.packages = new ConcurrentLinkedQueue<>();
         this.processor = new MavenProxyPackageProcessor();
         this.processor.setEvents(this.events);
         this.processor.setPackages(this.packages);
