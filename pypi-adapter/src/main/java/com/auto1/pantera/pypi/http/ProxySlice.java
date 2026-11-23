@@ -137,6 +137,14 @@ final class ProxySlice implements Slice {
     private final Authenticator auth;
 
     /**
+     * Record of upstream credentials not sent to an untrusted mirror host.
+     */
+    private static final com.auto1.pantera.http.client.auth.WithheldCredentialsLog WITHHELD =
+        new com.auto1.pantera.http.client.auth.WithheldCredentialsLog(
+            "com.auto1.pantera.pypi", "mirror_credentials_withheld", "Mirror"
+        );
+
+    /**
      * Which mirror hosts may receive {@link #auth}: the configured upstream
      * host, its parent domain, or the allowlist. Unknown upstream (legacy
      * ctors) = credentials never leave for a mirror (2.2.9).
@@ -1740,17 +1748,19 @@ final class ProxySlice implements Slice {
         } else {
             mirrorAuth = Authenticator.ANONYMOUS;
             if (this.auth != Authenticator.ANONYMOUS) {
-                EcsLogger.warn("com.auto1.pantera.pypi")
-                    .message("Mirror host is not the configured upstream; fetching anonymously")
-                    .eventCategory("network")
-                    .eventAction("mirror_credentials_withheld")
-                    .eventOutcome("success")
-                    .field("url.full", uri.toString())
-                    .field("destination.address", uri.getHost())
-                    .field("event.reason", "mirror_origin_untrusted")
-                    .field("repository.name", this.rname)
-                    .field("log.source", "application")
-                    .log();
+                // True for every file of an index served from another
+                // host: logged once per upstream and mirror host, then hourly.
+                ProxySlice.WITHHELD.record(
+                    this.mirrorTrust.upstreamHost(), uri,
+                    "files are fetched from it without the configured credentials (nothing to do when the mirror is public, as files.pythonhosted.org is for pypi.org)"
+                ).ifPresent(
+                    record -> record
+                        .eventCategory("network")
+                        .eventOutcome("success")
+                        .field("event.reason", "mirror_origin_untrusted")
+                        .field("repository.name", this.rname)
+                        .log()
+                );
             }
         }
         return new com.auto1.pantera.http.client.auth.AuthClientSlice(base, mirrorAuth);

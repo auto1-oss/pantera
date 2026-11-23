@@ -3273,7 +3273,7 @@ Retrieve the outbound egress policy (2.2.9) applied to every connection Pantera 
 |-------|------|-------------|
 | `egress_block_private` | string (`"true"`/`"false"`) | Also refuse loopback and private ranges (RFC1918, `fc00::/7` unique-local, `100.64.0.0/10` shared address space). Default `"false"`. |
 | `egress_allow_hosts` | string (comma-separated host names) | Hosts exempt from the strict-mode loopback/private-range refusal; never from the metadata, link-local, any-local or multicast refusal. Default empty. |
-| `upstream_credential_allow_hosts` | string (comma-separated host names) | Additional hosts a bearer-token realm may live on before an upstream's credentials are released to it; by default only the upstream host or a host under its parent domain. Default empty. |
+| `upstream_credential_allow_hosts` | string (comma-separated host names) | Additional hosts that may receive an upstream's credentials (the host of a bearer-token realm or of an index/mirror link); by default only the upstream host itself, with no parent-domain rule -- Docker Hub needs `auth.docker.io`. Default empty. |
 
 **curl example:**
 

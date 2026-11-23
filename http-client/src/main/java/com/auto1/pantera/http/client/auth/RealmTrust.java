@@ -101,6 +101,15 @@ public final class RealmTrust {
     }
 
     /**
+     * Host of the upstream the credentials belong to.
+     *
+     * @return Lower-case host name, or null when the upstream is unknown
+     */
+    public String upstreamHost() {
+        return this.upstream;
+    }
+
+    /**
      * Whether the configured credentials may be sent to this realm.
      *
      * <p>Credentials are released only to a realm host that exactly equals the

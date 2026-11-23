@@ -292,6 +292,18 @@ docker logs pantera 2>&1 | jq 'select(.message | contains("timeout"))'
 
 ---
 
+### Docker Hub Proxy Pulls as Anonymous Although Credentials Are Configured
+
+**Symptoms:** A Docker proxy of `registry-1.docker.io` with a username and password hits Docker Hub's anonymous pull rate limit (`429 Too Many Requests`), or cannot pull private images. The log has a `WARN` with `event.action: bearer_realm_untrusted` and `destination.address: auth.docker.io`.
+
+**Cause:** Docker Hub issues its tokens from `auth.docker.io`, which is not the upstream host. Pantera sends an upstream's credentials only to the upstream host itself and to hosts listed in `upstream_credential_allow_hosts`; there is no parent-domain rule. A token realm on any other host is asked anonymously.
+
+**Fix:** Add `auth.docker.io` to *Settings → Outbound Egress Policy → Credential-trusted realm hosts* (key `upstream_credential_allow_hosts`; the environment variable `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` is its fallback while nothing is saved). The change applies to the next request on every node, no restart. The same applies to any registry whose token service is on a different host than the registry.
+
+The warning is written once per upstream and realm host and then at most once an hour, with the number of occurrences in between -- it does not stop by itself; it stops when the host is listed.
+
+---
+
 ### Cooldown Blocking Legitimate Artifacts
 
 **Symptoms:** Builds fail because needed artifacts are blocked by cooldown.
