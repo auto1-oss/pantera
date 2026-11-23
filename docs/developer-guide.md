@@ -511,11 +511,19 @@ Two-tier cache for 404 (Not Found) responses:
 
 **L2 -- Valkey (shared across instances):**
 - Enabled when a Valkey connection is configured.
-- Keys namespaced by repo type and name: `negative:{repoType}:{repoName}:{key}`.
-- `SETEX` with configurable TTL.
+- Keys: `negative2:{scope}:{repoType}:{artifactName}:{artifactVersion}`
+  (`negative:` until 2.2.13; those keys are not read any more).
+- Each key is listed in the index SET `negative2-idx:{artifactName}`, written
+  atomically with the key (`ValkeyKeyIndex`: one Lua script, `SADD` +
+  `EXPIRE` + `SETEX`).
 - L2 lookups are async with 100ms timeout.
 - On L2 hit, entry is promoted to L1.
-- Bulk invalidation via `SCAN` + `DEL` (avoids blocking `KEYS`).
+- Invalidation after an upload reads the index SETs of the artifact name
+  and its parent paths — never a keyspace walk. For 24 hours after the
+  first 2.2.14 node of a cluster started (rolling upgrade), it also sweeps
+  the old `negative:` keys with the cursor `SCAN` 2.2.13 used.
+- Administrative listing and bulk invalidation use cursor `SCAN` + `DEL`
+  (never the blocking `KEYS`).
 
 ### 7.4 DiskCacheStorage
 

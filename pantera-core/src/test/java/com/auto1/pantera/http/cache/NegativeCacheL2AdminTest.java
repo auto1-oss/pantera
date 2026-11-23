@@ -131,6 +131,75 @@ final class NegativeCacheL2AdminTest {
         }
     }
 
+    @Test
+    @EnabledIfEnvironmentVariable(named = "VALKEY_HOST", matches = ".+")
+    void uploadInvalidationFindsPeerEntriesThroughTheNameIndex() throws Exception {
+        try (ValkeyConnection conn = NegativeCacheL2AdminTest.connection()) {
+            final String parent = "qa-ct-" + UUID.randomUUID();
+            final NegativeCacheKey exact =
+                new NegativeCacheKey("qa_ct_group", "go-group", parent + "/hello", "@v/v1.0.0.mod");
+            final NegativeCacheKey above =
+                new NegativeCacheKey("qa_ct_group", "go-group", parent, "@v/v1.0.0.mod");
+            final NegativeCacheKey other =
+                new NegativeCacheKey("qa_ct_group", "go-group", parent + "-x", "@v/v1.0.0.mod");
+            final NegativeCache writer = NegativeCacheL2AdminTest.node(conn);
+            writer.cacheNotFound(exact);
+            writer.cacheNotFound(above);
+            writer.cacheNotFound(other);
+            final NegativeCache uploader = NegativeCacheL2AdminTest.node(conn);
+            // The rolling upgrade is over: no keyspace walk is left, so the
+            // per-name index alone must find what the peer cached.
+            uploader.rolloutUntil(0L);
+            NegativeCacheL2AdminTest.await(
+                () -> conn.async().scard("negative2-idx:" + parent + "/hello")
+                    .get(5, TimeUnit.SECONDS) == 1L
+                    && uploader.l2TtlMillis(List.of(other.flat())).get(5, TimeUnit.SECONDS)
+                        .get(other.flat()) > 0L
+            );
+            uploader.invalidateByArtifactName(parent + "/hello");
+            NegativeCacheL2AdminTest.await(
+                () -> {
+                    final java.util.Map<String, Long> ttl = uploader.l2TtlMillis(
+                        List.of(exact.flat(), above.flat())
+                    ).get(5, TimeUnit.SECONDS);
+                    return ttl.get(exact.flat()) == -2L && ttl.get(above.flat()) == -2L;
+                }
+            );
+            MatcherAssert.assertThat(
+                "an entry of another artifact stays",
+                uploader.l2TtlMillis(List.of(other.flat())).get(5, TimeUnit.SECONDS)
+                    .get(other.flat()) > 0L,
+                new IsEqual<>(true)
+            );
+            uploader.invalidateCounted(other).get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "VALKEY_HOST", matches = ".+")
+    void previousGenerationEntryIsNotReadAndIsSweptWhileTheRolloutLasts() throws Exception {
+        try (ValkeyConnection conn = NegativeCacheL2AdminTest.connection()) {
+            final String name = "qa-ct-" + UUID.randomUUID();
+            final NegativeCacheKey key =
+                new NegativeCacheKey("qa_ct_group", "npm-group", name, "1.0.0/x.tgz");
+            // What a 2.2.13 node wrote: old prefix, no index entry.
+            final String legacy = "negative:" + key.flat();
+            conn.async().setex(legacy, 120L, new byte[] {'1'}).get(5, TimeUnit.SECONDS);
+            final NegativeCache node = NegativeCacheL2AdminTest.node(conn);
+            MatcherAssert.assertThat(
+                "an entry no index lists cannot be invalidated, so it is not read",
+                node.isKnown404Async(key).get(5, TimeUnit.SECONDS), new IsEqual<>(false)
+            );
+            node.rolloutUntil(0L);
+            node.invalidateByArtifactName(name);
+            node.rolloutUntil(Long.MAX_VALUE);
+            node.invalidateByArtifactName(name);
+            NegativeCacheL2AdminTest.await(
+                () -> conn.async().exists(legacy).get(5, TimeUnit.SECONDS) == 0L
+            );
+        }
+    }
+
     /**
      * A two-tier cache bound to the shared connection (one "node").
      *

@@ -111,6 +111,18 @@ public final class NpmProxySlice implements Slice {
                 ),
                 new LoggingSlice(new UpstreamPassthroughSlice(remote, "dist-tags"))
             ),
+            // Provenance endpoints `npm audit signatures` reads: the
+            // attestation bundle of one version and the registry signing
+            // keys. Forwarded as they are, never stored: they are not
+            // packuments, and the packument route no longer takes a
+            // "/-/..." path for a package name.
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
+                    new RtRule.ByPath(NpmProxySlice.provenancePattern(path))
+                ),
+                new LoggingSlice(new UpstreamPassthroughSlice(remote, "provenance"))
+            ),
             // WS8 Bug B3: answered directly from Pantera -- a proxy/group
             // ping must not require an upstream round-trip just to prove
             // Pantera itself is alive. Registered BEFORE the packument
@@ -234,6 +246,20 @@ public final class NpmProxySlice implements Slice {
             ? ""
             : String.format("/%s", java.util.regex.Pattern.quote(prefix));
         return String.format("^%s/-/v1/search$", base);
+    }
+
+    /**
+     * Matches {@code /-/npm/v1/attestations/<name>@<version>} and
+     * {@code /-/npm/v1/keys}.
+     *
+     * @param prefix Repository path prefix (empty for proxy repos)
+     * @return Path pattern
+     */
+    private static String provenancePattern(final String prefix) {
+        final String base = (prefix == null || prefix.isEmpty())
+            ? ""
+            : String.format("/%s", java.util.regex.Pattern.quote(prefix));
+        return String.format("^%s/-/npm/v1/(?:attestations/.+|keys)$", base);
     }
 
     /**

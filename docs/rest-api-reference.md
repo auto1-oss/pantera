@@ -3789,7 +3789,7 @@ Diagnostics and invalidation for the negative (404) cache, plus the request
 troubleshooter. All endpoints are admin only (`api_admin_permissions:admin`), and
 every response names the answering `node`. With Valkey configured the
 negative cache is cluster-wide: listings, probes and invalidations read and
-write the shared L2 tier (cursor `SCAN` of `negative:*`, bounded at 100,000
+write the shared L2 tier (cursor `SCAN` of `negative2:*`, bounded at 100,000
 keys) merged with the answering node's L1, and peers drop their L1 entries
 over pub/sub. Without Valkey everything is the answering node's L1
 (`"source": "L1-only"`). Mutations are audit-logged (`CACHE_CLEAR`).

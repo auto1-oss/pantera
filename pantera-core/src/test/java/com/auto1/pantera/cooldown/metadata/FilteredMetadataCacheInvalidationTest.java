@@ -55,7 +55,7 @@ final class FilteredMetadataCacheInvalidationTest {
         MatcherAssert.assertThat(
             "the dropped key must be published for peer L1 fan-out",
             published,
-            new IsEqual<>(List.of("metadata:npm-proxy:npm_proxy:default:openai"))
+            new IsEqual<>(List.of("metadata:npm-proxy:npm_proxy:default.v2:openai"))
         );
         seed(cache, "npm-proxy", "npm_proxy", "openai", loads);
         MatcherAssert.assertThat(
@@ -148,8 +148,8 @@ final class FilteredMetadataCacheInvalidationTest {
             "both dropped variant keys must be published for peer fan-out",
             published.stream().sorted().toList(),
             new IsEqual<>(List.of(
-                "metadata:npm-proxy:repo:abbreviated:openai",
-                "metadata:npm-proxy:repo:full:openai"
+                "metadata:npm-proxy:repo:abbreviated.v2:openai",
+                "metadata:npm-proxy:repo:full.v2:openai"
             ))
         );
     }
