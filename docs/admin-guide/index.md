@@ -31,6 +31,7 @@ This guide covers the installation, configuration, operation, and maintenance of
 9. [Logging](logging.md) -- ECS JSON structured logging, external configuration, hot reload, and log filtering.
 10. [Performance Tuning](performance-tuning.md) -- JVM settings, thread pools, S3 tuning, connection pooling, and file descriptors.
 11. [UI Deployment](ui-deployment.md) -- Deploying, configuring, and troubleshooting the Management UI.
+    [Repository Rename and Delete](repository-lifecycle.md) -- Instant rename and delete, the restore window, background purge jobs, and unowned storage directories.
 
 ### Architecture
 

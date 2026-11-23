@@ -1649,6 +1649,7 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_DB_LEAK_DETECTION_MS` | `300000` | Leak detection threshold (ms) -- 5 minutes |
 | `PANTERA_DB_WRITE_POOL_MAX` | `10` | Maximum connections in the dedicated `DbConsumer` write pool |
 | `PANTERA_DB_WRITE_POOL_MIN` | `2` | Minimum idle connections in the `DbConsumer` write pool |
+| `PANTERA_REPO_DELETE_RETENTION_HOURS` | `24` | Restore window of a deleted repository: hours between `DELETE /api/v1/repositories/:name` and the start of the purge of its data, `0`-`8760`. `0` purges at once. A delete can override it with `retention_hours`. See [Repository rename and delete](admin-guide/repository-lifecycle.md). |
 
 ### 7.2 I/O Thread Pools
 

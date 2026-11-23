@@ -20,6 +20,7 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 | `PANTERA_DB_LEAK_DETECTION_MS` | `5000` | Connection leak detection threshold (ms). v2.2.0 fail-fast default (was `300000`). A WARN past this threshold is a real held-connection bug -- see [Database](database.md#what-a-hikari-leak-warn-means). |
 | `PANTERA_DB_WRITE_POOL_MAX` | `10` | Maximum connections in the dedicated `DbConsumer` write pool |
 | `PANTERA_DB_WRITE_POOL_MIN` | `2` | Minimum idle connections in the `DbConsumer` write pool |
+| `PANTERA_REPO_DELETE_RETENTION_HOURS` | `24` | Restore window of a deleted repository: hours between `DELETE /api/v1/repositories/:name` and the start of the purge of its data, `0`-`8760`. `0` purges at once. A delete can override it with `retention_hours`. See [Repository rename and delete](repository-lifecycle.md). |
 
 > The `DbConsumer` event batcher is tuned via the YAML `meta.database` keys `buffer_size` (default 50) and `buffer_time_seconds` (default 2), not environment variables.
 

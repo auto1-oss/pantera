@@ -8,6 +8,14 @@ This page covers the process for upgrading Pantera to a new version, including p
 
 ## Version-Specific Notes
 
+### Upgrading to 2.2.14
+
+- **Migration `V148`** adds `repositories.repo_key`, `repository_tombstones`, `repository_aliases` and `repo_jobs`. Every existing repository gets `repo_key = name`; no data moves and no index row changes. The migration touches only the `repositories` table (one row per repository) and is quick whatever the size of the artifact index.
+- **Do not rename or delete a repository while nodes of different versions are running.** A 2.2.13 node does not know repository keys: a rename it performs copies the data to a directory named after the new name, which 2.2.14 nodes do not read. Finish the rolling upgrade first.
+- **Repository delete answers `202`, never `200`** (with a database), and its data is purged in the background after a restore window of 24 hours (`PANTERA_REPO_DELETE_RETENTION_HOURS`). Scripts that waited for `200` to know the data is gone must follow the purge job instead (`GET /api/v1/repository-jobs/:id`), and pass `retention_hours=0` to purge at once. A delete of a repository that is a member of a group now answers `409` unless `force=true` is given.
+- **Rollback.** Before rolling the application back, rename back every repository that was renamed under 2.2.14 (`SELECT name, repo_key FROM repositories WHERE name <> repo_key`): 2.2.13 looks for a repository's data in the directory named after it. Let running purge jobs finish, or restore the deleted repositories.
+- After the upgrade, scan for files left by earlier deletes: **Repository Jobs → Unowned storage directories → Scan storages**, or `GET /api/v1/repository-orphans`. See [Repository rename and delete](repository-lifecycle.md#unowned-storage-directories).
+
 ### Upgrading to 2.2.10
 
 **Coming from 2.2.8 or earlier: skip 2.2.9.** The 2.2.9 image cannot start against a database created by an earlier release: it shipped a comment edit inside the already-applied migration `V116`, and Flyway stops with `Migration checksum mismatch for migration version 116`. 2.2.10 restores the original file, so upgrade from 2.2.8 directly to 2.2.10 with no database action.
