@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.ProxyEventRetry;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.Queue;
@@ -26,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -193,6 +195,53 @@ class PyProxyPackageProcessorTest {
             "Artifact name stored in normalized form",
             artifact.artifactName(),
             Matchers.equalTo("alarmtime")
+        );
+    }
+
+    @Test
+    void givesUpOnAnArtifactThatNeverLands() {
+        ProxyArtifactEvent event = new ProxyArtifactEvent(
+            new Key.From("gone-1.0.0.tar.gz"), PyProxyPackageProcessorTest.REPO_NAME
+        );
+        for (int idx = 0; idx < ProxyEventRetry.MAX_ATTEMPTS; idx += 1) {
+            event = event.retried(0L);
+        }
+        this.packages.add(event);
+        // Quartz builds a new job instance for every run.
+        final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
+        processor.setEvents(this.events);
+        processor.setPackages(this.packages);
+        processor.setStorage(this.asto);
+        processor.execute(null);
+        MatcherAssert.assertThat(
+            "an exhausted event is dropped, not put back",
+            this.packages.isEmpty(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "nothing is recorded for it", this.events.isEmpty(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void waitsBeforeLookingAtAMissingArtifactAgain() {
+        this.packages.add(
+            new ProxyArtifactEvent(
+                new Key.From("slow-1.0.0.tar.gz"), PyProxyPackageProcessorTest.REPO_NAME
+            )
+        );
+        for (int run = 0; run < 3; run += 1) {
+            final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
+            processor.setEvents(this.events);
+            processor.setPackages(this.packages);
+            processor.setStorage(this.asto);
+            processor.execute(null);
+        }
+        MatcherAssert.assertThat(
+            "the event stays queued", this.packages.size(), new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "runs inside the wait do not look at the event again",
+            this.packages.peek().attempts(), new IsEqual<>(1)
         );
     }
 

@@ -17,8 +17,8 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.JobDataRegistry;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.ProxyEventRetry;
 import com.auto1.pantera.scheduling.QuartzJob;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
@@ -92,11 +92,8 @@ public final class GoProxyPackageProcessor extends QuartzJob {
      * Process packages in parallel batches.
      */
     private void processPackagesBatch() {
-        final List<ProxyArtifactEvent> batch = new ArrayList<>(100);
-        ProxyArtifactEvent event;
-        while (batch.size() < 100 && (event = this.packages.poll()) != null) {
-            batch.add(event);
-        }
+        // Events waiting for their retry time stay queued (ProxyEventRetry).
+        final List<ProxyArtifactEvent> batch = new ProxyEventRetry(this.packages).due(100);
 
         if (batch.isEmpty()) {
             return;
@@ -173,17 +170,10 @@ public final class GoProxyPackageProcessor extends QuartzJob {
         // Check existence and get metadata asynchronously
         return this.asto.exists(zipKey).thenCompose(exists -> {
             if (!exists) {
-                EcsLogger.warn("com.auto1.pantera.goproxy")
-                    .message("No .zip file found, re-queuing for retry")
-                    .eventCategory("web")
-                    .eventAction("proxy_processor")
-                    .eventOutcome("failure")
-                    .field("package.name", key.string())
-                    .field("file.target_path", zipKey.string())
-                    .field("log.source", "application")
-                    .log();
-                // Re-add event to queue for retry
-                this.packages.add(event);
+                // The zip is committed before the event is queued, so this
+                // is rare (evicted, deleted). Bounded retry with backoff:
+                // DEBUG while retrying, one WARN when given up.
+                new ProxyEventRetry(this.packages).again(event, "com.auto1.pantera.goproxy");
                 return CompletableFuture.completedFuture(null);
             }
 

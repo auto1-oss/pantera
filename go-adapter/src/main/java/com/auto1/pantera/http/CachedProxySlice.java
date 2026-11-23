@@ -1093,13 +1093,6 @@ final class CachedProxySlice implements Slice {
                     final ProxyCacheWriter.StreamedArtifact artifact =
                         ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) result).value();
                     if (artifactPath.isPresent()) {
-                        // Genuine cache miss + successful upstream fetch —
-                        // the only branch that should publish.
-                        this.bindContext(auditCtx);
-                        this.enqueueEvent(
-                            owner, artifactPath,
-                            releaseDate.or(() -> this.parseLastModified(rshdr.get()))
-                        );
                         this.auditZipAccess(
                             auditCtx, key, owner, artifact.body().size().orElse(0L),
                             AuditLogger.OUTCOME_SUCCESS, null
@@ -1108,6 +1101,20 @@ final class CachedProxySlice implements Slice {
                     // Release followers only after the cache write commits.
                     artifact.verificationOutcome()
                         .whenComplete((r2, e2) -> {
+                            if (e2 == null && r2 instanceof Result.Ok && artifactPath.isPresent()) {
+                                // Genuine cache miss + successful upstream
+                                // fetch — the only branch that should
+                                // publish. Queued only now that the zip is
+                                // committed: the package processor reads it
+                                // from storage, and a zip that failed
+                                // verification or whose client hung up
+                                // never lands at all.
+                                this.bindContext(auditCtx);
+                                this.enqueueEvent(
+                                    owner, artifactPath,
+                                    releaseDate.or(() -> this.parseLastModified(rshdr.get()))
+                                );
+                            }
                             if (!leaderGate.isDone()) {
                                 leaderGate.complete(null);
                             }
