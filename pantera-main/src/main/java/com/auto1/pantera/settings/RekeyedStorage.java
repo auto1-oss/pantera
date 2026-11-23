@@ -70,7 +70,13 @@ public final class RekeyedStorage extends Storage.Wrap {
 
     @Override
     public CompletableFuture<Collection<Key>> list(final Key prefix) {
-        return super.list(this.inward(prefix)).thenApply(this::outward);
+        // The raw listing matches by string prefix, so <key>-something
+        // directories come back too; they are not under <name>.
+        return super.list(this.inward(prefix)).thenApply(
+            keys -> this.outward(keys).stream()
+                .filter(item -> item.string().startsWith(prefix.string()))
+                .collect(Collectors.toList())
+        );
     }
 
     @Override
