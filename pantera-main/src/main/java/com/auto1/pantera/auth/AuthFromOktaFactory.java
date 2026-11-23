@@ -15,15 +15,16 @@ import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
 import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.db.dao.UserDao;
 import com.auto1.pantera.http.auth.PanteraAuthFactory;
 import com.auto1.pantera.http.auth.AuthFactory;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.DomainFilteredAuth;
 import com.auto1.pantera.settings.YamlSettings;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import javax.sql.DataSource;
 
 /**
  * Factory for auth from Okta.
@@ -33,6 +34,18 @@ public final class AuthFromOktaFactory implements AuthFactory {
 
     @Override
     public Authentication getAuthentication(final YamlMapping cfg) {
+        return this.getAuthentication(cfg, null);
+    }
+
+    /**
+     * Okta authentication that provisions its users where authorization
+     * reads them: the users table when a database is configured, the YAML
+     * policy storage otherwise.
+     * @param cfg Settings ({@code meta}) YAML
+     * @param source Database, null in DB-less mode
+     * @return Authentication
+     */
+    public Authentication getAuthentication(final YamlMapping cfg, final DataSource source) {
         final YamlMapping creds = cfg.yamlSequence("credentials")
             .values().stream().map(YamlNode::asMapping)
             .filter(node -> "okta".equals(node.string("type")))
@@ -52,24 +65,24 @@ public final class AuthFromOktaFactory implements AuthFactory {
         final String redirectUri = resolveEnvVar(creds.string("redirect-uri"));
         final String scope = resolveEnvVar(creds.string("scope"));
         final String groupsClaim = resolveEnvVar(creds.string("groups-claim"));
-        final Map<String, String> groupRoles = new HashMap<>(0);
-        final YamlMapping mapping = creds.yamlMapping("group-roles");
-        if (mapping != null) {
-            for (final YamlNode key : mapping.keys()) {
-                final String oktaGroup = key.asScalar().value();
-                final String role = mapping.string(oktaGroup);
-                if (role != null && !role.isEmpty()) {
-                    groupRoles.put(oktaGroup, role);
-                }
-            }
-        }
-        final BlockingStorage asto = new YamlSettings.PolicyStorage(cfg).parse()
-            .map(BlockingStorage::new)
-            .orElseThrow(
-                () -> new PanteraException(
-                    "Failed to create okta auth, policy storage is not configured"
-                )
+        final Map<String, String> groupRoles = new OktaGroupRoles(creds).asMap();
+        final OktaUserProvisioning provisioning;
+        if (source == null) {
+            provisioning = new OktaUserProvisioning(
+                new YamlSettings.PolicyStorage(cfg).parse()
+                    .map(BlockingStorage::new)
+                    .orElseThrow(
+                        () -> new PanteraException(
+                            "Okta users cannot be provisioned: neither a database"
+                                + " (meta.artifacts_database) nor a YAML policy storage"
+                                + " (meta.policy.storage) is configured"
+                        )
+                    ),
+                groupRoles
             );
+        } else {
+            provisioning = new OktaUserProvisioning(new UserDao(source), groupRoles);
+        }
         final OktaOidcClient client = new OktaOidcClient(
             issuer,
             authnUrl,
@@ -81,7 +94,6 @@ public final class AuthFromOktaFactory implements AuthFactory {
             scope,
             groupsClaim
         );
-        final OktaUserProvisioning provisioning = new OktaUserProvisioning(asto, groupRoles);
         final Authentication auth = new AuthFromOkta(client, provisioning);
         // Wrap with domain filter if user-domains is configured
         final List<String> domains = parseUserDomains(creds);

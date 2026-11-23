@@ -853,6 +853,57 @@ public final class YamlSettings implements Settings {
     }
 
     /**
+     * Build one YAML-configured auth provider. Okta provisions the users it
+     * authenticates, and has to do so where authorization reads them: it is
+     * given the database when there is one.
+     * @param loader Provider factories
+     * @param type Provider type
+     * @param settings Settings ({@code meta}) YAML
+     * @param dataSource Database (nullable)
+     * @return Authentication
+     */
+    private static Authentication newProvider(
+        final AuthLoader loader, final String type,
+        final YamlMapping settings, final DataSource dataSource
+    ) {
+        final Authentication auth;
+        if (dataSource != null && "okta".equals(type)) {
+            auth = new com.auto1.pantera.auth.AuthFromOktaFactory()
+                .getAuthentication(settings, dataSource);
+        } else {
+            auth = loader.newObject(type, settings);
+        }
+        return auth;
+    }
+
+    /**
+     * Report an auth provider that is configured but could not be built.
+     * The chain runs without it until the next start, so every login that
+     * relies on it fails: an ERROR that says so and what to fix.
+     * @param type Provider type
+     * @param err Why it could not be built
+     */
+    private static void logProviderNotLoaded(final String type, final Exception err) {
+        EcsLogger.error("com.auto1.pantera.settings")
+            .message(
+                "Auth provider '" + type + "' is configured but could not be loaded: "
+                    + LogSanitizer.sanitizeMessage(err.getMessage())
+                    + ". It is DISABLED until the next start: logins that rely on it are"
+                    + " rejected. Fix the 'meta.credentials' entry of type '" + type
+                    + "' in pantera.yml (and the environment variables it refers to),"
+                    + " then restart"
+            )
+            .eventCategory("authentication")
+            .eventAction("auth_init")
+            .eventOutcome("failure")
+            .field("event.provider", type)
+            .field("error.type", err.getClass().getSimpleName())
+            .field("error.message", LogSanitizer.sanitizeMessage(err.getMessage()))
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
      * Initialise authentication. When a database is available, {@link AuthFromDb}
      * is used as the primary authenticator. File-based and other providers from
      * the YAML credentials section are added as fallbacks.
@@ -905,7 +956,9 @@ public final class YamlSettings implements Settings {
                     continue;
                 }
                 try {
-                    final Authentication auth = loader.newObject(type, settings);
+                    final Authentication auth = YamlSettings.newProvider(
+                        loader, type, settings, dataSource
+                    );
                     // Wrap in DbGatedAuth so disable/delete via the UI
                     // actually takes effect on the running chain.
                     final Authentication gated = enabledCache != null && type != null
@@ -919,15 +972,7 @@ public final class YamlSettings implements Settings {
                     // throwable bundle and emit only sanitized message +
                     // exception class so the secret-bearing scope never
                     // reaches the log document.
-                    EcsLogger.warn("com.auto1.pantera.settings")
-                        .message("Failed to load auth provider: " + type)
-                        .eventCategory("authentication")
-                        .eventAction("auth_init")
-                        .eventOutcome("failure")
-                        .field("error.type", ex.getClass().getSimpleName())
-                        .field("error.message", LogSanitizer.sanitizeMessage(ex.getMessage()))
-                        .field("log.source", "application")
-                        .log();
+                    YamlSettings.logProviderNotLoaded(type, ex);
                 }
             }
         }
