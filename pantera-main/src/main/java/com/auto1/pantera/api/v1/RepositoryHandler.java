@@ -538,6 +538,15 @@ public final class RepositoryHandler {
                     // A name that still serves another repository as its
                     // former name cannot be taken.
                     this.ops.lifecycle().claimName(name);
+                    // Files left under the name by a delete made before
+                    // 2.2.14 are not adopted: the repository gets a
+                    // directory of its own and starts empty.
+                    final Optional<String> key = this.ops.keyAvoidingLeftovers(name, merged);
+                    if (key.isPresent()
+                        && this.crs instanceof com.auto1.pantera.db.dao.RepositoryDao dao) {
+                        dao.create(rname, key.get(), merged, actor);
+                        return;
+                    }
                 }
                 this.crs.save(rname, merged, actor);
             },

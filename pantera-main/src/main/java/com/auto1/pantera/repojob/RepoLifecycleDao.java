@@ -335,6 +335,21 @@ public final class RepoLifecycleDao {
     }
 
     /**
+     * Resolved storage config a repository config points at.
+     * @param name Repository name (for its own storage aliases)
+     * @param config Repository config
+     * @return Storage config, empty for a group or an alias the database
+     *  does not know
+     */
+    public Optional<JsonObject> storageConfigFor(final String name, final JsonObject config) {
+        try (Connection conn = this.source.getConnection()) {
+            return RepoLifecycleDao.storageConfig(conn, name, config);
+        } catch (final SQLException ex) {
+            throw new IllegalStateException("Failed to resolve storage of " + name, ex);
+        }
+    }
+
+    /**
      * Deleted repositories whose data is not purged yet.
      * @return Tombstones, newest first
      */

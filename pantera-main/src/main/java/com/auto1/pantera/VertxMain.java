@@ -294,6 +294,16 @@ public final class VertxMain {
             // The artifact index and the storage address a repository by
             // its immutable key; names are translated at those boundaries.
             com.auto1.pantera.settings.repo.RepoKeys.install((DbRepositories) repos);
+            // Repository jobs (purge of deleted repositories, rename
+            // follow-up): every node runs them, the database lease decides
+            // which node works on which job.
+            new com.auto1.pantera.repojob.RepoJobRunner(
+                sharedDs.get(),
+                new com.auto1.pantera.repojob.RepoStorages(settings.caches().storagesCache())
+                    .andThen(com.auto1.pantera.repojob.StoragePurgeStore::new),
+                VertxMain.nodeId(),
+                com.auto1.pantera.repojob.RepoJobRunner.Timing.standard()
+            ).share().start();
         } else {
             repos = new MapRepositories(settings);
         }
@@ -1662,6 +1672,24 @@ public final class VertxMain {
         );
         this.servers.add(server);
         return server.start();
+    }
+
+    /**
+     * Identity of this process in repository job leases: the host name and
+     * a suffix that changes at every start, so a restarted node never
+     * mistakes its predecessor's lease for its own.
+     * @return Node id
+     */
+    private static String nodeId() {
+        String host;
+        try {
+            host = java.net.InetAddress.getLocalHost().getHostName();
+        } catch (final java.net.UnknownHostException ex) {
+            host = "pantera";
+        }
+        return String.format(
+            "%s-%s", host, java.util.UUID.randomUUID().toString().substring(0, 6)
+        );
     }
 
     /**

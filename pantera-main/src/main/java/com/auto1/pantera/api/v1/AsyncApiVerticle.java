@@ -540,7 +540,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 com.auto1.pantera.repojob.RepoOps.retentionOf(
                     System.getenv("PANTERA_REPO_DELETE_RETENTION_HOURS")
                 ),
-                role -> this.caches.policyCache().invalidate(role)
+                role -> this.caches.policyCache().invalidate(role),
+                new com.auto1.pantera.repojob.RepoStorages(this.caches.storagesCache())
             );
             new RepoJobsHandler(repoOps, this.security.policy(), repoEvents).register(router);
         }

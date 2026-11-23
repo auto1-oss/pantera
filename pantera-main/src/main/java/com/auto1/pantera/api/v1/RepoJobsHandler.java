@@ -46,6 +46,10 @@ import java.util.function.Supplier;
  *   not purged yet.</li>
  *   <li>{@code POST /api/v1/deleted-repositories/:key/restore} - undo a
  *   delete whose purge has not started.</li>
+ *   <li>{@code GET /api/v1/repository-orphans} - storage directories no
+ *   repository owns.</li>
+ *   <li>{@code POST /api/v1/repository-orphans/purge} - queue the purge of
+ *   one of them.</li>
  * </ul>
  *
  * @since 2.2.14
@@ -108,6 +112,12 @@ public final class RepoJobsHandler {
         router.get("/api/v1/deleted-repositories")
             .handler(new AuthzHandler(this.policy, delete))
             .handler(this::deleted);
+        router.get("/api/v1/repository-orphans")
+            .handler(new AuthzHandler(this.policy, delete))
+            .handler(this::orphans);
+        router.post("/api/v1/repository-orphans/purge")
+            .handler(new AuthzHandler(this.policy, delete))
+            .handler(this::purgeOrphan);
         router.post("/api/v1/deleted-repositories/:key/restore")
             .handler(new AuthzHandler(this.policy, delete))
             .handler(this::restore);
@@ -216,7 +226,7 @@ public final class RepoJobsHandler {
      */
     private void restore(final RoutingContext ctx) {
         final String key = ctx.pathParam("key");
-        final JsonObject body = ctx.body() == null || ctx.body().length() == 0
+        final JsonObject body = RepoJobsHandler.empty(ctx)
             ? new JsonObject() : RepoJobsHandler.parse(ctx);
         if (body == null) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
@@ -264,16 +274,114 @@ public final class RepoJobsHandler {
     }
 
     /**
+     * GET /api/v1/repository-orphans.
+     * @param ctx Routing context
+     */
+    private void orphans(final RoutingContext ctx) {
+        RepoJobsHandler.async(
+            ctx,
+            () -> {
+                final JsonArray items = new JsonArray();
+                this.ops.orphans().scan().forEach(
+                    orphan -> items.add(
+                        new JsonObject()
+                            .put("storage", orphan.storage())
+                            .put("location", orphan.location())
+                            .put("directory", orphan.directory())
+                            .put("objects", orphan.objects())
+                            .put("more", orphan.more())
+                    )
+                );
+                return new JsonObject().put("items", items);
+            }
+        );
+    }
+
+    /**
+     * POST /api/v1/repository-orphans/purge.
+     * @param ctx Routing context
+     */
+    private void purgeOrphan(final RoutingContext ctx) {
+        final JsonObject body = RepoJobsHandler.empty(ctx) ? null : RepoJobsHandler.parse(ctx);
+        final String storage = body == null ? null : body.getString("storage");
+        final String dir = body == null ? null : body.getString("directory");
+        if (storage == null || storage.isBlank() || dir == null || dir.isBlank()) {
+            ApiResponse.sendError(
+                ctx, 400, "BAD_REQUEST", "JSON body with storage and directory is required"
+            );
+            return;
+        }
+        final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String clientIp = new ApiAuditContext(ctx).value().clientIp();
+        final String trace = new ApiAuditContext(ctx).value().traceId();
+        RepoJobsHandler.async(
+            ctx, 202,
+            () -> {
+                final javax.json.JsonObject config = this.ops.orphans().confirm(storage, dir)
+                    .orElseThrow(
+                        () -> {
+                            RepoJobsHandler.audit(
+                                actor, clientIp, "REPO_ORPHAN_PURGE", dir,
+                                Map.of("storage", storage, "error", "not an orphan"), false
+                            );
+                            return new RepoOpRejected(
+                                409, "CONFLICT",
+                                String.format(
+                                    "Directory '%s' is not an unowned directory of storage %s",
+                                    dir, storage
+                                )
+                            );
+                        }
+                    );
+                final long job = this.ops.jobs().enqueue(
+                    RepoJob.Type.ORPHAN_PURGE, dir, dir,
+                    javax.json.Json.createObjectBuilder().add("storage", config).build(),
+                    actor, trace
+                );
+                this.ops.wake();
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message(
+                        String.format(
+                            "Purge of unowned storage directory '%s' queued as job %d", dir, job
+                        )
+                    )
+                    .eventCategory("configuration")
+                    .eventAction("repository_orphan_purge")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+                RepoJobsHandler.audit(
+                    actor, clientIp, "REPO_ORPHAN_PURGE", dir,
+                    Map.of("storage", storage, "job_id", job), true
+                );
+                return new JsonObject().put("status", "purging").put("job_id", job);
+            }
+        );
+    }
+
+    /**
      * Run blocking work on the API worker pool and answer its JSON.
      * @param ctx Routing context
      * @param work Work
      */
     private static void async(final RoutingContext ctx, final Supplier<JsonObject> work) {
+        RepoJobsHandler.async(ctx, 200, work);
+    }
+
+    /**
+     * Run blocking work on the API worker pool and answer its JSON.
+     * @param ctx Routing context
+     * @param status Status of a successful answer
+     * @param work Work
+     */
+    private static void async(
+        final RoutingContext ctx, final int status, final Supplier<JsonObject> work
+    ) {
         CompletableFuture.supplyAsync(work, HandlerExecutor.get()).whenComplete(
             (json, err) -> {
                 if (err == null) {
                     ctx.response()
-                        .setStatusCode(200)
+                        .setStatusCode(status)
                         .putHeader("Content-Type", "application/json")
                         .end(json.encode());
                 } else {
@@ -291,6 +399,16 @@ public final class RepoJobsHandler {
                 }
             }
         );
+    }
+
+    /**
+     * Whether the request has no body.
+     * @param ctx Routing context
+     * @return True when there is nothing to parse
+     */
+    private static boolean empty(final RoutingContext ctx) {
+        final String text = ctx.body() == null ? null : ctx.body().asString();
+        return text == null || text.isBlank();
     }
 
     /**

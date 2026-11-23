@@ -12,11 +12,13 @@ package com.auto1.pantera.settings;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ListPage;
 import com.auto1.pantera.asto.ListResult;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import java.nio.file.Path;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -125,6 +127,36 @@ public final class RekeyedStorage extends Storage.Wrap {
     @Override
     public CompletableFuture<? extends Meta> metadata(final Key path) {
         return super.metadata(this.inward(path));
+    }
+
+    @Override
+    public CompletableFuture<ListPage> listPage(
+        final Key prefix, final Optional<String> after, final int limit
+    ) {
+        return super.listPage(
+            this.inward(prefix),
+            after.map(pos -> RekeyedStorage.swap(new Key.From(pos), this.name, this.key).string()),
+            limit
+        ).thenApply(
+            page -> new ListPage(
+                List.copyOf(this.outward(page.keys())),
+                page.next().map(
+                    pos -> RekeyedStorage.swap(new Key.From(pos), this.key, this.name).string()
+                )
+            )
+        );
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteBatch(final Collection<Key> keys) {
+        return super.deleteBatch(
+            keys.stream().map(this::inward).collect(Collectors.toList())
+        );
+    }
+
+    @Override
+    public CompletableFuture<Integer> abortIncompleteUploads(final Key prefix) {
+        return super.abortIncompleteUploads(this.inward(prefix));
     }
 
     @Override
