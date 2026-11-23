@@ -12,6 +12,7 @@ package com.auto1.pantera.http.misc;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ListPage;
 import com.auto1.pantera.asto.ListResult;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
@@ -103,6 +104,23 @@ public final class DispatchedStorage implements Storage {
     @Override
     public CompletableFuture<Void> deleteEmptyDirectories(final Key prefix) {
         return dispatch(this.delegate.deleteEmptyDirectories(prefix), StorageExecutors.WRITE);
+    }
+
+    @Override
+    public CompletableFuture<ListPage> listPage(
+        final Key prefix, final Optional<String> after, final int limit
+    ) {
+        return dispatch(this.delegate.listPage(prefix, after, limit), StorageExecutors.LIST);
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteBatch(final Collection<Key> keys) {
+        return dispatch(this.delegate.deleteBatch(keys), StorageExecutors.WRITE);
+    }
+
+    @Override
+    public CompletableFuture<Integer> abortIncompleteUploads(final Key prefix) {
+        return dispatch(this.delegate.abortIncompleteUploads(prefix), StorageExecutors.WRITE);
     }
 
     @Override

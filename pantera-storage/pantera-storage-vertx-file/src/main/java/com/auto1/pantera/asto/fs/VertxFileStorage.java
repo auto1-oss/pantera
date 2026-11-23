@@ -13,6 +13,7 @@ package com.auto1.pantera.asto.fs;
 import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ListPage;
 import com.auto1.pantera.asto.ListResult;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
@@ -424,6 +425,45 @@ public final class VertxFileStorage implements Storage {
                     this.id
                 );
             });
+    }
+
+    @Override
+    public CompletableFuture<ListPage> listPage(
+        final Key prefix, final Optional<String> after, final int limit
+    ) {
+        final long startNs = System.nanoTime();
+        return Single.fromCallable(
+            () -> new SortedKeyWalk(this.path(prefix), prefix).page(after, limit)
+        ).subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
+            .to(SingleInterop.get()).toCompletableFuture()
+            .whenComplete(
+                (result, throwable) -> StorageMetricsCollector.record(
+                    "list_page", System.nanoTime() - startNs, throwable == null, this.id
+                )
+            );
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteBatch(final Collection<Key> keys) {
+        final long startNs = System.nanoTime();
+        final Collection<Key> batch = new ArrayList<>(keys);
+        return Completable.fromAction(
+            () -> {
+                final Collection<Path> files = new ArrayList<>(batch.size());
+                for (final Key key : batch) {
+                    files.add(this.path(key));
+                }
+                new BatchFileDelete(this.dir).delete(files);
+            }
+        ).subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
+            .to(CompletableInterop.await())
+            .<Void>thenApply(ignored -> null)
+            .toCompletableFuture()
+            .whenComplete(
+                (result, throwable) -> StorageMetricsCollector.record(
+                    "delete_batch", System.nanoTime() - startNs, throwable == null, this.id
+                )
+            );
     }
 
     @Override
