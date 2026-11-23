@@ -6,13 +6,15 @@ import Aura from '@primeuix/themes/aura'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationStore } from '@/stores/notifications'
 import RepoJobsView from '../RepoJobsView.vue'
-import type { DeletedRepo, RepoJob } from '@/types'
+import type { DeletedRepo, RepoJob, RepoOrphan } from '@/types'
 
 const listJobsMock = vi.fn()
 const listDeletedMock = vi.fn()
 const retryMock = vi.fn()
 const startMock = vi.fn()
 const restoreMock = vi.fn()
+const scanMock = vi.fn()
+const purgeOrphanMock = vi.fn()
 
 vi.mock('@/api/repos', () => ({
   listRepoJobs: (...a: unknown[]) => listJobsMock(...a),
@@ -20,6 +22,8 @@ vi.mock('@/api/repos', () => ({
   retryRepoJob: (...a: unknown[]) => retryMock(...a),
   startRepoJob: (...a: unknown[]) => startMock(...a),
   restoreDeletedRepo: (...a: unknown[]) => restoreMock(...a),
+  scanRepoOrphans: (...a: unknown[]) => scanMock(...a),
+  purgeRepoOrphan: (...a: unknown[]) => purgeOrphanMock(...a),
 }))
 vi.mock('@/components/layout/AppLayout.vue', () => ({
   default: { name: 'AppLayoutStub', template: '<div><slot /></div>' },
@@ -88,6 +92,7 @@ describe('RepoJobsView', () => {
     seedAuth()
     listJobsMock.mockReset(); listDeletedMock.mockReset()
     retryMock.mockReset(); startMock.mockReset(); restoreMock.mockReset()
+    scanMock.mockReset(); purgeOrphanMock.mockReset()
     listJobsMock.mockResolvedValue([])
     listDeletedMock.mockResolvedValue([])
   })
@@ -305,5 +310,133 @@ describe('RepoJobsView', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(listJobsMock).not.toHaveBeenCalled()
     expect(listDeletedMock).not.toHaveBeenCalled()
+    // the unowned-directory scan is gated the same way
+    expect(el('orphans-card')).toBeNull()
+    expect(el('orphans-scan')).toBeNull()
+    expect(scanMock).not.toHaveBeenCalled()
+  })
+
+  describe('unowned storage directories', () => {
+    const BIG: RepoOrphan = {
+      storage: '5f2b9c1e0a7d4e38', location: 's3 bucket=artifacts region=eu-west-1', directory: 'old-maven', objects: 1000, more: true,
+    }
+    const SMALL: RepoOrphan = {
+      storage: 'a1', location: 'fs /var/pantera/data', directory: 'tmp-rename', objects: 42, more: false,
+    }
+    const ORPHAN_JOB = job({ id: 57, type: 'orphan_purge', repo_key: 'o1', repo_name: null, state: 'pending', phase: 'objects' })
+
+    async function typeName(value: string) {
+      const input = el<HTMLInputElement>('orphan-confirm-input')!
+      input.value = value
+      input.dispatchEvent(new Event('input'))
+      await flushPromises()
+    }
+
+    it('does not scan on mount or on the polling timer', async () => {
+      listJobsMock.mockResolvedValue([RUNNING])
+      await mountView()
+      await vi.advanceTimersByTimeAsync(20_000)
+      // the page did poll its jobs meanwhile
+      expect(listJobsMock.mock.calls.length).toBeGreaterThan(2)
+      expect(scanMock).not.toHaveBeenCalled()
+      expect(el('orphans-hint')!.textContent).toContain('Not scanned yet')
+      expect(el('orphans-table')).toBeNull()
+      expect(el('orphans-card')!.textContent).toContain('Nothing is removed until you purge a specific directory')
+    })
+
+    it('scans when asked and renders the directories', async () => {
+      scanMock.mockResolvedValue([BIG, SMALL])
+      const w = await mountView()
+      el('orphans-scan')!.click()
+      await flushPromises()
+      expect(scanMock).toHaveBeenCalledTimes(1)
+      const rows = w.findAll('[data-testid="orphans-table"] tbody tr')
+      expect(rows).toHaveLength(2)
+      expect(rows[0].text()).toContain('s3 bucket=artifacts region=eu-west-1')
+      expect(rows[0].text()).toContain('old-maven')
+      expect(rows[1].text()).toContain('tmp-rename')
+      expect(all('orphan-objects').map(e => e.textContent)).toEqual(['1,000+', '42'])
+      // the refreshes of the other lists never scan again
+      el('jobs-refresh')!.click()
+      await flushPromises()
+      expect(scanMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('says so when a scan finds nothing', async () => {
+      scanMock.mockResolvedValue([])
+      await mountView()
+      el('orphans-scan')!.click()
+      await flushPromises()
+      expect(el('orphans-empty')!.textContent).toContain('No unowned directories found')
+    })
+
+    it('keeps the last result when a later scan fails', async () => {
+      scanMock
+        .mockResolvedValueOnce([SMALL])
+        .mockRejectedValueOnce({ response: { status: 500, data: { message: 'storage unreachable' } } })
+      const w = await mountView()
+      el('orphans-scan')!.click()
+      await flushPromises()
+      el('orphans-scan')!.click()
+      await flushPromises()
+      expect(el('orphans-error')!.textContent).toContain('storage unreachable')
+      expect(w.findAll('[data-testid="orphans-table"] tbody tr')).toHaveLength(1)
+    })
+
+    it('purges only after the directory name is typed, then refreshes the jobs and drops the row', async () => {
+      scanMock.mockResolvedValue([BIG, SMALL])
+      purgeOrphanMock.mockResolvedValue({ status: 'purging', job_id: 57 })
+      listJobsMock.mockResolvedValueOnce([]).mockResolvedValue([ORPHAN_JOB])
+      const w = await mountView()
+      el('orphans-scan')!.click()
+      await flushPromises()
+      all('orphan-purge')[0].click()
+      await flushPromises()
+      // the dialog names what is about to go
+      const details = el('orphan-details')!.textContent!
+      expect(details).toContain('s3 bucket=artifacts region=eu-west-1')
+      expect(details).toContain('old-maven')
+      expect(details).toContain('1,000+')
+      expect(el('orphan-dialog')!.textContent).toContain('no restore window')
+      const confirm = el<HTMLButtonElement>('orphan-purge-confirm')!
+      expect(confirm.disabled).toBe(true)
+      await typeName('old-mave')
+      expect(confirm.disabled).toBe(true)
+      await typeName('old-maven')
+      expect(confirm.disabled).toBe(false)
+      expect(purgeOrphanMock).not.toHaveBeenCalled()
+      confirm.click()
+      await flushPromises()
+      expect(purgeOrphanMock).toHaveBeenCalledWith('5f2b9c1e0a7d4e38', 'old-maven')
+      // jobs reloaded: the new job is listed and, being live, starts the polling
+      expect(listJobsMock).toHaveBeenCalledTimes(2)
+      expect(document.body.textContent).toContain('Orphan purge')
+      expect(el('jobs-auto-refresh')).not.toBeNull()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(listJobsMock).toHaveBeenCalledTimes(3)
+      // the purged row is gone without another scan
+      const rows = w.findAll('[data-testid="orphans-table"] tbody tr')
+      expect(rows).toHaveLength(1)
+      expect(rows[0].text()).toContain('tmp-rename')
+      expect(scanMock).toHaveBeenCalledTimes(1)
+      expect(el('orphan-confirm-input')).toBeNull()
+    })
+
+    it('shows the 409 message of the server and keeps the row', async () => {
+      scanMock.mockResolvedValue([SMALL])
+      const message = "Directory 'tmp-rename' is no longer an unowned directory of storage a1"
+      purgeOrphanMock.mockRejectedValue({ response: { status: 409, data: { error: 'CONFLICT', message } } })
+      const w = await mountView()
+      el('orphans-scan')!.click()
+      await flushPromises()
+      all('orphan-purge')[0].click()
+      await flushPromises()
+      await typeName('tmp-rename')
+      el('orphan-purge-confirm')!.click()
+      await flushPromises()
+      expect(el('orphan-purge-error')!.textContent).toContain(message)
+      expect(w.findAll('[data-testid="orphans-table"] tbody tr')).toHaveLength(1)
+      expect(listJobsMock).toHaveBeenCalledTimes(1)
+    })
   })
 })

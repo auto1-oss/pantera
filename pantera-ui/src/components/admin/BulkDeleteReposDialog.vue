@@ -78,7 +78,8 @@ async function run() {
   <Dialog v-model:visible="visibleModel" :header="title" modal :style="{ width: '32rem' }">
     <p class="mb-2 text-sm">
       The repositories disappear at once. Their data is removed in the background after the
-      restore window; until then each can be restored under Repository Jobs.
+      server's default restore window (24 hours unless configured otherwise); until then each can
+      be restored under Repository Jobs.
     </p>
     <ul class="mb-3 max-h-40 overflow-auto rounded border border-gray-200 p-2 font-mono text-sm dark:border-gray-700" data-testid="bulk-delete-targets">
       <li v-for="n in targets" :key="n">{{ n }}</li>

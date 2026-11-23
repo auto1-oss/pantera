@@ -2,7 +2,7 @@ import { getApiClient } from './client'
 import type {
   PaginatedResponse, CursorResponse, RepoMember, RepoListItem, RepoMode,
   TreeEntry, ArtifactDetail, PullInstructions, StorageAlias,
-  RepoMoveResult, RepoDeleteResult, RepoJob, DeletedRepo, RepoRestoreResult,
+  RepoMoveResult, RepoDeleteResult, RepoJob, DeletedRepo, RepoRestoreResult, RepoOrphan,
 } from '@/types'
 
 export type RepoSortField = 'name' | 'type' | 'updated_at'
@@ -117,6 +117,28 @@ export async function restoreDeletedRepo(repoKey: string, name?: string): Promis
   const { data } = name
     ? await getApiClient().post<RepoRestoreResult>(url, { name })
     : await getApiClient().post<RepoRestoreResult>(url)
+  return data
+}
+
+// Storage directories that belong to no repository
+/**
+ * Scans the top level of every storage repositories use. It lists storages,
+ * so it can take seconds: call it on request only, never on a timer.
+ */
+export async function scanRepoOrphans(signal?: AbortSignal): Promise<RepoOrphan[]> {
+  const { data } = await getApiClient().get<{ items?: RepoOrphan[] }>('/repository-orphans', { signal })
+  return data.items ?? []
+}
+
+/**
+ * Queue the removal of one unowned directory; it shows up among the jobs as
+ * an `orphan_purge`. Irreversible. 409 when the directory is no longer an
+ * unowned directory of that storage.
+ */
+export async function purgeRepoOrphan(storage: string, directory: string): Promise<{ status: string; job_id: number }> {
+  const { data } = await getApiClient().post<{ status: string; job_id: number }>(
+    '/repository-orphans/purge', { storage, directory },
+  )
   return data
 }
 

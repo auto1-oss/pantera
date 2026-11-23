@@ -414,6 +414,8 @@ async function handleMove() {
 // Delete is instant too: the repository disappears, a background job purges
 // its data after the restore window, and it can be restored until then.
 type RetentionMode = 'default' | 'now' | 'custom'
+/** The server refuses a longer restore window with a 400. */
+const MAX_RETENTION_HOURS = 8760
 const deleteVisible = ref(false)
 const retentionMode = ref<RetentionMode>('default')
 const retentionHours = ref<number | null>(24)
@@ -424,7 +426,7 @@ const deleting = ref(false)
 const retentionValid = computed(() => {
   if (retentionMode.value !== 'custom') return true
   const hours = retentionHours.value
-  return hours !== null && Number.isInteger(hours) && hours >= 1
+  return hours !== null && Number.isInteger(hours) && hours >= 1 && hours <= MAX_RETENTION_HOURS
 })
 
 function openDelete() {
@@ -786,6 +788,7 @@ defineExpose({
               <InputNumber
                 v-model="retentionHours"
                 :min="1"
+                :max="MAX_RETENTION_HOURS"
                 :disabled="retentionMode !== 'custom'"
                 :invalid="!retentionValid"
                 :use-grouping="false"
@@ -793,7 +796,7 @@ defineExpose({
                 aria-label="Restore window in hours"
                 data-testid="delete-retention-hours"
               />
-              <span>hours</span>
+              <span>hours (1–{{ MAX_RETENTION_HOURS }})</span>
             </div>
             <div class="flex items-center gap-2">
               <RadioButton v-model="retentionMode" input-id="retentionNow" value="now" data-testid="delete-retention-now" />

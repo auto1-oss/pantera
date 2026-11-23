@@ -223,6 +223,13 @@ describe('RepoEditView danger zone', () => {
       vm.retentionHours = null
       await flushPromises()
       expect(el<HTMLButtonElement>('delete-confirm')!.disabled).toBe(true)
+      // the server refuses more than a year
+      vm.retentionHours = 8761
+      await flushPromises()
+      expect(el<HTMLButtonElement>('delete-confirm')!.disabled).toBe(true)
+      vm.retentionHours = 8760
+      await flushPromises()
+      expect(el<HTMLButtonElement>('delete-confirm')!.disabled).toBe(false)
       vm.retentionHours = 72
       await flushPromises()
       await click('delete-confirm')

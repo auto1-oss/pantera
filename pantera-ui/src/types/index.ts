@@ -396,6 +396,22 @@ export interface DeletedRepo {
   purge_after: string | null
 }
 
+/**
+ * A top-level storage directory that holds objects and belongs to no
+ * repository, no deleted repository and no running purge.
+ */
+export interface RepoOrphan {
+  /** Storage id, handed back to the purge call as-is. */
+  storage: string
+  /** Human-readable storage location, e.g. `s3 bucket=artifacts region=eu-west-1`. */
+  location: string
+  directory: string
+  /** Objects counted, up to 1000. */
+  objects: number
+  /** True when there are more objects than counted. */
+  more: boolean
+}
+
 /** Answer of `POST /deleted-repositories/:key/restore`. */
 export interface RepoRestoreResult {
   name: string

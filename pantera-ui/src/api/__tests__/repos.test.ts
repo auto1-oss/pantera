@@ -11,7 +11,7 @@ vi.mock('../client', () => ({
 
 import {
   deleteRepo, moveRepo, listRepoJobs, getRepoJob, retryRepoJob, startRepoJob,
-  listDeletedRepos, restoreDeletedRepo,
+  listDeletedRepos, restoreDeletedRepo, scanRepoOrphans, purgeRepoOrphan,
 } from '../repos'
 
 const JOB = {
@@ -175,5 +175,36 @@ describe('deleted repositories', () => {
     post.mockResolvedValue({ data: { name: 'other', repo_key: 'a/b', rejoined_groups: [] } })
     await restoreDeletedRepo('a/b', 'other')
     expect(post).toHaveBeenCalledWith('/deleted-repositories/a%2Fb/restore', { name: 'other' })
+  })
+})
+
+describe('unowned storage directories', () => {
+  const ORPHAN = {
+    storage: '5f2b9c1e0a7d4e38', location: 's3 bucket=artifacts region=eu-west-1',
+    directory: 'old-maven', objects: 1000, more: true,
+  }
+
+  it('scans the storages, passing the abort signal', async () => {
+    get.mockResolvedValue({ data: { items: [ORPHAN] } })
+    const signal = new AbortController().signal
+    await expect(scanRepoOrphans(signal)).resolves.toEqual([ORPHAN])
+    expect(get).toHaveBeenCalledWith('/repository-orphans', { signal })
+  })
+
+  it('answers an empty list when the server sends no items', async () => {
+    get.mockResolvedValue({ data: {} })
+    await expect(scanRepoOrphans()).resolves.toEqual([])
+  })
+
+  it('queues a purge with the storage id and the directory', async () => {
+    post.mockResolvedValue({ status: 202, data: { status: 'purging', job_id: 57 } })
+    await expect(purgeRepoOrphan('5f2b9c1e0a7d4e38', 'old-maven')).resolves.toEqual({ status: 'purging', job_id: 57 })
+    expect(post).toHaveBeenCalledWith('/repository-orphans/purge', { storage: '5f2b9c1e0a7d4e38', directory: 'old-maven' })
+  })
+
+  it('passes a 409 of the purge on to the caller', async () => {
+    const conflict = { response: { status: 409, data: { message: 'not an unowned directory' } } }
+    post.mockRejectedValue(conflict)
+    await expect(purgeRepoOrphan('s', 'd')).rejects.toBe(conflict)
   })
 })

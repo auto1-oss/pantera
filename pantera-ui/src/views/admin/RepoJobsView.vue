@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   listRepoJobs, listDeletedRepos, retryRepoJob, startRepoJob, restoreDeletedRepo,
+  scanRepoOrphans, purgeRepoOrphan,
 } from '@/api/repos'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationStore } from '@/stores/notifications'
@@ -15,7 +16,7 @@ import DataTable from 'primevue/datatable'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Tag from 'primevue/tag'
-import type { DeletedRepo, RepoJob, RepoJobPhase, RepoJobState, RepoJobType } from '@/types'
+import type { DeletedRepo, RepoJob, RepoJobPhase, RepoJobState, RepoJobType, RepoOrphan } from '@/types'
 
 /** Refresh interval while a job is pending or running. */
 const POLL_MS = 5000
@@ -138,7 +139,84 @@ onBeforeUnmount(() => {
   unmounted = true
   stopPolling()
   if (abort) abort.abort()
+  if (scanAbort) scanAbort.abort()
 })
+
+// ---------------------------------------------------------------------------
+// Unowned storage directories
+// ---------------------------------------------------------------------------
+// The scan lists every storage and can take seconds on S3, so it runs only
+// when asked for: never on mount and never on the polling timer.
+const orphans = ref<RepoOrphan[]>([])
+const scanned = ref(false)
+const scanning = ref(false)
+const scanError = ref('')
+let scanAbort: AbortController | null = null
+
+function orphanKey(o: RepoOrphan): string {
+  return `${o.storage}/${o.directory}`
+}
+
+function orphanObjects(o: RepoOrphan): string {
+  return `${formatCount(o.objects)}${o.more ? '+' : ''}`
+}
+
+async function scan() {
+  if (!canManage.value || scanning.value) return
+  scanAbort = new AbortController()
+  const ctrl = scanAbort
+  scanning.value = true
+  scanError.value = ''
+  try {
+    const found = await scanRepoOrphans(ctrl.signal)
+    if (ctrl.signal.aborted) return
+    orphans.value = found
+    scanned.value = true
+  } catch (err: unknown) {
+    if (ctrl.signal.aborted) return
+    // The last result stays on screen.
+    scanError.value = apiErrorMessage(err, 'Failed to scan storages')
+  } finally {
+    scanning.value = false
+  }
+}
+
+// Purging an unowned directory has no restore window: the directory name is typed to confirm.
+const orphanTarget = ref<RepoOrphan | null>(null)
+const orphanTyped = ref('')
+const orphanError = ref('')
+const orphanPurging = ref(false)
+const orphanVisible = computed({
+  get: () => orphanTarget.value !== null,
+  set: (open) => { if (!open) orphanTarget.value = null },
+})
+
+function askPurgeOrphan(o: RepoOrphan) {
+  orphanTyped.value = ''
+  orphanError.value = ''
+  orphanTarget.value = o
+}
+
+async function doPurgeOrphan() {
+  const target = orphanTarget.value
+  if (!target || orphanTyped.value !== target.directory) return
+  orphanPurging.value = true
+  orphanError.value = ''
+  try {
+    await purgeRepoOrphan(target.storage, target.directory)
+  } catch (err: unknown) {
+    // 409: it is no longer an unowned directory of that storage — the message says why.
+    orphanError.value = apiErrorMessage(err, 'Failed to purge the directory')
+    orphanPurging.value = false
+    return
+  }
+  orphanPurging.value = false
+  orphans.value = orphans.value.filter(o => orphanKey(o) !== orphanKey(target))
+  orphanTarget.value = null
+  notify.info('Purge queued', `${target.directory}: follow it in the Jobs list`)
+  // The new orphan_purge job is live, so this also starts the auto-refresh.
+  await load(true)
+}
 
 // ---------------------------------------------------------------------------
 // Actions
@@ -426,7 +504,123 @@ async function doPurgeNow() {
             </dl>
           </template>
         </Card>
+
+        <!-- Unowned storage directories -->
+        <Card class="shadow-sm" data-testid="orphans-card">
+          <template #title>Unowned storage directories</template>
+          <template #subtitle>
+            Files left behind by repository deletes made before this release, or by an interrupted rename.
+            Nothing is removed until you purge a specific directory.
+          </template>
+          <template #content>
+            <div class="flex flex-wrap items-center gap-3">
+              <Button
+                label="Scan storages"
+                icon="pi pi-search"
+                severity="secondary"
+                outlined
+                :loading="scanning"
+                data-testid="orphans-scan"
+                @click="scan"
+              />
+              <span class="text-xs text-gray-500" data-testid="orphans-hint">
+                <template v-if="scanning">Listing every storage; this can take a few seconds…</template>
+                <template v-else-if="!scanned">Not scanned yet. The scan lists every storage repositories use, so it runs only when you start it.</template>
+                <template v-else>Result of the last scan; scan again to update it.</template>
+              </span>
+            </div>
+            <div
+              v-if="scanError"
+              class="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+              data-testid="orphans-error"
+            >
+              {{ scanError }}
+            </div>
+            <template v-if="scanned">
+              <DataTable :value="orphans" striped-rows class="mt-4" data-testid="orphans-table">
+                <Column header="Storage">
+                  <template #body="{ data }">
+                    <span class="text-sm break-all" :title="data.storage">{{ data.location }}</span>
+                  </template>
+                </Column>
+                <Column header="Directory">
+                  <template #body="{ data }"><span class="font-mono text-sm break-all">{{ data.directory }}</span></template>
+                </Column>
+                <Column header="Objects">
+                  <template #body="{ data }">
+                    <span
+                      class="tabular-nums"
+                      :title="data.more ? 'More objects than were counted' : undefined"
+                      data-testid="orphan-objects"
+                    >{{ orphanObjects(data) }}</span>
+                  </template>
+                </Column>
+                <Column header="Actions">
+                  <template #body="{ data }">
+                    <Button
+                      label="Purge…"
+                      icon="pi pi-trash"
+                      size="small"
+                      severity="danger"
+                      text
+                      data-testid="orphan-purge"
+                      @click="askPurgeOrphan(data)"
+                    />
+                  </template>
+                </Column>
+                <template #empty>
+                  <div class="py-4 text-center text-gray-400" data-testid="orphans-empty">No unowned directories found</div>
+                </template>
+              </DataTable>
+              <p class="mt-3 text-xs text-gray-500">
+                A directory is listed when it holds files and belongs to no repository, no deleted repository
+                and no running purge. Pantera cannot tell whether a storage also holds data it does not
+                own, so check a directory before purging it. Objects are counted up to 1,000.
+              </p>
+            </template>
+          </template>
+        </Card>
       </template>
+
+      <Dialog v-model:visible="orphanVisible" header="Purge Unowned Directory" modal class="w-[32rem]" data-testid="orphan-dialog">
+        <template v-if="orphanTarget">
+          <p class="mb-3 text-sm">
+            This removes every file in the directory. It cannot be undone: there is no restore window.
+          </p>
+          <dl class="mb-4 grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm" data-testid="orphan-details">
+            <dt class="text-gray-500">Storage</dt>
+            <dd class="break-all">{{ orphanTarget.location }}</dd>
+            <dt class="text-gray-500">Directory</dt>
+            <dd class="font-mono break-all">{{ orphanTarget.directory }}</dd>
+            <dt class="text-gray-500">Objects</dt>
+            <dd class="tabular-nums">{{ orphanObjects(orphanTarget) }}</dd>
+          </dl>
+          <label for="orphanConfirm" class="mb-1 block text-sm">
+            Type <b class="font-mono break-all">{{ orphanTarget.directory }}</b> to confirm
+          </label>
+          <InputText
+            id="orphanConfirm"
+            v-model="orphanTyped"
+            class="w-full"
+            autocomplete="off"
+            data-testid="orphan-confirm-input"
+          />
+          <div v-if="orphanError" class="mt-3 text-sm text-red-700 dark:text-red-300" data-testid="orphan-purge-error">
+            {{ orphanError }}
+          </div>
+        </template>
+        <template #footer>
+          <Button label="Cancel" severity="secondary" text @click="orphanTarget = null" />
+          <Button
+            label="Purge directory"
+            severity="danger"
+            :disabled="!orphanTarget || orphanTyped !== orphanTarget.directory || orphanPurging"
+            :loading="orphanPurging"
+            data-testid="orphan-purge-confirm"
+            @click="doPurgeOrphan"
+          />
+        </template>
+      </Dialog>
 
       <Dialog v-model:visible="restoreVisible" header="Restore Repository" modal class="w-[28rem]" data-testid="restore-dialog">
         <template v-if="restoreTarget">
