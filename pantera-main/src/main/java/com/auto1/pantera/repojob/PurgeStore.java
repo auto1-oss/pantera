@@ -66,7 +66,7 @@ public interface PurgeStore {
          * @param cause Storage failure
          */
         public StoreThrottled(final Throwable cause) {
-            super(cause.getMessage(), cause);
+            super(String.valueOf(cause.getMessage()), cause);
         }
     }
 }

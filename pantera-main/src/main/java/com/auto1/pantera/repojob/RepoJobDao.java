@@ -99,7 +99,9 @@ public final class RepoJobDao {
             stmt.setString(6, actor);
             stmt.setString(7, trace);
             try (ResultSet rows = stmt.executeQuery()) {
-                rows.next();
+                if (!rows.next()) {
+                    throw new SQLException("INSERT INTO repo_jobs returned no row");
+                }
                 return new Queued(rows.getLong(1), rows.getTimestamp(2).toInstant());
             }
         }
@@ -134,7 +136,7 @@ public final class RepoJobDao {
         } catch (final SQLException ex) {
             if ("23505".equals(ex.getSQLState())) {
                 throw new RepoOpRejected(
-                    409, "CONFLICT", String.format("A purge of '%s' is already queued", key)
+                    409, "CONFLICT", String.format("A purge of '%s' is already queued", key), ex
                 );
             }
             throw new IllegalStateException("Failed to queue repository job", ex);
@@ -383,8 +385,7 @@ public final class RepoJobDao {
             )) {
             stmt.setString(1, state);
             try (ResultSet rows = stmt.executeQuery()) {
-                rows.next();
-                return rows.getLong(1);
+                return rows.next() ? rows.getLong(1) : 0L;
             }
         } catch (final SQLException ex) {
             throw new IllegalStateException("Failed to count repository jobs", ex);

@@ -36,7 +36,20 @@ public final class RepoOpRejected extends RuntimeException {
      * @param message Why the operation is refused
      */
     public RepoOpRejected(final int code, final String error, final String message) {
-        super(message);
+        this(code, error, message, null);
+    }
+
+    /**
+     * Ctor.
+     * @param code HTTP status to answer
+     * @param error API error code
+     * @param message Why the operation is refused
+     * @param cause What made it so, nullable
+     */
+    public RepoOpRejected(
+        final int code, final String error, final String message, final Throwable cause
+    ) {
+        super(message, cause);
         this.code = code;
         this.error = error;
     }

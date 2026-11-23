@@ -553,7 +553,10 @@ public final class RepoJobRunner implements AutoCloseable {
                     Thread.sleep(this.timing.backoff().toMillis() * Math.min(attempt, 8));
                 } catch (final InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
-                    throw new IllegalStateException("Interrupted while backing off", interrupted);
+                    final IllegalStateException stopped =
+                        new IllegalStateException("Interrupted while backing off", ex);
+                    stopped.addSuppressed(interrupted);
+                    throw stopped;
                 }
             }
         }

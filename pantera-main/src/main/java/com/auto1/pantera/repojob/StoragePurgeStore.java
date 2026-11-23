@@ -98,16 +98,17 @@ public final class StoragePurgeStore implements PurgeStore {
                 String.format("Storage call did not finish within %s", this.timeout), ex
             );
         } catch (final ExecutionException ex) {
-            Throwable cause = ex.getCause();
-            while (cause instanceof java.util.concurrent.CompletionException
+            Throwable cause = ex;
+            while ((cause instanceof ExecutionException
+                || cause instanceof java.util.concurrent.CompletionException)
                 && cause.getCause() != null) {
                 cause = cause.getCause();
             }
             if (cause instanceof StorageThrottledException) {
-                throw new StoreThrottled(cause);
+                throw new StoreThrottled(ex);
             }
             throw new IllegalStateException(
-                String.format("Storage call failed: %s", cause.getMessage()), cause
+                String.format("Storage call failed: %s", cause.getMessage()), ex
             );
         }
     }
