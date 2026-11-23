@@ -310,6 +310,10 @@ public final class FilteredMetadataCacheRegistry {
         }
         final FilteredMetadataCache cache = this.shared;
         if (cache == null) {
+            // No envelope cache (cooldown not wired): caches outside it that
+            // follow package changes (a Maven group's metadata and the
+            // misses it remembers) must still hear of the upload / refresh.
+            this.packageChanged(packageName);
             return 0;
         }
         try {

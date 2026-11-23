@@ -26,6 +26,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.ContentWithSize;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.index.SyncArtifactIndexer;
+import com.auto1.pantera.maven.cooldown.MavenMetadataCoordinates;
 import com.auto1.pantera.maven.metadata.MavenTimestamp;
 import com.auto1.pantera.maven.metadata.Version;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -248,6 +249,11 @@ public final class UploadSlice implements Slice {
                         );
                     }
                 )
+            ).thenCompose(
+                sha256 -> {
+                    UploadSlice.metadataStored(keyPath);
+                    return CompletableFuture.completedFuture(sha256);
+                }
             ).thenCompose(
                 sha256 -> this.addEvent(key, owner, size, sha256, headers)
                     .thenApply(ignored -> ResponseBuilder.created().build())
@@ -773,6 +779,24 @@ public final class UploadSlice implements Slice {
         // pkg = "{groupId}/{artifactId}/{version}" (everything before the filename)
         final String pkg = path.substring(0, path.lastIndexOf('/'));
         return this.createAndAddEvent(pkg, owner, size, sha256, headers);
+    }
+
+    /**
+     * A {@code maven-metadata.xml} was stored: tell every cache that follows
+     * the package (a group's metadata and the misses it remembers, on every
+     * node). A deploy asks for the metadata, gets a 404, and uploads it
+     * AFTER the artifact files, whose own upload event therefore predates
+     * the 404 a group may have remembered in between; without this event the
+     * group would keep answering that 404, or the metadata it cached before
+     * the new version was listed, until the entry expired.
+     *
+     * @param path Key of the stored metadata
+     */
+    private static void metadataStored(final String path) {
+        new MavenMetadataCoordinates().packageName(path).ifPresent(
+            pkg -> com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                .instance().invalidateAfterUpload("maven", pkg)
+        );
     }
 
     /**

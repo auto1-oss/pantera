@@ -1922,7 +1922,7 @@ public final class GroupResolver implements Slice {
      * @param headers Headers of the group's request
      * @return The member's answer, unchanged
      */
-    private static CompletableFuture<Response> noted(
+    static CompletableFuture<Response> noted(
         final CompletableFuture<Response> answer, final Headers headers
     ) {
         return answer.whenComplete(
