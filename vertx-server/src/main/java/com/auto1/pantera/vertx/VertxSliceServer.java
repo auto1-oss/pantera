@@ -28,6 +28,7 @@ import com.auto1.pantera.http.log.LogSanitizer;
 import co.elastic.apm.api.ElasticApm;
 import co.elastic.apm.api.Transaction;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.trace.SpanContext;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.reactivex.Flowable;
@@ -888,20 +889,11 @@ public final class VertxSliceServer implements Closeable {
                             this.serveWithBody(req, body, guardedResponse).whenComplete((result, throwable) -> {
                                 try {
                                     if (throwable != null) {
-                                        EcsLogger.error("com.auto1.pantera.vertx")
-                                            .message("Request serving failed")
-                                            .eventCategory("web")
-                                            .eventAction("request_serve")
-                                            .eventOutcome("failure")
-                                            .error(throwable)
-                                            .field("log.source", "application")
-                                            .log();
-                                        transaction.captureException(throwable);
-                                        transaction.setResult("error");
-                                        guardedResponse.safeSendError(
-                                            "proxyHandler.serveWithBody.error",
-                                            HttpURLConnection.HTTP_INTERNAL_ERROR,
-                                            INTERNAL_ERROR_BODY
+                                        // The failure is on record already: by the serve stage,
+                                        // or by the terminator that broke the response off.
+                                        VertxSliceServer.answerFailure(
+                                            transaction, throwable, guardedResponse,
+                                            "proxyHandler.serveWithBody.error"
                                         );
                                     } else {
                                         transaction.setResult("success");
@@ -930,20 +922,11 @@ public final class VertxSliceServer implements Closeable {
                                     this.rejectTooLarge(req, guardedResponse, -1L);
                                     transaction.setResult("error");
                                 } else if (throwable != null) {
-                                    EcsLogger.error("com.auto1.pantera.vertx")
-                                        .message("Request serving failed (streaming)")
-                                        .eventCategory("web")
-                                        .eventAction("request_serve")
-                                        .eventOutcome("failure")
-                                        .error(throwable)
-                                        .field("log.source", "application")
-                                        .log();
-                                    transaction.captureException(throwable);
-                                    transaction.setResult("error");
-                                    guardedResponse.safeSendError(
-                                        "proxyHandler.serveWithStream.error",
-                                        HttpURLConnection.HTTP_INTERNAL_ERROR,
-                                        INTERNAL_ERROR_BODY
+                                    // The failure is on record already: by the serve stage,
+                                    // or by the terminator that broke the response off.
+                                    VertxSliceServer.answerFailure(
+                                        transaction, throwable, guardedResponse,
+                                        "proxyHandler.serveWithStream.error"
                                     );
                                 } else {
                                     transaction.setResult("success");
@@ -959,20 +942,11 @@ public final class VertxSliceServer implements Closeable {
                     this.serve(req, null, guardedResponse).whenComplete((result, throwable) -> {
                         try {
                             if (throwable != null) {
-                                EcsLogger.error("com.auto1.pantera.vertx")
-                                    .message("Request serving failed")
-                                    .eventCategory("web")
-                                    .eventAction("request_serve")
-                                    .eventOutcome("failure")
-                                    .error(throwable)
-                                    .field("log.source", "application")
-                                    .log();
-                                transaction.captureException(throwable);
-                                transaction.setResult("error");
-                                guardedResponse.safeSendError(
-                                    "proxyHandler.serve.error",
-                                    HttpURLConnection.HTTP_INTERNAL_ERROR,
-                                    INTERNAL_ERROR_BODY
+                                // The failure is on record already: by the serve stage,
+                                // or by the terminator that broke the response off.
+                                VertxSliceServer.answerFailure(
+                                    transaction, throwable, guardedResponse,
+                                    "proxyHandler.serve.error"
                                 );
                             } else {
                                 transaction.setResult("success");
@@ -1003,6 +977,35 @@ public final class VertxSliceServer implements Closeable {
                 );
             }
         };
+    }
+
+    /**
+     * Finish a request whose serving failed: mark the APM transaction and
+     * answer 500 unless the response is terminated already. The failure was
+     * logged by the stage that saw it, so nothing is logged here, and a
+     * response {@link ResponseTerminator} broke off is not ended again.
+     *
+     * @param transaction APM transaction of the request
+     * @param throwable Failure
+     * @param guarded Response guard
+     * @param caller Name of the calling path, for the guard
+     */
+    private static void answerFailure(
+        final Transaction transaction,
+        final Throwable throwable,
+        final GuardedHttpServerResponse guarded,
+        final String caller
+    ) {
+        transaction.setResult("error");
+        if (ReportedFailure.clientGone(throwable)) {
+            return;
+        }
+        transaction.captureException(throwable);
+        if (!guarded.isTerminated()) {
+            guarded.safeSendError(
+                caller, HttpURLConnection.HTTP_INTERNAL_ERROR, INTERNAL_ERROR_BODY
+            );
+        }
     }
 
     /**
@@ -1092,8 +1095,11 @@ public final class VertxSliceServer implements Closeable {
         final GuardedHttpServerResponse guardedResponse
     ) {
         final Headers requestHeaders = VertxSliceServer.requestHeaders(req);
-        final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
-        final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
+        // One trace context per request: the access slice and every record
+        // this server writes for the exchange use the same trace.id.
+        final SpanContext span = SpanContext.extract(requestHeaders);
+        final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders, span.traceId());
+        final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost(), span);
 
         // Cancel hook installed by the response subscription (see accept()).
         // Fired when the client closes the connection, the response write fails,
@@ -1108,10 +1114,6 @@ public final class VertxSliceServer implements Closeable {
         req.response().exceptionHandler(err -> cancelHook.get().run());
         // Incoming request body error (upload path) — ditto.
         req.exceptionHandler(err -> cancelHook.get().run());
-
-        // Extract or generate trace ID for request correlation
-        final String traceId = com.auto1.pantera.http.trace.TraceContext.extractOrGenerate(requestHeaders);
-        com.auto1.pantera.http.trace.TraceContext.set(traceId);
 
         addRequestContext(
             EcsLogger.debug("com.auto1.pantera.vertx")
@@ -1164,7 +1166,6 @@ public final class VertxSliceServer implements Closeable {
         return response.thenCombine(continueFuture, (resp, ignored) -> resp)
             .thenCompose(
                 resp -> {
-                    com.auto1.pantera.http.trace.TraceContext.set(traceId);
                     addRequestContext(
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Accepting response (streaming)")
@@ -1182,11 +1183,14 @@ public final class VertxSliceServer implements Closeable {
                         transaction.addLabel("http.status_code", String.valueOf(resp.status().code()));
                     }
 
-                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse, cancelHook);
+                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse, cancelHook, ctx);
                 }
             )
             .whenComplete((result, error) -> {
-                com.auto1.pantera.http.trace.TraceContext.set(traceId);
+                if (error != null && ReportedFailure.is(error)) {
+                    // Logged once where the response was terminated.
+                    return;
+                }
                 if (error != null) {
                     addRequestContext(
                         EcsLogger.error("com.auto1.pantera.vertx")
@@ -1213,7 +1217,6 @@ public final class VertxSliceServer implements Closeable {
                         ctx
                     ).log();
                 }
-                com.auto1.pantera.http.trace.TraceContext.clear();
             });
     }
 
@@ -1231,8 +1234,11 @@ public final class VertxSliceServer implements Closeable {
         final GuardedHttpServerResponse guardedResponse
     ) {
         final Headers requestHeaders = VertxSliceServer.requestHeaders(req);
-        final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
-        final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
+        // One trace context per request: the access slice and every record
+        // this server writes for the exchange use the same trace.id.
+        final SpanContext span = SpanContext.extract(requestHeaders);
+        final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders, span.traceId());
+        final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost(), span);
 
         // Cancel hook installed by the response subscription (see accept()).
         // Fired when the client closes the connection, the response write fails,
@@ -1247,10 +1253,6 @@ public final class VertxSliceServer implements Closeable {
         req.response().exceptionHandler(err -> cancelHook.get().run());
         // Incoming request body error (upload path) — ditto.
         req.exceptionHandler(err -> cancelHook.get().run());
-
-        // Extract or generate trace ID for request correlation
-        final String traceId = com.auto1.pantera.http.trace.TraceContext.extractOrGenerate(requestHeaders);
-        com.auto1.pantera.http.trace.TraceContext.set(traceId);
 
         addRequestContext(
             EcsLogger.debug("com.auto1.pantera.vertx")
@@ -1286,8 +1288,6 @@ public final class VertxSliceServer implements Closeable {
         return response
             .thenCompose(
                 resp -> {
-                    // Ensure trace context is set for response handling
-                    com.auto1.pantera.http.trace.TraceContext.set(traceId);
                     addRequestContext(
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Accepting response")
@@ -1306,12 +1306,14 @@ public final class VertxSliceServer implements Closeable {
                         transaction.addLabel("http.status_code", String.valueOf(resp.status().code()));
                     }
 
-                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse, cancelHook);
+                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse, cancelHook, ctx);
                 }
             )
             .whenComplete((result, error) -> {
-                // Ensure trace context is set for completion logging
-                com.auto1.pantera.http.trace.TraceContext.set(traceId);
+                if (error != null && ReportedFailure.is(error)) {
+                    // Logged once where the response was terminated.
+                    return;
+                }
                 if (error != null) {
                     addRequestContext(
                         EcsLogger.error("com.auto1.pantera.vertx")
@@ -1338,8 +1340,6 @@ public final class VertxSliceServer implements Closeable {
                         ctx
                     ).log();
                 }
-                // Clean up trace context after request completes
-                com.auto1.pantera.http.trace.TraceContext.clear();
             });
     }
 
@@ -1357,8 +1357,11 @@ public final class VertxSliceServer implements Closeable {
         final GuardedHttpServerResponse guardedResponse
     ) {
         final Headers requestHeaders = VertxSliceServer.requestHeaders(req);
-        final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
-        final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
+        // One trace context per request: the access slice and every record
+        // this server writes for the exchange use the same trace.id.
+        final SpanContext span = SpanContext.extract(requestHeaders);
+        final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders, span.traceId());
+        final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost(), span);
 
         // Cancel hook installed by the response subscription (see accept()).
         // Fired when the client closes the connection or the response write fails.
@@ -1368,10 +1371,6 @@ public final class VertxSliceServer implements Closeable {
             new java.util.concurrent.atomic.AtomicReference<>(() -> { });
         req.connection().closeHandler(v -> cancelHook.get().run());
         req.response().exceptionHandler(err -> cancelHook.get().run());
-
-        // Extract or generate trace ID for request correlation
-        final String traceId = com.auto1.pantera.http.trace.TraceContext.extractOrGenerate(requestHeaders);
-        com.auto1.pantera.http.trace.TraceContext.set(traceId);
 
         addRequestContext(
             EcsLogger.debug("com.auto1.pantera.vertx")
@@ -1401,8 +1400,6 @@ public final class VertxSliceServer implements Closeable {
         return response.thenCombine(continueFuture, (resp, ignored) -> resp)
             .thenCompose(
                 resp -> {
-                    // Ensure trace context is set for response handling
-                    com.auto1.pantera.http.trace.TraceContext.set(traceId);
                     addRequestContext(
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Accepting response")
@@ -1421,12 +1418,14 @@ public final class VertxSliceServer implements Closeable {
                         transaction.addLabel("http.status_code", String.valueOf(resp.status().code()));
                     }
 
-                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse, cancelHook);
+                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse, cancelHook, ctx);
                 }
             )
             .whenComplete((result, error) -> {
-                // Ensure trace context is set for completion logging
-                com.auto1.pantera.http.trace.TraceContext.set(traceId);
+                if (error != null && ReportedFailure.is(error)) {
+                    // Logged once where the response was terminated.
+                    return;
+                }
                 if (error != null) {
                     addRequestContext(
                         EcsLogger.error("com.auto1.pantera.vertx")
@@ -1453,8 +1452,6 @@ public final class VertxSliceServer implements Closeable {
                         ctx
                     ).log();
                 }
-                // Clean up trace context after request completes
-                com.auto1.pantera.http.trace.TraceContext.clear();
             });
     }
 
@@ -1490,7 +1487,9 @@ public final class VertxSliceServer implements Closeable {
             }
             final Throwable cause = unwrapCompletionCause(error);
             if (cause instanceof RequestTimeoutException timeout) {
-                final RequestLogContext timeoutCtx = RequestLogContext.from(req, VertxSliceServer.requestHeaders(req));
+                final RequestLogContext timeoutCtx = RequestLogContext.from(
+                    req, VertxSliceServer.requestHeaders(req), null
+                );
                 addRequestContext(
                     EcsLogger.warn("com.auto1.pantera.vertx")
                         .message("Upstream processing timeout exceeded (" + timeout.timeout.toMillis() + "ms)")
@@ -1546,7 +1545,8 @@ public final class VertxSliceServer implements Closeable {
         HttpServerResponse response, RsStatus status, Headers headers, Content body,
         boolean isHead, io.vertx.core.http.HttpVersion version,
         GuardedHttpServerResponse guardedResponse,
-        java.util.concurrent.atomic.AtomicReference<Runnable> cancelHook
+        java.util.concurrent.atomic.AtomicReference<Runnable> cancelHook,
+        RequestLogContext ctx
     ) {
         final CompletableFuture<Void> promise = new CompletableFuture<>();
 
@@ -1599,7 +1599,7 @@ public final class VertxSliceServer implements Closeable {
         }
 
         final ResponseTerminator terminator = new ResponseTerminator(
-            response, promise, guardedResponse, headers
+            response, promise, guardedResponse, ctx
         );
 
         if (body == null || (body.size().isPresent() && body.size().get() == 0L)) {
@@ -1619,17 +1619,7 @@ public final class VertxSliceServer implements Closeable {
                     }))
                     .subscribe(
                         buffer -> { },
-                        error -> {
-                            EcsLogger.error("com.auto1.pantera.vertx")
-                                .message("Error in HEAD response body")
-                                .eventCategory("web")
-                                .eventAction("response_write")
-                                .eventOutcome("failure")
-                                .error(error)
-                                .field("log.source", "application")
-                                .log();
-                            terminator.fail(error);
-                        },
+                        terminator::fail,
                         () -> {
                             EcsLogger.debug("com.auto1.pantera.vertx")
                                 .message("HEAD response body fully written")
@@ -1659,17 +1649,16 @@ public final class VertxSliceServer implements Closeable {
 
                 // Register end handler BEFORE subscribing - Vert.x will call this when
                 // response.end() is invoked by toSubscriber()
+                // Vert.x also calls it when the connection is closed (or the
+                // HTTP/2 stream reset) before the response ended: that is the
+                // client going away, not a failure of this server.
+                final AtomicBoolean produced = new AtomicBoolean(false);
+                terminator.progress(bytesWritten, expectedBytes);
                 response.endHandler(ignored -> {
                     final long bytes = bytesWritten.get();
-                    if (expectedBytes > 0 && bytes != expectedBytes) {
-                        EcsLogger.error("com.auto1.pantera.vertx")
-                            .message(String.format("Incomplete transfer detected: expected %d bytes, wrote %d bytes", expectedBytes, bytes))
-                            .eventCategory("web")
-                            .eventAction("response_write")
-                            .eventOutcome("failure")
-                            .field("http.response.body.bytes", bytes)
-                            .field("log.source", "application")
-                            .log();
+                    if (!produced.get() && response.closed()) {
+                        terminator.clientGone();
+                    } else if (expectedBytes > 0 && bytes != expectedBytes) {
                         terminator.fail(new java.io.IOException(
                             String.format("Incomplete transfer: expected %d bytes, wrote %d bytes",
                                 expectedBytes, bytes)));
@@ -1680,18 +1669,8 @@ public final class VertxSliceServer implements Closeable {
 
                 // Use toSubscriber() for backpressure - it will call response.end() on completion
                 vpb.doOnNext(buffer -> bytesWritten.addAndGet(buffer.length()))
-                   .doOnError(error -> {
-                       EcsLogger.error("com.auto1.pantera.vertx")
-                           .message("Error streaming response body")
-                           .eventCategory("web")
-                           .eventAction("response_write")
-                           .eventOutcome("failure")
-                           .field("http.response.body.bytes", bytesWritten.get())
-                           .error(error)
-                           .field("log.source", "application")
-                           .log();
-                       terminator.fail(error);
-                   })
+                   .doOnComplete(() -> produced.set(true))
+                   .doOnError(terminator::fail)
                    // Capture the Subscription so client-disconnect handlers can cancel
                    // upstream work (see serveWithStream/serveWithBody cancelHook).
                    .doOnSubscribe(sub -> cancelHook.set(() -> {
@@ -1704,7 +1683,16 @@ public final class VertxSliceServer implements Closeable {
             if (isHead) {
                 terminator.end();
             } else {
+                final AtomicBoolean produced = new AtomicBoolean(false);
+                final java.util.concurrent.atomic.AtomicLong sent =
+                    new java.util.concurrent.atomic.AtomicLong(0);
+                terminator.progress(sent, -1L);
                 response.endHandler(ignored -> {
+                    if (!produced.get() && response.closed()) {
+                        // Closed before the last chunk: the client went away.
+                        terminator.clientGone();
+                        return;
+                    }
                     EcsLogger.debug("com.auto1.pantera.vertx")
                         .message("Completing chunked response")
                         .eventCategory("web")
@@ -1729,6 +1717,8 @@ public final class VertxSliceServer implements Closeable {
                             .field("log.source", "application")
                             .log();
                     })
+                    .doOnNext(buffer -> sent.addAndGet(buffer.length()))
+                    .doOnComplete(() -> produced.set(true))
                     .doOnError(terminator::fail)
                     .subscribe(response.toSubscriber());
             }
@@ -1765,6 +1755,10 @@ public final class VertxSliceServer implements Closeable {
      * @return Enriched logger
      */
     private static EcsLogger addRequestContext(final EcsLogger logger, final RequestLogContext ctx) {
+        // Correlated from the request itself: the thread writing the record
+        // (an event loop, a storage or upstream thread) holds no context of
+        // this request, or that of another one.
+        logger.traceContext(ctx.traceId(), ctx.clientIp());
         if (ctx.remotePort() >= 0) {
             logger.field("client.port", ctx.remotePort());
         }
@@ -1793,13 +1787,30 @@ public final class VertxSliceServer implements Closeable {
         private final Optional<String> username;
         private final Map<String, String> headers;
 
+        /**
+         * Trace id of the request, or null when the context is built
+         * outside the serve path.
+         */
+        private final String traceId;
+
+        /**
+         * Request method.
+         */
+        private final String method;
+
+        /**
+         * Request URI, credentials masked.
+         */
+        private final String path;
+
         private RequestLogContext(
             final String remoteHost,
             final int remotePort,
             final String clientIp,
             final String userAgent,
             final Optional<String> username,
-            final Map<String, String> headers
+            final Map<String, String> headers,
+            final String... request
         ) {
             this.remoteHost = remoteHost;
             this.remotePort = remotePort;
@@ -1807,9 +1818,14 @@ public final class VertxSliceServer implements Closeable {
             this.userAgent = userAgent;
             this.username = username;
             this.headers = headers;
+            this.traceId = request[0];
+            this.method = request[1];
+            this.path = request[2];
         }
 
-        static RequestLogContext from(final HttpServerRequest req, final Headers headers) {
+        static RequestLogContext from(
+            final HttpServerRequest req, final Headers headers, final String trace
+        ) {
             final io.vertx.reactivex.core.net.SocketAddress remote = req.remoteAddress();
             final String host = remote == null ? null : remote.host();
             final int port = remote == null ? -1 : remote.port();
@@ -1821,11 +1837,26 @@ public final class VertxSliceServer implements Closeable {
                 : EcsLogEvent.extractUsername(headers);
             final String userAgent = headers.values("user-agent").stream().findFirst().orElse(null);
             final Map<String, String> snapshot = captureHeaders(headers);
-            return new RequestLogContext(host, port, clientIp, userAgent, username, snapshot);
+            return new RequestLogContext(
+                host, port, clientIp, userAgent, username, snapshot,
+                trace, req.method().name(), LogSanitizer.sanitizeUrl(req.uri())
+            );
         }
 
         String remoteHost() {
             return this.remoteHost;
+        }
+
+        String traceId() {
+            return this.traceId;
+        }
+
+        String method() {
+            return this.method;
+        }
+
+        String path() {
+            return this.path;
         }
 
         int remotePort() {
@@ -1903,29 +1934,65 @@ public final class VertxSliceServer implements Closeable {
         return cause;
     }
 
+    /**
+     * Terminates one response exactly once and writes the single record of
+     * a body that did not reach the client in full: {@code ERROR} when the
+     * body failed on the server side (storage or upstream), {@code WARN}
+     * with {@code event.reason=client_disconnected} when the client closed
+     * the connection (HTTP/1.x) or reset the stream (HTTP/2) first. Either
+     * way the promise fails with a {@link ReportedFailure}, so the stages
+     * above neither log the failure again nor try to answer it.
+     */
     private static final class ResponseTerminator {
+
+        /**
+         * Reason token of a body the client did not wait for.
+         */
+        private static final String CLIENT_GONE = "client_disconnected";
+
         private final HttpServerResponse response;
         private final CompletableFuture<Void> promise;
         private final AtomicBoolean finished = new AtomicBoolean(false);
         private final GuardedHttpServerResponse guardedResponse;
 
         /**
-         * Response headers; on the failure path the request's trace id is
-         * read from Pantera's {@code traceparent} among them (the failure
-         * record is emitted after the request's MDC was cleared).
+         * The request this response answers: trace id, method, path and
+         * client of the failure record, which is written on a thread that
+         * holds no context of the request.
          */
-        private final Headers headers;
+        private final RequestLogContext ctx;
+
+        /**
+         * Body bytes handed to the connection so far; null until the body
+         * is subscribed.
+         */
+        private volatile java.util.concurrent.atomic.AtomicLong written;
+
+        /**
+         * Declared {@code Content-Length}, or -1 for a chunked body.
+         */
+        private volatile long expected = -1L;
 
         ResponseTerminator(
             final HttpServerResponse response,
             final CompletableFuture<Void> promise,
             final GuardedHttpServerResponse guardedResponse,
-            final Headers headers
+            final RequestLogContext ctx
         ) {
             this.response = response;
             this.promise = promise;
             this.guardedResponse = guardedResponse;
-            this.headers = headers;
+            this.ctx = ctx;
+        }
+
+        /**
+         * Tell the terminator where the body's progress is counted.
+         * @param counter Bytes written so far
+         * @param declared Declared length, -1 when unknown
+         */
+        void progress(final java.util.concurrent.atomic.AtomicLong counter, final long declared) {
+            this.written = counter;
+            this.expected = declared;
         }
 
         void end() {
@@ -1962,7 +2029,38 @@ public final class VertxSliceServer implements Closeable {
             }
         }
 
+        /**
+         * The client closed the connection, or reset the HTTP/2 stream,
+         * before the body was complete. Nothing is left to terminate; the
+         * exchange gets one {@code WARN} record.
+         */
+        void clientGone() {
+            if (this.finished.compareAndSet(false, true)) {
+                this.guardedResponse.markTerminated("ResponseTerminator.clientGone");
+                this.record(
+                    EcsLogger.warn("com.auto1.pantera.vertx")
+                        .message(
+                            "Client closed the connection before the response body was complete ("
+                                + this.progressText() + ")"
+                        )
+                        .field("event.reason", ResponseTerminator.CLIENT_GONE)
+                        .field("http.response.status_code", this.response.getStatusCode())
+                ).log();
+                this.promise.completeExceptionally(
+                    new ReportedFailure(
+                        new java.io.IOException("Client closed the connection"), true
+                    )
+                );
+            }
+        }
+
         void fail(final Throwable error) {
+            if (this.response.closed()) {
+                // The connection is gone already: whatever fails now reaches
+                // nobody, and is as a rule the cancelled body itself.
+                this.clientGone();
+                return;
+            }
             if (this.finished.compareAndSet(false, true)) {
                 // Status the client actually gets: a fresh 502/500 when the
                 // head is not written yet, else the already-sent status with
@@ -1977,18 +2075,15 @@ public final class VertxSliceServer implements Closeable {
                     answered = HttpURLConnection.HTTP_INTERNAL_ERROR;
                 }
                 final String reason = new com.auto1.pantera.http.log.FailureCause(error).reason();
-                EcsLogger.error("com.auto1.pantera.vertx")
-                    .message("Error streaming response (cause: " + reason
-                        + (head ? "; body truncated after headers" : "") + ")")
-                    .eventCategory("web")
-                    .eventAction("response_stream")
-                    .eventOutcome("failure")
-                    .field("event.reason", reason)
-                    .field("http.response.status_code", answered)
-                    .traceContext(VertxSliceServer.traceId(this.headers), null)
-                    .error(error)
-                    .field("log.source", "application")
-                    .log();
+                this.record(
+                    EcsLogger.error("com.auto1.pantera.vertx")
+                        .message("Error streaming response (cause: " + reason
+                            + (head ? "; body truncated after headers, " + this.progressText() : "")
+                            + ")")
+                        .field("event.reason", reason)
+                        .field("http.response.status_code", answered)
+                        .error(error)
+                ).log();
                 // The response is terminated on this path too: with an error
                 // status while the head is unsent, by breaking it off after.
                 // The guarded response keeps a second termination out.
@@ -2037,12 +2132,14 @@ public final class VertxSliceServer implements Closeable {
                             .eventCategory("web")
                             .eventAction("response_end")
                             .eventOutcome("failure")
+                            .traceContext(this.ctx.traceId(), this.ctx.clientIp())
+                            .field("url.path", this.ctx.path())
                             .error(e)
                             .field("log.source", "application")
                             .log();
                     }
                 }
-                this.promise.completeExceptionally(error);
+                this.promise.completeExceptionally(new ReportedFailure(error, false));
             } else {
                 EcsLogger.debug("com.auto1.pantera.vertx")
                     .message("Late failure after response completion")
@@ -2052,6 +2149,94 @@ public final class VertxSliceServer implements Closeable {
                     .field("log.source", "application")
                     .log();
             }
+        }
+
+        /**
+         * Fields every record of an unfinished body carries: which request
+         * it was (trace id, method, path, client) and how far the body got.
+         * @param logger Record under construction
+         * @return The record
+         */
+        private EcsLogger record(final EcsLogger logger) {
+            logger.eventCategory("web")
+                .eventAction("response_stream")
+                .eventOutcome("failure")
+                .field("http.request.method", this.ctx.method())
+                .field("url.path", this.ctx.path())
+                .field("log.source", "application");
+            final java.util.concurrent.atomic.AtomicLong counter = this.written;
+            if (counter != null) {
+                logger.field("http.response.body.bytes", counter.get());
+            }
+            return addRequestContext(logger, this.ctx);
+        }
+
+        /**
+         * Progress of the body for the message of the record.
+         * @return Text such as {@code wrote 4718592 of 6902150 bytes}
+         */
+        private String progressText() {
+            final java.util.concurrent.atomic.AtomicLong counter = this.written;
+            final long bytes = counter == null ? 0L : counter.get();
+            final String text;
+            if (this.expected >= 0L) {
+                text = String.format("wrote %d of %d bytes", bytes, this.expected);
+            } else {
+                text = String.format("wrote %d bytes of a chunked body", bytes);
+            }
+            return text;
+        }
+    }
+
+    /**
+     * Failure of a response that {@link ResponseTerminator} has already
+     * logged and terminated. The stages above only finish their bookkeeping.
+     */
+    private static final class ReportedFailure extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * True when the client went away, false when the body failed here.
+         */
+        private final boolean gone;
+
+        ReportedFailure(final Throwable cause, final boolean gone) {
+            super(cause.getMessage(), cause);
+            this.gone = gone;
+        }
+
+        /**
+         * Is the failure, or one of its causes, an already reported one?
+         * @param error Failure
+         * @return True if nothing is left to log
+         */
+        static boolean is(final Throwable error) {
+            return ReportedFailure.find(error) != null;
+        }
+
+        /**
+         * Did the request end because its client went away?
+         * @param error Failure
+         * @return True for a client disconnect
+         */
+        static boolean clientGone(final Throwable error) {
+            final ReportedFailure found = ReportedFailure.find(error);
+            return found != null && found.gone;
+        }
+
+        private static ReportedFailure find(final Throwable error) {
+            Throwable cursor = error;
+            int hops = 0;
+            ReportedFailure found = null;
+            while (cursor != null && hops < 8 && found == null) {
+                if (cursor instanceof ReportedFailure reported) {
+                    found = reported;
+                }
+                cursor = cursor.getCause();
+                hops += 1;
+            }
+            return found;
         }
     }
 
@@ -2094,27 +2279,6 @@ public final class VertxSliceServer implements Closeable {
             hops += 1;
         }
         return false;
-    }
-
-    /**
-     * Trace id carried by the W3C {@code traceparent} header
-     * ({@code 00-<trace-id>-<span-id>-<flags>}) that EcsLoggingSlice stamps
-     * on every response, or null. EcsLoggingSlice appends its own header
-     * AFTER any relayed upstream headers, so a relayed upstream
-     * {@code traceparent} comes first: the LAST well-formed one is Pantera's.
-     *
-     * @param headers Response headers
-     * @return Trace id, or null
-     */
-    private static String traceId(final Headers headers) {
-        String found = null;
-        for (final Header header : headers.find("traceparent")) {
-            final String[] parts = header.getValue().split("-");
-            if (parts.length >= 3 && !parts[1].isEmpty()) {
-                found = parts[1];
-            }
-        }
-        return found;
     }
 
     /**

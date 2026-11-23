@@ -275,6 +275,18 @@ Besides `event.reason` on the access record, a 5xx has a cause record with the d
 
 **Levels.** Upstream and transient causes are `WARN`; unexpected internal failures are `ERROR`. Two per-request causes are `DEBUG`, because their state transitions are logged on their own: `circuit_open` (the breaker logs `circuit_breaker_trip` / `circuit_breaker_probe` / `circuit_breaker_close` at `WARN`/`INFO`) and `bulkhead_full` (the bulkhead logs `bulkhead_overflow` at `WARN`, at most once in 10 s per repository, with the number of requests refused since its previous record; each one is counted by `pantera_bulkhead_overflow_total`). Enable `DEBUG` on the adapter logger to see each refused request. Group-level records that name `circuit_open` (`group_sibling_pin_failed`, `group_all_members_circuit_open`) stay at `WARN`.
 
+**A download that ends early leaves one record.** When a response body does not reach the client in full, the server writes exactly one `response_stream` record (logger `com.auto1.pantera.vertx`) under the request's own `trace.id`, with `http.request.method`, `url.path`, `http.response.status_code` (the status already sent), `http.response.body.bytes` (bytes written) and the declared length in `message`:
+
+| Level | `event.reason` | Meaning |
+|---|---|---|
+| `WARN` | `client_disconnected` | The client closed the connection (HTTP/1.x) or reset the stream (HTTP/2) before the body was complete: an aborted download, a client-side timeout, a cancelled build. Nothing failed in Pantera. |
+| `ERROR` | `io_error`, `connection_closed`, ... (the cause tokens above) | The body failed on the server side — storage or the upstream broke off mid-body. The connection is closed (HTTP/2: the stream is reset) so the client does not take the truncated body for a complete one. |
+
+```
+# clients that give up on downloads, by path
+event.action:"response_stream" AND event.reason:"client_disconnected"
+```
+
 **One stack trace per failure.** A transport failure produces two records: the outbound client's single-line `http_request_send` record (`WARN`, `url.full`, `destination.address`, `event.reason`, `error.type` and `error.message`, no stack trace) and the answering slice's record with the full `error.stack_trace`. Both carry the same `trace.id`.
 
 **Repeated upstream requests.** When an upstream closes a connection before answering, the outbound client sends a `GET` or `HEAD` again (see [Upstream Connection Retry](performance-tuning.md#upstream-connection-retry-v2212)). The failed attempt leaves its `http_request_send` record (`WARN`, `event.reason: connection_closed`), followed by one `INFO` record per repeat: `event.action: http_request_retry`, with `destination.address`, `http.request.method` and `url.path`, under the same logging context as the first attempt. When a repeat succeeds there is no 5xx and no further record. To see how often an upstream drops connections:

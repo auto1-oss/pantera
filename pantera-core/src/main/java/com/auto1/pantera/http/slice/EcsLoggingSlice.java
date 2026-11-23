@@ -130,6 +130,11 @@ public final class EcsLoggingSlice implements Slice {
     private final String repoType;
 
     /**
+     * Trace context the server derived for the request, or null.
+     */
+    private final SpanContext known;
+
+    /**
      * Ctor.
      * @param origin Origin slice
      */
@@ -155,10 +160,38 @@ public final class EcsLoggingSlice implements Slice {
      */
     public EcsLoggingSlice(final Slice origin, final String remoteAddress,
         final String repoName, final String repoType) {
+        this(origin, remoteAddress, repoName, repoType, null);
+    }
+
+    /**
+     * Ctor for a server that already derived the trace context of the
+     * request: the access record, the context headers and the server's own
+     * records of the exchange then share one {@code trace.id}.
+     * @param origin Origin slice
+     * @param remoteAddress Remote client address
+     * @param span Trace context of the request
+     */
+    public EcsLoggingSlice(final Slice origin, final String remoteAddress,
+        final SpanContext span) {
+        this(origin, remoteAddress, null, null, span);
+    }
+
+    /**
+     * Primary ctor.
+     * @param origin Origin slice
+     * @param remoteAddress Remote client address
+     * @param repoName Repository name (nullable)
+     * @param repoType Repository type (nullable)
+     * @param span Trace context of the request, or null to derive it from
+     *  the request headers
+     */
+    private EcsLoggingSlice(final Slice origin, final String remoteAddress,
+        final String repoName, final String repoType, final SpanContext span) {
         this.origin = origin;
         this.remoteAddress = remoteAddress;
         this.repoName = repoName;
         this.repoType = repoType;
+        this.known = span;
     }
 
     @Override
@@ -205,7 +238,7 @@ public final class EcsLoggingSlice implements Slice {
         // layer reports the verified principal on the response instead.
 
         // Extract or generate trace context from request headers (B3 / W3C / fallback)
-        final SpanContext span = SpanContext.extract(headers);
+        final SpanContext span = this.known == null ? SpanContext.extract(headers) : this.known;
 
         // Set MDC context for this request thread (constants from EcsMdc — no key drift)
         MDC.put(EcsMdc.TRACE_ID, span.traceId());
