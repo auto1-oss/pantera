@@ -360,6 +360,14 @@ public final class CachedPyProxySlice implements Slice {
         return this.origin.response(line, headers, body)
             .thenCompose(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
+                // A 404 that stands for an upstream refusal (401, 403, ...)
+                // is not the upstream saying "no such file": it is relayed
+                // with its reason and never remembered.
+                if (response.status().code() == 404
+                    && CachedPyProxySlice.upstreamRefusal(response)) {
+                    this.recordProxyMetric("client_error", duration);
+                    return CompletableFuture.completedFuture(response);
+                }
                 // Check for 404 status
                 if (response.status().code() == 404) {
                     EcsLogger.debug("com.auto1.pantera.pypi")
@@ -410,6 +418,37 @@ public final class CachedPyProxySlice implements Slice {
                 this.recordUpstreamErrorMetric(error);
                 throw new java.util.concurrent.CompletionException(error);
             });
+    }
+
+    /**
+     * Whether a 404 of the origin stands for an upstream answer other than
+     * "not found": the origin marks it as not to be negative-cached.
+     *
+     * @param response Origin answer
+     * @return True when the 404 carries the negative-cache skip marker
+     */
+    private static boolean upstreamRefusal(final Response response) {
+        return !response.headers().values(
+            com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER
+        ).isEmpty();
+    }
+
+    /**
+     * The internal headers of an origin answer that explain a 404: its
+     * reason and the negative-cache skip marker.
+     *
+     * @param origin Headers of the origin answer
+     * @return Headers for the 404 answered instead
+     */
+    private static Headers internal(final Headers origin) {
+        final Headers out = new Headers();
+        for (final String name : List.of(
+            com.auto1.pantera.http.log.AnswerReason.HEADER,
+            com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER
+        )) {
+            origin.values(name).stream().findFirst().ifPresent(value -> out.add(name, value));
+        }
+        return out;
     }
 
     /**
@@ -569,28 +608,23 @@ public final class CachedPyProxySlice implements Slice {
                     if (!leaderGate.isDone()) {
                         leaderGate.complete(null);
                     }
-                    final int status = resp.status().code();
-                    if (status >= 400 && status < 500) {
-                        return CompletableFuture.completedFuture(
-                            ResponseBuilder.notFound().build()
+                    // The origin is this repository's own proxy slice: its
+                    // non-2xx answer already says why (reason, Retry-After,
+                    // circuit-open marker) and its 5xx is already logged.
+                    // A 5xx is relayed: rebuilding it would drop the marker
+                    // a group needs to skip this member. A 4xx is a 404 for
+                    // the client and keeps the origin's reason.
+                    final Response answer;
+                    if (resp.status().serverError()) {
+                        answer = new Response(resp.status(), resp.headers(), Content.EMPTY);
+                    } else {
+                        // Reason and negative-cache skip marker included.
+                        answer = new Response(
+                            RsStatus.NOT_FOUND, CachedPyProxySlice.internal(resp.headers()),
+                            Content.EMPTY
                         );
                     }
-                    new ServerErrorLog("com.auto1.pantera.pypi", "proxy_upstream", headers)
-                        .repository(this.repoName)
-                        .path(path)
-                        .upstream(upstream)
-                        .status(RsStatus.BAD_GATEWAY.code())
-                        .reason(
-                            resp.headers().values(
-                                com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER
-                            ).isEmpty() ? "upstream_status_" + status : "circuit_open"
-                        )
-                        .warnUnlessExpected("Upstream answered " + status + " for distribution file");
-                    return CompletableFuture.completedFuture(
-                        ResponseBuilder.badGateway()
-                            .textBody("Upstream temporarily unavailable")
-                            .build()
-                    );
+                    return CompletableFuture.completedFuture(answer);
                 }
                 return this.cacheWriter.streamThroughAndCommit(
                     key,

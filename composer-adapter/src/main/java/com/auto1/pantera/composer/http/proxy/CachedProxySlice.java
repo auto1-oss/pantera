@@ -17,6 +17,7 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.log.ServerErrorLog;
+import com.auto1.pantera.http.cache.UpstreamMiss;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
@@ -1153,26 +1154,13 @@ final class CachedProxySlice implements Slice {
                     if (!leaderGate.isDone()) {
                         leaderGate.complete(null);
                     }
-                    final int status = resp.status().code();
-                    if (status >= 400 && status < 500) {
-                        return CompletableFuture.completedFuture(
-                            ResponseBuilder.notFound().build()
-                        );
-                    }
-                    new ServerErrorLog("com.auto1.pantera.composer", "proxy_upstream", headers)
-                        .repository(this.rname)
-                        .path(path)
-                        .upstream(upstream)
-                        .status(RsStatus.BAD_GATEWAY.code())
-                        .reason(
-                            resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()
-                                ? "upstream_status_" + status : "circuit_open"
-                        )
-                        .warnUnlessExpected("Upstream answered " + status + " for dist archive");
+                    // 404/410: 404. Another 4xx: 404 that no cache remembers.
+                    // 429, 5xx and a breaker fast-fail: 5xx with Retry-After
+                    // and the circuit-open marker kept, so a php-group skips
+                    // this member instead of convicting it.
                     return CompletableFuture.completedFuture(
-                        ResponseBuilder.badGateway()
-                            .textBody("Upstream temporarily unavailable")
-                            .build()
+                        new UpstreamMiss("com.auto1.pantera.composer", this.rname, path, headers)
+                            .answered(resp.status().code(), resp.headers())
                     );
                 }
                 return this.cacheWriter.streamThroughAndCommit(
@@ -1222,16 +1210,8 @@ final class CachedProxySlice implements Slice {
                 if (!leaderGate.isDone()) {
                     leaderGate.complete(null);
                 }
-                new ServerErrorLog("com.auto1.pantera.composer", "proxy_upstream", headers)
-                    .repository(this.rname)
-                    .path(path)
-                    .upstream(upstream)
-                    .status(RsStatus.BAD_GATEWAY.code())
-                    .failure(err)
-                    .warnUnlessExpected("Composer stream-through primary fetch failed");
-                return ResponseBuilder.badGateway()
-                    .textBody("Upstream temporarily unavailable")
-                    .build();
+                return new UpstreamMiss("com.auto1.pantera.composer", this.rname, path, headers)
+                    .failed(err, "Composer stream-through primary fetch failed");
             });
     }
 

@@ -198,8 +198,8 @@ Every access record (logger `http.access`, `event.action: http_request`) with a 
 | `event.reason` | The request was answered this way because |
 |----------------|---------------------------------------------|
 | `negative_cache` | A proxy or a group answered 404 from its negative cache; the upstream was not asked. For a group it also means a member did. |
-| `upstream_status_<code>` | The upstream answered `<code>`: `upstream_status_404` is the upstream's own "not found", `upstream_status_403` its refusal, `upstream_status_503` its failure. |
-| `connection_closed`, `connection_refused`, `connect_timeout`, `read_timeout`, `idle_timeout`, `request_timeout`, `unknown_host`, `tls_error`, `egress_denied`, `request_rejected` | The call to the upstream failed that way. Also on a 404 of a Docker or file proxy, which answer 404 when they cannot fetch. |
+| `upstream_status_<code>` | The upstream answered `<code>`: `upstream_status_404` is the upstream's own "not found", `upstream_status_403` its refusal, `upstream_status_503` its failure. On a 404 with `upstream_status_401`, `_403`, `_400` and the like, see below. |
+| `connection_closed`, `connection_refused`, `connect_timeout`, `read_timeout`, `idle_timeout`, `request_timeout`, `unknown_host`, `tls_error`, `egress_denied`, `request_rejected` | The call to the upstream failed that way. The answer is a 5xx. |
 | `bulkhead_full` | The repository had no free permit within its wait bound (503). |
 | `circuit_open` | The circuit breaker of the upstream, or of every remaining group member, is open. |
 | `cooldown_active` | Cooldown blocks the artifact. |
@@ -208,7 +208,30 @@ Every access record (logger `http.access`, `event.action: http_request`) with a 
 
 When several things happened to one request, the one that explains most is reported: a failure, before a request Pantera refused to forward (`circuit_open`, `bulkhead_full`), before `cooldown_active`, before `negative_cache`, before an upstream 4xx, before `upstream_status_404`. So a group's 404 reads `negative_cache` if any of its members answered from its negative cache, and `upstream_status_404` only if every proxy member asked its upstream. A 401 or 403 that a group relays keeps the reason of the member that gave it.
 
-Reasons are specific for Maven and Gradle proxies, npm and PyPI proxies (negative cache and upstream 404), file proxies, Docker blob downloads, and groups of any of them. The other paths report the status name.
+Reasons are specific for Maven and Gradle proxies, npm, PyPI and Go proxies, file proxies, Composer dist archives, Docker blob and manifest downloads, and groups of any of them. The other paths report the status name.
+
+**A proxy answers 404 only when its upstream said the file does not exist** (v2.2.14+; Maven and npm proxies did so before). What the upstream did decides the status, for Go, PyPI, file, Composer and Docker proxies alike:
+
+| The upstream | Pantera answers | `event.reason` |
+|--------------|-----------------|----------------|
+| answered 404 or 410 | 404 | `upstream_status_404`, `upstream_status_410` |
+| answered another 4xx (401, 403, 400, ...) | 404, never negative-cached | `upstream_status_<code>` |
+| answered 429, or 503 with `Retry-After` | 503 with that `Retry-After` | `upstream_status_<code>` |
+| answered any other 5xx | 502 | `upstream_status_<code>` |
+| was not asked: its circuit breaker is open | 502 with `Retry-After` and `X-Pantera-Circuit-Open` | `circuit_open` |
+| could not be reached, or the connection was lost | 502 | `connection_refused`, `read_timeout`, `connection_closed`, ... |
+
+One exception: a Docker registry that answers 401, 403 or 412 for a manifest does not host that image, and the answer stays a plain 404 (`not_found`) without a log record; a Docker proxy with several remotes gets that answer from every remote but one on each pull.
+
+Before 2.2.14 the Go and PyPI proxies answered 404 in every one of these cases (the Go proxy logged `artifact_not_found`), the PyPI proxy also remembered that 404 in its negative cache, and the file and Docker proxies answered 404 with the failure as its reason. A client reads a 404 as "this dependency does not exist" and stops; a 5xx it repeats.
+
+**A 404 with `upstream_status_401` (or `_403`, `_400`).** The upstream refused the request Pantera sent, which says nothing about the client's own credentials: relaying the 401 would make the client ask its user for a password. The client gets 404, and in a group the walk goes on to the next member. Such a 404 is never negative-cached, by the proxy or by a group, so it stops the moment the upstream accepts the request. A steady rate of it on one proxy repository usually means that the upstream credentials configured for that repository are missing, wrong or expired, or that the upstream answers 401 instead of 404 for paths it does not serve (private registries often do). To find the repository:
+
+```text
+event.action:"http_request" AND http.response.status_code:404 AND event.reason:"upstream_status_401"
+```
+
+aggregated by `repository.name`. A group's 404 carries this reason when one of its members got the 401 and no member had the file.
 
 ```text
 # cached "not found" answers per repository

@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Multi-read {@link Manifests} implementation.
@@ -75,13 +77,16 @@ public final class MultiReadManifests implements Manifests {
                 MDC.setContextMap(mdcContext);
             }
             try {
+                Throwable failure = null;
                 for (Manifests m : manifests) {
+                    final AtomicReference<Throwable> failed = new AtomicReference<>();
                     Optional<Manifest> res = m.get(ref).handle(
                         (manifest, throwable) -> {
                             final Optional<Manifest> result;
                             if (throwable == null) {
                                 result = manifest;
                             } else {
+                                failed.set(throwable);
                                 EcsLogger.error("com.auto1.pantera.docker")
                                     .message("Failed to read manifest")
                                     .eventCategory("web")
@@ -99,6 +104,12 @@ public final class MultiReadManifests implements Manifests {
                     if (res.isPresent()) {
                         return res;
                     }
+                    failure = ReadFailure.graver(failure, failed.get());
+                }
+                if (failure != null) {
+                    // "Nobody has it" is only known when everybody
+                    // answered: a source that failed may hold the manifest.
+                    throw new CompletionException(failure);
                 }
                 return Optional.empty();
             } finally {

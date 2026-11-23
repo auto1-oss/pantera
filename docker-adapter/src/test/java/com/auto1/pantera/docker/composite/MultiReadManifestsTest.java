@@ -43,8 +43,6 @@ final class MultiReadManifestsTest {
         "full,empty,one",
         "faulty,full,two",
         "full,faulty,one",
-        "faulty,empty,",
-        "empty,faulty,",
         "full,full,one"
     })
     void shouldReturnExpectedValue(
@@ -65,6 +63,24 @@ final class MultiReadManifestsTest {
                 .map(Manifest::digest)
                 .map(Digest::hex),
             new IsEqual<>(Optional.ofNullable(expected))
+        );
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "faulty,empty",
+        "empty,faulty",
+        "faulty,faulty"
+    })
+    void failsWhenNoneHasTheManifestAndOneCouldNotAnswer(final String one, final String two) {
+        final MultiReadManifests manifests = new MultiReadManifests(
+            "test",
+            Arrays.asList(new FakeManifests(one, "one"), new FakeManifests(two, "two"))
+        );
+        // "Nobody has it" is only known when everybody answered.
+        org.junit.jupiter.api.Assertions.assertThrows(
+            java.util.concurrent.CompletionException.class,
+            () -> manifests.get(ManifestReference.from("ref")).toCompletableFuture().join()
         );
     }
 

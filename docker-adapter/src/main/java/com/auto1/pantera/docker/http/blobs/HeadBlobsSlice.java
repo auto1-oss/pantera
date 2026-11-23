@@ -65,25 +65,13 @@ public class HeadBlobsSlice extends DockerActionSlice {
                             .completedFuture()
                     )
                 )
-                .exceptionally(err -> {
-                    // The 404 below stands for a failed fetch, not for a blob
-                    // that does not exist: the access record says which.
-                    com.auto1.pantera.http.log.RequestReasons.instance().note(
-                        headers, new com.auto1.pantera.http.log.FailureCause(err).reason()
-                    );
-                    EcsLogger.warn("com.auto1.pantera.docker")
-                        .message("Blob HEAD failed with exception, returning 404")
-                        .eventCategory("web")
-                        .eventAction("blob_head")
-                        .eventOutcome("failure")
-                        .field("package.checksum", request.digest().string())
-                        .error(err)
-                        .field("log.source", "application")
-                        .log();
-                    return ResponseBuilder.notFound()
-                        .jsonBody(new BlobUnknownError(request.digest()).json())
-                        .build();
-                })
+                // A failed fetch is not a blob that does not exist: 5xx
+                // with its cause (and the circuit-open marker), never the
+                // 404 BLOB_UNKNOWN a client and a group take for "absent".
+                .exceptionally(err -> new com.auto1.pantera.http.cache.UpstreamMiss(
+                        "com.auto1.pantera.docker", this.docker.registryName(),
+                        line.uri().getPath(), headers
+                    ).failed(err, "Blob HEAD failed"))
         );
     }
 
