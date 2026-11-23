@@ -1033,7 +1033,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final com.auto1.pantera.audit.AuditContext auditCtx
     ) {
         this.rawStorage.orElseThrow(); // guard: storage must be configured
-        final String upstreamUri = this.upstreamUrl() + path;
+        final String upstreamUri =
+            new com.auto1.pantera.http.log.UpstreamUrl(this.upstreamUrl()).of(path);
         // trace.id from the request's captured context, not this thread's
         // MDC: this runs after async hops on a pooled thread whose MDC may
         // still hold another request's id.

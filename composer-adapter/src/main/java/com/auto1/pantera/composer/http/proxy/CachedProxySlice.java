@@ -1140,7 +1140,8 @@ final class CachedProxySlice implements Slice {
         final String path,
         final CompletableFuture<Void> leaderGate
     ) {
-        final String upstream = this.upstreamUrl + path;
+        final String upstream =
+            new com.auto1.pantera.http.log.UpstreamUrl(this.upstreamUrl).of(path);
         final RequestContext ctx = new RequestContext(
             new com.auto1.pantera.audit.AuditContext(headers).traceId(),
             null,

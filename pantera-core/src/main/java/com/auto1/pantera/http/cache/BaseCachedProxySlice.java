@@ -34,6 +34,7 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.context.ContextualExecutor;
+import com.auto1.pantera.http.log.UpstreamUrl;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -1235,7 +1236,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     });
                 }
                 this.recordProxyMetric("success", duration);
-                final String upstreamUri = this.upstreamUrl + line.uri().getPath();
+                final String upstreamUri = new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath());
                 final com.auto1.pantera.http.context.RequestContext ctx =
                     new com.auto1.pantera.http.context.RequestContext(
                         org.apache.logging.log4j.ThreadContext.get("trace.id"),
@@ -1291,7 +1292,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 new ServerErrorLog(this.logger(), "proxy_upstream", headers)
                     .repository(this.repoName)
                     .path(line.uri().getPath())
-                    .upstream(this.upstreamUrl + line.uri().getPath())
+                    .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                     .status(RsStatus.BAD_GATEWAY.code())
                     .failure(error)
                     .warnUnlessExpected("Streaming cache write failed after " + duration + " ms");
@@ -1348,7 +1349,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     return this.staleOrUnavailable(
                         key, line,
                         new ServerErrorLog(this.logger(), "proxy_upstream", headers)
-                            .upstream(this.upstreamUrl + line.uri().getPath())
+                            .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                             .failure(error),
                         true,
                         "Upstream request failed with exception after " + duration + " ms"
@@ -1408,7 +1409,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 return this.staleOrUnavailable(
                     key, line,
                     new ServerErrorLog(this.logger(), "proxy_fetch_coalesced_error", headers)
-                        .upstream(this.upstreamUrl + line.uri().getPath())
+                        .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                         .reason(
                             failure == null ? "cache_write_failed"
                                 : new com.auto1.pantera.http.log.FailureCause(failure).reason()
@@ -1710,7 +1711,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                         new ServerErrorLog(this.logger(), "proxy_upstream", incomingHeaders)
                             .repository(this.repoName)
                             .path(line.uri().getPath())
-                            .upstream(this.upstreamUrl + line.uri().getPath())
+                            .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                             .status(RsStatus.SERVICE_UNAVAILABLE.code())
                             .reason(upstreamReason(resp, code))
                             .warnUnlessExpected("Upstream answered " + code + " for an uncacheable path");
@@ -1746,7 +1747,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 new ServerErrorLog(this.logger(), "proxy_upstream", incomingHeaders)
                     .repository(this.repoName)
                     .path(line.uri().getPath())
-                    .upstream(this.upstreamUrl + line.uri().getPath())
+                    .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                     .status(RsStatus.SERVICE_UNAVAILABLE.code())
                     .failure(error)
                     .warnUnlessExpected("Direct upstream request failed with exception after "
@@ -1811,7 +1812,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 this.staleOrUnavailable(
                     key, line,
                     new ServerErrorLog(this.logger(), "proxy_upstream", headers)
-                        .upstream(this.upstreamUrl + line.uri().getPath())
+                        .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                         .reason(reason),
                     false,
                     "Upstream answered " + code
