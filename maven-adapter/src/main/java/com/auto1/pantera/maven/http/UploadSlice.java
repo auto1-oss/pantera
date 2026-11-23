@@ -260,6 +260,7 @@ public final class UploadSlice implements Slice {
             ).exceptionally(
                 throwable -> {
                     EcsLogger.error("com.auto1.pantera.maven")
+                        .field("repository.name", this.rname)
                         .message("Failed to save artifact")
                         .eventCategory("web")
                         .eventAction("artifact_upload")
@@ -521,6 +522,7 @@ public final class UploadSlice implements Slice {
         ).exceptionally(
             throwable -> {
                 EcsLogger.error("com.auto1.pantera.maven")
+                    .field("repository.name", this.rname)
                     .message("Failed to save artifact")
                     .eventCategory("web")
                     .eventAction("artifact_upload")
@@ -623,6 +625,7 @@ public final class UploadSlice implements Slice {
             } catch (final IllegalArgumentException | SAXException | IOException
                            | ParserConfigurationException ex) {
                 EcsLogger.warn("com.auto1.pantera.maven")
+                    .field("repository.name", this.rname)
                     .message("Failed to parse metadata XML, using original")
                     .eventCategory("web")
                     .eventAction("metadata_fix")

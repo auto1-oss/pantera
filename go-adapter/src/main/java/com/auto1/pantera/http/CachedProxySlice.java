@@ -722,6 +722,7 @@ final class CachedProxySlice implements Slice {
                 .map(val -> Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(val)));
         } catch (final DateTimeParseException ex) {
             EcsLogger.warn("com.auto1.pantera.http")
+                .field("repository.name", this.rname)
                 .message("Failed to parse Last-Modified header: " + ex.getParsedString())
                 .eventCategory("web")
                 .eventAction("header_parse")
@@ -819,6 +820,7 @@ final class CachedProxySlice implements Slice {
     private void addEventToQueue(final Key key, final String owner, final Optional<Long> release) {
         if (this.events.isEmpty()) {
             EcsLogger.error("com.auto1.pantera.http")
+                .field("repository.name", this.rname)
                 .message("Events queue is NOT present - cannot enqueue events")
                 .eventCategory("web")
                 .eventAction("proxy_request")

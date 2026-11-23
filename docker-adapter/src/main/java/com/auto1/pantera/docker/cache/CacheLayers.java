@@ -148,6 +148,8 @@ public final class CacheLayers implements Layers {
                                 .eventCategory("web")
                                 .eventAction("blob_get")
                                 .eventOutcome("failure")
+                                .field("repository.name", this.repoName)
+                                .field("package.checksum", digest.string())
                                 .error(error)
                                 .field("log.source", "application")
                                 .log();

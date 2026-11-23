@@ -587,6 +587,7 @@ final class ProxySlice implements Slice {
         return this.cooldown.evaluate(request, this.inspector).thenCompose(evaluation -> {
             if (evaluation.blocked()) {
                 EcsLogger.warn("com.auto1.pantera.pypi")
+                    .field("repository.name", this.rname)
                     .message("Artifact BLOCKED by cooldown")
                     .eventCategory("web")
                     .eventAction("cooldown_evaluation")
@@ -661,6 +662,7 @@ final class ProxySlice implements Slice {
             }
             if (err != null) {
                 EcsLogger.warn("com.auto1.pantera.pypi")
+                    .field("repository.name", this.rname)
                     .message("Non-artifact request failed")
                     .eventCategory("web")
                     .eventAction("proxy_request")
@@ -875,6 +877,7 @@ final class ProxySlice implements Slice {
                 );
             } catch (final Exception ex) {
                 EcsLogger.warn("com.auto1.pantera.pypi")
+                    .field("repository.name", this.rname)
                     .message("Write-time rewriting failed, caching original")
                     .eventCategory("database")
                     .eventAction("pre_rewrite")
@@ -933,6 +936,7 @@ final class ProxySlice implements Slice {
                     this.refreshing.end(keyStr);
                     if (err != null) {
                         EcsLogger.warn("com.auto1.pantera.pypi")
+                            .field("repository.name", this.rname)
                             .message(String.format("Background refresh failed for key '%s'", keyStr))
                             .eventCategory("database")
                             .eventAction("stale_while_revalidate")
@@ -953,6 +957,7 @@ final class ProxySlice implements Slice {
             } catch (final Exception ex) {
                 this.refreshing.end(keyStr);
                 EcsLogger.warn("com.auto1.pantera.pypi")
+                    .field("repository.name", this.rname)
                     .message(String.format("Background refresh exception for key '%s'", keyStr))
                     .eventCategory("database")
                     .eventAction("stale_while_revalidate")
@@ -1017,6 +1022,7 @@ final class ProxySlice implements Slice {
                     // zero ELK trace. The timestamp is NOT bumped, so
                     // the next request retries.
                     EcsLogger.warn("com.auto1.pantera.pypi")
+                        .field("repository.name", this.rname)
                         .message(String.format(
                             "Background refresh got non-success upstream status for key '%s' — keeping stale index, will retry",
                             keyStr
@@ -1460,6 +1466,7 @@ final class ProxySlice implements Slice {
                     // Size limit protection
                     if (bytes.length > MAX_INDEX_SIZE) {
                         EcsLogger.warn("com.auto1.pantera.pypi")
+                            .field("repository.name", this.rname)
                             .message("PyPI index too large (" + bytes.length + " bytes, max: " + MAX_INDEX_SIZE + " bytes)")
                             .eventCategory("web")
                             .eventAction("index_rewrite")
@@ -1488,6 +1495,7 @@ final class ProxySlice implements Slice {
                 (Optional<Content> body, Throwable error) -> {
                     if (error != null) {
                         EcsLogger.warn("com.auto1.pantera.pypi")
+                            .field("repository.name", this.rname)
                             .message("Failed to rewrite PyPI index content")
                             .eventCategory("web")
                             .eventAction("index_rewrite")

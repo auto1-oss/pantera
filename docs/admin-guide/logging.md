@@ -156,6 +156,13 @@ Credentials carried in a URL are masked as `***REDACTED***` in every URL field, 
 | `container.image.tag` | Image tag |
 | `container.image.hash.all` | Image digest |
 
+A manifest lookup that finds nothing writes one `manifest_get` record (logger `com.auto1.pantera.docker`) with `repository.name`, `container.image.name` and the reference as `container.image.tag` or `container.image.hash.all`:
+
+| Level | `event.reason` | Meaning |
+|---|---|---|
+| `DEBUG` | `manifest_unknown` | No manifest is stored under that tag or digest. Ordinary: a tag nobody pushed, or the first pull of an image through a proxy (the upstream is asked next). |
+| `WARN` | `manifest_blob_missing` | The tag or digest link exists, but the manifest blob it points at is not in storage: the stored image is inconsistent and has to be pushed (or, on a proxy, evicted and pulled) again. |
+
 ### Destination Fields (proxy/upstream)
 
 | Field | Description |

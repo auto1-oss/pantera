@@ -152,6 +152,7 @@ final class AddArchiveSlice implements Slice {
         // Validate path doesn't contain directory traversal
         if (uri.contains("..")) {
             EcsLogger.warn("com.auto1.pantera.composer")
+                .field("repository.name", this.rname)
                 .message("Rejected archive path with directory traversal")
                 .eventCategory("web")
                 .eventAction("archive_upload")
@@ -171,6 +172,7 @@ final class AddArchiveSlice implements Slice {
 
         if (!isZip && !isTarGz) {
             EcsLogger.warn("com.auto1.pantera.composer")
+                .field("repository.name", this.rname)
                 .message("Rejected unsupported archive format")
                 .eventCategory("web")
                 .eventAction("archive_upload")
@@ -199,6 +201,7 @@ final class AddArchiveSlice implements Slice {
                         // Not an archive, no composer.json, or composer.json
                         // is not a JSON object: the client sent a bad package.
                         EcsLogger.warn("com.auto1.pantera.composer")
+                            .field("repository.name", this.rname)
                             .message("Rejected unreadable Composer archive")
                             .eventCategory("web")
                             .eventAction("archive_upload")
@@ -245,6 +248,7 @@ final class AddArchiveSlice implements Slice {
         }
         if (packageName == null || packageName.trim().isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.composer")
+                .field("repository.name", this.rname)
                 .message("Missing or empty 'name' in composer.json")
                 .eventCategory("web")
                 .eventAction("archive_upload")
@@ -278,6 +282,7 @@ final class AddArchiveSlice implements Slice {
         final String[] parts = packageName.split("/");
         if (parts.length != 2 || parts[0].isEmpty() || parts[1].isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.composer")
+                .field("repository.name", this.rname)
                 .message("Invalid package name format, expected 'vendor/package'")
                 .eventCategory("web")
                 .eventAction("archive_upload")
@@ -327,6 +332,7 @@ final class AddArchiveSlice implements Slice {
             return this.store(archive, bytes, packageName, version, upload);
         })).exceptionally(error -> {
             EcsLogger.error("com.auto1.pantera.composer")
+                .field("repository.name", this.rname)
                 .message("Failed to process Composer package")
                 .eventCategory("web")
                 .eventAction("archive_upload")
@@ -423,6 +429,7 @@ final class AddArchiveSlice implements Slice {
                 .<Long>thenApply(meta -> meta.read(Meta.OP_SIZE).map(Long::longValue).orElse(0L))
                 .exceptionally(error -> {
                     EcsLogger.warn("com.auto1.pantera.composer")
+                        .field("repository.name", this.rname)
                         .message("Failed to get file size for event")
                         .eventCategory("web")
                         .eventAction("event_creation")

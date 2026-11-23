@@ -92,6 +92,7 @@ public final class MultiReadManifests implements Manifests {
                                     .eventCategory("web")
                                     .eventAction("manifest_get")
                                     .eventOutcome("failure")
+                                    .field("container.image.name", this.name)
                                     .field("container.image.hash.all", ref.digest())
                                     .error(throwable)
                                     .field("log.source", "application")
