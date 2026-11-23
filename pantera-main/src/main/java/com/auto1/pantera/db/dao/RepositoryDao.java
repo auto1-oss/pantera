@@ -54,6 +54,105 @@ public final class RepositoryDao implements CrudRepoSettings {
         return result;
     }
 
+    /**
+     * Every repository with its immutable key and its config, in one query.
+     * @return Repositories ordered by name
+     */
+    public List<Entry> entries() {
+        final List<Entry> result = new ArrayList<>();
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT name, repo_key, config FROM repositories ORDER BY name"
+             );
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                result.add(
+                    new Entry(
+                        rs.getString("name"), rs.getString("repo_key"),
+                        rs.getString("config")
+                    )
+                );
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to load repositories", ex);
+        }
+        return result;
+    }
+
+    /**
+     * Former repository names that are still remembered.
+     * @return Aliases that have not expired
+     */
+    public List<Alias> aliases() {
+        final List<Alias> result = new ArrayList<>();
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT alias, repo_key, routable FROM repository_aliases"
+                     + " WHERE expires_at > NOW()"
+             );
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                result.add(
+                    new Alias(
+                        rs.getString("alias"), rs.getString("repo_key"),
+                        rs.getBoolean("routable")
+                    )
+                );
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to load repository aliases", ex);
+        }
+        return result;
+    }
+
+    /**
+     * Immutable key of a repository.
+     * @param name Repository name
+     * @return Key, empty when there is no such repository
+     */
+    public java.util.Optional<String> keyOf(final String name) {
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT repo_key FROM repositories WHERE name = ?"
+             )) {
+            ps.setString(1, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next()
+                    ? java.util.Optional.of(rs.getString(1)) : java.util.Optional.empty();
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to read repo key: " + name, ex);
+        }
+    }
+
+    /**
+     * Create a repository under an explicit key (the default key, its name,
+     * is assigned by the database). Used when the storage already holds
+     * leftover data under the name, so the new repository starts empty.
+     * @param rname Repository name
+     * @param key Repository key
+     * @param value Repository config
+     * @param actor Who creates it, nullable
+     */
+    public void create(final RepositoryName rname, final String key,
+        final JsonStructure value, final String actor) {
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "INSERT INTO repositories (name, repo_key, type, config, created_by, updated_by)"
+                     + " VALUES (?, ?, ?, ?::jsonb, ?, ?)"
+             )) {
+            ps.setString(1, rname.toString());
+            ps.setString(2, key);
+            ps.setString(3, extractType(value));
+            ps.setString(4, value.toString());
+            ps.setString(5, actor);
+            ps.setString(6, actor);
+            ps.executeUpdate();
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to create repo: " + rname, ex);
+        }
+    }
+
     @Override
     public Collection<RepoSummary> summaries() {
         final List<RepoSummary> result = new ArrayList<>();
@@ -195,5 +294,23 @@ public final class RepositoryDao implements CrudRepoSettings {
         } catch (final Exception ex) {
             return "unknown";
         }
+    }
+
+    /**
+     * A repository row.
+     * @param name Repository name
+     * @param key Immutable repository key
+     * @param config Config document (JSON text)
+     */
+    public record Entry(String name, String key, String config) {
+    }
+
+    /**
+     * A former repository name.
+     * @param alias Former name
+     * @param key Key of the repository it belonged to
+     * @param routable Whether requests for the former name are still served
+     */
+    public record Alias(String alias, String key, boolean routable) {
     }
 }

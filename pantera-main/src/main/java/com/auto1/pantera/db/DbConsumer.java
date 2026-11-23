@@ -393,7 +393,14 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             ) {
                 conn.setAutoCommit(false);
                 for (final ArtifactEvent record : sortedEvents) {
-                    if (DbConsumer.this.fence.fenced(record)) {
+                    // The index stores the repository's immutable key, not
+                    // its name: a rename rewrites no row. A name no
+                    // repository has (deleted on this or any other node)
+                    // resolves to no key, and the event is dropped like a
+                    // fenced one.
+                    final String repoKey = com.auto1.pantera.settings.repo.RepoKeys.shared()
+                        .key(normalizeRepoName(record.repoName())).orElse(null);
+                    if (repoKey == null || DbConsumer.this.fence.fenced(record)) {
                         // A repository or path delete ran after this upload
                         // was queued: writing it now would resurrect the row.
                         // The upload itself did happen, so it is still audited.
@@ -415,7 +422,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             // Use atomic UPSERT to prevent deadlocks
                             final long release = record.releaseDate().orElse(record.createdDate());
                             upsert.setString(1, record.repoType());
-                            upsert.setString(2, normalizeRepoName(record.repoName()));
+                            upsert.setString(2, repoKey);
                             upsert.setString(3, record.artifactName());
                             upsert.setString(4, record.artifactVersion());
                             upsert.setDouble(5, record.size());
@@ -444,13 +451,13 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             this.attempts.remove(record);
                             logArtifactPublish(record);
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {
-                            deletev.setString(1, normalizeRepoName(record.repoName()));
+                            deletev.setString(1, repoKey);
                             deletev.setString(2, record.artifactName());
                             deletev.setString(3, record.artifactVersion());
                             deletev.execute();
                             conn.releaseSavepoint(sp);
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_ALL) {
-                            delete.setString(1, normalizeRepoName(record.repoName()));
+                            delete.setString(1, repoKey);
                             delete.setString(2, record.artifactName());
                             delete.execute();
                             conn.releaseSavepoint(sp);

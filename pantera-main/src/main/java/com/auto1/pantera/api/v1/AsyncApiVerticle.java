@@ -527,12 +527,29 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             com.auto1.pantera.api.RepositoryEventBroadcaster.attach(
                 this.vertx.eventBus(), this.settings.cacheInvalidationPubSub()
             );
+        // With a database, rename and delete are metadata transactions and
+        // the data purge is a durable background job (repo_jobs); without
+        // one the handler keeps its in-request data removal.
+        final com.auto1.pantera.repojob.RepoOps repoOps;
+        if (this.dataSource == null) {
+            repoOps = null;
+        } else {
+            repoOps = new com.auto1.pantera.repojob.RepoOps(
+                this.dataSource,
+                com.auto1.pantera.repojob.RepoJobRunner.shared().orElse(null),
+                com.auto1.pantera.repojob.RepoOps.retentionOf(
+                    System.getenv("PANTERA_REPO_DELETE_RETENTION_HOURS")
+                ),
+                role -> this.caches.policyCache().invalidate(role)
+            );
+            new RepoJobsHandler(repoOps, this.security.policy(), repoEvents).register(router);
+        }
         new RepositoryHandler(
             this.caches.filtersCache(), crs,
             this.repoData(),
             this.security.policy(), this.events,
             this.cooldown,
-            repoEvents, this.artifactIndex
+            repoEvents, this.artifactIndex, repoOps
         ).register(router);
         new BulkAccessPolicyHandler(
             crs, this.security.policy(),

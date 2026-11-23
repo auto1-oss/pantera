@@ -402,6 +402,25 @@ public final class RepoData {
     public CompletionStage<Storage> repoStorage(
         final RepositoryName rname, final CrudRepoSettings crs
     ) {
+        return this.rawStorage(rname, crs).thenApply(
+            // A renamed repository keeps its data under its key: callers
+            // address <name>/<path>, the view maps it to <key>/<path>.
+            raw -> com.auto1.pantera.settings.repo.RepoKeys.shared().key(rname.toString())
+                .filter(key -> !key.equals(rname.toString()))
+                .<Storage>map(key -> new RekeyedStorage(raw, rname.toString(), key))
+                .orElse(raw)
+        );
+    }
+
+    /**
+     * The raw storage of a repository, addressed by repository key.
+     * @param rname Repository name
+     * @param crs Repository settings CRUD (DB fallback)
+     * @return Abstract storage
+     */
+    private CompletionStage<Storage> rawStorage(
+        final RepositoryName rname, final CrudRepoSettings crs
+    ) {
         return this.repoStorage(rname).exceptionallyCompose(err -> {
             if (crs == null) {
                 return CompletableFuture.failedFuture(err);

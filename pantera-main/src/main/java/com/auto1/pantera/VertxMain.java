@@ -90,6 +90,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class VertxMain {
 
     /**
+     * Interval of the repository config reload that lets a node converge
+     * after a lost repository event.
+     */
+    private static final long REPO_RELOAD_MS = 30_000L;
+
+
+    /**
      * Default port to start Pantera Rest API service.
      */
     private static final String DEF_API_PORT = "8086";
@@ -284,6 +291,9 @@ public final class VertxMain {
                 settings.caches().storagesCache(),
                 settings.metrics().storage()
             );
+            // The artifact index and the storage address a repository by
+            // its immutable key; names are translated at those boundaries.
+            com.auto1.pantera.settings.repo.RepoKeys.install((DbRepositories) repos);
         } else {
             repos = new MapRepositories(settings);
         }
@@ -809,7 +819,14 @@ public final class VertxMain {
                                         return;
                                     }
                                     VertxMain.this.vertx.getDelegate().runOnContext(
-                                        nothing -> slices.invalidateRepo(name)
+                                        nothing -> {
+                                            slices.invalidateRepo(name);
+                                            // Unless the name already
+                                            // belongs to a new repository.
+                                            if (repos.config(name).isEmpty()) {
+                                                VertxMain.forgetRepoName(slices, settings, name);
+                                            }
+                                        }
                                     );
                                 }
                             );
@@ -832,6 +849,12 @@ public final class VertxMain {
                                         nothing -> {
                                             slices.invalidateRepo(name);
                                             slices.invalidateRepo(target);
+                                            // A routable alias keeps the old
+                                            // name alive; anything else under
+                                            // it is dropped.
+                                            if (repos.config(name).isEmpty()) {
+                                                VertxMain.forgetRepoName(slices, settings, name);
+                                            }
                                         }
                                     );
                                 }
@@ -850,6 +873,29 @@ public final class VertxMain {
                 }
             }
         );
+        if (repos instanceof DbRepositories dbRepos) {
+            // Repository events reach peers over the cluster bus, which may
+            // lose a message. Every node also reloads on a timer and drops
+            // the state of whatever changed or went away since its last
+            // load, so a missed rename or delete is picked up within the
+            // interval instead of at the next restart.
+            dbRepos.onChange(
+                (changed, removed) -> VertxMain.this.vertx.getDelegate().runOnContext(
+                    nothing -> {
+                        changed.forEach(slices::invalidateRepo);
+                        removed.forEach(
+                            name -> {
+                                slices.invalidateRepo(name);
+                                VertxMain.forgetRepoName(slices, settings, name);
+                            }
+                        );
+                    }
+                )
+            );
+            this.vertx.getDelegate().setPeriodic(
+                VertxMain.REPO_RELOAD_MS, ignored -> repos.refreshAsync()
+            );
+        }
         // Warm up all configured repository slices before accepting traffic, so
         // the first request per repo does not block its Vert.x event-loop thread
         // on SharedClient.startFuture.join() during Jetty client initialisation.
@@ -1616,6 +1662,23 @@ public final class VertxMain {
         );
         this.servers.add(server);
         return server.start();
+    }
+
+    /**
+     * Drop what this node keeps under a repository name that no longer
+     * names a repository: slices, breaker, bulkhead, negative cache, and
+     * the proxy metadata jobs and queues.
+     * @param slices Repository slices
+     * @param settings Settings
+     * @param name Former repository name
+     */
+    private static void forgetRepoName(
+        final RepositorySlices slices, final Settings settings, final String name
+    ) {
+        slices.forgetRepo(name);
+        settings.artifactMetadata().ifPresent(
+            queues -> queues.stopProxyMetadataProcessing(name)
+        );
     }
 
     /**

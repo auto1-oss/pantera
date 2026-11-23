@@ -316,10 +316,17 @@ public final class DashboardHandler {
                         + "FROM mv_artifact_per_repo"
                 )) {
                     while (rs.next()) {
-                        rows.add(new RepoRow(
-                            rs.getString("repo_name"), rs.getString("repo_type"),
-                            rs.getLong("cnt"), rs.getLong("total_size")
-                        ));
+                        // The view groups index rows by repository key;
+                        // a key no repository holds is a deleted
+                        // repository whose purge has not finished.
+                        final java.util.Optional<String> repo =
+                            com.auto1.pantera.settings.repo.RepoKeys.shared().name(rs.getString("repo_name"));
+                        if (repo.isPresent()) {
+                            rows.add(new RepoRow(
+                                repo.get(), rs.getString("repo_type"),
+                                rs.getLong("cnt"), rs.getLong("total_size")
+                            ));
+                        }
                     }
                 }
                 try (ResultSet rs = stmt.executeQuery(

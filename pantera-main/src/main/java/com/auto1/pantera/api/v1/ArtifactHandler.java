@@ -470,7 +470,8 @@ public final class ArtifactHandler {
                      "SELECT name, size, created_date, artifact_kind"
                          + " FROM artifacts"
                          + " WHERE repo_name = ? AND name = ANY(?)")) {
-                stmt.setString(1, repoName);
+                // Index rows carry the repository's immutable key.
+                stmt.setString(1, com.auto1.pantera.settings.repo.RepoKeys.shared().key(repoName).orElse(repoName));
                 final Array arr = conn.createArrayOf(
                     "text", paths.toArray(new String[0])
                 );

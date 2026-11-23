@@ -507,7 +507,7 @@ public class RepositorySlices {
         final Set<String> groups = this.groupsEmbedding(name);
         stale.addAll(groups);
         this.slices.asMap().keySet().stream()
-            .filter(k -> stale.contains(k.name().string()))
+            .filter(k -> stale.contains(k.name().string()) || this.aliasOf(k.name().string(), stale))
             .forEach(this.slices::invalidate);
         // The rebuilt slice re-registers its raw-metadata revalidation hook;
         // until then the admin refresh must not drive the stale instance.
@@ -526,6 +526,53 @@ public class RepositorySlices {
                 .log();
         }
         this.syncCooldownOverride(name);
+    }
+
+    /**
+     * Whether a cached slice name is a former name of one of the given
+     * repositories: a slice requested under a routable alias is cached under
+     * the alias and must go stale with its repository.
+     * @param cached Name the slice is cached under
+     * @param stale Repository names being invalidated
+     * @return True when the name routes to one of them
+     */
+    private boolean aliasOf(final String cached, final Set<String> stale) {
+        return this.repos != null && this.repos.config(cached)
+            .map(cfg -> !cfg.name().equals(cached) && stale.contains(cfg.name()))
+            .orElse(false);
+    }
+
+    /**
+     * Drop the runtime state kept under a repository name that no longer
+     * names this repository (deleted, or renamed away): its slices, its
+     * group-member breaker, its bulkhead and its negative-cache entries. A
+     * repository created later under the same name starts clean.
+     * @param name Former repository name
+     */
+    public void forgetRepo(final String name) {
+        this.slices.asMap().keySet().stream()
+            .filter(k -> k.name().string().equals(name))
+            .forEach(this.slices::invalidate);
+        this.memberRegistries.remove(name);
+        if (this.repoBulkheads.remove(name) != null) {
+            com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance().deregister(name);
+        }
+        com.auto1.pantera.cooldown.metadata.ProxyMetadataRevalidators.instance().remove(name);
+        this.negativeCache().invalidateMatching(key -> name.equals(key.scope()))
+            .exceptionally(
+                err -> {
+                    EcsLogger.warn("com.auto1.pantera")
+                        .message("Negative cache entries of a removed repository name were not all dropped; they expire by TTL")
+                        .eventCategory("configuration")
+                        .eventAction("repository_forget")
+                        .eventOutcome("failure")
+                        .field("repository.name", name)
+                        .error(err)
+                        .field("log.source", "application")
+                        .log();
+                    return null;
+                }
+            );
     }
 
     /**

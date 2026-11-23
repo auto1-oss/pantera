@@ -47,6 +47,30 @@ public final class RepoConfig {
         StoragesCache cache,
         boolean metrics
     ) {
+        return RepoConfig.from(yaml, aliases, prefix.string(), prefix, cache, metrics);
+    }
+
+    /**
+     * Repository config whose data directory is not its name: a repository
+     * keeps the key it was created with, so a rename moves no data.
+     *
+     * @param yaml Repository settings
+     * @param aliases Storage aliases
+     * @param name Repository name, as clients address it
+     * @param key Immutable repository key: the directory of its data in its
+     *  storage and its identity in the artifact index
+     * @param cache Storages cache
+     * @param metrics Whether storage metrics are enabled
+     * @return Repository config
+     */
+    public static RepoConfig from(
+        YamlMapping yaml,
+        StorageByAlias aliases,
+        String name,
+        Key key,
+        StoragesCache cache,
+        boolean metrics
+    ) {
         YamlMapping repoYaml = Objects.requireNonNull(
             yaml.yamlMapping("repo"), "Invalid repo configuration"
         );
@@ -63,10 +87,10 @@ public final class RepoConfig {
             // - No MicrometerStorage (metrics overhead, bypassed by optimized slices)
             // - No LoggingStorage (already bypassed, 2-50% overhead on writes)
             // Request-level logging and metrics still active via Vert.x HTTP
-            storage = new SubStorage(prefix, storage(cache, aliases, storageNode));
+            storage = new SubStorage(key, storage(cache, aliases, storageNode));
         }
 
-        return new RepoConfig(repoYaml, prefix.string(), type, storage);
+        return new RepoConfig(repoYaml, name, key.string(), type, storage);
     }
 
     static Storage storage(StoragesCache storages, StorageByAlias aliases, YamlNode node) {
@@ -85,12 +109,18 @@ public final class RepoConfig {
 
     private final YamlMapping repoYaml;
     private final String name;
+    private final String key;
     private final String type;
     private final Storage storage;
 
     RepoConfig(YamlMapping repoYaml, String name, String type, Storage storage) {
+        this(repoYaml, name, name, type, storage);
+    }
+
+    RepoConfig(YamlMapping repoYaml, String name, String key, String type, Storage storage) {
         this.repoYaml = repoYaml;
         this.name = name;
+        this.key = key;
         this.type = type;
         this.storage = storage;
     }
@@ -102,6 +132,17 @@ public final class RepoConfig {
      */
     public String name() {
         return this.name;
+    }
+
+    /**
+     * Immutable repository key: the directory of the repository's data in
+     * its storage and its identity in the artifact index. Equal to the name
+     * until the repository is renamed.
+     *
+     * @return Repository key
+     */
+    public String repoKey() {
+        return this.key;
     }
 
     /**
