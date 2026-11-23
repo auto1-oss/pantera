@@ -93,8 +93,6 @@ public final class RepoJobsHandler {
     public void register(final Router router) {
         final ApiRepositoryPermission delete =
             new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.DELETE);
-        final ApiRepositoryPermission create =
-            new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.CREATE);
         router.get("/api/v1/repository-jobs")
             .handler(new AuthzHandler(this.policy, delete))
             .handler(this::list);
@@ -111,7 +109,7 @@ public final class RepoJobsHandler {
             .handler(new AuthzHandler(this.policy, delete))
             .handler(this::deleted);
         router.post("/api/v1/deleted-repositories/:key/restore")
-            .handler(new AuthzHandler(this.policy, create))
+            .handler(new AuthzHandler(this.policy, delete))
             .handler(this::restore);
     }
 

@@ -778,7 +778,7 @@ defineExpose({
             <legend class="mb-1 text-xs text-gray-500">Restore window</legend>
             <div class="flex items-center gap-2">
               <RadioButton v-model="retentionMode" input-id="retentionDefault" value="default" data-testid="delete-retention-default" />
-              <label for="retentionDefault">Server default (24 hours)</label>
+              <label for="retentionDefault">Server default (24 hours unless configured otherwise)</label>
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <RadioButton v-model="retentionMode" input-id="retentionCustom" value="custom" data-testid="delete-retention-custom" />
