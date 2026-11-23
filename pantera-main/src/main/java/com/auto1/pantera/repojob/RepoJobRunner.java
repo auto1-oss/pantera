@@ -305,7 +305,9 @@ public final class RepoJobRunner implements AutoCloseable {
                 RepoJobRunner.count("done", job.type());
             }
         } else {
-            this.jobs.release(job.id(), this.node, outcome.note(), outcome.delay(), false);
+            // A wait is not an error: the reason goes to the log, not to
+            // the job's last error.
+            this.jobs.release(job.id(), this.node, null, outcome.delay(), false);
             RepoJobRunner.log(job, "repo_job_wait", "unknown",
                 String.format("Repository job %d waits: %s", job.id(), outcome.note())
             ).log();

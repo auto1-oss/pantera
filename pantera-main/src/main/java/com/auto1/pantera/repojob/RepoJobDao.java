@@ -272,7 +272,8 @@ public final class RepoJobDao {
     ) {
         try (Connection conn = this.source.getConnection();
             PreparedStatement stmt = conn.prepareStatement(
-                "UPDATE repo_jobs SET attempts = attempts + ?, last_error = ?, updated_at = NOW(),"
+                "UPDATE repo_jobs SET attempts = attempts + ?,"
+                    + " last_error = COALESCE(?, last_error), updated_at = NOW(),"
                     + " lease_owner = NULL, lease_until = NULL,"
                     + " not_before = NOW() + (? * INTERVAL '1 millisecond'),"
                     + " state = CASE WHEN attempts + ? >= ? THEN 'failed' ELSE 'pending' END"
