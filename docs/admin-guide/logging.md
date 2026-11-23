@@ -200,6 +200,8 @@ Audit-log entries inherit the originating HTTP request's `trace.id` so an artifa
 
 ## Why a Request Was Not Answered 2xx
 
+Every access record (logger `http.access`, `event.action: http_request`) carries `repository.name` and `repository.type` of the repository the request was for -- for a group the group itself, not the member that supplied the artifact -- and the client's `user_agent.original` (v2.2.14+; a request that matched no repository, such as an unknown repository name, has no `repository.*`).
+
 Every access record (logger `http.access`, `event.action: http_request`) with a status of 400 or above carries `event.reason`: a short token saying why (v2.2.12+). It is on the access record itself, so it needs no second record, no matching `trace.id` and no debug logging. A 404 from the negative cache and a 404 of the upstream, or a 503 for a full bulkhead and a 502 after a lost connection, are told apart by this one field.
 
 | `event.reason` | The request was answered this way because |
