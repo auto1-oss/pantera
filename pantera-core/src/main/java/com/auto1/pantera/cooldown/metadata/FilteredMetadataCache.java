@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
@@ -499,8 +500,10 @@ public class FilteredMetadataCache implements Cleanable<String> {
         // Valkey must not add the read timeout to every serve). Writes
         // stay enabled; they are async fire-and-forget.
         if (this.l2Connection != null && this.l2ReadAllowed()) {
-            return this.l2Connection.get(key)
-                .orTimeout(L2_READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            return new CallerContext().resume(
+                this.l2Connection.get(key)
+                    .orTimeout(L2_READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            )
                 .handle((raw, err) -> {
                     if (err != null) {
                         this.recordL2ReadFailure(err);

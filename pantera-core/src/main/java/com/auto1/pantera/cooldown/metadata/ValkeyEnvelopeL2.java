@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.cache.ValkeyKeyIndex;
 import io.lettuce.core.KeyScanCursor;
@@ -53,7 +54,7 @@ final class ValkeyEnvelopeL2 implements EnvelopeL2 {
 
     @Override
     public CompletableFuture<byte[]> get(final String key) {
-        return this.valkey.async().get(key).toCompletableFuture();
+        return new CallerContext().resume(this.valkey.async().get(key));
     }
 
     @Override
@@ -77,7 +78,7 @@ final class ValkeyEnvelopeL2 implements EnvelopeL2 {
 
     @Override
     public CompletableFuture<Long> pttl(final String key) {
-        return this.valkey.async().pttl(key).toCompletableFuture();
+        return new CallerContext().resume(this.valkey.async().pttl(key));
     }
 
     @Override
@@ -86,7 +87,9 @@ final class ValkeyEnvelopeL2 implements EnvelopeL2 {
         if (keys.isEmpty()) {
             result = CompletableFuture.completedFuture(0L);
         } else {
-            result = this.valkey.async().del(keys.toArray(new String[0])).toCompletableFuture();
+            result = new CallerContext().resume(
+                this.valkey.async().del(keys.toArray(new String[0]))
+            );
         }
         return result;
     }
@@ -107,10 +110,10 @@ final class ValkeyEnvelopeL2 implements EnvelopeL2 {
     private CompletableFuture<Long> deleteStep(
         final ScanCursor cursor, final String pattern, final long sofar
     ) {
-        return this.valkey.async()
-            .scan(cursor, ScanArgs.Builder.matches(pattern).limit(ValkeyEnvelopeL2.SCAN_COUNT))
-            .toCompletableFuture()
-            .thenCompose(page -> this.delete(page.getKeys()).thenCompose(
+        return new CallerContext().resume(
+            this.valkey.async()
+                .scan(cursor, ScanArgs.Builder.matches(pattern).limit(ValkeyEnvelopeL2.SCAN_COUNT))
+        ).thenCompose(page -> this.delete(page.getKeys()).thenCompose(
                 count -> this.nextStep(page, pattern, sofar + count)
             ));
     }

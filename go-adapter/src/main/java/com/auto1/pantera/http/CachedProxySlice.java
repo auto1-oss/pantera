@@ -574,6 +574,8 @@ final class CachedProxySlice implements Slice {
                 // Network error during HEAD - log and continue with empty headers
                 // This allows cache to work in degraded mode (no checksum validation)
                 EcsLogger.warn("com.auto1.pantera.http")
+                    .traceContext(ctx.traceId(), ctx.clientIp())
+                    .field("repository.name", this.rname)
                     .message("Remote HEAD failed, proceeding without checksum validation")
                     .eventCategory("web")
                     .eventAction("proxy_request")
@@ -679,6 +681,7 @@ final class CachedProxySlice implements Slice {
                         // The cache gave nothing and the upstream was not
                         // asked: nothing more is known than the status.
                         EcsLogger.debug("com.auto1.pantera.http")
+                            .traceContext(ctx.traceId(), ctx.clientIp())
                             .message("Cache load returned empty without an upstream answer, returning 404")
                             .eventCategory("web")
                             .eventAction("proxy_request")

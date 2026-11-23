@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.group;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry;
@@ -279,9 +280,11 @@ public final class GroupMetadataCache {
         // 2. Stale L2 (bounded by staleL2Timeout, fully defensive)
         final CompletableFuture<Optional<byte[]>> l2Future;
         if (this.staleTwoTier) {
-            l2Future = this.staleL2.get(buildStaleL2Key(path))
+            l2Future = new CallerContext().resume(
+                this.staleL2.get(buildStaleL2Key(path))
                 .toCompletableFuture()
                 .orTimeout(this.staleL2Timeout.toMillis(), TimeUnit.MILLISECONDS)
+            )
                 .exceptionally(err -> null)
                 .thenApply(b -> b != null && b.length > 0
                     ? Optional.of(b)

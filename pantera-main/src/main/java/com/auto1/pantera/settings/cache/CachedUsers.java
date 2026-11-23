@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.settings.cache;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.asto.misc.UncheckedIOScalar;
@@ -297,9 +298,11 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
             final String redisKey = "auth:" + key;
             final long l2StartNanos = System.nanoTime();
 
-            return this.l2.get(redisKey)
+            return new CallerContext().resume(
+                this.l2.get(redisKey)
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
+            )
                 .exceptionally(err -> {
                     // L2 error - treat as miss
                     if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {

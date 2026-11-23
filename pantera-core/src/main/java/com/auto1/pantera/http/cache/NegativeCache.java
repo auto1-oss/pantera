@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.http.cache;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.cache.CacheInvalidationPubSub;
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.NegativeCacheConfig;
@@ -547,9 +548,11 @@ public final class NegativeCache {
             final String[] redisKeys = keys.stream()
                 .map(k -> L2_PREFIX + k.flat())
                 .toArray(String[]::new);
-            return this.l2.del(redisKeys)
+            return new CallerContext().resume(
+                this.l2.del(redisKeys)
                 .toCompletableFuture()
                 .orTimeout(500, TimeUnit.MILLISECONDS)
+            )
                 .exceptionally(err -> 0L)
                 .thenApply(ignored -> null);
         }
@@ -996,9 +999,11 @@ public final class NegativeCache {
     private CompletableFuture<Boolean> l2Get(final String flat) {
         final String redisKey = L2_PREFIX + flat;
         final long l2Start = System.nanoTime();
-        return this.l2.get(redisKey)
+        return new CallerContext().resume(
+            this.l2.get(redisKey)
             .toCompletableFuture()
             .orTimeout(100, TimeUnit.MILLISECONDS)
+        )
             .exceptionally(err -> null)
             .thenApply(l2Bytes -> {
                 final long durationMs = (System.nanoTime() - l2Start) / 1_000_000;

@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.index;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.cache.ArtifactIndexCacheConfig;
 import com.auto1.pantera.cache.CacheInvalidationPubSub;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -184,9 +185,11 @@ public final class ArtifactIndexCache implements ArtifactIndex, ScopedSearchInde
             this.positiveConfig.l2Timeout().toMillis(),
             this.negativeConfig.l2Timeout().toMillis()
         );
-        return this.l2.smembers(L2_POSITIVE_PREFIX + artifactName)
+        return new CallerContext().resume(
+            this.l2.smembers(L2_POSITIVE_PREFIX + artifactName)
             .toCompletableFuture()
             .orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+        )
             .handle((members, err) -> {
                 if (err != null) {
                     logL2Failure("smembers", artifactName, err);
@@ -201,9 +204,11 @@ public final class ArtifactIndexCache implements ArtifactIndex, ScopedSearchInde
                     return CompletableFuture.completedFuture(Optional.of(decoded));
                 }
                 // No positive hit — try negative.
-                return this.l2.exists(L2_NEGATIVE_PREFIX + artifactName)
+                return new CallerContext().resume(
+                    this.l2.exists(L2_NEGATIVE_PREFIX + artifactName)
                     .toCompletableFuture()
                     .orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                )
                     .handle((count, err) -> count == null ? 0L : count)
                     .thenCompose(count -> {
                         if (count != null && count > 0) {

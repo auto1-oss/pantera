@@ -168,6 +168,8 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
 
                     if (filtered.isEmpty()) {
                         EcsLogger.debug("com.auto1.pantera.maven")
+                            .traceContext(event.traceId(), event.clientIp())
+                            .field("repository.name", event.repoName())
                             .message("Maven package has only temporary files, skipping (will retry later)")
                             .eventCategory("web")
                             .eventAction("proxy_package_process")
@@ -214,6 +216,8 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                             );
 
                             EcsLogger.debug("com.auto1.pantera.maven")
+                                .traceContext(event.traceId(), event.clientIp())
+                                .field("repository.name", event.repoName())
                                 .message("Recorded Maven proxy artifact")
                                 .eventCategory("web")
                                 .eventAction("proxy_artifact_record")
@@ -231,6 +235,8 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                         });
                 } catch (final RuntimeException err) {
                     EcsLogger.error("com.auto1.pantera.maven")
+                        .traceContext(event.traceId(), event.clientIp())
+                        .field("repository.name", event.repoName())
                         .message("Failed to extract Maven archive from keys")
                         .eventCategory("web")
                         .eventAction("proxy_package_process")
@@ -244,6 +250,8 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             })
             .exceptionally(err -> {
                 EcsLogger.error("com.auto1.pantera.maven")
+                    .traceContext(event.traceId(), event.clientIp())
+                    .field("repository.name", event.repoName())
                     .message("Failed to process Maven package")
                     .eventCategory("web")
                     .eventAction("proxy_package_process")
@@ -364,6 +372,8 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             new ProxyEventRetry(this.packages).again(event, "com.auto1.pantera.maven");
         } else {
             EcsLogger.error("com.auto1.pantera.maven")
+                .traceContext(event.traceId(), event.clientIp())
+                .field("repository.name", event.repoName())
                 .message("Failed to read Maven artifact metadata")
                 .eventCategory("web")
                 .eventAction("proxy_package_process")

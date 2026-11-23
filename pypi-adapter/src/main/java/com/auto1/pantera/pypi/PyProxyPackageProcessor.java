@@ -172,6 +172,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                             );
 
                             EcsLogger.info("com.auto1.pantera.pypi")
+                                .traceContext(event.traceId(), event.clientIp())
                                 .message("Recorded PyPI proxy release")
                                 .eventCategory("web")
                                 .eventAction("package_processing")
@@ -186,6 +187,8 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                 .log();
                         } else {
                             EcsLogger.warn("com.auto1.pantera.pypi")
+                                .traceContext(event.traceId(), event.clientIp())
+                                .field("repository.name", event.repoName())
                                 .message("Python proxy package failed filename validation")
                                 .eventCategory("package")
                                 .eventAction("package_processing")
@@ -197,6 +200,8 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                         }
                     } catch (final Exception err) {
                         EcsLogger.error("com.auto1.pantera.pypi")
+                            .traceContext(event.traceId(), event.clientIp())
+                            .field("repository.name", event.repoName())
                             .message("Failed to parse/check python proxy package")
                             .eventCategory("web")
                             .eventAction("package_processing")
@@ -209,6 +214,8 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                 });
         }).exceptionally(err -> {
             EcsLogger.error("com.auto1.pantera.pypi")
+                .traceContext(event.traceId(), event.clientIp())
+                .field("repository.name", event.repoName())
                 .message("Failed to process PyPI package")
                 .eventCategory("web")
                 .eventAction("package_processing")

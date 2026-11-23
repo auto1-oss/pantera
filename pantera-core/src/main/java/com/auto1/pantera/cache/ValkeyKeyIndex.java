@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.cache;
 
+import com.auto1.pantera.http.context.CallerContext;
 import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import java.nio.charset.StandardCharsets;
@@ -113,14 +114,14 @@ public final class ValkeyKeyIndex {
     public CompletableFuture<Void> put(
         final String index, final String key, final long ttlSeconds, final byte[] value
     ) {
-        return this.valkey.<Long>eval(
+        return ValkeyKeyIndex.resumed(this.valkey.<Long>eval(
             ValkeyKeyIndex.PUT,
             ScriptOutputType.INTEGER,
             new String[] {index, key},
             ValkeyKeyIndex.ascii(Long.toString(ttlSeconds)),
             ValkeyKeyIndex.ascii(Long.toString(ttlSeconds + ValkeyKeyIndex.INDEX_MARGIN)),
             value
-        ).toCompletableFuture().thenApply(ignored -> null);
+        )).thenApply(ignored -> null);
     }
 
     /**
@@ -132,12 +133,12 @@ public final class ValkeyKeyIndex {
      * @return What was dropped
      */
     public CompletableFuture<Dropped> drop(final String index, final String prefix) {
-        return this.valkey.<List<Object>>eval(
+        return ValkeyKeyIndex.resumed(this.valkey.<List<Object>>eval(
             ValkeyKeyIndex.DROP,
             ScriptOutputType.MULTI,
             new String[] {index},
             prefix.getBytes(StandardCharsets.UTF_8)
-        ).toCompletableFuture().thenApply(ValkeyKeyIndex::dropped);
+        )).thenApply(ValkeyKeyIndex::dropped);
     }
 
     /**
@@ -147,7 +148,7 @@ public final class ValkeyKeyIndex {
      * @return Listed keys; some may have expired already
      */
     public CompletableFuture<List<String>> members(final String index) {
-        return this.valkey.smembers(index).toCompletableFuture().thenApply(
+        return ValkeyKeyIndex.resumed(this.valkey.smembers(index)).thenApply(
             raw -> raw.stream().map(ValkeyKeyIndex::text).toList()
         );
     }
@@ -161,12 +162,26 @@ public final class ValkeyKeyIndex {
      * @return Epoch seconds of the first call
      */
     public CompletableFuture<Long> since(final String marker, final long now) {
-        return this.valkey.<byte[]>eval(
+        return ValkeyKeyIndex.resumed(this.valkey.<byte[]>eval(
             ValkeyKeyIndex.SINCE,
             ScriptOutputType.VALUE,
             new String[] {marker},
             ValkeyKeyIndex.ascii(Long.toString(now))
-        ).toCompletableFuture().thenApply(raw -> Long.parseLong(ValkeyKeyIndex.text(raw)));
+        )).thenApply(raw -> Long.parseLong(ValkeyKeyIndex.text(raw)));
+    }
+
+    /**
+     * Hand a Valkey answer back to the caller: the continuation runs on a
+     * Lettuce event loop, under the caller's logging context, and the loop
+     * gets its own context back afterwards.
+     * @param answer Answer of Valkey
+     * @param <T> Result type
+     * @return Future to chain on
+     */
+    private static <T> CompletableFuture<T> resumed(
+        final java.util.concurrent.CompletionStage<T> answer
+    ) {
+        return new CallerContext().resume(answer);
     }
 
     /**

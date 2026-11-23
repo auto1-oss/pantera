@@ -31,9 +31,11 @@ import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.observability.StructuredLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.trace.SpanContext;
+import org.apache.logging.log4j.ThreadContext;
 import org.slf4j.MDC;
 
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -161,6 +163,33 @@ public final class EcsLoggingSlice implements Slice {
 
     @Override
     public CompletableFuture<Response> response(
+        final RequestLine line,
+        final Headers headers,
+        final Content body
+    ) {
+        // The request's context is on this thread only while the slice chain
+        // runs on it. An event loop serves many connections: left behind, the
+        // trace.id of this request would mark every later record the thread
+        // writes for somebody else, so the thread gets its own context back.
+        final Map<String, String> prior = ThreadContext.getImmutableContext();
+        try {
+            return this.serve(line, headers, body);
+        } finally {
+            ThreadContext.clearMap();
+            if (!prior.isEmpty()) {
+                ThreadContext.putAll(prior);
+            }
+        }
+    }
+
+    /**
+     * Serve the request with its context bound to the current thread.
+     * @param line Request line
+     * @param headers Request headers
+     * @param body Request body
+     * @return Response
+     */
+    private CompletableFuture<Response> serve(
         final RequestLine line,
         final Headers headers,
         final Content body

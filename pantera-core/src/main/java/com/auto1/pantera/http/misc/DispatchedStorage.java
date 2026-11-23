@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.http.misc;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.ListPage;
@@ -166,16 +167,20 @@ public final class DispatchedStorage implements Storage {
         final Executor executor
     ) {
         final CompletableFuture<T> result = new CompletableFuture<>();
+        // The pool threads are shared by every request: the continuation
+        // runs under its caller's logging context and the thread gets its
+        // own back, so a context bound by one request never reaches the next.
+        final CallerContext caller = new CallerContext();
         source.whenComplete(
             (val, err) -> {
                 try {
-                    executor.execute(() -> {
+                    executor.execute(() -> caller.run(() -> {
                         if (err != null) {
                             result.completeExceptionally(err);
                         } else {
                             result.complete(val);
                         }
-                    });
+                    }));
                 } catch (final java.util.concurrent.RejectedExecutionException rex) {
                     result.completeExceptionally(rex);
                 }

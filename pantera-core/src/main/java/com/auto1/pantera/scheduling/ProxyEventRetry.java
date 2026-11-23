@@ -124,6 +124,7 @@ public final class ProxyEventRetry {
         if (event.attempts() >= ProxyEventRetry.MAX_ATTEMPTS) {
             queued = false;
             EcsLogger.warn(logger)
+                .traceContext(event.traceId(), event.clientIp())
                 .message(
                     "Proxy artifact still not in storage after "
                         + ProxyEventRetry.MAX_ATTEMPTS
@@ -143,6 +144,7 @@ public final class ProxyEventRetry {
             );
             queued = this.offer(event.retried(this.clock.getAsLong() + delay));
             EcsLogger.debug(logger)
+                .traceContext(event.traceId(), event.clientIp())
                 .message(
                     "Proxy artifact not in storage yet, retry "
                         + (event.attempts() + 1) + "/" + ProxyEventRetry.MAX_ATTEMPTS
