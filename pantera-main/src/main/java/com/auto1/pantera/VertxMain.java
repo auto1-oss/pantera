@@ -43,11 +43,6 @@ import com.auto1.pantera.db.DbManager;
 import com.auto1.pantera.db.migration.YamlToDbMigrator;
 import com.auto1.pantera.vertx.VertxSliceServer;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.binder.jvm.ClassLoaderMetrics;
-import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics;
-import io.micrometer.core.instrument.binder.jvm.JvmMemoryMetrics;
-import io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics;
-import io.micrometer.core.instrument.binder.system.ProcessorMetrics;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.config.MeterFilter;
 import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
@@ -1716,7 +1711,7 @@ public final class VertxMain {
      * @param mctx Metrics context
      * @return Vert.x instance
      */
-    private static Vertx vertx(final MetricsContext mctx) {
+    static Vertx vertx(final MetricsContext mctx) {
         final Vertx res;
         final Optional<Pair<String, Integer>> endpoint = mctx.endpointAndPort();
         // NOTE: APM registry removed - using Elastic APM Java Agent via -javaagent (safe mode)
@@ -1745,8 +1740,9 @@ public final class VertxMain {
         if (apm != null || endpoint.isPresent()) {
             final MicrometerMetricsOptions micrometer = new MicrometerMetricsOptions()
                 .setEnabled(true)
-                // Enable comprehensive Vert.x metrics with labels
-                .setJvmMetricsEnabled(true)
+                // JVM meters (class loader, memory, GC, processor, threads)
+                // are bound by Vert.x, once, when the `jvm` metric type is on.
+                .setJvmMetricsEnabled(mctx.jvm())
                 // Add labels for HTTP metrics (method, status code)
                 // NOTE: HTTP_PATH label removed to avoid high cardinality
                 // Repository-level metrics use pantera_http_requests_total with repo_name label instead
@@ -1775,91 +1771,25 @@ public final class VertxMain {
                         .setStartEmbeddedServer(false)  // Disabled - using AsyncMetricsVerticle instead
                 );
             }
+            // The registry is created and configured BEFORE Vert.x starts:
+            // Vert.x registers its pool, HTTP and JVM meters while it boots,
+            // and a common tag or MeterFilter added afterwards does not
+            // apply to a meter that already exists (Micrometer warns "A
+            // MeterFilter is being configured after a Meter has been
+            // registered"), so those meters lacked the job tag, the
+            // repo/method cardinality caps and the SLO buckets.
+            final MeterRegistry registry;
+            if (apm == null) {
+                registry = new io.micrometer.prometheus.PrometheusMeterRegistry(
+                    io.micrometer.prometheus.PrometheusConfig.DEFAULT
+                );
+                micrometer.setMicrometerRegistry(registry);
+            } else {
+                registry = apm;
+            }
+            VertxMain.configureMeters(registry);
             options.setMetricsOptions(micrometer);
             res = Vertx.vertx(options);
-
-            // CRITICAL FIX: Get MeterRegistry AFTER Vertx.vertx() to avoid NullPointerException
-            // BackendRegistries.getDefaultNow() requires Vertx to be initialized first
-            final MeterRegistry registry = BackendRegistries.getDefaultNow();
-
-            // Add common tags to all metrics
-            registry.config().commonTags("job", "pantera");
-
-            // Add repo_name cardinality control filter (default max 50 distinct repos)
-            registry.config().meterFilter(
-                new RepoNameMeterFilter(
-                    ConfigDefaults.getInt("PANTERA_METRICS_MAX_REPOS", 50)
-                )
-            );
-
-            // The method tag of the HTTP server metrics is whatever token a
-            // client sends, credentials or not: keep it to the methods HTTP
-            // defines, or a client can grow the registry without bound.
-            registry.config().meterFilter(
-                new com.auto1.pantera.http.misc.HttpMethodMeterFilter()
-            );
-
-            // Histogram buckets for Timer metrics, opt-in via
-            // PANTERA_METRICS_PERCENTILES_HISTOGRAM (default: false).
-            //
-            // Curated SLO ladders instead of percentilesHistogram(true):
-            // Micrometer's auto mode emits ~70 buckets per timer series;
-            // these ladders emit 16-18 spent where the SLOs live. Two
-            // ladders because the timer families measure different things:
-            //
-            //  - TRANSFER timers span full body streaming — a multi-GB
-            //    docker layer to a slow client legitimately runs minutes,
-            //    so the ladder extends to 20 min or p99 clamps at the top
-            //    bucket and lies.
-            //  - CONTROL-PLANE timers (cooldown, phases, cache ops) live
-            //    in the 1-500 ms band and get denser low boundaries; 30 s
-            //    is already pathological there.
-            //
-            // Recording cost is bucket-count-insensitive (binary search +
-            // one lock-free increment, single ns); the cost axis is series
-            // count at scrape/TSDB time (~buckets+1 series per tag combo).
-            // Bucket shapes are fixed at meter creation — changing the
-            // ladders requires a restart, unlike DB-backed settings.
-            if (Boolean.parseBoolean(
-                ConfigDefaults.get("PANTERA_METRICS_PERCENTILES_HISTOGRAM", "false")
-            )) {
-                final java.util.Set<String> transferTimers = java.util.Set.of(
-                    "pantera.http.request.duration",
-                    "pantera.proxy.request.duration",
-                    "pantera.upstream.request.duration",
-                    "pantera.storage.operation.duration",
-                    "vertx.http.server.response.time"
-                );
-                final double[] transferSlos = slosNanos(
-                    10, 25, 50, 100, 250, 500, 750,
-                    1_000, 2_500, 5_000, 10_000, 20_000, 30_000,
-                    60_000, 120_000, 300_000, 600_000, 1_200_000
-                );
-                final double[] controlSlos = slosNanos(
-                    1, 2.5, 5, 10, 25, 50, 75, 100, 250, 500, 750,
-                    1_000, 2_500, 5_000, 10_000, 30_000
-                );
-                registry.config().meterFilter(
-                    new MeterFilter() {
-                        @Override
-                        public DistributionStatisticConfig configure(
-                            final Meter.Id id,
-                            final DistributionStatisticConfig config
-                        ) {
-                            if (id.getType() == Meter.Type.TIMER) {
-                                return DistributionStatisticConfig.builder()
-                                    .serviceLevelObjectives(
-                                        transferTimers.contains(id.getName())
-                                            ? transferSlos : controlSlos
-                                    )
-                                    .build()
-                                    .merge(config);
-                            }
-                            return config;
-                        }
-                    }
-                );
-            }
 
             // Initialize MicrometerMetrics with the registry
             com.auto1.pantera.metrics.MicrometerMetrics.initialize(registry);
@@ -1874,13 +1804,9 @@ public final class VertxMain {
             // Initialize storage metrics recorder
             com.auto1.pantera.metrics.StorageMetricsRecorder.initialize();
 
-            if (mctx.jvm()) {
-                new ClassLoaderMetrics().bindTo(registry);
-                new JvmMemoryMetrics().bindTo(registry);
-                new JvmGcMetrics().bindTo(registry);
-                new ProcessorMetrics().bindTo(registry);
-                new JvmThreadMetrics().bindTo(registry);
-            }
+            // The JVM binders are not bound here: Vert.x binds the same five
+            // (setJvmMetricsEnabled above), and binding them twice registered
+            // every JVM meter a second time.
             if (endpoint.isPresent()) {
                 EcsLogger.info("com.auto1.pantera")
                     .message("Micrometer metrics (JVM, Vert.x, Storage, Cache, Repository) enabled on port " + endpoint.get().getValue())
@@ -1905,6 +1831,93 @@ public final class VertxMain {
             .log();
 
         return res;
+    }
+
+    /**
+     * Common tags, cardinality caps and histogram ladders of the meter
+     * registry. Has to run before the first meter is registered.
+     *
+     * @param registry Registry without meters
+     */
+    private static void configureMeters(final MeterRegistry registry) {
+        // Add common tags to all metrics
+        registry.config().commonTags("job", "pantera");
+
+        // Add repo_name cardinality control filter (default max 50 distinct repos)
+        registry.config().meterFilter(
+            new RepoNameMeterFilter(
+                ConfigDefaults.getInt("PANTERA_METRICS_MAX_REPOS", 50)
+            )
+        );
+
+        // The method tag of the HTTP server metrics is whatever token a
+        // client sends, credentials or not: keep it to the methods HTTP
+        // defines, or a client can grow the registry without bound.
+        registry.config().meterFilter(
+            new com.auto1.pantera.http.misc.HttpMethodMeterFilter()
+        );
+
+        // Histogram buckets for Timer metrics, opt-in via
+        // PANTERA_METRICS_PERCENTILES_HISTOGRAM (default: false).
+        //
+        // Curated SLO ladders instead of percentilesHistogram(true):
+        // Micrometer's auto mode emits ~70 buckets per timer series;
+        // these ladders emit 16-18 spent where the SLOs live. Two
+        // ladders because the timer families measure different things:
+        //
+        //  - TRANSFER timers span full body streaming — a multi-GB
+        //    docker layer to a slow client legitimately runs minutes,
+        //    so the ladder extends to 20 min or p99 clamps at the top
+        //    bucket and lies.
+        //  - CONTROL-PLANE timers (cooldown, phases, cache ops) live
+        //    in the 1-500 ms band and get denser low boundaries; 30 s
+        //    is already pathological there.
+        //
+        // Recording cost is bucket-count-insensitive (binary search +
+        // one lock-free increment, single ns); the cost axis is series
+        // count at scrape/TSDB time (~buckets+1 series per tag combo).
+        // Bucket shapes are fixed at meter creation — changing the
+        // ladders requires a restart, unlike DB-backed settings.
+        if (Boolean.parseBoolean(
+            ConfigDefaults.get("PANTERA_METRICS_PERCENTILES_HISTOGRAM", "false")
+        )) {
+            final java.util.Set<String> transferTimers = java.util.Set.of(
+                "pantera.http.request.duration",
+                "pantera.proxy.request.duration",
+                "pantera.upstream.request.duration",
+                "pantera.storage.operation.duration",
+                "vertx.http.server.response.time"
+            );
+            final double[] transferSlos = slosNanos(
+                10, 25, 50, 100, 250, 500, 750,
+                1_000, 2_500, 5_000, 10_000, 20_000, 30_000,
+                60_000, 120_000, 300_000, 600_000, 1_200_000
+            );
+            final double[] controlSlos = slosNanos(
+                1, 2.5, 5, 10, 25, 50, 75, 100, 250, 500, 750,
+                1_000, 2_500, 5_000, 10_000, 30_000
+            );
+            registry.config().meterFilter(
+                new MeterFilter() {
+                    @Override
+                    public DistributionStatisticConfig configure(
+                        final Meter.Id id,
+                        final DistributionStatisticConfig config
+                    ) {
+                        if (id.getType() == Meter.Type.TIMER) {
+                            return DistributionStatisticConfig.builder()
+                                .serviceLevelObjectives(
+                                    transferTimers.contains(id.getName())
+                                        ? transferSlos : controlSlos
+                                )
+                                .build()
+                                .merge(config);
+                        }
+                        return config;
+                    }
+                }
+            );
+        }
     }
 
     /**
