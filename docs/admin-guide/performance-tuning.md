@@ -284,14 +284,14 @@ The permits **never fall** (v2.2.12+). Up to v2.2.11 one request slower than twi
 
 ## Upstream Circuit Breaker (v2.2.0+)
 
-Per-host state-machine circuit breaker in front of the Jetty client. Trips closed → open on every 5xx / 401 / 407 / non-rejection exception (429 is owned by the rate limiter, not the breaker, by design). Fibonacci backoff with daemon HEAD probe at expiry. While open the client sees a synthesised `502` (`X-Pantera-Fault: circuit-breaker-open`) and the broken upstream is left alone.
+Per-host state-machine circuit breaker in front of the Jetty client. Trips closed → open when at least half of the calls in the window (minimum 10 in 30 s by default) ended in a 5xx or a non-rejection exception; a 4xx never counts (429 is owned by the rate limiter). Fibonacci backoff with daemon HEAD probe at expiry. The probe asks for the path of the last failed request, not for `/`, and requests are refused until it is answered. The backoff returns to its seed once the breaker has stayed closed for ten windows; an upstream that fails again sooner is blocked longer each time. While open the client sees a synthesised `502` (`X-Pantera-Fault: circuit-breaker-open`) and the broken upstream is left alone.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | Seed backoff | 30 s | First open-window duration after a trip. |
 | Max backoff | 60 min | Cap on the Fibonacci envelope. |
 | Sequence (with defaults) | 30, 30, 60, 90, 150, 240, 390, 630, 1020, 1650, 2670, 3600... | F(n) = F(n-1) + F(n-2), clamped at cap. |
-| Trip on status | 5xx, 401, 407 | 429 is explicitly excluded. |
+| Trip on status | 5xx | A 4xx is the upstream answering; 429 belongs to the rate limiter. |
 | Trip on exception | every exception except `RejectedExecutionException` | Local backpressure ≠ upstream brokenness. |
 
 **Observability:** `pantera_circuit_breaker_state{upstream_host}` (1=open), `pantera_circuit_breaker_trips_total{upstream_host}`, `pantera_circuit_breaker_fastfail_total{upstream_host}`. Open the **Upstream Circuit Breaker** Grafana dashboard or the [Upstream Circuit Breaker Open runbook](../runbooks/upstream-circuit-breaker-open.md) when the matching alert fires.

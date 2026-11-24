@@ -14,6 +14,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
@@ -25,11 +26,14 @@ import java.util.function.Supplier;
  *
  * <p>States:
  * <ul>
- *   <li><b>Closed</b> — {@code blockedUntil == null} (or in the past).
- *       Outbound calls pass through.</li>
- *   <li><b>Open</b> — {@code blockedUntil} is in the future. Outbound
- *       calls fast-fail via the decorator. {@link #isOpen()} returns
- *       {@code true}.</li>
+ *   <li><b>Closed</b> — outbound calls pass through.</li>
+ *   <li><b>Open</b> — from a trip until a recovery probe succeeds
+ *       ({@link #probeSucceeded()}). Outbound calls fast-fail via the
+ *       decorator, also after {@code blockedUntil} has passed and while
+ *       the probe is on its way: the end of a block is the time of the
+ *       next probe, not a recovery. Letting requests through for as long
+ *       as a probe of a hanging upstream takes sent every one of them
+ *       into the same timeout.</li>
  * </ul>
  *
  * <p>Transitions:
@@ -46,9 +50,14 @@ import java.util.function.Supplier;
  *       unconditional re-trip — used by the recovery probe, where the
  *       breaker already convicted the upstream and one failed probe is
  *       authoritative evidence it is still down.</li>
- *   <li>{@link #recordSuccess()}: clears {@code blockedUntil}, resets
- *       the Fibonacci backoff to seed, and records a success into the
- *       window.</li>
+ *   <li>{@link #recordSuccess()}: records a success into the window.
+ *       It never closes the breaker — an answer to a request sent before
+ *       the trip says nothing about the upstream now.</li>
+ *   <li>{@link #probeSucceeded()}: closes the breaker. The Fibonacci
+ *       backoff is kept: it returns to the seed only once the breaker
+ *       has stayed closed for {@link #PROBATION_WINDOWS} windows. An
+ *       upstream that answers the probe and fails real requests again
+ *       is blocked longer each time instead of for the seed forever.</li>
  *   <li>A failure that does NOT satisfy the trip predicate: no state
  *       change (e.g. a 429 — owned by the rate-limit gate; a 403 —
  *       authoritative auth signal from upstream).</li>
@@ -64,6 +73,19 @@ import java.util.function.Supplier;
  * @since 2.2.0
  */
 public final class UpstreamCircuitBreaker {
+
+    /**
+     * Sliding windows the breaker has to stay closed for before the
+     * backoff returns to its seed. Longer than any request timeout: a
+     * re-trip on requests that hang for 30 s arrives more than one
+     * window after the breaker closed.
+     */
+    public static final int PROBATION_WINDOWS = 10;
+
+    /**
+     * Probe target of an upstream no request failed on.
+     */
+    private static final String ROOT = "/";
 
     /**
      * Host this breaker protects. Exposed for diagnostics; the
@@ -115,6 +137,38 @@ public final class UpstreamCircuitBreaker {
     private volatile Instant blockedUntil;
 
     /**
+     * Whether the breaker is open: set by a trip, cleared only by a
+     * successful probe.
+     */
+    private volatile boolean convicted;
+
+    /**
+     * When the breaker last closed; {@code null} before the first
+     * recovery. Guarded by {@code this}.
+     */
+    private Instant closedAt;
+
+    /**
+     * Whether a recovery probe is scheduled or on its way. The breaker
+     * is shared by every client slice of the host, so the claim lives
+     * here: one probe per block, whoever sends it.
+     */
+    private final AtomicBoolean probing;
+
+    /**
+     * Requests refused since the breaker last opened. Counted here, not
+     * in a client slice: every slice of the host refuses on this
+     * breaker, and the one whose probe closes it reports the total.
+     */
+    private final AtomicLong refused;
+
+    /**
+     * Request target of the last qualifying failure — what the recovery
+     * probe asks for.
+     */
+    private volatile String failing;
+
+    /**
      * Per-second sliding window: successes per epoch-second bucket.
      * Index is {@code epochSecond % windowSeconds}; {@code stamps}
      * detects stale buckets from earlier revolutions. Guarded by
@@ -154,6 +208,9 @@ public final class UpstreamCircuitBreaker {
         this.backoff = new FibonacciBackoff(this.backoffSeed, this.backoffCap);
         this.tripCount = new AtomicLong();
         this.blockedUntil = null;
+        this.probing = new AtomicBoolean();
+        this.refused = new AtomicLong();
+        this.failing = UpstreamCircuitBreaker.ROOT;
         this.successes = new int[initial.windowSeconds()];
         this.failures = new int[initial.windowSeconds()];
         this.stamps = new long[initial.windowSeconds()];
@@ -182,14 +239,84 @@ public final class UpstreamCircuitBreaker {
 
     /**
      * @return {@code true} iff the breaker is currently open
-     *     (outbound calls must fast-fail). The check is wall-clock
-     *     aware: an entry whose {@code blockedUntil} has elapsed
-     *     reports closed without requiring an explicit
-     *     {@link #recordSuccess()}.
+     *     (outbound calls must fast-fail): from a trip until
+     *     {@link #probeSucceeded()}, whatever the clock says.
      */
     public boolean isOpen() {
-        final Instant until = this.blockedUntil;
-        return until != null && this.clock.instant().isBefore(until);
+        return this.convicted;
+    }
+
+    /**
+     * Remember what a qualifying failure was asked for, so the recovery
+     * probe asks for the same. An upstream can answer {@code /} from its
+     * front end while every artifact request hangs or fails.
+     *
+     * @param target Request target (path and query) of the failed call.
+     */
+    public void failedOn(final String target) {
+        if (target != null && !target.isEmpty()) {
+            this.failing = target;
+        }
+    }
+
+    /**
+     * @return Request target the recovery probe asks for: that of the
+     *     last qualifying failure, {@code /} when there was none.
+     */
+    public String probeTarget() {
+        return this.failing;
+    }
+
+    /**
+     * Count a request refused while open.
+     */
+    public void fastFailed() {
+        this.refused.incrementAndGet();
+    }
+
+    /**
+     * @return Requests refused since the last call, for the recovery
+     *     record; the count starts again.
+     */
+    public long drainFastFails() {
+        return this.refused.getAndSet(0L);
+    }
+
+    /**
+     * Claim the recovery probe of the current block.
+     *
+     * @return {@code true} for the one caller that has to send it; the
+     *     claim is given back by {@link #probeSucceeded()}, a
+     *     {@code probeFailed} or {@link #releaseProbe()}.
+     */
+    public boolean claimProbe() {
+        return this.convicted && this.probing.compareAndSet(false, true);
+    }
+
+    /**
+     * Give back a claimed probe that could not be sent.
+     */
+    public void releaseProbe() {
+        this.probing.set(false);
+    }
+
+    /**
+     * The recovery probe was answered: close the breaker. The backoff
+     * is kept, see {@link #PROBATION_WINDOWS}.
+     *
+     * @return {@code true} iff the breaker was open and this closed it
+     *     — the caller logs the recovery exactly once.
+     */
+    public synchronized boolean probeSucceeded() {
+        final boolean closed = this.convicted;
+        this.convicted = false;
+        this.blockedUntil = null;
+        this.failing = UpstreamCircuitBreaker.ROOT;
+        if (closed) {
+            this.closedAt = this.clock.instant();
+        }
+        this.probing.set(false);
+        return closed;
     }
 
     /**
@@ -233,6 +360,7 @@ public final class UpstreamCircuitBreaker {
         if (this.config.get().shouldTripOnException().test(error)) {
             this.trip();
         }
+        this.probing.set(false);
     }
 
     /**
@@ -245,23 +373,18 @@ public final class UpstreamCircuitBreaker {
         if (this.config.get().shouldTripOnStatus().test(status)) {
             this.trip();
         }
+        this.probing.set(false);
     }
 
     /**
-     * Record a successful upstream response into the window, close the
-     * breaker (clear {@code blockedUntil}) and reset the Fibonacci
-     * backoff to the configured seed.
-     *
-     * @return {@code true} iff the breaker had a block set (still open
-     *     or wall-clock-expired) and this success closed it — the
-     *     caller logs the recovery exactly once.
+     * Record a successful upstream response into the window. Closing
+     * the breaker is the probe's business ({@link #probeSucceeded()}):
+     * a request sent before the trip may be answered while the breaker
+     * is open, and one such answer among the failures that opened it is
+     * no recovery.
      */
-    public synchronized boolean recordSuccess() {
+    public synchronized void recordSuccess() {
         this.markWindow(true);
-        final boolean closed = this.blockedUntil != null;
-        this.blockedUntil = null;
-        this.backoff.reset();
-        return closed;
     }
 
     /**
@@ -282,9 +405,10 @@ public final class UpstreamCircuitBreaker {
     }
 
     /**
-     * @return Wall-clock instant the breaker re-opens, or {@code null}
-     *     when closed. Surface this to callers that need to set
-     *     {@code Retry-After} on synthesised responses.
+     * @return Wall-clock instant of the next recovery probe, or
+     *     {@code null} when closed or when that instant has passed (the
+     *     probe is due or on its way). Surface this to callers that
+     *     need to set {@code Retry-After} on synthesised responses.
      */
     public Instant blockedUntil() {
         final Instant until = this.blockedUntil;
@@ -393,8 +517,18 @@ public final class UpstreamCircuitBreaker {
             this.backoffCap = cfg.maxBackoff();
             this.backoff = new FibonacciBackoff(this.backoffSeed, this.backoffCap);
         }
+        final Instant now = this.clock.instant();
+        if (this.closedAt != null && !now.isBefore(
+            this.closedAt.plusSeconds((long) cfg.windowSeconds() * PROBATION_WINDOWS)
+        )) {
+            // Closed long enough: this is a new outage, not the old one
+            // coming back after a probe that proved nothing.
+            this.backoff.reset();
+        }
+        this.closedAt = null;
         final Duration window = this.backoff.next();
-        this.blockedUntil = this.clock.instant().plus(window);
+        this.blockedUntil = now.plus(window);
+        this.convicted = true;
         this.tripCount.incrementAndGet();
     }
 }

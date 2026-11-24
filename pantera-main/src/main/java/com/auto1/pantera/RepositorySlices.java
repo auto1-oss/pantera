@@ -898,7 +898,8 @@ public class RepositorySlices {
             client.get().circuitBreakerRegistry().find(key).ifPresent(
                 breaker -> out.add(new com.auto1.pantera.api.v1.admin.BreakerProbe.Upstream(
                     key, breaker.isOpen(),
-                    breaker.isOpen() ? Math.max(0L, breaker.timeRemaining().toSeconds()) : 0L
+                    java.util.Optional.ofNullable(breaker.timeRemaining())
+                        .map(java.time.Duration::toSeconds).orElse(0L)
                 ))
             );
         }
