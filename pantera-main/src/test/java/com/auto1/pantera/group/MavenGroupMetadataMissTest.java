@@ -131,9 +131,12 @@ final class MavenGroupMetadataMissTest {
             "snapshot metadata is missing before deploy",
             get(group, SNAPSHOT).status(), new IsEqual<>(RsStatus.NOT_FOUND)
         );
+        // The hosted repository regenerates the artifact-level metadata
+        // itself when an artifact file is stored (2.3.0), so only the
+        // snapshot-level file is still missing at this point.
         MatcherAssert.assertThat(
-            "artifact metadata is missing before deploy",
-            get(group, PATH).status(), new IsEqual<>(RsStatus.NOT_FOUND)
+            "artifact metadata is written with the artifact",
+            get(group, PATH).status(), new IsEqual<>(RsStatus.OK)
         );
         hosted.put(SNAPSHOT, metadata("1.0-SNAPSHOT"));
         hosted.put(PATH, metadata("1.0-SNAPSHOT"));
