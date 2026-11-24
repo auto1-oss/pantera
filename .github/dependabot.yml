@@ -35,6 +35,16 @@ updates:
       day: monday
     open-pull-requests-limit: 5
 
+  # Base images of the Pantera image definitions. The JDK is pinned to a
+  # release (scripts/check-jvm-cve-2026-114938.sh rejects a floating tag),
+  # so a JDK security release reaches the image through this update.
+  - package-ecosystem: docker
+    directory: "/pantera-main"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+
 # NOTE: pantera-main/docker-compose/pantera/artifacts/** are deliberately
 # NOT covered — those are local-testing fixture projects whose pinned,
 # dependency-heavy trees exist to exercise the proxy (bumping them breaks

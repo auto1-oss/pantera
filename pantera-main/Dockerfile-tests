@@ -1,10 +1,40 @@
-FROM openjdk:21-oracle
+# The JDK is a pinned Temurin release that carries the fix for CVE-2026-114938
+# (21.0.13.1 or later); scripts/check-jvm-cve-2026-114938.sh reads
+# PANTERA_JDK_VERSION and fails an older one. It is installed from the
+# release archive, checked against the published SHA-256: the Ubuntu-based
+# eclipse-temurin image of this release has no arm64 build.
+FROM ubuntu:22.04
+
+# this is a non-interactive automated build - avoid some warning messages
+ENV DEBIAN_FRONTEND noninteractive
+
+ENV PANTERA_JDK_VERSION=21.0.13.1+2
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wget ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    case "$(uname -m)" in \
+        x86_64) arch="x64" ;; \
+        aarch64) arch="aarch64" ;; \
+        *) echo "Unsupported architecture: $(uname -m)" && exit 1 ;; \
+    esac && \
+    name="OpenJDK21U-jdk_${arch}_linux_hotspot_$(echo "$PANTERA_JDK_VERSION" | tr '+' '_').tar.gz" && \
+    base="https://github.com/adoptium/temurin21-binaries/releases/download/jdk-$(echo "$PANTERA_JDK_VERSION" | sed 's/+/%2B/')" && \
+    cd /tmp && \
+    wget -q -O "$name" "$base/$name" && \
+    wget -q -O "$name.sha256.txt" "$base/$name.sha256.txt" && \
+    sha256sum -c "$name.sha256.txt" && \
+    mkdir -p /opt/java/jdk21 && \
+    tar -zxf "$name" -C /opt/java/jdk21 --strip-components 1 && \
+    rm -f "$name" "$name.sha256.txt"
+ENV JAVA_HOME /opt/java/jdk21
+ENV PATH $JAVA_HOME/bin:$PATH
+
 ARG JAR_FILE
 
 LABEL description="Pantera Artifact Registry"
 
 RUN groupadd -r -g 2020 pantera && \
-    adduser -M -r -g pantera -u 2021 -s /sbin/nologin pantera && \
+    useradd -M -r -g pantera -u 2021 -s /sbin/nologin pantera && \
     mkdir -p /etc/pantera /usr/lib/pantera /var/pantera && \
     chown pantera:pantera -R /etc/pantera /usr/lib/pantera /var/pantera
 USER 2021:2020
@@ -13,10 +43,10 @@ COPY target/dependency  /usr/lib/pantera/lib
 COPY target/${JAR_FILE} /usr/lib/pantera/pantera.jar
 
 # Run server for 10sec. on build-time to prepare JVM AppCDS cache data, which will be used to speed-up startup of the container
-RUN timeout 10s java -XX:ArchiveClassesAtExit=/usr/lib/pantera/pantera-d.jsa $JVM_ARGS -XX:-UseBASE64Intrinsics --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.security=ALL-UNNAMED -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* com.auto1.pantera.VertxMain --config-file=/etc/pantera/pantera.yml --port=8080 --api-port=8086 || :
+RUN timeout 10s java -XX:ArchiveClassesAtExit=/usr/lib/pantera/pantera-d.jsa $JVM_ARGS --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.security=ALL-UNNAMED -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* com.auto1.pantera.VertxMain --config-file=/etc/pantera/pantera.yml --port=8080 --api-port=8086 || :
 
 VOLUME /var/pantera /etc/pantera
 WORKDIR /var/pantera
 
 EXPOSE 8080 8086
-CMD [ "sh", "-c", "java -XX:SharedArchiveFile=/usr/lib/pantera/pantera-d.jsa $JVM_ARGS -XX:-UseBASE64Intrinsics --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.security=ALL-UNNAMED -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* com.auto1.pantera.VertxMain --config-file=/etc/pantera/pantera.yml --port=8080 --api-port=8086" ]
+CMD [ "sh", "-c", "java -XX:SharedArchiveFile=/usr/lib/pantera/pantera-d.jsa $JVM_ARGS --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.security=ALL-UNNAMED -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* com.auto1.pantera.VertxMain --config-file=/etc/pantera/pantera.yml --port=8080 --api-port=8086" ]

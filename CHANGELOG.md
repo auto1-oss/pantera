@@ -46,6 +46,10 @@
 - **`url.full` of upstream records has no double slash** for a remote configured with a trailing slash. The request itself was always sent with one. ([@aydasraf](https://github.com/aydasraf))
 - **Metric filters and the `job` tag apply to every meter.** Vert.x pool and JVM meters were registered before the filters and lacked the `job` tag; the Micrometer warnings at start are gone. JVM meters are registered once: a panel that summed the two former series shows half its previous value. ([@aydasraf](https://github.com/aydasraf))
 
+### 🔒 Security
+
+- **The images run a JDK that carries the fix for CVE-2026-114938, and the build can no longer pick up an older one.** The base image was a floating tag, so a cached layer could build an image on a JDK without the fix. All image definitions are now pinned to Temurin 21.0.13.1; CI rejects an unpinned or older JDK. The `-XX:-UseBASE64Intrinsics` workaround is no longer passed by the image; keep it if you run the jar on an older JDK. ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.13
 
 ### 🌟 New features
