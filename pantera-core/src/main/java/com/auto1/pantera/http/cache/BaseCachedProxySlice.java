@@ -134,6 +134,12 @@ public abstract class BaseCachedProxySlice implements Slice {
     private final Cache cache;
 
     /**
+     * Largest checksum or signature file that is read into memory to be
+     * stored; a longer answer is relayed as it is.
+     */
+    private static final int CHECKSUM_LIMIT = 64 * 1024;
+
+    /**
      * Repository name.
      */
     private final String repoName;
@@ -2013,8 +2019,81 @@ public abstract class BaseCachedProxySlice implements Slice {
                             .build()
                     );
                 }
-                return this.fetchDirect(line, key, incomingHeaders, owner);
+                return this.fetchDirect(line, key, incomingHeaders, owner)
+                    .thenCompose(resp -> this.keepChecksum(key, resp));
             }).toCompletableFuture();
+    }
+
+    /**
+     * Store a checksum file the upstream just answered. A checksum file
+     * that is not in the storage (the artifact was stored before checksums
+     * were kept, or is not cached at all and a client only asks for its
+     * checksum to see whether its own copy is current) sent every request
+     * for it to the upstream: a build of nothing but cached artifacts
+     * still failed when the upstream was down. It is now fetched once.
+     *
+     * <p>Storing it writes one small file and nothing else: a checksum path
+     * produces no artifact event, so the search index gets no row for it,
+     * and the artifact's own fetch later overwrites it with the checksums
+     * verified against the artifact.</p>
+     *
+     * @param key Key of the checksum file
+     * @param resp Answer of the upstream
+     * @return The answer, with a body that can still be read
+     */
+    private CompletableFuture<Response> keepChecksum(final Key key, final Response resp) {
+        final String path = key.string();
+        if (!resp.status().success() || this.storage.isEmpty()
+            || BaseCachedProxySlice.declaredLength(resp) > BaseCachedProxySlice.CHECKSUM_LIMIT) {
+            return CompletableFuture.completedFuture(resp);
+        }
+        final Storage store = this.storage.get();
+        return resp.body().asBytesFuture().thenCompose(
+            bytes -> {
+                final Response answer = new Response(
+                    resp.status(), resp.headers(), new Content.From(bytes)
+                );
+                if (bytes.length == 0 || bytes.length > BaseCachedProxySlice.CHECKSUM_LIMIT) {
+                    return CompletableFuture.completedFuture(answer);
+                }
+                return store.save(key, new Content.From(bytes))
+                    .handle(
+                        (ignored, err) -> {
+                            if (err != null) {
+                                EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                                    .message("Could not store the checksum file fetched"
+                                        + " from the upstream; it is served and will be"
+                                        + " fetched again")
+                                    .eventCategory("file")
+                                    .eventAction("checksum_store")
+                                    .eventOutcome("failure")
+                                    .field("repository.name", this.repoName)
+                                    .field("url.path", path)
+                                    .error(err)
+                                    .field("log.source", "application")
+                                    .log();
+                            }
+                            return answer;
+                        }
+                    );
+            }
+        );
+    }
+
+    /**
+     * Length a response declares, or 0 when it declares none.
+     */
+    private static long declaredLength(final Response resp) {
+        long length = 0L;
+        final List<String> values = resp.headers().values("Content-Length");
+        if (!values.isEmpty()) {
+            try {
+                length = Long.parseLong(values.get(0).trim());
+            } catch (final NumberFormatException ignored) {
+                length = 0L;
+            }
+        }
+        return length;
     }
 
     private CompletableFuture<Response> handleRootPath(
