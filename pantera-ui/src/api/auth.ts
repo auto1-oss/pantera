@@ -202,8 +202,9 @@ export async function updateRequestLimitsSettings(
  * GET/PUT /admin/egress-settings. `egress_block_private` ("true"/"false")
  * refuses outbound connections to private, loopback and link-local
  * destinations; `egress_allow_hosts` exempts listed hosts from that;
- * `upstream_credential_allow_hosts` lists hosts a bearer-token realm may
- * live on before upstream credentials are released to it. Comma-separated.
+ * `upstream_credential_allow_hosts` lists hosts, besides the upstream host
+ * itself, a bearer-token realm or mirror may live on before upstream
+ * credentials are released to it (Docker Hub: auth.docker.io). Comma-separated.
  */
 export interface EgressSettings {
   egress_block_private: string

@@ -63,7 +63,6 @@ final class CacheManifestsTest {
         "full,empty,origin",
         "faulty,full,cache",
         "full,faulty,origin",
-        "faulty,empty,",
         "empty,faulty,",
         "full,full,origin"
     })
@@ -84,6 +83,22 @@ final class CacheManifestsTest {
                 .map(Manifest::digest)
                 .map(Digest::hex),
             new IsEqual<>(Optional.ofNullable(expected))
+        );
+    }
+
+    @Test
+    void failsWhenOriginFailedAndNothingIsCached() {
+        final CacheManifests manifests = new CacheManifests(
+            "test",
+            new SimpleRepo(new FakeManifests("faulty", "origin")),
+            new SimpleRepo(new FakeManifests("empty", "cache")),
+            Optional.empty(), "*", Optional.empty()
+        );
+        // An origin that could not answer is not a manifest that does not
+        // exist: "absent" here was served as 404 MANIFEST_UNKNOWN.
+        Assertions.assertThrows(
+            java.util.concurrent.CompletionException.class,
+            () -> manifests.get(ManifestReference.from("ref")).toCompletableFuture().join()
         );
     }
 

@@ -13,14 +13,18 @@ package com.auto1.pantera.group;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.LocalRefusal;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
+import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestReasons;
 import io.micrometer.core.instrument.DistributionSummary;
 
 import java.io.ByteArrayOutputStream;
@@ -29,8 +33,11 @@ import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Maven-specific group slice with sequential-first metadata fetch.
@@ -80,6 +87,11 @@ public final class MavenGroupSlice implements Slice {
      * Member repository names.
      */
     private final List<String> members;
+
+    /**
+     * Names of the members that are proxy repositories.
+     */
+    private final Set<String> proxies;
 
     /**
      * Slice resolver for getting member slices.
@@ -179,6 +191,31 @@ public final class MavenGroupSlice implements Slice {
         this(delegate, group, members, resolver, port, depth, cache, "maven-group");
     }
 
+    /**
+     * Constructor of a group that knows none of its members to be a proxy.
+     *
+     * @param delegate Delegate group slice
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param resolver Slice resolver
+     * @param port Server port
+     * @param depth Nesting depth
+     * @param cache Group metadata cache to use
+     * @param repoType Repo type ("maven-group" or "gradle-group")
+     */
+    public MavenGroupSlice(
+        final Slice delegate,
+        final String group,
+        final List<String> members,
+        final SliceResolver resolver,
+        final int port,
+        final int depth,
+        final GroupMetadataCache cache,
+        final String repoType
+    ) {
+        this(delegate, group, members, resolver, port, depth, cache, repoType, Set.of());
+    }
+
     /** Repo type ("maven-group" / "gradle-group") — used only for audit records. */
     private final String repoType;
 
@@ -203,6 +240,9 @@ public final class MavenGroupSlice implements Slice {
      * @param depth Nesting depth
      * @param cache Group metadata cache to use
      * @param repoType Repo type ("maven-group" or "gradle-group")
+     * @param proxies Names of the members that are proxy repositories: one
+     *  of them failing or being skipped does not fail the group, see
+     *  {@link #walkTerminal}
      */
     public MavenGroupSlice(
         final Slice delegate,
@@ -212,8 +252,10 @@ public final class MavenGroupSlice implements Slice {
         final int port,
         final int depth,
         final GroupMetadataCache cache,
-        final String repoType
+        final String repoType,
+        final Set<String> proxies
     ) {
+        this.proxies = Set.copyOf(proxies);
         this.delegate = delegate;
         this.group = group;
         this.members = members;
@@ -319,6 +361,7 @@ public final class MavenGroupSlice implements Slice {
                                 .build();
                         } catch (java.security.NoSuchAlgorithmException e) {
                             EcsLogger.error("com.auto1.pantera.group")
+                                .requestContext(headers)
                                 .message("Failed to compute checksum")
                                 .eventCategory("web")
                                 .eventAction("checksum_compute")
@@ -359,6 +402,7 @@ public final class MavenGroupSlice implements Slice {
             if (cached.isPresent()) {
                 // Cache HIT (L1 or L2)
                 EcsLogger.debug("com.auto1.pantera.group")
+                    .requestContext(headers)
                     .message("Returning cached merged metadata (cache hit)")
                     .eventCategory("web")
                     .eventAction("metadata_merge")
@@ -392,6 +436,10 @@ public final class MavenGroupSlice implements Slice {
                 );
             }
 
+            if (this.metadataCache.knownMiss(cacheKey)) {
+                return CompletableFuture.completedFuture(this.rememberedMiss(headers, path));
+            }
+
             // Cache MISS: coalesce concurrent callers so only one does the
             // N-member fanout + merge. Leader-vs-follower is distinguished by
             // a flag the loader sets on the caller's thread (Caffeine runs
@@ -418,6 +466,7 @@ public final class MavenGroupSlice implements Slice {
                     );
             }
             EcsLogger.debug("com.auto1.pantera.group")
+                .requestContext(headers)
                 .message("Coalescing with in-flight metadata fetch")
                 .eventCategory("web")
                 .eventAction("metadata_fetch_coalesce")
@@ -457,10 +506,13 @@ public final class MavenGroupSlice implements Slice {
         // is still reference-counted.
         return CompletableFuture.completedFuture((byte[]) null).thenCompose(ignored -> {
             final long fetchStartTime = System.currentTimeMillis();
-            return tryMembersSequentially(line, headers, path, cacheKey, 0, fetchStartTime)
+            final MetadataWalk walk = new MetadataWalk(this.metadataCache.startWalk(cacheKey));
+            return tryMembersSequentially(line, headers, path, cacheKey, 0, fetchStartTime, walk)
+                .whenComplete((resp, err) -> walk.abandon())
                 .exceptionally(err -> {
                     final Throwable cause = err.getCause() != null ? err.getCause() : err;
                     EcsLogger.error("com.auto1.pantera.group")
+                        .requestContext(headers)
                         .message("Failed to fetch metadata sequentially")
                         .eventCategory("web")
                         .eventAction("metadata_fetch")
@@ -489,10 +541,12 @@ public final class MavenGroupSlice implements Slice {
         final String path,
         final String cacheKey,
         final int idx,
-        final long fetchStartTime
+        final long fetchStartTime,
+        final MetadataWalk walk
     ) {
         if (idx >= this.members.size()) {
-            return staleFallbackOrNotFound(path, cacheKey, fetchStartTime);
+            return staleFallbackOrNotFound(headers, path, cacheKey, fetchStartTime)
+                .thenApply(answer -> this.walkTerminal(walk, answer, headers, path));
         }
         final String member = this.members.get(idx);
         final Slice memberSlice = this.resolver.slice(
@@ -501,7 +555,10 @@ public final class MavenGroupSlice implements Slice {
         // Member slices are wrapped in TrimPathSlice which expects paths
         // with the member name as the first segment.
         final RequestLine memberLine = rewritePath(line, member);
-        return memberSlice.response(memberLine, dropFullPathHeader(headers), Content.EMPTY)
+        return GroupResolver.noted(
+            memberSlice.response(memberLine, dropFullPathHeader(headers), Content.EMPTY),
+            headers
+        )
             .thenCompose(resp -> {
                 if (isCooldownVerdict(resp)) {
                     // The member's own cooldown verdict (e.g. every version
@@ -510,6 +567,7 @@ public final class MavenGroupSlice implements Slice {
                     // bytes must not mask the verdict. Relay it verbatim;
                     // never cache it.
                     EcsLogger.info("com.auto1.pantera.group")
+                        .requestContext(headers)
                         .message("Member returned a cooldown verdict for metadata; relaying it")
                         .eventCategory("web")
                         .eventAction("metadata_fetch")
@@ -541,6 +599,7 @@ public final class MavenGroupSlice implements Slice {
                                     recordMetadataOperation("fetch", fetchDuration);
                                     if (fetchDuration > 500) {
                                         EcsLogger.debug("com.auto1.pantera.group")
+                                            .requestContext(headers)
                                             .message("Slow sequential metadata fetch")
                                             .eventCategory("web")
                                             .eventAction("metadata_fetch")
@@ -563,8 +622,9 @@ public final class MavenGroupSlice implements Slice {
                 // recurse to the next member. 404 is normal (artifact not
                 // present in this member); 5xx logs at WARN and falls
                 // through identically — the next member may still answer.
-                if (resp.status() != RsStatus.NOT_FOUND) {
+                if (!walk.note(resp, this.proxies.contains(member))) {
                     EcsLogger.warn("com.auto1.pantera.group")
+                        .requestContext(headers)
                         .message("Member returned non-OK status; trying next")
                         .eventCategory("web")
                         .eventAction("metadata_fetch")
@@ -578,11 +638,13 @@ public final class MavenGroupSlice implements Slice {
                 }
                 return resp.body().asBytesFuture()
                     .thenCompose(drained -> tryMembersSequentially(
-                        line, headers, path, cacheKey, idx + 1, fetchStartTime
+                        line, headers, path, cacheKey, idx + 1, fetchStartTime, walk
                     ));
             })
             .exceptionally(err -> {
+                walk.threw(this.proxies.contains(member));
                 EcsLogger.warn("com.auto1.pantera.group")
+                    .requestContext(headers)
                     .message("Member fetch threw; trying next: " + member)
                     .eventCategory("web")
                     .eventAction("metadata_fetch")
@@ -601,16 +663,246 @@ public final class MavenGroupSlice implements Slice {
                 }
                 // Exception path collapsed to null — try next.
                 return tryMembersSequentially(
-                    line, headers, path, cacheKey, idx + 1, fetchStartTime
+                    line, headers, path, cacheKey, idx + 1, fetchStartTime, walk
                 );
             });
     }
 
     /**
+     * Answer for a path remembered as a miss: 404 without asking a member.
+     */
+    private Response rememberedMiss(final Headers headers, final String path) {
+        EcsLogger.debug("com.auto1.pantera.group")
+            .requestContext(headers)
+            .message("Metadata is a remembered miss, returning 404 without a member walk")
+            .eventCategory("web")
+            .eventAction("group_negative_cache_hit")
+            .field("repository.name", this.group)
+            .field("url.path", path)
+            .field("log.source", "application")
+            .log();
+        RequestReasons.instance().note(headers, RequestReasons.NEGATIVE_CACHE);
+        return ResponseBuilder.notFound().build();
+    }
+
+    /**
+     * Answer of a walk no member won, by the rules {@code GroupResolver}
+     * applies to artifacts. Stale bytes, when there are any, are served as
+     * before. Without them: when a member said the metadata is absent and
+     * every member that failed or was not asked is a proxy, it is a 404 an
+     * outer group must not remember — an unreachable proxy does not fail the
+     * group. Otherwise a member that failed makes it a 502; a member
+     * that was not asked (its upstream circuit is open, its bulkhead has no
+     * free permit) makes it a 503 with {@code Retry-After} and the refusal
+     * marker; a member that answered without saying the metadata is absent
+     * makes it a 404 an outer group must not remember; and only when every
+     * member answered an authoritative 404 is the miss remembered.
+     *
+     * @param walk What the members answered
+     * @param answer Stale bytes, or the 404 of {@link #staleFallbackOrNotFound}
+     * @param headers Request headers
+     * @param path Request path
+     * @return Answer of the group
+     */
+    private Response walkTerminal(
+        final MetadataWalk walk, final Response answer, final Headers headers, final String path
+    ) {
+        final Response result;
+        if (answer.status() != RsStatus.NOT_FOUND) {
+            walk.abandon();
+            result = answer;
+        } else if (walk.onlyProxiesUnreachable()) {
+            // A member said "not found" and every member that failed or was
+            // not asked is a proxy: an unreachable proxy does not fail the
+            // group. The 404 is marked so nobody remembers it.
+            walk.abandon();
+            if (walk.refused.get()) {
+                RequestReasons.instance().note(headers, RequestReasons.CIRCUIT_OPEN);
+            }
+            result = ResponseBuilder.notFound()
+                .header(NegativeCache.SKIP_HEADER, "true")
+                .build();
+        } else if (walk.failed.get()) {
+            walk.abandon();
+            result = ResponseBuilder.from(RsStatus.BAD_GATEWAY).build();
+        } else if (walk.refused.get()) {
+            walk.abandon();
+            result = this.membersUnavailable(walk, headers, path);
+        } else if (walk.unverified.get()) {
+            walk.abandon();
+            result = ResponseBuilder.notFound()
+                .header(NegativeCache.SKIP_HEADER, "true")
+                .build();
+        } else {
+            walk.missing();
+            result = answer;
+        }
+        return result;
+    }
+
+    /**
+     * 503 of a walk in which nobody answered and at least one member was
+     * not asked. Never a 404: that asserts absence and would be remembered.
+     */
+    private Response membersUnavailable(
+        final MetadataWalk walk, final Headers headers, final String path
+    ) {
+        final long retry = Math.max(5L, walk.retryAfter.get());
+        RequestReasons.instance().note(headers, RequestReasons.CIRCUIT_OPEN);
+        EcsLogger.warn("com.auto1.pantera.group")
+            .requestContext(headers)
+            .message(
+                "No member has the metadata and at least one is circuit-open or without"
+                    + " a free permit — returning 503, Retry-After " + retry + "s"
+            )
+            .eventCategory("network")
+            .eventAction("group_all_members_circuit_open")
+            .eventOutcome("failure")
+            .field("event.reason", "circuit_open")
+            .field("repository.name", this.group)
+            .field("url.path", path)
+            .field("http.response.status_code", RsStatus.SERVICE_UNAVAILABLE.code())
+            .requestContext(headers)
+            .field("log.source", "application")
+            .log();
+        return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+            .header("Retry-After", Long.toString(retry))
+            .header(UpstreamCircuitOpenException.HEADER, "true")
+            .textBody("All group members are temporarily unavailable")
+            .build();
+    }
+
+    /**
+     * What the members of one metadata walk answered.
+     */
+    private static final class MetadataWalk {
+
+        /**
+         * The cache's handle of the walk.
+         */
+        private final GroupMetadataCache.Walk handle;
+
+        /**
+         * The handle was finished.
+         */
+        private final AtomicBoolean finished = new AtomicBoolean();
+
+        /**
+         * A member answered 5xx or 429, or threw.
+         */
+        private final AtomicBoolean failed = new AtomicBoolean();
+
+        /**
+         * A member was not asked: circuit open or bulkhead full.
+         */
+        private final AtomicBoolean refused = new AtomicBoolean();
+
+        /**
+         * A member answered neither the metadata nor an authoritative 404.
+         */
+        private final AtomicBoolean unverified = new AtomicBoolean();
+
+        /**
+         * A member answered 404.
+         */
+        private final AtomicBoolean absent = new AtomicBoolean();
+
+        /**
+         * A member that is no proxy failed or was not asked: it may hold
+         * the metadata. Also set by a full bulkhead, which clears in a
+         * moment and keeps its 503.
+         */
+        private final AtomicBoolean hosted = new AtomicBoolean();
+
+        /**
+         * Largest {@code Retry-After} of a refusal, seconds.
+         */
+        private final AtomicLong retryAfter = new AtomicLong();
+
+        MetadataWalk(final GroupMetadataCache.Walk handle) {
+            this.handle = handle;
+        }
+
+        /**
+         * Note a member's non-2xx answer.
+         * @param resp Answer
+         * @param proxy Whether the member is a proxy repository
+         * @return True when the answer is no failure of the member: a 404
+         *  or a request Pantera itself refused to forward
+         */
+        boolean note(final Response resp, final boolean proxy) {
+            final RsStatus status = resp.status();
+            final boolean quiet;
+            if (status == RsStatus.NOT_FOUND) {
+                this.absent.set(true);
+                if (!resp.headers().values(NegativeCache.SKIP_HEADER).isEmpty()) {
+                    this.unverified.set(true);
+                }
+                quiet = true;
+            } else if (new LocalRefusal(resp).present()) {
+                this.refused.set(true);
+                this.hosted.compareAndSet(false, !proxy || new LocalRefusal(resp).bulkhead());
+                this.retryAfter.accumulateAndGet(
+                    GroupResolver.parseRetryAfterSeconds(resp), Math::max
+                );
+                quiet = true;
+            } else if (status.serverError() || status == RsStatus.TOO_MANY_REQUESTS) {
+                this.failed.set(true);
+                this.hosted.compareAndSet(false, !proxy);
+                quiet = false;
+            } else {
+                this.unverified.set(true);
+                quiet = false;
+            }
+            return quiet;
+        }
+
+        /**
+         * A member threw.
+         * @param proxy Whether the member is a proxy repository
+         */
+        void threw(final boolean proxy) {
+            this.failed.set(true);
+            this.hosted.compareAndSet(false, !proxy);
+        }
+
+        /**
+         * Whether the walk ends in "not found" although members did not
+         * answer: a member said 404, and every member that failed or was
+         * not asked is a proxy.
+         * @return True when the group answers a 404 nobody remembers
+         */
+        boolean onlyProxiesUnreachable() {
+            return (this.failed.get() || this.refused.get())
+                && this.absent.get() && !this.hosted.get();
+        }
+
+        /**
+         * Every member answered an authoritative 404: remember the miss.
+         */
+        void missing() {
+            if (this.finished.compareAndSet(false, true)) {
+                this.handle.finish(true);
+            }
+        }
+
+        /**
+         * End the walk without remembering anything. No-op once ended.
+         */
+        void abandon() {
+            if (this.finished.compareAndSet(false, true)) {
+                this.handle.finish(false);
+            }
+        }
+    }
+
+    /**
      * All members exhausted: return last-known-good stale bytes if the L2
-     * cache has them, otherwise 404.
+     * cache has them, otherwise 404. The stale read may answer on a Valkey
+     * thread, so both records are correlated from the request's headers.
      */
     private CompletableFuture<Response> staleFallbackOrNotFound(
+        final Headers headers,
         final String path,
         final String cacheKey,
         final long fetchStartTime
@@ -620,6 +912,7 @@ public final class MavenGroupSlice implements Slice {
             .thenApply(stale -> {
                 if (stale.isPresent()) {
                     EcsLogger.warn("com.auto1.pantera.group")
+                        .requestContext(headers)
                         .message("Returning stale metadata (all members 404)")
                         .eventCategory("web")
                         .eventAction("metadata_fetch")
@@ -635,7 +928,8 @@ public final class MavenGroupSlice implements Slice {
                         .body(stale.get())
                         .build();
                 }
-                EcsLogger.warn("com.auto1.pantera.group")
+                EcsLogger.debug("com.auto1.pantera.group")
+                    .requestContext(headers)
                     .message("No member returned metadata and no stale fallback")
                     .eventCategory("web")
                     .eventAction("metadata_fetch")

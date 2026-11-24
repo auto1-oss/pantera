@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.ProxyEventRetry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -95,11 +96,8 @@ public final class GoProxyPackageProcessor implements Runnable {
      * Process packages in parallel batches.
      */
     private void processPackagesBatch() {
-        final List<ProxyArtifactEvent> batch = new ArrayList<>(100);
-        ProxyArtifactEvent event;
-        while (batch.size() < 100 && (event = this.packages.poll()) != null) {
-            batch.add(event);
-        }
+        // Events waiting for their retry time stay queued (ProxyEventRetry).
+        final List<ProxyArtifactEvent> batch = new ProxyEventRetry(this.packages).due(100);
 
         if (batch.isEmpty()) {
             return;
@@ -147,6 +145,8 @@ public final class GoProxyPackageProcessor implements Runnable {
     private CompletableFuture<Void> processGoPackageAsync(final ProxyArtifactEvent event) {
         final Key key = event.artifactKey();
         EcsLogger.debug("com.auto1.pantera.goproxy")
+            .traceContext(event.traceId(), event.clientIp())
+            .field("repository.name", event.repoName())
             .message("Processing Go proxy event")
             .eventCategory("web")
             .eventAction("proxy_processor")
@@ -158,6 +158,8 @@ public final class GoProxyPackageProcessor implements Runnable {
         final ModuleCoordinates coords = parseCoordinates(key);
         if (coords == null) {
             EcsLogger.warn("com.auto1.pantera.goproxy")
+                .traceContext(event.traceId(), event.clientIp())
+                .field("repository.name", event.repoName())
                 .message("Could not parse coordinates, skipping")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
@@ -176,17 +178,10 @@ public final class GoProxyPackageProcessor implements Runnable {
         // Check existence and get metadata asynchronously
         return this.asto.exists(zipKey).thenCompose(exists -> {
             if (!exists) {
-                EcsLogger.warn("com.auto1.pantera.goproxy")
-                    .message("No .zip file found, re-queuing for retry")
-                    .eventCategory("web")
-                    .eventAction("proxy_processor")
-                    .eventOutcome("failure")
-                    .field("package.name", key.string())
-                    .field("file.target_path", zipKey.string())
-                    .field("log.source", "application")
-                    .log();
-                // Re-add event to queue for retry
-                this.packages.add(event);
+                // The zip is committed before the event is queued, so this
+                // is rare (evicted, deleted). Bounded retry with backoff:
+                // DEBUG while retrying, one WARN when given up.
+                new ProxyEventRetry(this.packages).again(event, "com.auto1.pantera.goproxy");
                 return CompletableFuture.completedFuture(null);
             }
 
@@ -196,6 +191,8 @@ public final class GoProxyPackageProcessor implements Runnable {
                 .thenAccept(size -> {
                     if (size.isEmpty()) {
                         EcsLogger.warn("com.auto1.pantera.goproxy")
+                            .traceContext(event.traceId(), event.clientIp())
+                            .field("repository.name", event.repoName())
                             .message("Missing size metadata, skipping")
                             .eventCategory("web")
                             .eventAction("proxy_processor")
@@ -233,13 +230,16 @@ public final class GoProxyPackageProcessor implements Runnable {
                     );
 
                     EcsLogger.info("com.auto1.pantera.goproxy")
+
+                        .traceContext(event.traceId(), event.clientIp())
+
+                        .field("repository.name", event.repoName())
                         .message("Recorded Go proxy module")
                         .eventCategory("web")
                         .eventAction("proxy_processor")
                         .eventOutcome("success")
                         .field("package.name", decodedModule)
                         .field("package.version", coords.version())
-                        .field("repository.name", event.repoName())
                         .field("package.size", size.get())
                         .field("package.release_date", release == null ? null
                             : java.time.Instant.ofEpochMilli(release).toString())
@@ -248,6 +248,8 @@ public final class GoProxyPackageProcessor implements Runnable {
                 });
         }).exceptionally(err -> {
             EcsLogger.error("com.auto1.pantera.goproxy")
+                .traceContext(event.traceId(), event.clientIp())
+                .field("repository.name", event.repoName())
                 .message("Failed to process Go package")
                 .eventCategory("web")
                 .eventAction("proxy_processor")

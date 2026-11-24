@@ -19,11 +19,11 @@ import com.auto1.pantera.http.trace.TraceContext;
 import com.auto1.pantera.maven.http.MavenSlice;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.ProxyEventRetry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -54,23 +54,6 @@ public final class MavenProxyPackageProcessor implements Runnable {
      * @since 2.2.0
      */
     private static final String FALLBACK_REPO_TYPE = "maven-proxy";
-
-    /**
-     * Maximum number of retry attempts for failed package processing.
-     * After this many retries, the package will be dropped with a warning.
-     *
-     * @since 1.19.2
-     */
-    private static final int MAX_RETRIES = 3;
-
-    /**
-     * Retry count tracker for each artifact key.
-     * Maps artifact key to number of retry attempts.
-     * Used to prevent infinite retry loops for permanently failing packages.
-     *
-     * @since 1.19.2
-     */
-    private final ConcurrentHashMap<String, Integer> retryCount = new ConcurrentHashMap<>();
 
     /**
      * Artifact events queue.
@@ -111,12 +94,8 @@ public final class MavenProxyPackageProcessor implements Runnable {
         TraceContext.set(traceId);
 
         // Drain up to 100 packages for batch processing
-        final List<ProxyArtifactEvent> batch = new ArrayList<>(100);
-        ProxyArtifactEvent event = this.packages.poll();
-        while (batch.size() < 100 && event != null) {
-            batch.add(event);
-            event = this.packages.poll();
-        }
+        // Events waiting for their retry time stay queued (ProxyEventRetry).
+        final List<ProxyArtifactEvent> batch = new ProxyEventRetry(this.packages).due(100);
 
         if (batch.isEmpty()) {
             return;
@@ -197,6 +176,8 @@ public final class MavenProxyPackageProcessor implements Runnable {
 
                     if (filtered.isEmpty()) {
                         EcsLogger.debug("com.auto1.pantera.maven")
+                            .traceContext(event.traceId(), event.clientIp())
+                            .field("repository.name", event.repoName())
                             .message("Maven package has only temporary files, skipping (will retry later)")
                             .eventCategory("web")
                             .eventAction("proxy_package_process")
@@ -242,10 +223,9 @@ public final class MavenProxyPackageProcessor implements Runnable {
                                 ).withContext(event.traceId(), event.clientIp())
                             );
 
-                            // Clear retry count on successful processing
-                            this.retryCount.remove(event.artifactKey().string());
-
                             EcsLogger.debug("com.auto1.pantera.maven")
+                                .traceContext(event.traceId(), event.clientIp())
+                                .field("repository.name", event.repoName())
                                 .message("Recorded Maven proxy artifact")
                                 .eventCategory("web")
                                 .eventAction("proxy_artifact_record")
@@ -263,6 +243,8 @@ public final class MavenProxyPackageProcessor implements Runnable {
                         });
                 } catch (final RuntimeException err) {
                     EcsLogger.error("com.auto1.pantera.maven")
+                        .traceContext(event.traceId(), event.clientIp())
+                        .field("repository.name", event.repoName())
                         .message("Failed to extract Maven archive from keys")
                         .eventCategory("web")
                         .eventAction("proxy_package_process")
@@ -276,6 +258,8 @@ public final class MavenProxyPackageProcessor implements Runnable {
             })
             .exceptionally(err -> {
                 EcsLogger.error("com.auto1.pantera.maven")
+                    .traceContext(event.traceId(), event.clientIp())
+                    .field("repository.name", event.repoName())
                     .message("Failed to process Maven package")
                     .eventCategory("web")
                     .eventAction("proxy_package_process")
@@ -345,43 +329,14 @@ public final class MavenProxyPackageProcessor implements Runnable {
         // If ValueNotFoundException, the file might still be in transit
         // This can happen if file was just moved after listing
         if (err.getCause() instanceof com.auto1.pantera.asto.ValueNotFoundException) {
-            final String key = event.artifactKey().string();
-            final int currentRetries = this.retryCount.getOrDefault(key, 0);
-
-            if (currentRetries < MavenProxyPackageProcessor.MAX_RETRIES) {
-                // Increment retry count and re-queue
-                this.retryCount.put(key, currentRetries + 1);
-                this.packages.add(event);
-
-                EcsLogger.debug("com.auto1.pantera.maven")
-                    .message("Maven package not found (likely still being written), retrying (attempt " + (currentRetries + 1) + "/" + MavenProxyPackageProcessor.MAX_RETRIES + ")")
-                    .eventCategory("web")
-                    .eventAction("proxy_package_retry")
-                    .eventOutcome("failure")
-                    .field("event.reason", "retry_exhausted")
-                    .field("repository.type", repoType)
-                    .field("package.name", event.artifactKey().string())
-                    .error(err)
-                    .field("log.source", "application")
-                    .log();
-            } else {
-                // Max retries reached, give up and clean up retry count
-                this.retryCount.remove(key);
-
-                EcsLogger.warn("com.auto1.pantera.maven")
-                    .message("Maven package not found after " + MavenProxyPackageProcessor.MAX_RETRIES + " retries, giving up")
-                    .eventCategory("web")
-                    .eventAction("proxy_package_retry")
-                    .eventOutcome("failure")
-                    .field("event.reason", "request_abandoned")
-                    .field("repository.type", repoType)
-                    .field("package.name", event.artifactKey().string())
-                    .error(err)
-                    .field("log.source", "application")
-                    .log();
-            }
+            // The attempt count travels with the event: Quartz builds a
+            // new job instance for every run, so a counter kept here was
+            // reset each time and the event came back forever.
+            new ProxyEventRetry(this.packages).again(event, "com.auto1.pantera.maven");
         } else {
             EcsLogger.error("com.auto1.pantera.maven")
+                .traceContext(event.traceId(), event.clientIp())
+                .field("repository.name", event.repoName())
                 .message("Failed to read Maven artifact metadata")
                 .eventCategory("web")
                 .eventAction("proxy_package_process")

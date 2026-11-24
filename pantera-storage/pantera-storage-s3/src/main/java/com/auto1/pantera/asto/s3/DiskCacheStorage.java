@@ -310,6 +310,20 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         return super.delete(key);
     }
 
+    @Override
+    public CompletableFuture<Void> deleteBatch(final java.util.Collection<Key> keys) {
+        // Like delete: drop the local copies first, off the caller's thread
+        // (two file deletes per key), then delete at the backend.
+        final java.util.List<Key> batch = new java.util.ArrayList<>(keys);
+        return CompletableFuture.runAsync(
+            () -> {
+                for (final Key key : batch) {
+                    this.invalidate(key);
+                }
+            }
+        ).thenCompose(ignored -> super.deleteBatch(batch));
+    }
+
     private void invalidate(final Key key) {
         try {
             Files.deleteIfExists(filePath(key));

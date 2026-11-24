@@ -519,6 +519,16 @@ public final class MergeShardsSlice implements Slice {
                                 )
                                 .thenApply(n -> {
                                     updated.incrementAndGet();
+                                    // Groups that cached this metadata, or
+                                    // remembered that it was missing, must
+                                    // see the merged file.
+                                    new com.auto1.pantera.maven.cooldown.MavenMetadataCoordinates()
+                                        .packageName(mdKey.string())
+                                        .ifPresent(
+                                            pkg -> com.auto1.pantera.cooldown.metadata
+                                                .FilteredMetadataCacheRegistry.instance()
+                                                .invalidateAfterUpload("maven", pkg)
+                                        );
                                     return null;
                                 });
                         }));

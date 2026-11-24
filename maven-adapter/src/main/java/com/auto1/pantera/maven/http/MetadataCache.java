@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.maven.http;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.cache.ValkeyConnection;
@@ -433,9 +434,11 @@ public class MetadataCache {
         // L2: Check Valkey (if enabled)
         if (this.twoTier) {
             final String redisKey = this.l2Key(key);
-            return this.l2.get(redisKey)
+            return new CallerContext().resume(
+                this.l2.get(redisKey)
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
+            )
                 .exceptionally(err -> null)
                 .thenCompose(l2Bytes -> {
                     if (l2Bytes != null) {

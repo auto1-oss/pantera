@@ -374,6 +374,7 @@ Asynchronous batch event processor for artifact metadata:
 - Events are sorted by `(repo_name, name, version)` before processing to ensure consistent lock ordering and prevent deadlocks.
 - Uses atomic `INSERT ... ON CONFLICT DO UPDATE` (UPSERT) for idempotent writes.
 - **Dead-letter queue:** After 3 consecutive batch failures, events are written to `.dead-letter` files under `/var/pantera/.dead-letter/` with exponential backoff (1s, 2s, 4s, max 8s). An event that fails on its own while its batch commits is re-queued at most 3 times; a data exception (SQLSTATE class `22`, e.g. a NUL byte in a name) is dead-lettered at once (`event.action=event_dead_letter`).
+- **Proxy package processors:** a `*ProxyPackageProcessor` (maven, pypi, go) that does not find the cached artifact in storage puts the event back through `ProxyEventRetry`: at most 8 times, waiting 1 s doubling up to 60 s, DEBUG while retrying and one WARN (`event.action=proxy_package_retry`, `event.reason=retry_exhausted`) when it gives up. The attempt count travels with the `ProxyArtifactEvent`, because Quartz builds a new job instance for every run. A proxy slice should queue the event only after the cache write is committed (the Go proxy does so for `.zip`).
 - **Delete fence:** `IndexWriteFence` keeps a repository or path delete from being undone by uploads still queued. `DbArtifactIndex.removeRepo`/`removeByPath` register a fence (waiting for batches in flight) before purging rows; the consumer drops insert events created before the fence (`ArtifactEvent.sequence()`). Fences are in-process and expire after 15 minutes.
 
 ### 5.3 DbArtifactIndex
@@ -565,11 +566,19 @@ Two-tier cache for 404 (Not Found) responses:
 
 **L2 -- Valkey (shared across instances):**
 - Enabled when a Valkey connection is configured.
-- Keys namespaced by repo type and name: `negative:{repoType}:{repoName}:{key}`.
-- `SETEX` with configurable TTL.
+- Keys: `negative2:{scope}:{repoType}:{artifactName}:{artifactVersion}`
+  (`negative:` until 2.2.13; those keys are not read any more).
+- Each key is listed in the index SET `negative2-idx:{artifactName}`, written
+  atomically with the key (`ValkeyKeyIndex`: one Lua script, `SADD` +
+  `EXPIRE` + `SETEX`).
 - L2 lookups are async with 100ms timeout.
 - On L2 hit, entry is promoted to L1.
-- Bulk invalidation via `SCAN` + `DEL` (avoids blocking `KEYS`).
+- Invalidation after an upload reads the index SETs of the artifact name
+  and its parent paths — never a keyspace walk. For 24 hours after the
+  first 2.2.14 node of a cluster started (rolling upgrade), it also sweeps
+  the old `negative:` keys with the cursor `SCAN` 2.2.13 used.
+- Administrative listing and bulk invalidation use cursor `SCAN` + `DEL`
+  (never the blocking `KEYS`).
 
 ### 7.4 DiskCacheStorage
 

@@ -71,6 +71,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 final class GroupResolverTest {
 
+    private static final String SKIP =
+        com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER;
+
     private static final String GROUP = "maven-group";
     private static final String REPO_TYPE = "maven-group";
     private static final String HOSTED = "libs-release-local";
@@ -860,32 +863,71 @@ final class GroupResolverTest {
             "locateByName must NOT be called for metadata URL");
     }
 
-    // ---- Mixed 404 + 5xx in proxy fanout: AllProxiesFailed (not all-404) ----
+    // ---- Mixed 404 + 5xx in proxy fanout: a 404 nobody remembers ----
 
     @Test
-    void proxyFanout_mixed404And5xx_allProxiesFailed() {
+    void failedProxyDoesNotTurnNotFoundIntoAServerError() {
         final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // miss
         final Map<String, Slice> slices = new HashMap<>();
         slices.put(PROXY_A, notFoundSlice());
         slices.put(PROXY_B, staticSlice(RsStatus.INTERNAL_ERROR));
-
+        final NegativeCache negCache = buildNegativeCache();
         final GroupResolver resolver = buildResolver(
             idx,
             List.of(PROXY_A, PROXY_B),
             Set.of(PROXY_A, PROXY_B),
-            buildNegativeCache(),
+            negCache,
             slices
         );
         final Response resp = resolver.response(
             new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
         ).join();
+        MatcherAssert.assertThat(
+            "one proxy says not found, the other failed: the group says not found",
+            resp.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "marked so that an outer group does not remember it",
+            resp.headers().values(SKIP).isEmpty(), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "and not remembered here: the failed proxy may have the file",
+            negCache.isKnown404(new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION)),
+            new IsEqual<>(false)
+        );
+    }
 
-        // Mixed: one 404 + one 5xx => AllProxiesFailed (passes through the 5xx)
-        assertTrue(resp.status().serverError(),
-            "Mixed 404+5xx must produce AllProxiesFailed (server error)");
-        assertTrue(resp.headers().stream()
-                .anyMatch(h -> h.getKey().equals(FaultTranslator.HEADER_FAULT)),
-            "Must have X-Pantera-Fault header");
+    @Test
+    void failedHostedMemberKeepsTheServerError() {
+        // The hosted member may hold the file: its failure is not softened
+        // by the proxy that says "not found".
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(HOSTED, staticSlice(RsStatus.INTERNAL_ERROR));
+        slices.put(PROXY_A, notFoundSlice());
+        final Response resp = buildResolver(
+            new RecordingIndex(Optional.of(List.of())),
+            List.of(HOSTED, PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            resp.status().serverError(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void groupOfUnreachableProxiesOnlyStaysUnavailable() {
+        // Nobody said "not found": every member failed.
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, staticSlice(RsStatus.BAD_GATEWAY));
+        slices.put(PROXY_B, staticSlice(RsStatus.SERVICE_UNAVAILABLE));
+        final Response resp = buildResolver(
+            new RecordingIndex(Optional.of(List.of())),
+            List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+            buildNegativeCache(), slices
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            resp.status().serverError(), new IsEqual<>(true)
+        );
     }
 
     // ---- HEAD request works like GET ----
@@ -1128,11 +1170,11 @@ final class GroupResolverTest {
             )
         ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
         MatcherAssert.assertThat(
-            "the group does not answer 2xx or 404",
-            answer.status().serverError(), new IsEqual<>(true)
+            "the other proxy said not found, so the group does",
+            answer.status(), new IsEqual<>(RsStatus.NOT_FOUND)
         );
         MatcherAssert.assertThat(
-            "and the reason is how the member's upstream call failed",
+            "but its reason is how the member's upstream call failed, not not_found",
             new com.auto1.pantera.http.log.AnswerReason(answer).token(),
             new IsEqual<>(Optional.of("connection_closed"))
         );
@@ -1267,10 +1309,84 @@ final class GroupResolverTest {
             new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
         ).join();
 
-        assertEquals(502, resp.status().code(),
-            "A genuine member 5xx still yields a 502 terminal");
+        assertEquals(404, resp.status().code(),
+            "The other proxy said not found: the failed one does not fail the group");
         assertTrue(registry.isBlocked(PROXY_A),
             "A genuine member 5xx still convicts the member");
+    }
+
+    @Test
+    void failureOfOneRemoteOfAProxyDoesNotConvictTheMember() {
+        // PROXY_A has two remotes: one says "not found", the other times
+        // out. Its 502 stands, but the member is not blocked: its first
+        // remote still serves everything it has.
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        final Slice proxy = new com.auto1.pantera.http.group.RaceSlice(
+            notFoundSlice(),
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new java.util.concurrent.TimeoutException("idle timeout")
+            )
+        );
+        final GroupResolver resolver = resolverWithRegistry(
+            registry, proxy, notFoundSlice(), buildNegativeCache()
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the other member said not found, so the group does",
+            resp.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "without anyone remembering it: a remote did not answer",
+            resp.headers().values(SKIP).isEmpty(), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the member is not blocked for the failure of one remote",
+            registry.isBlocked(PROXY_A), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void failureOfEveryRemoteOfAProxyStillConvictsTheMember() {
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        final Slice proxy = new com.auto1.pantera.http.group.RaceSlice(
+            staticSlice(RsStatus.SERVICE_UNAVAILABLE),
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new java.util.concurrent.TimeoutException("idle timeout")
+            )
+        );
+        resolverWithRegistry(
+            registry, proxy, notFoundSlice(), buildNegativeCache()
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            registry.isBlocked(PROXY_A), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void notFoundOfAGroupWithASkippedMemberIsExplainedByTheSkip() {
+        // PROXY_A is blocked by the group's breaker and is skipped without
+        // an answer; PROXY_B's upstream refused the request with a 401.
+        // The 503 is caused by the member that was not asked.
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        registry.recordFailure(PROXY_A);
+        final Response answer = new com.auto1.pantera.http.slice.ReasonSlice(
+            resolverWithRegistry(
+                registry, notFoundSlice(),
+                reasonedSlice(RsStatus.NOT_FOUND, "upstream_status_401"),
+                buildNegativeCache()
+            )
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "the member that answered said not found, so the group does",
+            answer.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "the reason is the open circuit, not the other member's 401",
+            new com.auto1.pantera.http.log.AnswerReason(answer).token(),
+            new IsEqual<>(Optional.of("circuit_open"))
+        );
     }
 
     /**

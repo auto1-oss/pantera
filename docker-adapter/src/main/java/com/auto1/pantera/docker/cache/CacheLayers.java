@@ -17,6 +17,7 @@ import com.auto1.pantera.docker.asto.BlobSource;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 
@@ -117,7 +118,9 @@ public final class CacheLayers implements Layers {
                                 final long duration = System.currentTimeMillis() - startTime;
                                 this.recordProxyMetric("exception", duration);
                                 this.recordUpstreamErrorMetric(error);
-                                return cached;
+                                // Nothing cached and the origin could not
+                                // answer: a failure, not an absent blob.
+                                throw new CompletionException(error);
                             });
                     }
                 } else {
@@ -145,10 +148,12 @@ public final class CacheLayers implements Layers {
                                 .eventCategory("web")
                                 .eventAction("blob_get")
                                 .eventOutcome("failure")
+                                .field("repository.name", this.repoName)
+                                .field("package.checksum", digest.string())
                                 .error(error)
                                 .field("log.source", "application")
                                 .log();
-                            return Optional.empty();
+                            throw new CompletionException(error);
                         });
                 }
                 return result;

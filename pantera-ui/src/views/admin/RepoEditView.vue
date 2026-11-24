@@ -2,22 +2,26 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { getRepo, putRepo, moveRepo, deleteRepo } from '@/api/repos'
+import type { DeleteRepoOptions } from '@/api/repos'
 import { getCooldown, putCooldown } from '@/api/settings'
 import { getCooldownExemptions, putCooldownExemptions } from '@/api/cooldown'
 import type { CooldownExemption, CooldownExemptionInput } from '@/api/cooldown'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationStore } from '@/stores/notifications'
-import { useConfirmDelete } from '@/composables/useConfirmDelete'
 import { repoModeLabel } from '@/utils/repoTypes'
+import { apiErrorMessage } from '@/utils/apiError'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import RepoConfigForm from '@/components/admin/RepoConfigForm.vue'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
+import Checkbox from 'primevue/checkbox'
 import DatePicker from 'primevue/datepicker'
 import Dialog from 'primevue/dialog'
 import InputSwitch from 'primevue/inputswitch'
+import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
+import RadioButton from 'primevue/radiobutton'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import type { RepoConfigEnvelope } from '@/types/repo'
@@ -358,34 +362,129 @@ function onBeforeUnload(e: BeforeUnloadEvent) {
 // ---------------------------------------------------------------------------
 // Danger zone: rename, delete
 // ---------------------------------------------------------------------------
+const JOBS_PATH = '/admin/repository-jobs'
+
+// Rename is a metadata change: no data is copied, so it is instant for any
+// size. The old name can stay routable for a while so client URLs keep working.
 const moveVisible = ref(false)
 const moveTarget = ref('')
+const keepOldName = ref(false)
+const keepOldNameDays = ref<number | null>(30)
+const moveError = ref('')
+const moving = ref(false)
+const keepDaysValid = computed(() => {
+  if (!keepOldName.value) return true
+  const days = keepOldNameDays.value
+  return days !== null && Number.isInteger(days) && days >= 1 && days <= 365
+})
+
+function openMove() {
+  moveTarget.value = ''
+  keepOldName.value = false
+  keepOldNameDays.value = 30
+  moveError.value = ''
+  moveVisible.value = true
+}
+
 async function handleMove() {
+  if (!moveTarget.value || !keepDaysValid.value) return
+  const target = moveTarget.value
+  const days = keepOldName.value ? keepOldNameDays.value ?? 0 : 0
+  moving.value = true
+  moveError.value = ''
   try {
-    await moveRepo(props.name, moveTarget.value)
-    notify.success('Repository renamed', `${props.name} → ${moveTarget.value}`)
+    const res = await moveRepo(props.name, target, days > 0 ? days : undefined)
+    const kept = res?.keep_old_name_days ?? days
+    const detail = kept > 0
+      ? `${props.name} → ${target}. The old name keeps working for ${kept} day${kept === 1 ? '' : 's'}.`
+      : `${props.name} → ${target}`
+    notify.success('Repository renamed', detail)
     moveVisible.value = false
-    router.replace(`/admin/repositories/${encodeURIComponent(moveTarget.value)}/edit`)
-  } catch {
-    notify.error('Failed to rename repository')
+    router.replace(`/admin/repositories/${encodeURIComponent(target)}/edit`)
+  } catch (err: unknown) {
+    // A 409 says why the name is not free (taken, or still the former name
+    // of another repository); that message is the actionable part.
+    moveError.value = apiErrorMessage(err, 'Failed to rename repository')
+    notify.error('Failed to rename repository', moveError.value)
+  } finally {
+    moving.value = false
   }
 }
 
-const { visible: deleteVisible, targetName, confirm: confirmDel, accept: acceptDel, reject: rejectDel } = useConfirmDelete()
-async function handleDelete() {
-  const confirmed = await confirmDel(props.name)
-  if (!confirmed) return
+// Delete is instant too: the repository disappears, a background job purges
+// its data after the restore window, and it can be restored until then.
+type RetentionMode = 'default' | 'now' | 'custom'
+/** The server refuses a longer restore window with a 400. */
+const MAX_RETENTION_HOURS = 8760
+const deleteVisible = ref(false)
+const retentionMode = ref<RetentionMode>('default')
+const retentionHours = ref<number | null>(24)
+const deleteError = ref('')
+/** The server's "member of group(s) …" refusal; set means the force step is shown. */
+const deleteBlocked = ref('')
+const deleting = ref(false)
+const retentionValid = computed(() => {
+  if (retentionMode.value !== 'custom') return true
+  const hours = retentionHours.value
+  return hours !== null && Number.isInteger(hours) && hours >= 1 && hours <= MAX_RETENTION_HOURS
+})
+
+function openDelete() {
+  retentionMode.value = 'default'
+  retentionHours.value = 24
+  deleteError.value = ''
+  deleteBlocked.value = ''
+  deleteVisible.value = true
+}
+
+function formatInstant(iso: string): string {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
+}
+
+async function handleDelete(force = false) {
+  if (!retentionValid.value) return
+  const opts: DeleteRepoOptions = {}
+  if (force) opts.force = true
+  if (retentionMode.value === 'now') opts.retentionHours = 0
+  else if (retentionMode.value === 'custom' && retentionHours.value !== null) opts.retentionHours = retentionHours.value
+  deleting.value = true
+  deleteError.value = ''
   try {
-    const result = await deleteRepo(props.name)
-    if (result === 'deleting') notify.info('Repository is being deleted', props.name)
-    else notify.success('Repository deleted', props.name)
+    const result = await deleteRepo(props.name, opts)
+    let next = '/admin/repositories'
+    if (result?.kind === 'job') {
+      next = JOBS_PATH
+      const removed = result.removedFromGroups.length
+        ? ` Removed from group(s) ${result.removedFromGroups.join(', ')}.`
+        : ''
+      const purge = opts.retentionHours === 0 || !result.purgeAfter
+        ? 'Its data is being purged.'
+        : `Its data is purged after ${formatInstant(result.purgeAfter)}; it can be restored until then.`
+      notify.success('Repository deleted', `${props.name}: ${purge}${removed} Follow it under Repository Jobs.`)
+    } else if (result?.kind === 'deleting') {
+      notify.info('Repository is being deleted', props.name)
+    } else {
+      notify.success('Repository deleted', props.name)
+    }
+    deleteVisible.value = false
     // The repository is gone; nothing left to keep.
     savedConfig.value = stable(config.value)
     savedOverride.value = overrideJson()
     savedExemptions.value = exemptionsJson()
-    router.push('/admin/repositories')
-  } catch {
-    notify.error('Failed to delete repository')
+    router.push(next)
+  } catch (err: unknown) {
+    const status = (err as { response?: { status?: number } }).response?.status
+    const message = apiErrorMessage(err, 'Failed to delete repository')
+    if (status === 409 && !force) {
+      // Member of groups: show the refusal and offer the forced delete.
+      deleteBlocked.value = message
+    } else {
+      deleteError.value = message
+      notify.error('Failed to delete repository', message)
+    }
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -445,7 +544,10 @@ function goBack() {
   }
 }
 
-defineExpose({ dirty, save, reset, overrideEnabled, exemptionsValid })
+defineExpose({
+  dirty, save, reset, overrideEnabled, exemptionsValid,
+  moveTarget, keepOldName, keepOldNameDays, retentionMode, retentionHours,
+})
 </script>
 
 <template>
@@ -610,8 +712,8 @@ defineExpose({ dirty, save, reset, overrideEnabled, exemptionsValid })
           <template #title>Danger zone</template>
           <template #content>
             <div class="flex flex-wrap gap-3">
-              <Button v-if="canMove" label="Rename…" icon="pi pi-arrows-h" severity="secondary" outlined size="small" @click="moveTarget = ''; moveVisible = true" />
-              <Button v-if="canDelete" label="Delete repository…" icon="pi pi-trash" severity="danger" outlined size="small" @click="handleDelete" />
+              <Button v-if="canMove" label="Rename…" icon="pi pi-arrows-h" severity="secondary" outlined size="small" data-testid="rename-btn" @click="openMove" />
+              <Button v-if="canDelete" label="Delete repository…" icon="pi pi-trash" severity="danger" outlined size="small" data-testid="delete-btn" @click="openDelete" />
             </div>
           </template>
         </Card>
@@ -634,20 +736,107 @@ defineExpose({ dirty, save, reset, overrideEnabled, exemptionsValid })
         </div>
       </template>
 
-      <Dialog v-model:visible="moveVisible" header="Rename Repository" modal class="w-96">
+      <Dialog v-model:visible="moveVisible" header="Rename Repository" modal class="w-[30rem]" data-testid="rename-dialog">
         <p class="mb-3">Rename <strong>{{ name }}</strong> to:</p>
-        <InputText v-model="moveTarget" placeholder="New name" class="w-full" />
+        <InputText v-model="moveTarget" placeholder="New name" class="w-full" data-testid="rename-target" />
+        <p class="mt-2 text-xs text-gray-500">Renaming is instant and moves no data.</p>
+        <div class="mt-4 flex flex-wrap items-center gap-2 text-sm">
+          <Checkbox v-model="keepOldName" binary input-id="keepOldName" data-testid="rename-keep-old" />
+          <label for="keepOldName">Keep the old name working for</label>
+          <InputNumber
+            v-model="keepOldNameDays"
+            :min="1"
+            :max="365"
+            :disabled="!keepOldName"
+            :invalid="!keepDaysValid"
+            :use-grouping="false"
+            input-class="w-16"
+            aria-label="Days the old name keeps working"
+            data-testid="rename-keep-days"
+          />
+          <span>days</span>
+        </div>
+        <p class="mt-1 text-xs text-gray-500">
+          Client URLs with the old name keep working for that time (1–365 days); no other repository can take the name meanwhile.
+        </p>
+        <div v-if="moveError" class="mt-3 text-sm text-red-700 dark:text-red-300" data-testid="rename-error">
+          {{ moveError }}
+        </div>
         <template #footer>
           <Button label="Cancel" severity="secondary" text @click="moveVisible = false" />
-          <Button label="Rename" :disabled="!moveTarget" @click="handleMove" />
+          <Button label="Rename" :disabled="!moveTarget || !keepDaysValid || moving" :loading="moving" data-testid="rename-confirm" @click="handleMove" />
         </template>
       </Dialog>
 
-      <Dialog v-model:visible="deleteVisible" header="Confirm Delete" modal class="w-96">
-        <p>Delete repository <strong>{{ targetName }}</strong>? This cannot be undone.</p>
+      <Dialog v-model:visible="deleteVisible" header="Confirm Delete" modal class="w-[30rem]" data-testid="delete-dialog">
+        <template v-if="!deleteBlocked">
+          <p>Delete repository <strong>{{ name }}</strong>?</p>
+          <p class="mt-2 text-sm text-gray-500">
+            It disappears at once: the name is free and it is no longer served or searchable. Its data
+            is removed in the background after the restore window; until then it can be restored
+            under Repository Jobs.
+          </p>
+          <fieldset class="mt-4 space-y-2 text-sm">
+            <legend class="mb-1 text-xs text-gray-500">Restore window</legend>
+            <div class="flex items-center gap-2">
+              <RadioButton v-model="retentionMode" input-id="retentionDefault" value="default" data-testid="delete-retention-default" />
+              <label for="retentionDefault">Server default (24 hours unless configured otherwise)</label>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <RadioButton v-model="retentionMode" input-id="retentionCustom" value="custom" data-testid="delete-retention-custom" />
+              <label for="retentionCustom">Keep the data for</label>
+              <InputNumber
+                v-model="retentionHours"
+                :min="1"
+                :max="MAX_RETENTION_HOURS"
+                :disabled="retentionMode !== 'custom'"
+                :invalid="!retentionValid"
+                :use-grouping="false"
+                input-class="w-20"
+                aria-label="Restore window in hours"
+                data-testid="delete-retention-hours"
+              />
+              <span>hours (1–{{ MAX_RETENTION_HOURS }})</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <RadioButton v-model="retentionMode" input-id="retentionNow" value="now" data-testid="delete-retention-now" />
+              <label for="retentionNow">Purge immediately — cannot be restored</label>
+            </div>
+          </fieldset>
+          <div v-if="deleteError" class="mt-3 text-sm text-red-700 dark:text-red-300" data-testid="delete-error">
+            {{ deleteError }}
+          </div>
+        </template>
+        <template v-else>
+          <p class="text-sm text-red-700 dark:text-red-300" data-testid="delete-blocked">{{ deleteBlocked }}</p>
+          <p class="mt-3 text-sm">
+            Delete <strong>{{ name }}</strong> anyway? It is removed from the group(s) named above,
+            which then no longer serve its artifacts.
+          </p>
+          <div v-if="deleteError" class="mt-3 text-sm text-red-700 dark:text-red-300" data-testid="delete-error">
+            {{ deleteError }}
+          </div>
+        </template>
         <template #footer>
-          <Button label="Cancel" severity="secondary" text @click="rejectDel" />
-          <Button label="Delete" severity="danger" @click="acceptDel" />
+          <Button label="Cancel" severity="secondary" text @click="deleteVisible = false" />
+          <Button
+            v-if="!deleteBlocked"
+            label="Delete"
+            severity="danger"
+            :disabled="!retentionValid || deleting"
+            :loading="deleting"
+            data-testid="delete-confirm"
+            @click="handleDelete(false)"
+          />
+          <Button
+            v-else
+            label="Remove from groups and delete"
+            severity="danger"
+            :disabled="deleting"
+            :loading="deleting"
+            data-testid="delete-force-confirm"
+            @click="handleDelete(true)"
+          />
         </template>
       </Dialog>
 

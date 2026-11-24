@@ -12,6 +12,7 @@ package com.auto1.pantera.index;
 
 import com.auto1.pantera.db.IndexWriteFence;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.settings.repo.RepoKeys;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.context.ContextualExecutorService;
 import java.util.Locale;
@@ -364,7 +365,7 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
         return CompletableFuture.runAsync(() -> {
             try (Connection conn = this.source.getConnection();
                  PreparedStatement stmt = conn.prepareStatement(DELETE_SQL)) {
-                stmt.setString(1, repoName);
+                stmt.setString(1, DbArtifactIndex.keyOf(repoName));
                 stmt.setString(2, artifactPath);
                 stmt.executeUpdate();
             } catch (final SQLException ex) {
@@ -411,7 +412,7 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
                      "DELETE FROM artifacts"
                          + " WHERE repo_name = ? AND name LIKE ? ESCAPE '\\'"
                  )) {
-                stmt.setString(1, repoName);
+                stmt.setString(1, DbArtifactIndex.keyOf(repoName));
                 stmt.setString(2, escaped + "%");
                 return stmt.executeUpdate();
             } catch (final SQLException ex) {
@@ -449,7 +450,7 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
             IndexWriteFence.shared().fencePath(repoName, clean);
             try (Connection conn = this.source.getConnection();
                  PreparedStatement stmt = conn.prepareStatement(REMOVE_BY_PATH_SQL)) {
-                stmt.setString(1, repoName);
+                stmt.setString(1, DbArtifactIndex.keyOf(repoName));
                 stmt.setString(2, clean);
                 stmt.setString(3, DbArtifactIndex.likeEscape(clean) + "/%");
                 stmt.setString(4, clean);
@@ -480,7 +481,7 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
                  PreparedStatement stmt = conn.prepareStatement(
                      "DELETE FROM artifacts WHERE repo_name = ?"
                  )) {
-                stmt.setString(1, repoName);
+                stmt.setString(1, DbArtifactIndex.keyOf(repoName));
                 return stmt.executeUpdate();
             } catch (final SQLException ex) {
                 throw new IllegalStateException(
@@ -548,9 +549,12 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
     @Override
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset,
-        final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
-        final List<String> allowedRepos
+        final String repoType, final String repo, final String sortBy, final boolean sortAsc,
+        final List<String> allowed
     ) {
+        // The index stores repository keys: names are translated going in.
+        final String repoName = DbArtifactIndex.keyOf(repo);
+        final List<String> allowedRepos = DbArtifactIndex.scope(allowed);
         // Fix 2: facets only on first page
         final boolean includeFacets = offset == 0;
         return CompletableFuture.supplyAsync(() -> {
@@ -615,9 +619,13 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
      */
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset,
-        final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
-        final List<String> allowedRepos, final List<FieldFilter> fieldFilters
+        final String repoType, final String repo, final String sortBy, final boolean sortAsc,
+        final List<String> allowed, final List<FieldFilter> filters
     ) {
+        // The index stores repository keys: names are translated going in.
+        final String repoName = DbArtifactIndex.keyOf(repo);
+        final List<String> allowedRepos = DbArtifactIndex.scope(allowed);
+        final List<FieldFilter> fieldFilters = DbArtifactIndex.keyed(filters);
         final boolean includeFacets = offset == 0;
         return CompletableFuture.supplyAsync(() -> {
             final String fts = query == null ? "" : query;
@@ -1071,7 +1079,10 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
             }
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    counts.put(rs.getString("repo_name"), rs.getLong("cnt"));
+                    final String repo = DbArtifactIndex.nameOf(rs.getString("repo_name"));
+                    if (repo != null) {
+                        counts.merge(repo, rs.getLong("cnt"), Long::sum);
+                    }
                 }
             }
         }
@@ -1138,7 +1149,10 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
             }
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    counts.put(rs.getString("repo_name"), rs.getLong("cnt"));
+                    final String repo = DbArtifactIndex.nameOf(rs.getString("repo_name"));
+                    if (repo != null) {
+                        counts.merge(repo, rs.getLong("cnt"), Long::sum);
+                    }
                 }
             }
         }
@@ -1214,7 +1228,10 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
             }
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    counts.put(rs.getString("repo_name"), rs.getLong("cnt"));
+                    final String repo = DbArtifactIndex.nameOf(rs.getString("repo_name"));
+                    if (repo != null) {
+                        counts.merge(repo, rs.getLong("cnt"), Long::sum);
+                    }
                 }
             }
         }
@@ -1747,7 +1764,7 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
                 stmt.setString(idx, artifactPath);
                 try (ResultSet rs = stmt.executeQuery()) {
                     while (rs.next()) {
-                        repos.add(rs.getString("repo_name"));
+                        DbArtifactIndex.addName(repos, rs.getString("repo_name"));
                     }
                 }
             } catch (final SQLException ex) {
@@ -1792,7 +1809,7 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
                         stmt.setString(1, artifactName);
                         try (ResultSet rs = stmt.executeQuery()) {
                             while (rs.next()) {
-                                repos.add(rs.getString("repo_name"));
+                                DbArtifactIndex.addName(repos, rs.getString("repo_name"));
                             }
                         }
                     }
@@ -2034,7 +2051,7 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
         final PreparedStatement stmt, final ArtifactDocument doc
     ) throws SQLException {
         stmt.setString(1, doc.repoType());
-        stmt.setString(2, doc.repoName());
+        stmt.setString(2, DbArtifactIndex.keyOf(doc.repoName()));
         stmt.setString(3, doc.artifactPath());
         stmt.setString(4, doc.version() != null ? doc.version() : "");
         stmt.setLong(5, doc.size());
@@ -2045,6 +2062,96 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
         stmt.setLong(7, createdEpoch);
         stmt.setString(8, doc.owner() != null ? doc.owner() : "");
         stmt.setString(9, null); // path_prefix populated by DbConsumer from ArtifactEvent
+    }
+
+    /**
+     * Key of a repository name: what {@code artifacts.repo_name} holds.
+     * A name of no repository is passed through (it matches nothing a
+     * repository owns).
+     * @param repo Repository name, nullable
+     * @return Repository key, {@code null} for {@code null}
+     */
+    private static String keyOf(final String repo) {
+        final String res;
+        if (repo == null || repo.isBlank()) {
+            res = repo;
+        } else {
+            res = RepoKeys.shared().key(repo.trim()).orElse(repo);
+        }
+        return res;
+    }
+
+    /**
+     * Keys a search may read: the caller's allowed repositories, or, with
+     * no restriction, every repository that exists (so a deleted
+     * repository's rows are never returned while its purge runs).
+     * @param allowed Allowed repository names, nullable
+     * @return Repository keys, {@code null} for no restriction
+     */
+    private static List<String> scope(final List<String> allowed) {
+        final List<String> res;
+        if (allowed == null) {
+            res = RepoKeys.shared().live().orElse(null);
+        } else {
+            res = RepoKeys.shared().keys(allowed);
+        }
+        return res;
+    }
+
+    /**
+     * Translate the values of {@code repo:} field filters to keys.
+     * @param filters Field filters, nullable
+     * @return Filters with repository names replaced by keys
+     */
+    private static List<FieldFilter> keyed(final List<FieldFilter> filters) {
+        final List<FieldFilter> res;
+        if (filters == null || filters.isEmpty()) {
+            res = filters;
+        } else {
+            res = new ArrayList<>(filters.size());
+            for (final FieldFilter filter : filters) {
+                if ("repo".equals(filter.field())) {
+                    final List<String> values = new ArrayList<>(filter.values().size());
+                    filter.values().forEach(value -> values.add(DbArtifactIndex.keyOf(value)));
+                    res.add(new FieldFilter(filter.field(), values, filter.matchType()));
+                } else {
+                    res.add(filter);
+                }
+            }
+        }
+        return res;
+    }
+
+    /**
+     * Current name of a repository key.
+     * @param key Repository key
+     * @return Name, {@code null} when the repository no longer exists
+     */
+    private static String nameOf(final String key) {
+        return key == null ? null : RepoKeys.shared().name(key).orElse(null);
+    }
+
+    /**
+     * Name to show for a row: the repository's current name.
+     * @param key Repository key
+     * @return Name, the key itself when the repository is unknown
+     */
+    private static String shownName(final String key) {
+        final String name = DbArtifactIndex.nameOf(key);
+        return name == null ? key : name;
+    }
+
+    /**
+     * Add the name of a repository key to a list, unless the repository no
+     * longer exists.
+     * @param repos Repository names
+     * @param key Repository key
+     */
+    private static void addName(final List<String> repos, final String key) {
+        final String name = DbArtifactIndex.nameOf(key);
+        if (name != null && !repos.contains(name)) {
+            repos.add(name);
+        }
     }
 
     /**
@@ -2059,7 +2166,7 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
         final long createdDate = rs.getLong("created_date");
         return new ArtifactDocument(
             rs.getString("repo_type"),
-            rs.getString("repo_name"),
+            DbArtifactIndex.shownName(rs.getString("repo_name")),
             name,
             name,
             rs.getString("version"),

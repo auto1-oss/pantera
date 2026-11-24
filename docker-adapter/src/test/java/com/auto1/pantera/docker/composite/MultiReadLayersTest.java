@@ -13,7 +13,9 @@ package com.auto1.pantera.docker.composite;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.fake.FakeLayers;
 import java.util.Arrays;
+import java.util.concurrent.CompletionException;
 import org.hamcrest.MatcherAssert;
+import org.junit.jupiter.api.Assertions;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -30,9 +32,7 @@ final class MultiReadLayersTest {
         "empty,full,true",
         "full,empty,true",
         "faulty,full,true",
-        "full,faulty,true",
-        "faulty,empty,false",
-        "empty,faulty,false"
+        "full,faulty,true"
     })
     void shouldReturnExpectedValue(final String one, final String two, final boolean present) {
         MatcherAssert.assertThat(
@@ -45,6 +45,23 @@ final class MultiReadLayersTest {
                 .toCompletableFuture().join()
                 .isPresent(),
             new IsEqual<>(present)
+        );
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "faulty,empty",
+        "empty,faulty",
+        "faulty,faulty"
+    })
+    void failsWhenNoneHasTheBlobAndOneCouldNotAnswer(final String one, final String two) {
+        final MultiReadLayers layers = new MultiReadLayers(
+            Arrays.asList(new FakeLayers(one), new FakeLayers(two))
+        );
+        // "Nobody has it" is only known when everybody answered.
+        Assertions.assertThrows(
+            CompletionException.class,
+            () -> layers.get(new Digest.FromString("123")).toCompletableFuture().join()
         );
     }
 }

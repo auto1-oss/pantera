@@ -56,5 +56,22 @@ public class PackagePathTest {
             () -> path.value("/@vue/vue-cli")
         );
     }
-}
 
+    @Test
+    public void registryApiPathIsNotAPackage() {
+        MatcherAssert.assertThat(
+            new PackagePath("").pattern()
+                .matcher("/-/npm/v1/attestations/@oxfmt/binding-android-arm64@0.65.0")
+                .matches(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    public void registryApiPathUnderPrefixIsNotAPackage() {
+        MatcherAssert.assertThat(
+            new PackagePath("npm-proxy").pattern().matcher("/npm-proxy/-/npm/v1/keys").matches(),
+            new IsEqual<>(false)
+        );
+    }
+}

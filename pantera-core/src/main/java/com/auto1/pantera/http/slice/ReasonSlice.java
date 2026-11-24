@@ -20,6 +20,7 @@ import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.fault.FaultTranslator;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.AnswerReason;
+import com.auto1.pantera.http.log.AnsweringRepository;
 import com.auto1.pantera.http.log.FailureCause;
 import com.auto1.pantera.http.log.ReasonWeight;
 import com.auto1.pantera.http.log.RequestReasons;
@@ -128,8 +129,11 @@ public final class ReasonSlice implements Slice {
             )
             .thenApply(
                 response -> {
-                    final Response explained =
-                        ReasonSlice.explained(response, reasons.close(slot));
+                    // Name this repository on the answer for the access
+                    // record (a group replaces the stamp of its member).
+                    final Response explained = new AnsweringRepository(
+                        ReasonSlice.explained(response, reasons.close(slot))
+                    ).stamped(this.name, this.type);
                     if (traced) {
                         final int code = explained.status().code();
                         this.traced(

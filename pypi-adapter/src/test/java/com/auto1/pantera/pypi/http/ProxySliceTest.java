@@ -297,12 +297,12 @@ class ProxySliceTest {
     }
 
     @Test
-    void returnsNotFoundOnRemoteAndCacheError() {
+    void returnsBadGatewayOnCacheError() {
         final TestClientSlices clients = new TestClientSlices(line ->
             ResponseBuilder.internalError().build()
         );
         MatcherAssert.assertThat(
-            "Status 400 returned",
+            "A failing cache is a failure, not a missing file: a 404 would be negative-cached",
             this.newProxySlice(
                 new SliceSimple(ResponseBuilder.badRequest().build()),
                 cacheFailing(),
@@ -310,7 +310,7 @@ class ProxySliceTest {
                 Optional.empty()
             ),
             new SliceHasResponse(
-                new RsHasStatus(RsStatus.NOT_FOUND),
+                new RsHasStatus(RsStatus.BAD_GATEWAY),
                 new RequestLine(RqMethod.GET, "/anything"),
                 this.authorization,
                 Content.EMPTY

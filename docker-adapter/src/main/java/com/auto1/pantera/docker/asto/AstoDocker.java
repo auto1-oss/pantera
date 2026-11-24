@@ -66,7 +66,7 @@ public final class AstoDocker implements Docker {
 
     @Override
     public Repo repo(String name) {
-        return new AstoRepo(this.storage, name);
+        return new AstoRepo(this.storage, name, this.registryName);
     }
 
     @Override

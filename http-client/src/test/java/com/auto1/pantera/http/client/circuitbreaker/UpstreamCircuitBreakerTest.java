@@ -69,40 +69,141 @@ final class UpstreamCircuitBreakerTest {
     }
 
     @Test
-    void breakerAutoClosesAfterWindowElapses() {
+    void staysOpenAfterTheBlockUntilAProbeSucceeds() {
         final TestClock clock = new TestClock(T0);
         final UpstreamCircuitBreaker breaker = newBreaker(clock);
         breaker.recordFailure(500);
         clock.advance(Duration.ofSeconds(31));
         MatcherAssert.assertThat(
-            "breaker reports closed once blockedUntil has elapsed",
-            breaker.isOpen(), new IsEqual<>(false)
+            "the end of the block is the time of the probe, not a recovery",
+            breaker.isOpen(), new IsEqual<>(true)
         );
         MatcherAssert.assertThat(
-            "time remaining is null after block elapses",
+            "no time remains: the probe is due",
             breaker.timeRemaining(), new IsEqual<>(null)
+        );
+        MatcherAssert.assertThat(
+            "the answered probe reports the close",
+            breaker.probeSucceeded(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "and closes the breaker",
+            breaker.isOpen(), new IsEqual<>(false)
         );
     }
 
     @Test
-    void recordSuccessImmediatelyClosesAndResetsBackoff() {
+    void answerToARequestSentBeforeTheTripDoesNotClose() {
+        final UpstreamCircuitBreaker breaker = newBreaker(new TestClock(T0));
+        breaker.recordFailure(503);
+        breaker.recordSuccess();
+        MatcherAssert.assertThat(breaker.isOpen(), new IsEqual<>(true));
+    }
+
+    @Test
+    void backoffGrowsWhenTheUpstreamFailsAgainSoonAfterAnAnsweredProbe() {
+        final TestClock clock = new TestClock(T0);
+        final UpstreamCircuitBreaker breaker = newBreaker(clock);
+        final long[] expected = {30, 30, 60, 90, 150};
+        for (int idx = 0; idx < expected.length; idx = idx + 1) {
+            breaker.recordFailure(503);
+            MatcherAssert.assertThat(
+                "trip #" + (idx + 1) + " blocks for " + expected[idx] + "s",
+                breaker.timeRemaining(), new IsEqual<>(Duration.ofSeconds(expected[idx]))
+            );
+            clock.advance(Duration.ofSeconds(expected[idx] + 1));
+            // The upstream answers the probe and then fails real requests
+            // again: 40 s later, more than one window after the close.
+            breaker.probeSucceeded();
+            clock.advance(Duration.ofSeconds(40));
+        }
+    }
+
+    @Test
+    void backoffReturnsToTheSeedOnceTheUpstreamStayedHealthy() {
         final TestClock clock = new TestClock(T0);
         final UpstreamCircuitBreaker breaker = newBreaker(clock);
         breaker.recordFailure(503);
+        clock.advance(Duration.ofSeconds(31));
+        breaker.probeFailed(503);
+        clock.advance(Duration.ofSeconds(31));
+        breaker.probeFailed(503);
+        MatcherAssert.assertThat(
+            "the third trip of one outage blocks for 60s",
+            breaker.timeRemaining(), new IsEqual<>(Duration.ofSeconds(60))
+        );
+        clock.advance(Duration.ofSeconds(61));
+        breaker.probeSucceeded();
+        clock.advance(
+            Duration.ofSeconds(30L * UpstreamCircuitBreaker.PROBATION_WINDOWS)
+        );
         breaker.recordFailure(503);
         MatcherAssert.assertThat(
-            "two trips elapses time remaining beyond seed",
+            "a failure after ten healthy windows is a new outage",
             breaker.timeRemaining(), new IsEqual<>(Duration.ofSeconds(30))
         );
-        breaker.recordSuccess();
+    }
+
+    @Test
+    void handsOutOneProbePerBlock() {
+        final UpstreamCircuitBreaker breaker = newBreaker(new TestClock(T0));
         MatcherAssert.assertThat(
-            "success closes the breaker",
-            breaker.isOpen(), new IsEqual<>(false)
+            "a closed breaker has no probe to send",
+            breaker.claimProbe(), new IsEqual<>(false)
         );
         breaker.recordFailure(503);
         MatcherAssert.assertThat(
-            "after success + failure, the backoff has reset to seed",
-            breaker.timeRemaining(), new IsEqual<>(Duration.ofSeconds(30))
+            "the first caller sends the probe",
+            breaker.claimProbe(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "a second caller does not",
+            breaker.claimProbe(), new IsEqual<>(false)
+        );
+        breaker.probeFailed(503);
+        MatcherAssert.assertThat(
+            "the failed probe gives the claim back for the next block",
+            breaker.claimProbe(), new IsEqual<>(true)
+        );
+        breaker.releaseProbe();
+        MatcherAssert.assertThat(
+            "so does a probe that could not be sent",
+            breaker.claimProbe(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void countsRefusedRequestsUntilTheyAreReported() {
+        final UpstreamCircuitBreaker breaker = newBreaker(new TestClock(T0));
+        breaker.fastFailed();
+        breaker.fastFailed();
+        MatcherAssert.assertThat(
+            "both refusals are reported",
+            breaker.drainFastFails(), new IsEqual<>(2L)
+        );
+        MatcherAssert.assertThat(
+            "and the count starts again",
+            breaker.drainFastFails(), new IsEqual<>(0L)
+        );
+    }
+
+    @Test
+    void probeAsksForWhatLastFailed() {
+        final UpstreamCircuitBreaker breaker = newBreaker(new TestClock(T0));
+        MatcherAssert.assertThat(
+            "the root, while nothing failed",
+            breaker.probeTarget(), new IsEqual<>("/")
+        );
+        breaker.failedOn("/org/acme/app/1.0/app-1.0.pom");
+        breaker.recordFailure(503);
+        MatcherAssert.assertThat(
+            "the path of the failed request",
+            breaker.probeTarget(), new IsEqual<>("/org/acme/app/1.0/app-1.0.pom")
+        );
+        breaker.probeSucceeded();
+        MatcherAssert.assertThat(
+            "the root again after the recovery",
+            breaker.probeTarget(), new IsEqual<>("/")
         );
     }
 
@@ -111,8 +212,11 @@ final class UpstreamCircuitBreakerTest {
         final TestClock clock = new TestClock(T0);
         final UpstreamCircuitBreaker breaker = newBreaker(clock);
         final long[] expected = {30, 30, 60, 90, 150, 240};
+        breaker.recordFailure(503);
         for (int i = 0; i < expected.length; i = i + 1) {
-            breaker.recordFailure(503);
+            if (i > 0) {
+                breaker.probeFailed(503);
+            }
             MatcherAssert.assertThat(
                 "trip #" + (i + 1) + " window is " + expected[i] + "s",
                 breaker.timeRemaining(), new IsEqual<>(Duration.ofSeconds(expected[i]))
@@ -327,19 +431,19 @@ final class UpstreamCircuitBreakerTest {
     }
 
     @Test
-    void recordSuccessReportsCloseExactlyOnce() {
+    void answeredProbeReportsCloseExactlyOnce() {
         final TestClock clock = new TestClock(T0);
         final UpstreamCircuitBreaker breaker = gatedBreaker(clock);
         for (int i = 0; i < 10; i = i + 1) {
             breaker.recordFailure(503);
         }
         MatcherAssert.assertThat(
-            "first success after a trip reports the close",
-            breaker.recordSuccess(), new IsEqual<>(true)
+            "the first answered probe after a trip reports the close",
+            breaker.probeSucceeded(), new IsEqual<>(true)
         );
         MatcherAssert.assertThat(
-            "subsequent successes do not re-report the close",
-            breaker.recordSuccess(), new IsEqual<>(false)
+            "a later one does not re-report it",
+            breaker.probeSucceeded(), new IsEqual<>(false)
         );
     }
 
@@ -350,7 +454,7 @@ final class UpstreamCircuitBreakerTest {
         for (int i = 0; i < 10; i = i + 1) {
             breaker.recordFailure(503);
         }
-        breaker.recordSuccess();
+        breaker.probeSucceeded();
         final boolean tripped = breaker.recordFailure(500);
         MatcherAssert.assertThat(
             "pre-trip failures were cleared — one new failure cannot re-trip",

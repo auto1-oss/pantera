@@ -161,7 +161,7 @@ public final class GoProxySlice extends Slice.Wrap {
                     // Content-Length from local storage metadata when the
                     // requested Go module file is already cached. Falls
                     // through to upstream HEAD on cache miss only.
-                    new HeadProxySlice(remote, storage)
+                    new HeadProxySlice(remote, storage, rname)
                 ),
                 new RtRulePath(
                     MethodRule.GET,

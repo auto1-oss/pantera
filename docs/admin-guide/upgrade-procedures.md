@@ -10,12 +10,13 @@ This page covers the process for upgrading Pantera to a new version, including p
 
 ### Upgrading to 2.3.0
 
-2.3.0 contains everything shipped in 2.2.10. The upgrade path depends on the release you run:
+2.3.0 contains everything shipped up to 2.2.14. The upgrade path depends on the release you run:
 
-- **Coming from 2.2.10:** no database action. The 2.2.10 notes below (the `immutable` setting, HTTP `DELETE`, migration `V146`) are already in effect.
+- **Coming from 2.2.14:** no database action. The notes below (migration `V148`, repository delete answering `202`) are already in effect.
+- **Coming from 2.2.10 to 2.2.13:** read [Upgrading to 2.2.14](#upgrading-to-2214) first: migrations `V147` and `V148` run at start, and its notes on repository rename and delete apply.
 - **Coming from 2.2.9 or earlier:** read [Upgrading to 2.2.10](#upgrading-to-2210) first — every note there applies to an upgrade straight to 2.3.0, including the `V116` checksum fix for a database that first ran `V116` under 2.2.9 (run the `UPDATE` before starting 2.3.0) and the `immutable` default for YAML-only deployments. Coming from 2.2.8 or earlier, skip 2.2.9.
 
-**No database migration of its own.** 2.3.0 adds no Flyway migration beyond 2.2.10's `V146` (the highest version is `V146`), and an existing `pantera.yml`, repository YAMLs and environment load unchanged. The storage and download features are opt-in per storage/repository:
+**No database migration of its own.** 2.3.0 adds no Flyway migration beyond 2.2.14's `V148` (the highest version is `V148`), and an existing `pantera.yml`, repository YAMLs and environment load unchanged. The storage and download features are opt-in per storage/repository:
 
 - **Index-accelerated S3 cache** (`cache.mode: index`) — serves cache hits from an in-memory index with async durable write-back and byte-bounded LRU/LFU eviction. Default is unchanged (`mode: disk`, the prior disk cache). See [Index Cache Mode](storage-backends.md#index-cache-mode-cachemode-index).
 - **S3-API-compatible backends** — the S3 backend also targets MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS Gateway, or GCS's S3-interop endpoint via `endpoint`/`region`/`path-style`/`credentials`; `storage-class` selects the object storage class. See [S3-API-Compatible Object Stores](storage-backends.md#s3-api-compatible-object-stores).
@@ -27,6 +28,14 @@ Leave these keys unset to upgrade with no functional change. Behavior that chang
 - **Docker manifest `GET`/`HEAD` honour the client's `Accept` header** and answer `406` when the stored manifest's media type is not acceptable; an absent `Accept` or `*/*` is unaffected. Registry API deletes (shipped in 2.2.10) also maintain the OCI 1.1 referrers index: deleting a referrer manifest by digest removes it from `GET .../referrers/<digest>`.
 - **`go-proxy` proxies the Go checksum database** (`/sumdb/...`) to its upstream, so clients can keep `GOSUMDB` at its default; `go` and `go-group` repositories answer `404` for `/sumdb/`.
 - **Per-node event draining.** Each node drains its own artifact-events queue and proxy package processors on a local scheduler instead of the cluster-shared Quartz job store; a Quartz firing that lands on a node without the job's dependencies is skipped and logged (`event.action=job_skip_unresolved`) rather than deleting the job. No operator action is required.
+
+### Upgrading to 2.2.14
+
+- **Migration `V148`** adds `repositories.repo_key`, `repository_tombstones`, `repository_aliases` and `repo_jobs`. Every existing repository gets `repo_key = name`; no data moves and no index row changes. The migration touches only the `repositories` table (one row per repository) and is quick whatever the size of the artifact index.
+- **Do not rename or delete a repository while nodes of different versions are running.** A 2.2.13 node does not know repository keys: a rename it performs copies the data to a directory named after the new name, which 2.2.14 nodes do not read. Finish the rolling upgrade first.
+- **Repository delete answers `202`, never `200`** (with a database), and its data is purged in the background after a restore window of 24 hours (`PANTERA_REPO_DELETE_RETENTION_HOURS`). Scripts that waited for `200` to know the data is gone must follow the purge job instead (`GET /api/v1/repository-jobs/:id`), and pass `retention_hours=0` to purge at once. A delete of a repository that is a member of a group now answers `409` unless `force=true` is given.
+- **Rollback.** Before rolling the application back, rename back every repository that was renamed under 2.2.14 (`SELECT name, repo_key FROM repositories WHERE name <> repo_key`): 2.2.13 looks for a repository's data in the directory named after it. Let running purge jobs finish, or restore the deleted repositories.
+- After the upgrade, scan for files left by earlier deletes: **Repository Jobs → Unowned storage directories → Scan storages**, or `GET /api/v1/repository-orphans`. See [Repository rename and delete](repository-lifecycle.md#unowned-storage-directories).
 
 ### Upgrading to 2.2.10
 
@@ -213,6 +222,8 @@ For zero-downtime upgrades in HA deployments:
 Database migrations run on the first node that starts with the new version. Subsequent nodes detect that migrations have already been applied and skip them.
 
 **Token revocations while versions are mixed (upgrading to 2.2.9 from an earlier release).** Revocations (sign-out, password change, `revoke-user`, API-token revoke) keep propagating in both directions during the rollout: a 2.2.9 node publishes each revocation in both the 2.2.9 message format and the earlier one, and it still applies messages from nodes not yet upgraded. The earlier release handles what it receives its own way: it records the revocation at the time it receives the message and keeps it for 2 hours, and it rejects every session of a revoked user on that node for those 2 hours, including one opened after the revocation. When a 2.2.9 node restarts, it reloads each user revocation that an earlier release wrote to Valkey as a revocation of every token issued before the restart. To keep this window short, finish the rollout promptly.
+
+**Valkey cache keys while versions are mixed (upgrading to 2.2.14 from an earlier release).** 2.2.14 writes the cooldown-filtered metadata envelopes and the negative (404) cache under new keys (`metadata:...:{variant}.v2:{package}` with the index `metadata-idx:{package}`; `negative2:...` with the index `negative2-idx:{name}`) and does not read the keys an earlier release wrote: both caches start cold on the upgraded nodes, and the old keys expire by their TTL — no manual cleanup is needed. Invalidations keep reaching both key sets during the rollout: a 2.2.14 node also deletes the earlier release's keys of the package or artifact it invalidates (for the negative cache with the keyspace `SCAN` the earlier release used, for 24 hours after the first 2.2.14 node started; for metadata envelopes by key name, for the repositories that node has served), and it applies the invalidations that nodes not yet upgraded publish. Finish the rollout within 24 hours; after that, no upload or metadata refresh scans the Valkey keyspace.
 
 ---
 

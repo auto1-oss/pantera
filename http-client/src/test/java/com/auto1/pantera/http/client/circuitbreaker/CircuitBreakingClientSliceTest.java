@@ -27,6 +27,7 @@ import java.time.ZoneOffset;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -34,8 +35,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /**
  * Behavioural tests for {@link CircuitBreakingClientSlice}: fast-fail
@@ -52,6 +55,13 @@ final class CircuitBreakingClientSliceTest {
     );
 
     private ScheduledExecutorService probeExecutor;
+
+    @BeforeAll
+    static void startLogging() {
+        // Probes log from the probe thread, which tearDown interrupts.
+        // Logging is started here so that it is never initialised there.
+        org.apache.logging.log4j.LogManager.getRootLogger();
+    }
 
     @BeforeEach
     void setUp() {
@@ -159,30 +169,113 @@ final class CircuitBreakingClientSliceTest {
     }
 
     @Test
-    void downstream200ClearsAnyPriorOpenState() {
+    @Timeout(30)
+    void fastFailsAfterTheBlockUntilTheProbeIsAnswered() throws InterruptedException {
         final TestClock clock = new TestClock(Instant.parse("2026-05-14T12:00:00Z"));
         final UpstreamCircuitBreaker breaker = newBreaker(clock);
         breaker.recordFailure(503);
-        // Time-travel past the block so isOpen() reports closed; the
-        // backoff is still at "tripped" until a recordSuccess() lands.
+        // The block is over. Nobody scheduled a probe: the breaker was
+        // tripped behind the slice's back, as by another slice of the host.
         clock.advance(Duration.ofSeconds(31));
-        final RecordingSlice downstream = new RecordingSlice();
-        downstream.enqueue(ResponseBuilder.ok().body(Flowable.empty()).build());
+        final CompletableFuture<Response> probe = new CompletableFuture<>();
+        final CountDownLatch probed = new CountDownLatch(1);
+        final AtomicInteger gets = new AtomicInteger();
+        final Slice downstream = (line, headers, body) -> {
+            final CompletableFuture<Response> res;
+            if (line.method() == RqMethod.HEAD) {
+                probed.countDown();
+                res = probe;
+            } else {
+                gets.incrementAndGet();
+                res = CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+            }
+            return res;
+        };
         final CircuitBreakingClientSlice slice = new CircuitBreakingClientSlice(
             downstream, "repo1.maven.org", breaker,
             CircuitBreakerConfig.defaults(), clock, this.probeExecutor
         );
-        final Response response = slice.response(GET, Headers.EMPTY, Content.EMPTY).join();
         MatcherAssert.assertThat(
-            "200 passes through",
-            response.status(), new IsEqual<>(RsStatus.OK)
+            "a request after the block still fast-fails",
+            slice.response(GET, Headers.EMPTY, Content.EMPTY).join().status(),
+            new IsEqual<>(RsStatus.BAD_GATEWAY)
         );
-        // Next failure: the recordSuccess in the 200 path should have
-        // reset the backoff, so the next trip's window is the seed.
-        breaker.recordFailure(503);
         MatcherAssert.assertThat(
-            "after recordSuccess, the next trip uses the seed window again",
-            breaker.timeRemaining(), new IsEqual<>(Duration.ofSeconds(30))
+            "and makes the slice send the probe nobody had scheduled",
+            probed.await(10, TimeUnit.SECONDS), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "while the probe is on its way requests keep fast-failing",
+            slice.response(GET, Headers.EMPTY, Content.EMPTY).join().headers()
+                .values(CircuitBreakingClientSlice.CIRCUIT_OPEN_HEADER),
+            new IsEqual<>(java.util.List.of("true"))
+        );
+        MatcherAssert.assertThat(
+            "none of them reached the upstream",
+            gets.get(), new IsEqual<>(0)
+        );
+        probe.complete(ResponseBuilder.ok().build());
+        MatcherAssert.assertThat(
+            "the answered probe closes the breaker",
+            waitUntil(() -> !breaker.isOpen(), Duration.ofSeconds(10)),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "and requests reach the upstream again",
+            slice.response(GET, Headers.EMPTY, Content.EMPTY).join().status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+    }
+
+    @Test
+    @Timeout(30)
+    void upstreamThatAnswersItsRootButFailsArtifactsStaysBlocked()
+        throws InterruptedException {
+        final TestClock clock = new TestClock(Instant.parse("2026-05-14T12:00:00Z"));
+        final CircuitBreakerConfig config = hairTrigger(
+            Duration.ofMillis(50), Duration.ofMillis(500)
+        );
+        final UpstreamCircuitBreaker breaker = new UpstreamCircuitBreaker(
+            "repository.example", config, clock
+        );
+        // The front end answers "/", every artifact request fails.
+        final java.util.List<String> probes = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final AtomicInteger gets = new AtomicInteger();
+        final Slice downstream = (line, headers, body) -> {
+            if (line.method() == RqMethod.HEAD) {
+                probes.add(line.uri().getPath());
+            } else {
+                gets.incrementAndGet();
+            }
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.from(
+                    "/".equals(line.uri().getPath())
+                        ? RsStatus.OK : RsStatus.SERVICE_UNAVAILABLE
+                ).build()
+            );
+        };
+        final CircuitBreakingClientSlice slice = new CircuitBreakingClientSlice(
+            downstream, "repository.example", breaker, config, clock, this.probeExecutor
+        );
+        slice.response(GET, Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "the probe is repeated",
+            waitUntil(() -> probes.size() >= 3, Duration.ofSeconds(10)),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "every probe asked for the artifact that failed, never for the root",
+            new java.util.HashSet<>(probes),
+            new IsEqual<>(java.util.Set.of(GET.uri().getPath()))
+        );
+        MatcherAssert.assertThat(
+            "the breaker stays open",
+            breaker.isOpen(), new IsEqual<>(true)
+        );
+        slice.response(GET, Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "and no further request reached the upstream",
+            gets.get(), new IsEqual<>(1)
         );
     }
 

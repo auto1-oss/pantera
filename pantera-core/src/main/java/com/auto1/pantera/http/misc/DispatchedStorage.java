@@ -10,8 +10,10 @@
  */
 package com.auto1.pantera.http.misc;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ListPage;
 import com.auto1.pantera.asto.ListResult;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
@@ -106,6 +108,23 @@ public final class DispatchedStorage implements Storage {
     }
 
     @Override
+    public CompletableFuture<ListPage> listPage(
+        final Key prefix, final Optional<String> after, final int limit
+    ) {
+        return dispatch(this.delegate.listPage(prefix, after, limit), StorageExecutors.LIST);
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteBatch(final Collection<Key> keys) {
+        return dispatch(this.delegate.deleteBatch(keys), StorageExecutors.WRITE);
+    }
+
+    @Override
+    public CompletableFuture<Integer> abortIncompleteUploads(final Key prefix) {
+        return dispatch(this.delegate.abortIncompleteUploads(prefix), StorageExecutors.WRITE);
+    }
+
+    @Override
     public <T> CompletionStage<T> exclusively(
         final Key key,
         final Function<Storage, CompletionStage<T>> operation
@@ -148,16 +167,20 @@ public final class DispatchedStorage implements Storage {
         final Executor executor
     ) {
         final CompletableFuture<T> result = new CompletableFuture<>();
+        // The pool threads are shared by every request: the continuation
+        // runs under its caller's logging context and the thread gets its
+        // own back, so a context bound by one request never reaches the next.
+        final CallerContext caller = new CallerContext();
         source.whenComplete(
             (val, err) -> {
                 try {
-                    executor.execute(() -> {
+                    executor.execute(() -> caller.run(() -> {
                         if (err != null) {
                             result.completeExceptionally(err);
                         } else {
                             result.complete(val);
                         }
-                    });
+                    }));
                 } catch (final java.util.concurrent.RejectedExecutionException rex) {
                     result.completeExceptionally(rex);
                 }

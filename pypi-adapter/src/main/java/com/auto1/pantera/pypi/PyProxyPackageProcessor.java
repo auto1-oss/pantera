@@ -21,9 +21,9 @@ import com.auto1.pantera.pypi.meta.PackageInfo;
 import com.auto1.pantera.pypi.meta.ValidFilename;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.ProxyEventRetry;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -81,11 +81,8 @@ public final class PyProxyPackageProcessor implements Runnable {
      * Process packages in parallel batches.
      */
     private void processPackagesBatch() {
-        final List<ProxyArtifactEvent> batch = new ArrayList<>(100);
-        ProxyArtifactEvent event;
-        while (batch.size() < 100 && (event = this.packages.poll()) != null) {
-            batch.add(event);
-        }
+        // Events waiting for their retry time stay queued (ProxyEventRetry).
+        final List<ProxyArtifactEvent> batch = new ProxyEventRetry(this.packages).due(100);
 
         if (batch.isEmpty()) {
             return;
@@ -141,15 +138,12 @@ public final class PyProxyPackageProcessor implements Runnable {
 
         return this.asto.exists(key).thenCompose(exists -> {
             if (!exists) {
-                EcsLogger.debug("com.auto1.pantera.pypi")
-                    .message("Artifact not yet cached, re-queuing for retry")
-                    .eventCategory("web")
-                    .eventAction("package_processing")
-                    .field("package.name", key.string())
-                    .field("log.source", "application")
-                    .log();
-                // Re-add event to queue for retry
-                this.packages.add(event);
+                // The stream-through cache commits the file only when the
+                // client has read the body, which is after the event was
+                // queued; and it never commits when the client hangs up.
+                // Bounded retry with backoff: DEBUG while retrying, one
+                // WARN when given up.
+                new ProxyEventRetry(this.packages).again(event, "com.auto1.pantera.pypi");
                 return CompletableFuture.completedFuture(null);
             }
 
@@ -185,6 +179,7 @@ public final class PyProxyPackageProcessor implements Runnable {
                             );
 
                             EcsLogger.info("com.auto1.pantera.pypi")
+                                .traceContext(event.traceId(), event.clientIp())
                                 .message("Recorded PyPI proxy release")
                                 .eventCategory("web")
                                 .eventAction("package_processing")
@@ -199,6 +194,8 @@ public final class PyProxyPackageProcessor implements Runnable {
                                 .log();
                         } else {
                             EcsLogger.warn("com.auto1.pantera.pypi")
+                                .traceContext(event.traceId(), event.clientIp())
+                                .field("repository.name", event.repoName())
                                 .message("Python proxy package failed filename validation")
                                 .eventCategory("package")
                                 .eventAction("package_processing")
@@ -210,6 +207,8 @@ public final class PyProxyPackageProcessor implements Runnable {
                         }
                     } catch (final Exception err) {
                         EcsLogger.error("com.auto1.pantera.pypi")
+                            .traceContext(event.traceId(), event.clientIp())
+                            .field("repository.name", event.repoName())
                             .message("Failed to parse/check python proxy package")
                             .eventCategory("web")
                             .eventAction("package_processing")
@@ -222,6 +221,8 @@ public final class PyProxyPackageProcessor implements Runnable {
                 });
         }).exceptionally(err -> {
             EcsLogger.error("com.auto1.pantera.pypi")
+                .traceContext(event.traceId(), event.clientIp())
+                .field("repository.name", event.repoName())
                 .message("Failed to process PyPI package")
                 .eventCategory("web")
                 .eventAction("package_processing")

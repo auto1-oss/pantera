@@ -268,7 +268,14 @@ public final class CacheManifests implements Manifests {
                         .error(throwable)
                         .field("log.source", "application")
                         .log();
-                    result = this.cache.manifests().get(ref.withVariant(variant));
+                    // The cached copy stands in for an origin that could
+                    // not answer. Without one the failure is the answer:
+                    // "absent" would be served as 404 MANIFEST_UNKNOWN.
+                    result = this.cache.manifests().get(ref.withVariant(variant)).thenCompose(
+                        cached -> cached.isPresent()
+                            ? CompletableFuture.completedFuture(cached)
+                            : CompletableFuture.failedFuture(throwable)
+                    );
                 }
                 return result;
             }

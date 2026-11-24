@@ -12,6 +12,7 @@ package com.auto1.pantera.http.group;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.PartialUpstreamFailure;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
@@ -300,6 +301,67 @@ final class RaceSliceTest {
         org.hamcrest.MatcherAssert.assertThat(
             "a genuine upstream failure is a 502",
             res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+    }
+
+    @Test
+    void failureOfOneRemoteIsMarkedPartialWhenAnotherAnswered() {
+        final Response res = new RaceSlice(
+            slice(RsStatus.NOT_FOUND, "miss", Duration.ZERO),
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new java.util.concurrent.TimeoutException("idle")
+            )
+        ).response(new RequestLine(RqMethod.GET, "/a"), Headers.EMPTY, Content.EMPTY).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "nobody knows whether the failed remote has the file",
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "but the repository answered through its other remote",
+            new PartialUpstreamFailure(res).present(),
+            new org.hamcrest.core.IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void failureOfEveryRemoteIsNotMarkedPartial() {
+        final Response res = new RaceSlice(
+            slice(RsStatus.SERVICE_UNAVAILABLE, "down", Duration.ZERO),
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new java.util.concurrent.TimeoutException("idle")
+            )
+        ).response(new RequestLine(RqMethod.GET, "/a"), Headers.EMPTY, Content.EMPTY).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "every remote failed",
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "so the repository as a whole did",
+            new PartialUpstreamFailure(res).present(),
+            new org.hamcrest.core.IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void remoteThatWasNotAskedIsNoAnswer() {
+        final Response res = new RaceSlice(
+            slice(RsStatus.INTERNAL_ERROR, "boom", Duration.ZERO),
+            circuitOpen("9")
+        ).response(new RequestLine(RqMethod.GET, "/a"), Headers.EMPTY, Content.EMPTY).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            new PartialUpstreamFailure(res).present(),
+            new org.hamcrest.core.IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void singleRemoteFailureIsNotMarkedPartial() {
+        final Response res = new RaceSlice(
+            slice(RsStatus.INTERNAL_ERROR, "boom", Duration.ZERO)
+        ).response(new RequestLine(RqMethod.GET, "/a"), Headers.EMPTY, Content.EMPTY).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            new PartialUpstreamFailure(res).present(),
+            new org.hamcrest.core.IsEqual<>(false)
         );
     }
 

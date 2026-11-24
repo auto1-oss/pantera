@@ -156,6 +156,33 @@ final class CachedUsersTest {
     }
 
     @Test
+    @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(
+        named = "VALKEY_HOST", matches = ".+"
+    )
+    void invalidateAllFlushesTheSharedTier() throws Exception {
+        try (com.auto1.pantera.cache.ValkeyConnection conn =
+            new com.auto1.pantera.cache.ValkeyConnection(
+                System.getenv("VALKEY_HOST"),
+                Integer.parseInt(System.getenv().getOrDefault("VALKEY_PORT", "6379")),
+                java.time.Duration.ofSeconds(2)
+            )) {
+            final java.util.List<String> keys = new java.util.ArrayList<>();
+            for (int idx = 0; idx < 50; idx = idx + 1) {
+                final String key = "auth:qa-ct-" + java.util.UUID.randomUUID();
+                conn.async().setex(key, 120L, new byte[] {1})
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                keys.add(key);
+            }
+            new CachedUsers(this.auth, conn).invalidateAll();
+            MatcherAssert.assertThat(
+                conn.async().exists(keys.toArray(new String[0]))
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS),
+                new IsEqual<>(0L)
+            );
+        }
+    }
+
+    @Test
     void doesNotCacheFailedAuth() {
         MatcherAssert.assertThat(
             "David was not authenticated on the first call",

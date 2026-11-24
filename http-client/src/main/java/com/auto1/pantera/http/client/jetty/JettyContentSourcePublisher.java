@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.http.client.jetty;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.nio.ByteBuffer;
 import java.util.Objects;
@@ -189,8 +190,13 @@ final class JettyContentSourcePublisher implements Publisher<ByteBuffer> {
     }
 
     @Override
-    public void subscribe(final Subscriber<? super ByteBuffer> sub) {
-        Objects.requireNonNull(sub, "subscriber");
+    public void subscribe(final Subscriber<? super ByteBuffer> origin) {
+        Objects.requireNonNull(origin, "subscriber");
+        // Chunks and the end of the body are delivered by Jetty threads the
+        // whole client shares: the subscriber gets them under the logging
+        // context of the request that subscribed, and the Jetty thread gets
+        // its own back after each signal.
+        final Subscriber<ByteBuffer> sub = new CallerContext().resume(origin);
         if (!this.subscriber.compareAndSet(null, sub)) {
             sub.onSubscribe(NoopSubscription.INSTANCE);
             sub.onError(new IllegalStateException(

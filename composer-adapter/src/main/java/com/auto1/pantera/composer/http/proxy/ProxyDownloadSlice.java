@@ -552,20 +552,6 @@ public final class ProxyDownloadSlice implements Slice {
         return target.response(newLine, out, Content.EMPTY).thenCompose(response -> {
             if (!response.status().success()) {
                 leaderGate.complete(null);
-                EcsLogger.warn("com.auto1.pantera.composer")
-                    .message("Upstream download failed with status "
-                        + response.status().code() + " (relayed)")
-                    .eventCategory("web")
-                    .eventAction("proxy_download")
-                    .eventOutcome("failure")
-                    .field("event.reason", "upstream_status_" + response.status().code())
-                    .field("package.name", packageName)
-                    .field("package.version", version)
-                    .field("http.response.status_code", response.status().code())
-                    .field("url.full", dist.url())
-                    .requestContext(headers)
-                    .field("log.source", "http")
-                    .log();
                 AuditLogger.access(
                     ctx, this.rtype, this.rname, packageName, version, 0L, owner,
                     AuditLogger.OUTCOME_FAILURE,
@@ -573,7 +559,16 @@ public final class ProxyDownloadSlice implements Slice {
                         ? AuditLogger.REASON_NOT_FOUND
                         : AuditLogger.REASON_UPSTREAM_UNAVAILABLE
                 );
-                return CompletableFuture.completedFuture(response);
+                // 404/410: 404. Another 4xx is the upstream refusing Pantera,
+                // not the client: 404 that no cache remembers. 429, 5xx and a
+                // breaker fast-fail: 5xx with Retry-After and the circuit-open
+                // marker kept, so a php-group skips this member instead of
+                // convicting it. The upstream's status is never relayed as it
+                // is: its 401 would make the client ask for a password.
+                final Response miss = new com.auto1.pantera.http.cache.UpstreamMiss(
+                    "com.auto1.pantera.composer", this.rname, distKey.string(), headers
+                ).answered(response.status().code(), response.headers());
+                return response.body().asBytesFuture().thenApply(ignored -> miss);
             }
             return this.streamThrough(
                 headers, ctx, packageName, version, distKey, dist, response, leaderGate

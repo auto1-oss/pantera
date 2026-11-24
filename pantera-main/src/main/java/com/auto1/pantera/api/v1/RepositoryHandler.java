@@ -134,7 +134,14 @@ public final class RepositoryHandler {
     private final ArtifactIndex artifactIndex;
 
     /**
-     * Ctor.
+     * Rename, delete and restore as database transactions with background
+     * purge; {@code null} without a database, where the legacy in-request
+     * data removal and copy are used.
+     */
+    private final com.auto1.pantera.repojob.RepoOps ops;
+
+    /**
+     * Ctor for deployments without a database.
      * @param filtersCache Pantera filters cache
      * @param crs Repository settings CRUD
      * @param repoData Repository data management
@@ -148,8 +155,31 @@ public final class RepositoryHandler {
     public RepositoryHandler(final FiltersCache filtersCache,
         final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy, final Optional<MetadataEventQueues> events,
-        final CooldownService cooldown, // NOPMD UnusedFormalParameter - public API; reserved for upcoming cooldown integration in repo CRUD endpoints
+        final CooldownService cooldown,
         final RepositoryEventBroadcaster events2, final ArtifactIndex artifactIndex) {
+        this(filtersCache, crs, repoData, policy, events, cooldown, events2, artifactIndex, null);
+    }
+
+    /**
+     * Ctor.
+     * @param filtersCache Pantera filters cache
+     * @param crs Repository settings CRUD
+     * @param repoData Repository data management
+     * @param policy Pantera security policy
+     * @param events Artifact events queue
+     * @param cooldown Cooldown service
+     * @param events2 Repository lifecycle event broadcaster (local bus + peers)
+     * @param artifactIndex Artifact index (rows purged on repository delete)
+     * @param ops Database-backed rename/delete/restore, {@code null} without a database
+     * @checkstyle ParameterNumberCheck (10 lines)
+     */
+    public RepositoryHandler(final FiltersCache filtersCache,
+        final CrudRepoSettings crs, final RepoData repoData,
+        final Policy<?> policy, final Optional<MetadataEventQueues> events,
+        final CooldownService cooldown, // NOPMD UnusedFormalParameter - public API; reserved for upcoming cooldown integration in repo CRUD endpoints
+        final RepositoryEventBroadcaster events2, final ArtifactIndex artifactIndex,
+        final com.auto1.pantera.repojob.RepoOps ops) {
+        this.ops = ops;
         this.filtersCache = filtersCache;
         this.crs = crs;
         this.repoData = repoData;
@@ -504,6 +534,20 @@ public final class RepositoryHandler {
                 } catch (final SecretRebindException ex) {
                     throw new ConfigRejected(ex.getMessage(), ex);
                 }
+                if (!exists && this.ops != null) {
+                    // A name that still serves another repository as its
+                    // former name cannot be taken.
+                    this.ops.lifecycle().claimName(name);
+                    // Files left under the name by a delete made before
+                    // 2.2.14 are not adopted: the repository gets a
+                    // directory of its own and starts empty.
+                    final Optional<String> key = this.ops.keyAvoidingLeftovers(name, merged);
+                    if (key.isPresent()
+                        && this.crs instanceof com.auto1.pantera.db.dao.RepositoryDao dao) {
+                        dao.create(rname, key.get(), merged, actor);
+                        return;
+                    }
+                }
                 this.crs.save(rname, merged, actor);
             },
             HandlerExecutor.get()
@@ -512,6 +556,9 @@ public final class RepositoryHandler {
                 ApiResponse.sendError(
                     ctx, 400, "BAD_REQUEST", RepositoryHandler.rootCause(err).getMessage()
                 );
+            } else if (err != null && RepositoryHandler.rootCause(err)
+                instanceof com.auto1.pantera.repojob.RepoOpRejected rejected) {
+                ApiResponse.sendError(ctx, rejected.status(), rejected.error(), rejected.getMessage());
             } else if (err != null) {
                 RepositoryHandler.audit(actor, clientIp, auditAction, name,
                     java.util.Map.of(
@@ -734,6 +781,10 @@ public final class RepositoryHandler {
      * @param ctx Routing context
      */
     private void deleteRepository(final RoutingContext ctx) {
+        if (this.ops != null) {
+            this.deleteWithPurgeJob(ctx);
+            return;
+        }
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
@@ -836,6 +887,224 @@ public final class RepositoryHandler {
     }
 
     /**
+     * DELETE with a database: the repository stops existing in one
+     * transaction (its name is free, it is no longer served or searchable on
+     * any node) and its data is purged by a background job after the restore
+     * window. Answers 202 with the job to follow; nothing is removed inside
+     * the request, so the answer does not depend on the repository's size.
+     * @param ctx Routing context
+     */
+    private void deleteWithPurgeJob(final RoutingContext ctx) {
+        final String name = ctx.pathParam("name");
+        final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String clientIp = RepositoryHandler.clientIp(ctx);
+        final String trace = new ApiAuditContext(ctx).value().traceId();
+        final boolean force = Boolean.parseBoolean(ctx.request().getParam("force"));
+        final java.time.Duration retention;
+        try {
+            retention = RepositoryHandler.intParam(
+                ctx.request().getParam("retention_hours"), -1,
+                com.auto1.pantera.repojob.RepoOps.MAX_RETENTION_HOURS
+            ).map(hours -> java.time.Duration.ofHours(hours)).orElse(this.ops.retention());
+        } catch (final IllegalArgumentException bad) {
+            ApiResponse.sendError(
+                ctx, 400, "BAD_REQUEST",
+                String.format(
+                    "retention_hours must be an integer between 0 and %d",
+                    com.auto1.pantera.repojob.RepoOps.MAX_RETENTION_HOURS
+                )
+            );
+            return;
+        }
+        CompletableFuture.supplyAsync(
+            () -> this.ops.lifecycle().delete(name, force, retention, actor, trace),
+            HandlerExecutor.get()
+        ).whenComplete((deleted, err) -> {
+            if (err != null) {
+                final Throwable cause = RepositoryHandler.rootCause(err);
+                RepositoryHandler.audit(actor, clientIp, "REPO_DELETE", name,
+                    java.util.Map.of("error", String.valueOf(cause.getMessage())), false);
+                if (cause instanceof com.auto1.pantera.repojob.RepoOpRejected rejected) {
+                    ApiResponse.sendError(ctx, rejected.status(), rejected.error(), cause.getMessage());
+                } else {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
+                }
+                return;
+            }
+            this.filtersCache.invalidate(name);
+            this.ops.rolesChanged(deleted.roles());
+            this.eventBus.publish(RepositoryEvents.remove(name));
+            deleted.groups().forEach(
+                group -> this.eventBus.publish(RepositoryEvents.upsert(group))
+            );
+            this.events.ifPresent(item -> item.stopProxyMetadataProcessing(name));
+            this.ops.wake();
+            EcsLogger.info("com.auto1.pantera.api.v1")
+                .message(
+                    String.format(
+                        "Repository deleted; purge job %d removes its data after %s",
+                        deleted.job(), deleted.purgeAfter()
+                    )
+                )
+                .eventCategory("configuration")
+                .eventAction("repository_delete")
+                .eventOutcome("success")
+                .field("repository.name", name)
+                .field("log.source", "application")
+                .log();
+            RepositoryHandler.audit(actor, clientIp, "REPO_DELETE", name,
+                java.util.Map.of(
+                    "repo_key", deleted.key(), "job_id", deleted.job(),
+                    "purge_after", deleted.purgeAfter().toString(),
+                    "removed_from_groups", String.join(",", deleted.groups())
+                ), true);
+            ctx.response()
+                .setStatusCode(202)
+                .putHeader("Content-Type", "application/json")
+                .end(
+                    new JsonObject()
+                        .put("status", "deleting")
+                        .put("job_id", deleted.job())
+                        .put("repo_key", deleted.key())
+                        .put("purge_after", deleted.purgeAfter().toString())
+                        .put("removed_from_groups", new io.vertx.core.json.JsonArray(deleted.groups()))
+                        .put(
+                            "message",
+                            String.format(
+                                "Repository '%s' is deleted; its data is purged in the background after %s and can be restored until the purge starts",
+                                name, deleted.purgeAfter()
+                            )
+                        ).encode()
+                );
+        });
+    }
+
+    /**
+     * Rename with a database: one transaction changes the name and the
+     * records that refer to the repository by name. The data stays under the
+     * repository's immutable key, so nothing is copied and the answer does
+     * not depend on the repository's size.
+     * @param ctx Routing context
+     * @param name Current name
+     * @param target New name
+     * @param body Request body
+     * @param actor Who renames
+     * @param clientIp Client IP, nullable
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private void renameInPlace(
+        final RoutingContext ctx, final String name, final String target,
+        final javax.json.JsonObject body, final String actor, final String clientIp
+    ) {
+        final int alias;
+        try {
+            alias = body.containsKey("keep_old_name_days") && !body.isNull("keep_old_name_days")
+                ? body.getInt("keep_old_name_days") : 0;
+        } catch (final ClassCastException bad) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "keep_old_name_days must be an integer");
+            return;
+        }
+        if (alias < 0 || alias > com.auto1.pantera.repojob.RepoOps.MAX_ALIAS_DAYS) {
+            ApiResponse.sendError(
+                ctx, 400, "BAD_REQUEST",
+                String.format(
+                    "keep_old_name_days must be between 0 and %d",
+                    com.auto1.pantera.repojob.RepoOps.MAX_ALIAS_DAYS
+                )
+            );
+            return;
+        }
+        CompletableFuture.supplyAsync(
+            () -> this.ops.lifecycle().rename(name, target, alias, actor),
+            HandlerExecutor.get()
+        ).whenComplete((renamed, err) -> {
+            if (err != null) {
+                final Throwable cause = RepositoryHandler.rootCause(err);
+                RepositoryHandler.audit(actor, clientIp, "REPO_MOVE", name,
+                    java.util.Map.of("new_name", target,
+                        "error", String.valueOf(cause.getMessage())), false);
+                if (cause instanceof com.auto1.pantera.repojob.RepoOpRejected rejected) {
+                    ApiResponse.sendError(ctx, rejected.status(), rejected.error(), cause.getMessage());
+                } else {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
+                }
+                return;
+            }
+            this.filtersCache.invalidate(name);
+            this.filtersCache.invalidate(target);
+            this.ops.rolesChanged(renamed.roles());
+            this.eventBus.publish(RepositoryEvents.move(name, target));
+            renamed.groups().forEach(
+                group -> this.eventBus.publish(RepositoryEvents.upsert(group))
+            );
+            this.ops.wake();
+            EcsLogger.info("com.auto1.pantera.api.v1")
+                .message(
+                    String.format(
+                        "Repository renamed from '%s' to '%s'; data stays under key '%s'%s",
+                        name, target, renamed.key(),
+                        alias > 0
+                            ? String.format("; the old name keeps serving for %d day(s)", alias)
+                            : ""
+                    )
+                )
+                .eventCategory("configuration")
+                .eventAction("repository_rename")
+                .eventOutcome("success")
+                .field("repository.name", target)
+                .field("log.source", "application")
+                .log();
+            RepositoryHandler.audit(actor, clientIp, "REPO_MOVE", name,
+                java.util.Map.of(
+                    "new_name", target, "repo_key", renamed.key(),
+                    "keep_old_name_days", alias,
+                    "groups_updated", String.join(",", renamed.groups()),
+                    "roles_updated", String.join(",", renamed.roles())
+                ), true);
+            ctx.response()
+                .setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end(
+                    new JsonObject()
+                        .put("name", target)
+                        .put("previous_name", name)
+                        .put("repo_key", renamed.key())
+                        .put("keep_old_name_days", alias)
+                        .put("groups_updated", new io.vertx.core.json.JsonArray(renamed.groups()))
+                        .put("roles_updated", new io.vertx.core.json.JsonArray(renamed.roles()))
+                        .encode()
+                );
+        });
+    }
+
+    /**
+     * Parse an optional non-negative integer parameter.
+     * @param raw Raw value, nullable
+     * @param min Exclusive lower bound
+     * @param max Inclusive upper bound
+     * @return Value, empty when the parameter is absent
+     * @throws IllegalArgumentException When it is not an integer in range
+     */
+    private static Optional<Integer> intParam(final String raw, final int min, final int max) {
+        final Optional<Integer> res;
+        if (raw == null || raw.isBlank()) {
+            res = Optional.empty();
+        } else {
+            final int value;
+            try {
+                value = Integer.parseInt(raw.trim());
+            } catch (final NumberFormatException ex) {
+                throw new IllegalArgumentException(raw, ex);
+            }
+            if (value <= min || value > max) {
+                throw new IllegalArgumentException(raw);
+            }
+            res = Optional.of(value);
+        }
+        return res;
+    }
+
+    /**
      * Answer 202: the repository's removal is still running.
      * @param ctx Routing context
      * @param name Repository name
@@ -912,6 +1181,10 @@ public final class RepositoryHandler {
         final RepositoryName newrname = new RepositoryName.Simple(newName);
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
         final String clientIp = RepositoryHandler.clientIp(ctx);
+        if (this.ops != null) {
+            this.renameInPlace(ctx, name, newName, body, actor, clientIp);
+            return;
+        }
         // SECURITY (2.2.9): reject a move onto an existing repository. The data
         // move copies the source subtree over the target's storage and then
         // deletes the source, so renaming onto a live repository would destroy

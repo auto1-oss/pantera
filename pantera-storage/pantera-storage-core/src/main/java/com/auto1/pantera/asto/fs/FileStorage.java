@@ -14,6 +14,7 @@ import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ListPage;
 import com.auto1.pantera.asto.ListResult;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.OneTimePublisher;
@@ -372,6 +373,39 @@ public final class FileStorage implements Storage {
     }
 
     @Override
+    public CompletableFuture<ListPage> listPage(
+        final Key prefix, final Optional<String> after, final int limit
+    ) {
+        final long startNs = System.nanoTime();
+        return this.keyPath(prefix).thenApplyAsync(
+            path -> new SortedKeyWalk(path, prefix).page(after, limit)
+        ).whenComplete(
+            (result, throwable) -> StorageMetricsCollector.record(
+                "list_page", System.nanoTime() - startNs, throwable == null, this.id
+            )
+        );
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteBatch(final Collection<Key> keys) {
+        final long startNs = System.nanoTime();
+        final Collection<Key> batch = new ArrayList<>(keys);
+        return CompletableFuture.runAsync(
+            () -> {
+                final Collection<Path> files = new ArrayList<>(batch.size());
+                for (final Key key : batch) {
+                    files.add(this.contained(key));
+                }
+                new BatchFileDelete(this.dir).delete(files);
+            }
+        ).whenComplete(
+            (result, throwable) -> StorageMetricsCollector.record(
+                "delete_batch", System.nanoTime() - startNs, throwable == null, this.id
+            )
+        );
+    }
+
+    @Override
     public CompletableFuture<Void> delete(final Key key) {
         final long startNs = System.nanoTime();
         return this.keyPath(key).thenAcceptAsync(
@@ -613,5 +647,22 @@ public final class FileStorage implements Storage {
             );
         }
         return res;
+    }
+
+    /**
+     * Converts key to path, with the same containment check as
+     * {@link #keyPath(Key)}.
+     *
+     * @param key Key to validate.
+     * @return Path inside the storage directory
+     */
+    private Path contained(final Key key) {
+        final Path path = this.dir.resolve(key.string());
+        if (!path.normalize().startsWith(path)) {
+            throw new PanteraIOException(
+                String.format("Entry path is out of storage: %s", key)
+            );
+        }
+        return path;
     }
 }

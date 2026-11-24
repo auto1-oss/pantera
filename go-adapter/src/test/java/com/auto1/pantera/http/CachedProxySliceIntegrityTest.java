@@ -20,6 +20,7 @@ import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
@@ -30,6 +31,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -174,13 +180,50 @@ final class CachedProxySliceIntegrityTest {
         );
     }
 
+    @Test
+    @DisplayName("the proxy event is queued only once the zip is committed to the cache")
+    void queuesTheProxyEventAfterTheCommit() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final CountDownLatch queued = new CountDownLatch(1);
+        final AtomicBoolean stored = new AtomicBoolean(false);
+        final Queue<ProxyArtifactEvent> events = new ConcurrentLinkedQueue<>() {
+            @Override
+            public boolean offer(final ProxyArtifactEvent event) {
+                stored.set(storage.exists(MODULE_KEY).join());
+                queued.countDown();
+                return super.offer(event);
+            }
+        };
+        final CachedProxySlice slice = buildSlice(
+            new FakeGoUpstream(MODULE_ZIP),
+            storage, new SimpleMeterRegistry(), Optional.of(events)
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, MODULE_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(
+            0, events.size(),
+            "nothing is queued before the body was read: the zip is not stored yet"
+        );
+        response.body().asBytesFuture().join();
+        assertTrue(queued.await(30, TimeUnit.SECONDS), "the event is queued after the commit");
+        assertTrue(stored.get(), "the zip was in storage when the event was queued");
+    }
+
     private static CachedProxySlice buildSlice(
         final Slice origin, final Storage storage, final MeterRegistry registry
+    ) throws Exception {
+        return buildSlice(origin, storage, registry, Optional.empty());
+    }
+
+    private static CachedProxySlice buildSlice(
+        final Slice origin, final Storage storage, final MeterRegistry registry,
+        final Optional<Queue<ProxyArtifactEvent>> events
     ) throws Exception {
         final CachedProxySlice slice = new CachedProxySlice(
             origin,
             Cache.NOP,
-            Optional.empty(),
+            events,
             Optional.of(storage),
             "go-proxy-test",
             "go-proxy",

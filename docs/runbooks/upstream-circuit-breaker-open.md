@@ -36,18 +36,22 @@ why the upstream hasn't recovered.
 
 1. **External outage check first**. `curl -v https://<upstream>/` from outside
    Pantera (locally on your laptop or from a different VM). If the upstream is
-   broken globally, page the upstream vendor and wait. The breaker will
-   auto-close once the HEAD probe of the upstream root (`HEAD /`) gets any
-   answer other than a server error at the next backoff interval. A `404`
-   or `501 Not Implemented` (an upstream that does not support `HEAD`)
-   counts as recovered; any other `5xx` keeps the breaker open and the next
-   probe waits longer.
+   broken globally, page the upstream vendor and wait. The breaker
+   closes once its `HEAD` probe gets any answer other than a server error.
+   The probe asks for the path of the request that last failed (the
+   `circuit_breaker_probe` record names it), not for `/`: an upstream can
+   answer its front page while artifact requests hang. Requests are refused
+   until the probe is answered. A `404` or `501 Not Implemented` (an
+   upstream that does not support `HEAD`) counts as recovered; any other
+   `5xx` or a timeout keeps the breaker open and the next probe waits
+   longer. To check by hand, `curl -I` the path from that record, not `/`.
 2. **Reachability check**. From a Pantera box: `curl -v https://<upstream>/`.
    If THIS fails but a laptop curl works, you have a DNS / firewall / TLS
    issue specific to the Pantera deployment. Investigate the network path.
 3. **Credential check**. If outbound auth is configured (private upstream),
-   verify the credential is still valid. The breaker treats 401 / 407 as trip
-   conditions on purpose — a rotated secret will trip the breaker.
+   verify the credential is still valid. A 401 / 407 does not trip the
+   breaker (only a `5xx` or a failed call does), so a rotated secret shows
+   as `upstream_status_401` on the access records, not here.
 4. **Reset manually if needed**. There is no admin endpoint to force-close the
    breaker (per design — manual override defeats the purpose). To recover
    quickly without waiting for the next probe, restart the Pantera node; the

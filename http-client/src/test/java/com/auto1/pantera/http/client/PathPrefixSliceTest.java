@@ -31,6 +31,8 @@ final class PathPrefixSliceTest {
     @CsvSource({
         "'',/,/,",
         "/prefix,/,/prefix/,",
+        "/,/software/amazon/awssdk/a.pom,/software/amazon/awssdk/a.pom,",
+        "/maven2/,/org/acme/a.jar,/maven2/org/acme/a.jar,",
         "/a/b/c,/d/e/f,/a/b/c/d/e/f,",
         "/my/repo,/123/file.txt?param1=foo&param2=bar,/my/repo/123/file.txt,param1=foo&param2=bar",
         "/aaa/bbb,/%26/file.txt?p=%20%20,/aaa/bbb/%26/file.txt,p=%20%20"

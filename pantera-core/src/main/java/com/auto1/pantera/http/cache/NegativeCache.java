@@ -10,10 +10,12 @@
  */
 package com.auto1.pantera.http.cache;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.cache.CacheInvalidationPubSub;
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.cache.ValkeyConnection;
+import com.auto1.pantera.cache.ValkeyKeyIndex;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -89,6 +91,17 @@ public final class NegativeCache {
     private final CacheInvalidationPubSub pubsub;
 
     /**
+     * Index of L2 keys by artifact name; {@code null} for single-tier.
+     */
+    private final ValkeyKeyIndex index;
+
+    /**
+     * Epoch millisecond until which previous-generation keys are still
+     * cleaned up. Open-ended until the rollout marker has been read.
+     */
+    private volatile long rolloutEnd = Long.MAX_VALUE;
+
+    /**
      * Pub/sub channel name used by {@link #pubsub}. Single-key
      * invalidations publish the {@link NegativeCacheKey#flat()} form;
      * {@link #invalidateByArtifactName} publishes the artifact name
@@ -101,7 +114,32 @@ public final class NegativeCache {
     private static final String NAME_PREFIX = "name:";
 
     /** L2 key prefix of every negative-cache entry. */
-    private static final String L2_PREFIX = "negative:";
+    private static final String L2_PREFIX = "negative2:";
+
+    /**
+     * L2 key prefix of 2.2.13 and older. Those keys are listed in no index,
+     * so this version does not read them; it only deletes them while nodes
+     * that do read them can still be running (see {@link #rollout()}).
+     */
+    private static final String LEGACY_PREFIX = "negative:";
+
+    /**
+     * Prefix of the per-artifact-name index SET that lists the L2 keys of
+     * one artifact name (see {@link ValkeyKeyIndex}).
+     */
+    private static final String INDEX_PREFIX = "negative2-idx:";
+
+    /**
+     * Key holding the epoch second the first node of this key generation
+     * started — the beginning of the rolling upgrade.
+     */
+    private static final String ROLLOUT_MARKER = "negative2-since";
+
+    /**
+     * How long after {@link #ROLLOUT_MARKER} nodes of the previous key
+     * generation are assumed to be possibly still running.
+     */
+    private static final Duration ROLLOUT_WINDOW = Duration.ofHours(24);
 
     /** SCAN page size for L2 sweeps and admin listings. */
     private static final int SCAN_COUNT = 1000;
@@ -164,6 +202,7 @@ public final class NegativeCache {
         this.ttl = config.l2Ttl();
         this.l2 = l2Commands;
         this.twoTier = l2Commands != null;
+        this.index = l2Commands == null ? null : new ValkeyKeyIndex(l2Commands);
         final int maxSize = config.isValkeyEnabled() ? config.l1MaxSize() : config.maxSize();
         final Duration l1Ttl = config.isValkeyEnabled() ? config.l1Ttl() : config.ttl();
         this.notFoundCache = Caffeine.newBuilder()
@@ -175,6 +214,37 @@ public final class NegativeCache {
         if (pubsub != null) {
             pubsub.subscribe(PUBSUB_CHANNEL, this::onPeerInvalidate);
         }
+        if (this.index != null) {
+            this.index.since(ROLLOUT_MARKER, System.currentTimeMillis() / 1000L)
+                .thenAccept(
+                    since -> this.rolloutEnd = since * 1000L + ROLLOUT_WINDOW.toMillis()
+                )
+                .exceptionally(ignored -> null);
+        }
+    }
+
+    /**
+     * Whether nodes of the previous L2 key generation (2.2.13 and older)
+     * may still be running: a rolling upgrade is assumed to finish within
+     * {@link #ROLLOUT_WINDOW} of the first new node's start. While it
+     * holds, invalidations also delete the old {@code negative:} keys —
+     * the by-name one with the keyspace SCAN those nodes use themselves —
+     * and a peer's invalidation is applied to this generation's L2 keys.
+     * Afterwards no invalidation walks the keyspace.
+     *
+     * @return True during the rolling-upgrade window
+     */
+    boolean rollout() {
+        return System.currentTimeMillis() < this.rolloutEnd;
+    }
+
+    /**
+     * Override the end of the rolling-upgrade window (tests only).
+     *
+     * @param epochMillis End of the window
+     */
+    void rolloutUntil(final long epochMillis) {
+        this.rolloutEnd = epochMillis;
     }
 
     /**
@@ -193,9 +263,17 @@ public final class NegativeCache {
         if (key.startsWith(NAME_PREFIX)) {
             final String name = key.substring(NAME_PREFIX.length());
             this.invalidateByArtifactNameLocal(name);
+            if (this.twoTier && this.rollout()) {
+                // The peer may be of the previous key generation: it
+                // cleared its own L2 keys, not this generation's.
+                this.dropIndexedByName(name);
+            }
             return;
         }
         this.notFoundCache.invalidate(key);
+        if (this.twoTier && this.rollout()) {
+            this.l2.del(L2_PREFIX + key);
+        }
     }
 
     /** Local-only artifact-name match invalidation; does not publish. */
@@ -309,7 +387,7 @@ public final class NegativeCache {
         final String flat = key.flat();
         this.notFoundCache.put(flat, CACHED);
         if (this.twoTier) {
-            l2Set("negative:" + flat);
+            l2Set(L2_PREFIX + flat);
         }
     }
 
@@ -322,7 +400,10 @@ public final class NegativeCache {
         final String flat = key.flat();
         this.notFoundCache.invalidate(flat);
         if (this.twoTier) {
-            this.l2.del("negative:" + flat);
+            this.l2.del(L2_PREFIX + flat);
+            if (this.rollout()) {
+                this.l2.del(LEGACY_PREFIX + flat);
+            }
         }
         if (this.pubsub != null) {
             this.pubsub.publish(PUBSUB_CHANNEL, flat);
@@ -365,7 +446,7 @@ public final class NegativeCache {
         }
         if (this.twoTier && !matched.isEmpty()) {
             final String[] redisKeys = matched.stream()
-                .map(f -> "negative:" + f)
+                .map(f -> L2_PREFIX + f)
                 .toArray(String[]::new);
             this.l2.del(redisKeys);
         }
@@ -375,7 +456,8 @@ public final class NegativeCache {
             // undone on its next miss by re-promoting the surviving L2 key —
             // so the L2 sweep must not depend on the local L1 (same class of
             // bug as the 2.2.7 envelope fix). Asynchronous: the upload path
-            // must not wait on Valkey.
+            // must not wait on Valkey. The keys come from the per-name index,
+            // never from a walk over the keyspace.
             this.sweepL2ByName(artifactName);
         }
         // Peer fan-out — every other Pantera instance runs the same
@@ -432,7 +514,7 @@ public final class NegativeCache {
         }
         if (this.twoTier && !matched.isEmpty()) {
             final String[] redisKeys = matched.stream()
-                .map(f -> "negative:" + f)
+                .map(f -> L2_PREFIX + f)
                 .toArray(String[]::new);
             this.l2.del(redisKeys);
         }
@@ -464,11 +546,13 @@ public final class NegativeCache {
         }
         if (this.twoTier) {
             final String[] redisKeys = keys.stream()
-                .map(k -> "negative:" + k.flat())
+                .map(k -> L2_PREFIX + k.flat())
                 .toArray(String[]::new);
-            return this.l2.del(redisKeys)
+            return new CallerContext().resume(
+                this.l2.del(redisKeys)
                 .toCompletableFuture()
                 .orTimeout(500, TimeUnit.MILLISECONDS)
+            )
                 .exceptionally(err -> 0L)
                 .thenApply(ignored -> null);
         }
@@ -481,7 +565,7 @@ public final class NegativeCache {
     public void clear() {
         this.notFoundCache.invalidateAll();
         if (this.twoTier) {
-            scanAndDelete("negative:*");
+            scanAndDelete(L2_PREFIX + "*");
         }
         if (this.pubsub != null) {
             this.pubsub.publishAll(PUBSUB_CHANNEL);
@@ -746,15 +830,13 @@ public final class NegativeCache {
     }
 
     /**
-     * Asynchronous L2 sweep for {@link #invalidateByArtifactName}: SCAN with
-     * a server-side MATCH anchored on the artifact-name segment — for the
-     * name and each of its parent paths — verified client-side with the same
-     * rule as the L1 scan. A failure is logged; the entry then expires via
-     * TTL.
+     * The artifact name and each of its parent paths: the cached names an
+     * upload of {@code artifactName} invalidates.
      *
-     * @param artifactName Canonical artifact name just stored
+     * @param artifactName Canonical artifact name
+     * @return Names, most specific first
      */
-    private void sweepL2ByName(final String artifactName) {
+    private static java.util.Set<String> withParents(final String artifactName) {
         final java.util.Set<String> names = new java.util.LinkedHashSet<>();
         String cur = artifactName;
         while (!cur.isEmpty()) {
@@ -762,21 +844,70 @@ public final class NegativeCache {
             final int slash = cur.lastIndexOf('/');
             cur = slash > 0 ? cur.substring(0, slash) : "";
         }
-        for (final String name : names) {
-            final String pattern = L2_PREFIX + "*:*:"
+        return names;
+    }
+
+    /**
+     * Delete from L2 every entry cached under the artifact name or one of
+     * its parent paths: one read of each name's index SET, so the cost is
+     * the number of such entries, not the size of the keyspace. A failure
+     * is logged; the entry then expires via TTL.
+     *
+     * @param artifactName Canonical artifact name just stored
+     */
+    private void dropIndexedByName(final String artifactName) {
+        for (final String name : NegativeCache.withParents(artifactName)) {
+            this.index.drop(INDEX_PREFIX + name, "").whenComplete(
+                (ignored, err) -> {
+                    if (err != null) {
+                        NegativeCache.logL2SweepFailure(artifactName, err);
+                    }
+                }
+            );
+        }
+    }
+
+    /**
+     * Log a failed by-name L2 invalidation.
+     *
+     * @param artifactName Artifact name
+     * @param err Failure
+     */
+    private static void logL2SweepFailure(final String artifactName, final Throwable err) {
+        EcsLogger.warn("com.auto1.pantera.cache")
+            .message("Negative-cache L2 sweep failed; entries expire via TTL")
+            .eventCategory("database")
+            .eventAction("neg_cache_invalidate_l2")
+            .eventOutcome("failure")
+            .field("package.name", artifactName)
+            .error(err)
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * Asynchronous L2 invalidation for {@link #invalidateByArtifactName}:
+     * the entries of this key generation through the per-name index
+     * ({@link #dropIndexedByName}). Only during a rolling upgrade
+     * ({@link #rollout()}) the previous generation's keys are swept as
+     * well, the way 2.2.13 did it: SCAN with a server-side MATCH anchored
+     * on the artifact-name segment — for the name and each of its parent
+     * paths — verified client-side with the same rule as the L1 scan.
+     *
+     * @param artifactName Canonical artifact name just stored
+     */
+    private void sweepL2ByName(final String artifactName) {
+        this.dropIndexedByName(artifactName);
+        if (!this.rollout()) {
+            return;
+        }
+        for (final String name : NegativeCache.withParents(artifactName)) {
+            final String pattern = LEGACY_PREFIX + "*:*:"
                 + NegativeCache.escapeGlob(NegativeCache.encodeSegment(name)) + ":*";
             this.sweepL2Step(ScanCursor.INITIAL, pattern, artifactName)
                 .whenComplete((ignored, err) -> {
                     if (err != null) {
-                        EcsLogger.warn("com.auto1.pantera.cache")
-                            .message("Negative-cache L2 sweep failed; entries expire via TTL")
-                            .eventCategory("database")
-                            .eventAction("neg_cache_invalidate_l2")
-                            .eventOutcome("failure")
-                            .field("package.name", artifactName)
-                            .error(err)
-                            .field("log.source", "application")
-                            .log();
+                        NegativeCache.logL2SweepFailure(artifactName, err);
                     }
                 });
         }
@@ -799,7 +930,7 @@ public final class NegativeCache {
                 final String[] victims = page.getKeys().stream()
                     .filter(key -> {
                         final NegativeCacheKey nck =
-                            NegativeCacheKey.parse(key.substring(L2_PREFIX.length()));
+                            NegativeCacheKey.parse(key.substring(LEGACY_PREFIX.length()));
                         return nck != null
                             && cachedNameMatchesUploaded(nck.artifactName(), uploaded);
                     })
@@ -866,11 +997,13 @@ public final class NegativeCache {
      * L2 GET — returns true if found, promotes to L1.
      */
     private CompletableFuture<Boolean> l2Get(final String flat) {
-        final String redisKey = "negative:" + flat;
+        final String redisKey = L2_PREFIX + flat;
         final long l2Start = System.nanoTime();
-        return this.l2.get(redisKey)
+        return new CallerContext().resume(
+            this.l2.get(redisKey)
             .toCompletableFuture()
             .orTimeout(100, TimeUnit.MILLISECONDS)
+        )
             .exceptionally(err -> null)
             .thenApply(l2Bytes -> {
                 final long durationMs = (System.nanoTime() - l2Start) / 1_000_000;
@@ -893,10 +1026,21 @@ public final class NegativeCache {
     private static final byte[] L2_SENTINEL = {'1'};
 
     /**
-     * L2 SET with TTL.
+     * L2 SET with TTL, listed in the index of its artifact name in the same
+     * atomic step — so an upload of that artifact finds the key without a
+     * walk over the keyspace.
      */
     private void l2Set(final String redisKey) {
-        this.l2.setex(redisKey, this.ttl.getSeconds(), L2_SENTINEL);
+        final NegativeCacheKey nck =
+            NegativeCacheKey.parse(redisKey.substring(L2_PREFIX.length()));
+        if (nck == null) {
+            this.l2.setex(redisKey, this.ttl.getSeconds(), L2_SENTINEL);
+        } else {
+            this.index.put(
+                INDEX_PREFIX + nck.artifactName(), redisKey,
+                this.ttl.getSeconds(), L2_SENTINEL
+            );
+        }
     }
 
     private void recordL1Metrics(final boolean hit, final long startNanos) {

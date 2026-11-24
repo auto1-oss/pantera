@@ -709,6 +709,7 @@ final class CachedProxySlice implements Slice {
             });
         }).exceptionally(throwable -> {
             EcsLogger.warn("com.auto1.pantera.composer")
+                .field("repository.name", this.rname)
                 .message("Failed to read cached item")
                 .eventCategory("web")
                 .eventAction("cache_read")
@@ -929,6 +930,7 @@ final class CachedProxySlice implements Slice {
             return rewriter.rewrite(json);
         } catch (Exception ex) {
             EcsLogger.error("com.auto1.pantera.composer")
+                .field("repository.name", this.rname)
                 .message("Failed to rewrite metadata")
                 .eventCategory("web")
                 .eventAction("metadata_rewrite")
@@ -950,6 +952,7 @@ final class CachedProxySlice implements Slice {
     private void emitEvent(final String name, final Headers headers, final Optional<? extends Content> content) {
         if (this.events.isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.composer")
+                .field("repository.name", this.rname)
                 .message("Events queue is empty, cannot emit event")
                 .eventCategory("web")
                 .eventAction("event_creation")
@@ -961,6 +964,7 @@ final class CachedProxySlice implements Slice {
         }
         if (content.isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.composer")
+                .field("repository.name", this.rname)
                 .message("Content is empty, cannot emit event")
                 .eventCategory("web")
                 .eventAction("event_creation")

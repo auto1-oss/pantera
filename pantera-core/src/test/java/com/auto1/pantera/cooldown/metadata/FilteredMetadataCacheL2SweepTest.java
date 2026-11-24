@@ -20,12 +20,13 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Behavioural test for the 2.2.7 fix of
- * {@link FilteredMetadataCache#invalidateByPackageName(String)}: the Valkey
- * L2 sweep must be independent of what the local L1 happens to hold.
+ * {@link FilteredMetadataCache#invalidateByPackageName(String)} on a real
+ * Valkey: the L2 drop must be independent of what the local L1 happens to
+ * hold, and must not need a walk over the keyspace.
  *
  * <p>Background (the 2.2.6 "npm metadata never refreshes" incident): the
  * old implementation issued the L2 {@code DEL} only for keys matched by a
@@ -33,12 +34,16 @@ import java.util.concurrent.TimeUnit;
  * invalidation hook, the envelope's short-lived L1 twin was typically
  * already evicted — so the stale envelope survived in Valkey for the full
  * L2 TTL and was re-promoted into L1 on every serve, hiding the freshly
- * refreshed packument for up to 24 h.</p>
+ * refreshed packument for up to 24 h. 2.2.7 replaced that with a cursor
+ * {@code SCAN} of the whole keyspace, which timed out in production; since
+ * 2.2.14 the envelope keys of a package come from its index SET, written
+ * atomically with each envelope.</p>
  *
- * <p>These tests seed envelope keys straight into Valkey with a COLD L1
- * (nothing ever loaded through the cache instance), invalidate by package
- * name, and require the keys to be gone. Valkey-gated — same convention as
- * {@code FilteredMetadataCacheClearL2Test}.</p>
+ * <p>These tests write envelopes through one cache instance and invalidate
+ * through another with a COLD L1 (nothing ever loaded through it), and
+ * require the keys to be gone. Valkey-gated — same convention as
+ * {@code FilteredMetadataCacheClearL2Test}; the ungated twin is
+ * {@code FilteredMetadataCacheIndexedInvalidationTest}.</p>
  *
  * @since 2.2.7
  */
@@ -46,33 +51,37 @@ final class FilteredMetadataCacheL2SweepTest {
 
     @Test
     @EnabledIfEnvironmentVariable(named = "VALKEY_HOST", matches = ".+")
-    void sweepsL2EntriesTheL1NeverHeld() throws Exception {
-        final String host = System.getenv("VALKEY_HOST");
-        final int port = Integer.parseInt(
-            System.getenv().getOrDefault("VALKEY_PORT", "6379")
-        );
-        try (ValkeyConnection conn = new ValkeyConnection(
-            host, port, Duration.ofSeconds(2)
-        )) {
-            final byte[] seed = "stale-envelope".getBytes(StandardCharsets.UTF_8);
-            final List<String> victims = List.of(
-                "metadata:npm-proxy:sweep-repo-a:sweep-openai",
-                "metadata:npm-group:sweep-repo-b:sweep-openai",
-                "metadata:npm-proxy:sweep-repo-a:full:sweep-openai",
-                "metadata:npm-proxy:sweep-repo-a:abbreviated:sweep-openai"
+    void dropsL2EntriesTheL1NeverHeld() throws Exception {
+        try (ValkeyConnection conn = connect()) {
+            final String pkg = "sweep-openai-" + UUID.randomUUID();
+            final String other = "sweep-not-openai-" + UUID.randomUUID();
+            final FilteredMetadataCache writer = new FilteredMetadataCache(
+                100, Duration.ofMinutes(5), Duration.ofMinutes(5), conn
             );
-            final String survivor = "metadata:npm-proxy:sweep-repo-a:sweep-not-openai";
-            for (final String key : victims) {
-                conn.async().setex(key, 120L, seed).get(2, TimeUnit.SECONDS);
-            }
-            conn.async().setex(survivor, 120L, seed).get(2, TimeUnit.SECONDS);
+            final List<String> victims = List.of(
+                write(conn, writer, "npm-proxy", "sweep-repo-a", "full", pkg),
+                write(conn, writer, "npm-proxy", "sweep-repo-a", "abbreviated", pkg),
+                write(conn, writer, "npm-group", "sweep-repo-b", "full", pkg)
+            );
+            final String survivor = write(conn, writer, "npm-proxy", "sweep-repo-a", "full", other);
+            MatcherAssert.assertThat(
+                "every envelope is listed in the index of its package",
+                conn.async().scard(FilteredMetadataCache.indexKey(pkg)).get(2, TimeUnit.SECONDS),
+                new IsEqual<>(3L)
+            );
+            MatcherAssert.assertThat(
+                "the index outlives the envelopes it lists",
+                conn.async().ttl(FilteredMetadataCache.indexKey(pkg)).get(2, TimeUnit.SECONDS)
+                    >= conn.async().ttl(victims.get(0)).get(2, TimeUnit.SECONDS),
+                new IsEqual<>(true)
+            );
 
             // COLD L1: this instance never loaded anything, mirroring the
             // production state at hook time (L1 twin already evicted).
             final FilteredMetadataCache cache = new FilteredMetadataCache(
                 100, Duration.ofMinutes(5), Duration.ofMinutes(5), conn
             );
-            final int l1Dropped = cache.invalidateByPackageName("sweep-openai");
+            final int l1Dropped = cache.invalidateByPackageName(pkg);
 
             MatcherAssert.assertThat(
                 "nothing was in L1, so the L1 count must be zero",
@@ -80,37 +89,90 @@ final class FilteredMetadataCacheL2SweepTest {
             );
             awaitGone(conn, victims);
             MatcherAssert.assertThat(
-                "an envelope of a different package must survive the sweep",
+                "an envelope of a different package must survive",
                 conn.async().exists(survivor).get(2, TimeUnit.SECONDS),
                 new IsEqual<>(1L)
             );
-            conn.async().del(survivor).get(2, TimeUnit.SECONDS);
+            MatcherAssert.assertThat(
+                "the emptied index is gone too",
+                conn.async().exists(FilteredMetadataCache.indexKey(pkg)).get(2, TimeUnit.SECONDS),
+                new IsEqual<>(0L)
+            );
+            cache.invalidatePackageAwaiting(other).get(5, TimeUnit.SECONDS);
         }
     }
 
     @Test
     @EnabledIfEnvironmentVariable(named = "VALKEY_HOST", matches = ".+")
-    void sweepsL2InL2OnlyMode() throws Exception {
-        final String host = System.getenv("VALKEY_HOST");
-        final int port = Integer.parseInt(
-            System.getenv().getOrDefault("VALKEY_PORT", "6379")
-        );
-        try (ValkeyConnection conn = new ValkeyConnection(
-            host, port, Duration.ofSeconds(2)
-        )) {
-            final String key = "metadata:npm-proxy:sweep-l2only:sweep-axios";
-            conn.async().setex(
-                key, 120L, "stale".getBytes(StandardCharsets.UTF_8)
-            ).get(2, TimeUnit.SECONDS);
-
-            // l1Size == 0 with a Valkey connection = L2-only mode: the old
-            // implementation had NO key source at all here and the
-            // invalidation was a total no-op.
+    void dropsL2InL2OnlyMode() throws Exception {
+        try (ValkeyConnection conn = connect()) {
+            final String pkg = "sweep-axios-" + UUID.randomUUID();
+            // l1Size == 0 with a Valkey connection = L2-only mode.
             final FilteredMetadataCache cache = new FilteredMetadataCache(
                 0, Duration.ofMinutes(5), Duration.ofMinutes(5), conn
             );
-            cache.invalidateByPackageName("sweep-axios");
+            final String key = write(conn, cache, "npm-proxy", "sweep-l2only", "full", pkg);
+            cache.invalidateByPackageName(pkg);
             awaitGone(conn, List.of(key));
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "VALKEY_HOST", matches = ".+")
+    void repositoryScopedInvalidationLeavesOtherRepositories() throws Exception {
+        try (ValkeyConnection conn = connect()) {
+            final String pkg = "sweep-scoped-" + UUID.randomUUID();
+            final FilteredMetadataCache writer = new FilteredMetadataCache(
+                100, Duration.ofMinutes(5), Duration.ofMinutes(5), conn
+            );
+            final String gone = write(conn, writer, "npm-proxy", "sweep-repo-a", "full", pkg);
+            final String kept = write(conn, writer, "npm-proxy", "sweep-repo-b", "full", pkg);
+            new FilteredMetadataCache(
+                100, Duration.ofMinutes(5), Duration.ofMinutes(5), conn
+            ).invalidate("npm-proxy", "sweep-repo-a", pkg);
+            awaitGone(conn, List.of(gone));
+            MatcherAssert.assertThat(
+                "the other repository's envelope stays, still listed",
+                conn.async().smembers(FilteredMetadataCache.indexKey(pkg))
+                    .get(2, TimeUnit.SECONDS).size()
+                    + conn.async().exists(kept).get(2, TimeUnit.SECONDS),
+                new IsEqual<>(2L)
+            );
+            writer.invalidatePackageAwaiting(pkg).get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "VALKEY_HOST", matches = ".+")
+    void envelopeOfThePreviousKeyGenerationIsNotReadAndIsDeleted() throws Exception {
+        try (ValkeyConnection conn = connect()) {
+            final String pkg = "sweep-legacy-" + UUID.randomUUID();
+            // What a 2.2.13 node wrote: no generation marker, no index entry.
+            final String legacy = "metadata:npm-proxy:sweep-repo-a:full:" + pkg;
+            conn.async().setex(
+                legacy, 120L, "stale".getBytes(StandardCharsets.UTF_8)
+            ).get(2, TimeUnit.SECONDS);
+            final FilteredMetadataCache cache = new FilteredMetadataCache(
+                100, Duration.ofMinutes(5), Duration.ofMinutes(5), conn
+            );
+            final byte[] served = cache.getEntry(
+                "npm-proxy", "sweep-repo-a", "full", pkg,
+                () -> java.util.concurrent.CompletableFuture.completedFuture(
+                    FilteredMetadataCache.CacheEntry.noBlockedVersions(
+                        "fresh".getBytes(StandardCharsets.UTF_8), Duration.ofMinutes(5)
+                    )
+                )
+            ).get(5, TimeUnit.SECONDS).data();
+            MatcherAssert.assertThat(
+                "an envelope no index lists must not be served",
+                new String(served, StandardCharsets.UTF_8), new IsEqual<>("fresh")
+            );
+            cache.invalidatePackageAwaiting(pkg).get(5, TimeUnit.SECONDS);
+            MatcherAssert.assertThat(
+                "the invalidation deletes it for the nodes that still read it",
+                conn.async().exists(legacy).get(2, TimeUnit.SECONDS),
+                new IsEqual<>(0L)
+            );
         }
     }
 
@@ -128,7 +190,8 @@ final class FilteredMetadataCacheL2SweepTest {
             final byte[] original = ("{\"versions\":{"
                 + "\"1.0.0\":{\"x\":\"" + "y".repeat(4096) + "\"}}}"
             ).getBytes(StandardCharsets.UTF_8);
-            final String key = "metadata:npm-proxy:rt-repo:full:rt-pkg";
+            final String key =
+                FilteredMetadataCache.cacheKey("npm-proxy", "rt-repo", "full", "rt-pkg");
             conn.async().del(key).get(2, TimeUnit.SECONDS);
 
             final FilteredMetadataCache writer = new FilteredMetadataCache(
@@ -174,7 +237,8 @@ final class FilteredMetadataCacheL2SweepTest {
             );
 
             // Legacy (pre-compression) raw value: must pass through unchanged.
-            final String legacyKey = "metadata:npm-proxy:rt-repo:full:rt-legacy";
+            final String legacyKey =
+                FilteredMetadataCache.cacheKey("npm-proxy", "rt-repo", "full", "rt-legacy");
             final byte[] legacy = "{\"legacy\":true}".getBytes(StandardCharsets.UTF_8);
             conn.async().setex(legacyKey, 60L, legacy).get(2, TimeUnit.SECONDS);
             final byte[] legacyServed = reader.getEntry(
@@ -192,7 +256,55 @@ final class FilteredMetadataCacheL2SweepTest {
     }
 
     /**
-     * Poll until every key is deleted (the sweep is async SCAN+DEL) or fail
+     * Connect to the Valkey named by the environment.
+     *
+     * @return Connection
+     */
+    private static ValkeyConnection connect() {
+        return new ValkeyConnection(
+            System.getenv("VALKEY_HOST"),
+            Integer.parseInt(System.getenv().getOrDefault("VALKEY_PORT", "6379")),
+            Duration.ofSeconds(2)
+        );
+    }
+
+    /**
+     * Compute an envelope through the cache and wait for its L2 write.
+     *
+     * @param conn Connection
+     * @param cache Cache that writes
+     * @param type Repository type
+     * @param repo Repository name
+     * @param variant Variant
+     * @param pkg Package name
+     * @return The envelope key
+     * @throws Exception On failure
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private static String write(
+        final ValkeyConnection conn, final FilteredMetadataCache cache, final String type,
+        final String repo, final String variant, final String pkg
+    ) throws Exception {
+        cache.getEntry(
+            type, repo, variant, pkg,
+            () -> java.util.concurrent.CompletableFuture.completedFuture(
+                FilteredMetadataCache.CacheEntry.noBlockedVersions(
+                    "envelope".getBytes(StandardCharsets.UTF_8), Duration.ofMinutes(5)
+                )
+            )
+        ).get(5, TimeUnit.SECONDS);
+        final String key = FilteredMetadataCache.cacheKey(type, repo, variant, pkg);
+        final long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (conn.async().exists(key).get(2, TimeUnit.SECONDS) == 0L) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("L2 envelope write never landed: " + key);
+            }
+        }
+        return key;
+    }
+
+    /**
+     * Poll until every key is deleted (the drop is asynchronous) or fail
      * after a bounded deadline — never a bare sleep-and-hope.
      */
     private static void awaitGone(

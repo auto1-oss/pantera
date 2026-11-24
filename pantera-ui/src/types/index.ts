@@ -338,3 +338,95 @@ export interface RuntimeConfig {
   apmEnvironment: string
   registryUrl: string
 }
+
+// ---------------------------------------------------------------------------
+// Repository rename / delete / background jobs
+// ---------------------------------------------------------------------------
+
+/** Answer of `PUT /repositories/:name/move`. */
+export interface RepoMoveResult {
+  name: string
+  previous_name: string
+  repo_key: string
+  /** Days the old name keeps serving the repository; 0 = released at once. */
+  keep_old_name_days: number
+  groups_updated: string[]
+  roles_updated: string[]
+}
+
+/**
+ * Outcome of `DELETE /repositories/:name`.
+ * - `job`: the repository is gone and a purge job removes its data after the
+ *   restore window (`purgeAfter`); it can be restored until the purge starts.
+ * - `deleting`: a server without a database removes the data in the
+ *   background and has no job to follow.
+ * - `deleted`: a server without a database finished within the request.
+ */
+export type RepoDeleteResult =
+  | {
+    kind: 'job'
+    jobId: number
+    repoKey: string
+    /** ISO instant the purge starts at; null when the server sent none. */
+    purgeAfter: string | null
+    removedFromGroups: string[]
+    message: string
+  }
+  | { kind: 'deleting'; message: string }
+  | { kind: 'deleted' }
+
+export type RepoJobType = 'purge' | 'orphan_purge' | 'rename_followup'
+export type RepoJobState = 'pending' | 'running' | 'failed' | 'done' | 'cancelled'
+export type RepoJobPhase = 'waiting' | 'objects' | 'verify' | 'rows'
+
+export interface RepoJob {
+  id: number
+  type: RepoJobType
+  repo_key: string
+  repo_name: string | null
+  state: RepoJobState
+  phase: RepoJobPhase | null
+  objects_done: number
+  rows_done: number
+  attempts: number
+  last_error: string | null
+  not_before: string | null
+  node: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string | null
+  finished_at: string | null
+}
+
+/** A deleted repository whose data is not purged yet. */
+export interface DeletedRepo {
+  repo_key: string
+  name: string
+  type: string
+  deleted_at: string
+  deleted_by: string | null
+  purge_after: string | null
+}
+
+/**
+ * A top-level storage directory that holds objects and belongs to no
+ * repository, no deleted repository and no running purge.
+ */
+export interface RepoOrphan {
+  /** Storage id, handed back to the purge call as-is. */
+  storage: string
+  /** Human-readable storage location, e.g. `s3 bucket=artifacts region=eu-west-1`. */
+  location: string
+  directory: string
+  /** Objects counted, up to 1000. */
+  objects: number
+  /** True when there are more objects than counted. */
+  more: boolean
+}
+
+/** Answer of `POST /deleted-repositories/:key/restore`. */
+export interface RepoRestoreResult {
+  name: string
+  repo_key: string
+  rejoined_groups: string[]
+}

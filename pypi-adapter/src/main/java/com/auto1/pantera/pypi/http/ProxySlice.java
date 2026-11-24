@@ -27,6 +27,7 @@ import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.cache.UpstreamMiss;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
@@ -134,6 +135,14 @@ final class ProxySlice implements Slice {
      * Authenticator to access upstream remotes.
      */
     private final Authenticator auth;
+
+    /**
+     * Record of upstream credentials not sent to an untrusted mirror host.
+     */
+    private static final com.auto1.pantera.http.client.auth.WithheldCredentialsLog WITHHELD =
+        new com.auto1.pantera.http.client.auth.WithheldCredentialsLog(
+            "com.auto1.pantera.pypi", "mirror_credentials_withheld", "Mirror"
+        );
 
     /**
      * Which mirror hosts may receive {@link #auth}: the configured upstream
@@ -456,7 +465,7 @@ final class ProxySlice implements Slice {
             // nothing) is bound to the worker thread that eventually runs
             // the storage/network continuations.
             final AuditContext ctx = this.captureAuditContext(rqheaders);
-            return this.checkCacheFirst(line, info, user, ctx);
+            return this.checkCacheFirst(line, rqheaders, info, user, ctx);
         }
 
         // A PEP 658 `.metadata` sidecar (/packages/{hash}/{file}.metadata) is
@@ -615,6 +624,7 @@ final class ProxySlice implements Slice {
      */
     private CompletableFuture<Response> checkCacheFirst(
         final RequestLine line,
+        final Headers rqheaders,
         final ArtifactCoordinates info,
         final String user,
         final AuditContext ctx
@@ -648,7 +658,7 @@ final class ProxySlice implements Slice {
                     return this.serveArtifactContent(line, cached.get(), Headers.EMPTY);
                 }
                 // Cache MISS - now we need network, evaluate cooldown first
-                return this.evaluateCooldownAndFetch(line, info, user, ctx);
+                return this.evaluateCooldownAndFetch(line, rqheaders, info, user, ctx);
             }).toCompletableFuture();
     }
 
@@ -664,6 +674,7 @@ final class ProxySlice implements Slice {
      */
     private CompletableFuture<Response> evaluateCooldownAndFetch(
         final RequestLine line,
+        final Headers rqheaders,
         final ArtifactCoordinates info,
         final String user,
         final AuditContext ctx
@@ -690,6 +701,7 @@ final class ProxySlice implements Slice {
         return this.cooldown.evaluate(request, this.inspector).thenCompose(evaluation -> {
             if (evaluation.blocked()) {
                 EcsLogger.warn("com.auto1.pantera.pypi")
+                    .field("repository.name", this.rname)
                     .message("Artifact BLOCKED by cooldown")
                     .eventCategory("web")
                     .eventAction("cooldown_evaluation")
@@ -718,10 +730,10 @@ final class ProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
             // Cooldown passed - now serve the artifact (no further cooldown checks)
-            return this.serveArtifact(line, user, ctx);
+            return this.serveArtifact(line, rqheaders, user, ctx);
         });
     }
-    
+
     private CompletableFuture<Response> serveNonArtifact(
         final RequestLine line, final Headers rqheaders, final Content body, final String user
     ) {
@@ -764,6 +776,7 @@ final class ProxySlice implements Slice {
             }
             if (err != null) {
                 EcsLogger.warn("com.auto1.pantera.pypi")
+                    .field("repository.name", this.rname)
                     .message("Non-artifact request failed")
                     .eventCategory("web")
                     .eventAction("proxy_request")
@@ -772,8 +785,10 @@ final class ProxySlice implements Slice {
                     .error(err)
                     .field("log.source", "application")
                     .log();
+                // A failed cache read or refresh is a failure, never "not
+                // found": a 404 here would be negative-cached above.
                 return CompletableFuture.completedFuture(
-                    ResponseBuilder.notFound().build()
+                    this.miss(line, rqheaders).failed(err, "PyPI index serve failed")
                 );
             }
             return CompletableFuture.completedFuture(resp);
@@ -813,12 +828,15 @@ final class ProxySlice implements Slice {
         final AtomicReference<Headers> remote, final AtomicBoolean remoteSuccess,
         final SimpleApiFormat format
     ) {
+        final UpstreamMiss miss = this.miss(line, rqheaders);
+        final AtomicReference<Response> missed = new AtomicReference<>();
         return this.cache.load(
             key,
             new Remote.WithErrorHandling(
                 () -> {
-                    final CompletableFuture<Response> fetch =
-                        this.fetchFromUpstream(line, upstream, format);
+                    final CompletableFuture<Response> fetch = ProxySlice.recorded(
+                        () -> this.fetchFromUpstream(line, upstream, format), miss, missed
+                    );
                     return fetch.thenCompose(
                         (Response response) -> {
                             remote.set(response.headers());
@@ -855,8 +873,11 @@ final class ProxySlice implements Slice {
                                     response.body(), response.headers(), line
                                 ).<Optional<? extends Content>>thenApply(opt -> opt);
                             }
-                            return CompletableFuture.completedFuture(
-                                Optional.empty()
+                            missed.set(
+                                miss.answered(response.status().code(), response.headers())
+                            );
+                            return response.body().asBytesFuture().thenApply(
+                                ignored -> Optional.<Content>empty()
                             );
                         }
                     );
@@ -866,9 +887,10 @@ final class ProxySlice implements Slice {
         ).handle(
             (content, throwable) -> {
                 if (throwable != null || content.isEmpty()) {
-                    return body.asBytesFuture().thenApply(ignored ->
-                        ResponseBuilder.notFound().build()
+                    final Response answer = ProxySlice.missAnswer(
+                        miss, missed.get(), throwable
                     );
+                    return body.asBytesFuture().thenApply(ignored -> answer);
                 }
                 // Content is pre-rewritten at write time — serve directly
                 if (remoteSuccess.get()) {
@@ -969,6 +991,7 @@ final class ProxySlice implements Slice {
                 );
             } catch (final Exception ex) {
                 EcsLogger.warn("com.auto1.pantera.pypi")
+                    .field("repository.name", this.rname)
                     .message("Write-time rewriting failed, caching original")
                     .eventCategory("database")
                     .eventAction("pre_rewrite")
@@ -1027,6 +1050,7 @@ final class ProxySlice implements Slice {
                     this.refreshing.end(keyStr);
                     if (err != null) {
                         EcsLogger.warn("com.auto1.pantera.pypi")
+                            .field("repository.name", this.rname)
                             .message(String.format("Background refresh failed for key '%s'", keyStr))
                             .eventCategory("database")
                             .eventAction("stale_while_revalidate")
@@ -1047,6 +1071,7 @@ final class ProxySlice implements Slice {
             } catch (final Exception ex) {
                 this.refreshing.end(keyStr);
                 EcsLogger.warn("com.auto1.pantera.pypi")
+                    .field("repository.name", this.rname)
                     .message(String.format("Background refresh exception for key '%s'", keyStr))
                     .eventCategory("database")
                     .eventAction("stale_while_revalidate")
@@ -1111,6 +1136,7 @@ final class ProxySlice implements Slice {
                     // zero ELK trace. The timestamp is NOT bumped, so
                     // the next request retries.
                     EcsLogger.warn("com.auto1.pantera.pypi")
+                        .field("repository.name", this.rname)
                         .message(String.format(
                             "Background refresh got non-success upstream status for key '%s' — keeping stale index, will retry",
                             keyStr
@@ -1232,18 +1258,20 @@ final class ProxySlice implements Slice {
     }
 
     private CompletableFuture<Response> serveArtifact(
-        final RequestLine line, final String user, final AuditContext ctx
+        final RequestLine line, final Headers rqheaders, final String user,
+        final AuditContext ctx
     ) {
+        final UpstreamMiss miss = this.miss(line, rqheaders);
+        final AtomicReference<Response> missed = new AtomicReference<>();
         final AtomicReference<Headers> remote = new AtomicReference<>(Headers.EMPTY);
         final Key key = ProxySlice.keyFromPath(line);
         final RequestLine upstream = this.upstreamLine(line);
-        
+
         return this.cache.load(
             key,
             new Remote.WithErrorHandling(
-                () -> {
+                () -> ProxySlice.recorded(() -> {
                     final CompletableFuture<Response> fetch;
-                    
                     // Check mirror cache first for all paths
                     final URI mirror = this.mirrors.getIfPresent(line.uri().getPath());
                     if (mirror != null) {
@@ -1292,8 +1320,8 @@ final class ProxySlice implements Slice {
                             .log();
                         fetch = this.origin.response(upstream, Headers.EMPTY, Content.EMPTY);
                     }
-                    
-                    return fetch.thenApply(response -> {
+                    return fetch;
+                }, miss, missed).thenCompose(response -> {
                         remote.set(response.headers());
                         if (response.status().success()) {
                             // Genuine cache miss + successful upstream fetch —
@@ -1319,23 +1347,34 @@ final class ProxySlice implements Slice {
                             // The access record is written once the body
                             // is cached (below), where its size is known
                             // even for a chunked upstream answer (R43).
-                            return Optional.of(response.body());
+                            return CompletableFuture.completedFuture(
+                                Optional.<Content>of(response.body())
+                            );
                         }
-                        return Optional.empty();
-                    });
-                }
+                        missed.set(
+                            miss.answered(response.status().code(), response.headers())
+                        );
+                        // Drain the non-2xx body to release the connection.
+                        return response.body().asBytesFuture().thenApply(
+                            ignored -> Optional.<Content>empty()
+                        );
+                    })
             ),
             CacheControl.Standard.ALWAYS
         ).handle(
             (content, throwable) -> {
                 if (throwable != null || content.isEmpty()) {
-                    if (throwable == null) {
-                        this.auditArtifactAccess(
-                            ctx, line, user, 0L,
-                            AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_NOT_FOUND
-                        );
-                    }
-                    return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                    final Response answer = ProxySlice.missAnswer(
+                        miss, missed.get(), throwable
+                    );
+                    this.auditArtifactAccess(
+                        ctx, line, user, 0L,
+                        AuditLogger.OUTCOME_FAILURE,
+                        answer.status().serverError()
+                            ? AuditLogger.REASON_UPSTREAM_UNAVAILABLE
+                            : AuditLogger.REASON_NOT_FOUND
+                    );
+                    return CompletableFuture.completedFuture(answer);
                 }
                 // Cache hit or cache miss (a miss was enqueued as a publish
                 // above): either way this serve is an access. The size is
@@ -1350,7 +1389,69 @@ final class ProxySlice implements Slice {
             }
         ).thenCompose(Function.identity()).toCompletableFuture();
     }
-    
+
+    /**
+     * What this proxy answers when the upstream gave no content.
+     *
+     * @param line Request line
+     * @param rqheaders Headers of the client request
+     * @return Mapping of the upstream outcome to the client answer
+     */
+    private UpstreamMiss miss(final RequestLine line, final Headers rqheaders) {
+        return new UpstreamMiss(
+            "com.auto1.pantera.pypi", this.rname, line.uri().getPath(), rqheaders
+        );
+    }
+
+    /**
+     * Run an upstream fetch and keep its failure for the answer. The cache
+     * contract turns a failed remote into "no content"; without this record
+     * a refused connection or a timeout would be answered 404.
+     *
+     * @param fetch Upstream fetch
+     * @param miss Mapping of the upstream outcome to the client answer
+     * @param missed Where the answer of a failed fetch is kept
+     * @return The fetch
+     */
+    private static CompletableFuture<Response> recorded(
+        final java.util.function.Supplier<CompletableFuture<Response>> fetch,
+        final UpstreamMiss miss, final AtomicReference<Response> missed
+    ) {
+        CompletableFuture<Response> stage;
+        try {
+            stage = fetch.get();
+        } catch (final RuntimeException ex) {
+            stage = CompletableFuture.failedFuture(ex);
+        }
+        return stage.whenComplete((resp, err) -> {
+            if (err != null) {
+                missed.set(miss.failed(err, "PyPI upstream fetch failed"));
+            }
+        });
+    }
+
+    /**
+     * Answer of a cache load that produced no content.
+     *
+     * @param miss Mapping of the upstream outcome to the client answer
+     * @param missed Answer recorded for the upstream outcome, or null
+     * @param failure Failure of the cache load itself, or null
+     * @return 404 only when nothing failed
+     */
+    private static Response missAnswer(
+        final UpstreamMiss miss, final Response missed, final Throwable failure
+    ) {
+        final Response answer;
+        if (missed != null) {
+            answer = missed;
+        } else if (failure != null) {
+            answer = miss.failed(failure, "PyPI fetch through cache failed");
+        } else {
+            answer = ResponseBuilder.notFound().build();
+        }
+        return answer;
+    }
+
     private CompletableFuture<Response> serveArtifactContent(
         final RequestLine line, final Content content, final Headers remote
     ) {
@@ -1479,6 +1580,7 @@ final class ProxySlice implements Slice {
                     // Size limit protection
                     if (bytes.length > MAX_INDEX_SIZE) {
                         EcsLogger.warn("com.auto1.pantera.pypi")
+                            .field("repository.name", this.rname)
                             .message("PyPI index too large (" + bytes.length + " bytes, max: " + MAX_INDEX_SIZE + " bytes)")
                             .eventCategory("web")
                             .eventAction("index_rewrite")
@@ -1507,6 +1609,7 @@ final class ProxySlice implements Slice {
                 (Optional<Content> body, Throwable error) -> {
                     if (error != null) {
                         EcsLogger.warn("com.auto1.pantera.pypi")
+                            .field("repository.name", this.rname)
                             .message("Failed to rewrite PyPI index content")
                             .eventCategory("web")
                             .eventAction("index_rewrite")
@@ -1582,15 +1685,15 @@ final class ProxySlice implements Slice {
 
     /**
      * Extract base path from request URI for link rewriting.
-     * 
+     *
      * IMPORTANT: Pantera's routing layer (ApiRoutingSlice, SliceByPath) strips path prefixes
      * before requests reach ProxySlice. For example:
      * - External: /test_prefix/api/pypi/pypi_group/simple/requests/
      * - ProxySlice sees: /simple/requests/ (prefix already stripped!)
-     * 
+     *
      * Therefore, we ALWAYS use the repository name (this.rname) as the base path.
      * The routing layer will add the necessary prefix when serving responses.
-     * 
+     *
      * According to PEP 503:
      * - Index pages: /{repo}/simple/{package}/
      * - Download links: /{repo}/packages/{hash}/{filename}
@@ -1671,26 +1774,26 @@ final class ProxySlice implements Slice {
 
     /**
      * Check if request path matches PyPI package file patterns.
-     * 
+     *
      * PyPI structure:
      * - /packages/{hash}/{filename} -> package files (wheels, tarballs)
      * - /packages/{hash}/{filename}.metadata -> PEP 658 metadata files
-     * 
+     *
      * These can be forwarded directly to the configured upstream without
      * requiring index page parsing first.
-     * 
+     *
      * @param line Request line
      * @return true if path matches /packages/ pattern
      */
     private boolean isPackageFilePath(final RequestLine line) {
         String path = line.uri().getPath();
-        
+
         // Remove repo prefix if present (routing may or may not strip it)
         final String repoPrefix = String.format("/%s", this.rname);
         if (path.startsWith(repoPrefix + "/")) {
             path = path.substring(repoPrefix.length());
         }
-        
+
         // Pattern: /packages/{hash}/{filename} or /packages/{hash}/{filename}.metadata
         final boolean isPackage = path.startsWith("/packages/");
         EcsLogger.debug("com.auto1.pantera.pypi")
@@ -1751,17 +1854,19 @@ final class ProxySlice implements Slice {
         } else {
             mirrorAuth = Authenticator.ANONYMOUS;
             if (this.auth != Authenticator.ANONYMOUS) {
-                EcsLogger.warn("com.auto1.pantera.pypi")
-                    .message("Mirror host is not the configured upstream; fetching anonymously")
-                    .eventCategory("network")
-                    .eventAction("mirror_credentials_withheld")
-                    .eventOutcome("success")
-                    .field("url.full", uri.toString())
-                    .field("destination.address", uri.getHost())
-                    .field("event.reason", "mirror_origin_untrusted")
-                    .field("repository.name", this.rname)
-                    .field("log.source", "application")
-                    .log();
+                // True for every file of an index served from another
+                // host: logged once per upstream and mirror host, then hourly.
+                ProxySlice.WITHHELD.record(
+                    this.mirrorTrust.upstreamHost(), uri,
+                    "files are fetched from it without the configured credentials (nothing to do when the mirror is public, as files.pythonhosted.org is for pypi.org)"
+                ).ifPresent(
+                    record -> record
+                        .eventCategory("network")
+                        .eventOutcome("success")
+                        .field("event.reason", "mirror_origin_untrusted")
+                        .field("repository.name", this.rname)
+                        .log()
+                );
             }
         }
         return new com.auto1.pantera.http.client.auth.AuthClientSlice(base, mirrorAuth);

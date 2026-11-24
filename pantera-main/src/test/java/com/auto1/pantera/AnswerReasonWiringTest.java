@@ -22,6 +22,7 @@ import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.auth.Tokens;
 import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.log.AnswerReason;
+import com.auto1.pantera.http.log.AnsweringRepository;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.settings.StorageByAlias;
@@ -100,6 +101,37 @@ final class AnswerReasonWiringTest {
         MatcherAssert.assertThat(
             "and the group's answer carries a reason too",
             new AnswerReason(answer).token().isPresent(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void theAnswerNamesTheRepositoryForTheAccessRecord(@TempDir final Path tmp)
+        throws Exception {
+        final RepositorySlices slices = AnswerReasonWiringTest.slices(tmp);
+        final AnsweringRepository hosted = new AnsweringRepository(
+            AnswerReasonWiringTest.get(slices, "files", true)
+        );
+        final AnsweringRepository refused = new AnsweringRepository(
+            AnswerReasonWiringTest.get(slices, "files", false)
+        );
+        final AnsweringRepository group = new AnsweringRepository(
+            AnswerReasonWiringTest.get(slices, "grp", true)
+        );
+        MatcherAssert.assertThat(
+            "a 404 of a hosted repository names it",
+            hosted.name(), new IsEqual<>(Optional.of("files"))
+        );
+        MatcherAssert.assertThat(
+            "with its type",
+            hosted.type(), new IsEqual<>(Optional.of("file"))
+        );
+        MatcherAssert.assertThat(
+            "a 401 names the repository that refused",
+            refused.name(), new IsEqual<>(Optional.of("files"))
+        );
+        MatcherAssert.assertThat(
+            "a group answer names the group, not the member it asked",
+            group.name(), new IsEqual<>(Optional.of("grp"))
         );
     }
 

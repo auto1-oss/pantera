@@ -12,6 +12,7 @@ package com.auto1.pantera.asto;
 
 import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.asto.misc.BoundedFanOut;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -207,6 +208,99 @@ public interface Storage {
     }
 
     /**
+     * One page of the keys strictly inside {@code prefix}, which is a path
+     * prefix: {@code maven} covers {@code maven/a.jar}, never
+     * {@code maven-proxy/a.jar} and never a key equal to {@code maven}.
+     * {@link Key#ROOT} covers every key.
+     *
+     * <p>Keys come in one total order, the same on every storage: by the
+     * UTF-8 bytes of the key string ({@link Utf8Order}), which is the order
+     * of an S3 listing. The page holds the keys strictly greater than
+     * {@code after}. The token is the key string the previous page ended at,
+     * so it stays valid across restarts and after the keys already returned
+     * were deleted; a caller passes back {@link ListPage#next()} unchanged.</p>
+     *
+     * <p>A page may hold fewer than {@code limit} keys, even none, and still
+     * name a next token; the listing is finished only when the token is
+     * empty. Keys saved or removed while the listing runs may or may not
+     * appear.</p>
+     *
+     * <p>The storages of real size (file system, S3) never build the whole
+     * listing; this default does, through {@link #list(Key)}, and is meant
+     * for small and test storages only.</p>
+     *
+     * @param prefix Path prefix
+     * @param after Resume token of the previous page; empty for the first
+     * @param limit Maximum number of keys, positive
+     * @return Page
+     * @since 2.2.14
+     */
+    default CompletableFuture<ListPage> listPage(
+        final Key prefix, final Optional<String> after, final int limit
+    ) {
+        final CompletableFuture<ListPage> res;
+        if (limit < 1) {
+            res = CompletableFuture.failedFuture(
+                new IllegalArgumentException(
+                    String.format("Page limit must be positive: %d", limit)
+                )
+            );
+        } else {
+            res = this.list(prefix).thenApply(
+                keys -> new PagedKeys(prefix, after, limit).page(keys)
+            );
+        }
+        return res;
+    }
+
+    /**
+     * Removes the given keys. A key that does not exist counts as removed:
+     * repeating a batch, in whole or in part, succeeds.
+     *
+     * <p>On failure some keys of the batch may be gone and others not. A
+     * {@link StorageThrottledException} asks the caller to slow down and
+     * repeat the batch.</p>
+     *
+     * <p>This default deletes key by key, a few at a time; S3 sends
+     * multi-object deletes and the file storages remove the directories the
+     * batch left empty once per batch.</p>
+     *
+     * @param keys Keys to remove
+     * @return Completion or error signal
+     * @since 2.2.14
+     */
+    default CompletableFuture<Void> deleteBatch(final Collection<Key> keys) {
+        return new BoundedFanOut<Key>(
+            8,
+            key -> this.delete(key).exceptionallyCompose(
+                err -> {
+                    final CompletableFuture<Void> res;
+                    if (new AbsentKey(err).reported()) {
+                        res = CompletableFuture.completedFuture(null);
+                    } else {
+                        res = CompletableFuture.failedFuture(err);
+                    }
+                    return res;
+                }
+            )
+        ).run(keys);
+    }
+
+    /**
+     * Aborts the uploads that were started under the path prefix and never
+     * finished. Only object storages keep such parts (S3 multipart uploads:
+     * invisible to a listing, yet stored and billed); the default has
+     * nothing to abort.
+     *
+     * @param prefix Path prefix, {@link Key#ROOT} for the whole storage
+     * @return Number of uploads aborted
+     * @since 2.2.14
+     */
+    default CompletableFuture<Integer> abortIncompleteUploads(final Key prefix) {
+        return CompletableFuture.completedFuture(0);
+    }
+
+    /**
      * Runs operation exclusively for specified key.
      *
      * @param key Key which is scope of operation.
@@ -327,6 +421,23 @@ public interface Storage {
         @Override
         public CompletableFuture<Void> deleteEmptyDirectories(final Key prefix) {
             return this.delegate.deleteEmptyDirectories(prefix);
+        }
+
+        @Override
+        public CompletableFuture<ListPage> listPage(
+            final Key prefix, final Optional<String> after, final int limit
+        ) {
+            return this.delegate.listPage(prefix, after, limit);
+        }
+
+        @Override
+        public CompletableFuture<Void> deleteBatch(final Collection<Key> keys) {
+            return this.delegate.deleteBatch(keys);
+        }
+
+        @Override
+        public CompletableFuture<Integer> abortIncompleteUploads(final Key prefix) {
+            return this.delegate.abortIncompleteUploads(prefix);
         }
 
         @Override

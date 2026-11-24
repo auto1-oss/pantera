@@ -127,6 +127,44 @@ final class CachedProxySliceMetadataChecksumTest {
         );
     }
 
+    @Test
+    void metadataOfAFailedUpstreamIsNotFoundThatNobodyRemembers() {
+        final Slice down = (line, headers, body) ->
+            ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE).completedFuture();
+        final Response response = new com.auto1.pantera.http.slice.ReasonSlice(slice(down))
+            .response(new RequestLine(RqMethod.GET, PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "a build goes on without the metadata of an upstream that is down",
+            response.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "a group in front must not remember the miss",
+            response.headers().values(
+                com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER
+            ).isEmpty(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "and the access record says the upstream failed, not not_found",
+            new com.auto1.pantera.http.log.AnswerReason(response).token(),
+            new IsEqual<>(Optional.of("upstream_status_503"))
+        );
+    }
+
+    @Test
+    void metadataTheUpstreamDoesNotHaveIsAPlainNotFound() {
+        final Slice missing = (line, headers, body) ->
+            ResponseBuilder.notFound().completedFuture();
+        MatcherAssert.assertThat(
+            slice(missing).response(
+                new RequestLine(RqMethod.GET, PATH), Headers.EMPTY, Content.EMPTY
+            ).join().headers().values(
+                com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER
+            ).isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
     private static CachedProxySlice slice(final Slice upstream) {
         return new CachedProxySlice(
             upstream,

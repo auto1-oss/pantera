@@ -237,6 +237,7 @@ Routes are defined in `src/router/index.ts` with meta fields controlling access:
 | `meta.public` | `boolean` | Skips auth check (login, OAuth callback) |
 | `meta.requiredPermission` | `string` | Permission key needed (e.g., `api_user_permissions`) |
 | `meta.requiresAdmin` | `boolean` | Must be admin (settings page) |
+| `meta.requiredAction` | `string` | Action of `meta.requiredPermission` the user must hold (e.g. `delete` for Repository Jobs); without it any write action of the permission is enough |
 
 The global `beforeEach` guard (async) enforces this:
 

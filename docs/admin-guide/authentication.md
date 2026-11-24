@@ -196,6 +196,37 @@ group-roles:
   - pantera_admins: "admin"
 ```
 
+### User Provisioning for Username/Password Logins
+
+A user who authenticates with an Okta username and password (basic auth from a client, or the login form) is created or updated in Pantera on each successful login, in the place authorization reads users from:
+
+| Deployment | Users are written to |
+|------------|----------------------|
+| Database configured (`meta.artifacts_database`) | the `users` and `user_roles` tables, with `auth_provider = okta` for a new user |
+| No database | the YAML policy storage (`meta.policy.storage`), as `users/<name>.yml` |
+
+Both behave the same:
+
+- Roles mapped from the user's Okta groups by `group-roles` are **added** to the roles the user already has. A group without a mapping gives no role. Roles are never removed by a login.
+- The email is updated.
+- The enabled state of an existing user is never changed: a user disabled in Pantera stays disabled.
+- The provider of an existing user is never changed.
+
+With a database, a mapped role must already exist in Pantera (roles are not created by a login; an unknown role is skipped with a WARN), and a role added to an existing user takes effect when that user's cached permissions expire.
+
+No YAML policy storage is needed when a database is configured. With neither, the provider cannot be loaded.
+
+### A Provider That Cannot Be Loaded
+
+A provider listed under `meta.credentials` that cannot be built at startup (missing key, unresolved environment variable, no place to provision users) is left out of the authentication chain until the next start, and every login that relies on it is rejected. Startup logs one ERROR for it:
+
+```
+event.category=authentication event.action=auth_init event.outcome=failure event.provider=<type>
+message: Auth provider '<type>' is configured but could not be loaded: <reason>. It is DISABLED until the next start ...
+```
+
+Fix the entry (or the environment variables it refers to) and restart.
+
 ### MFA Authentication
 
 When Okta MFA is enabled, pass the MFA code in the login request:

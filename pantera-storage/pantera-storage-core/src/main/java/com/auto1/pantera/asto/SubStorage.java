@@ -14,8 +14,7 @@ import com.auto1.pantera.asto.ext.CompletableFutureSupport;
 import com.auto1.pantera.asto.lock.storage.StorageLock;
 import java.util.Collection;
 import java.util.Optional;
-import java.util.stream.Collectors;
-import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.regex.Pattern;
@@ -167,6 +166,69 @@ public final class SubStorage implements Storage {
     @Override
     public CompletableFuture<Void> deleteEmptyDirectories(final Key key) {
         return this.origin.deleteEmptyDirectories(new PrefixedKed(this.prefix, key));
+    }
+
+    @Override
+    public CompletableFuture<ListPage> listPage(
+        final Key root, final Optional<String> after, final int limit
+    ) {
+        final String own = this.ownPrefix();
+        return this.origin.listPage(
+            new PrefixedKed(this.prefix, root), after.map(token -> own + token), limit
+        ).thenApply(
+            page -> new ListPage(
+                page.keys().stream()
+                    .<Key>map(key -> new Key.From(SubStorage.relative(own, key.string())))
+                    .collect(Collectors.toList()),
+                page.next().map(token -> SubStorage.relative(own, token))
+            )
+        );
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteBatch(final Collection<Key> keys) {
+        return this.origin.deleteBatch(
+            keys.stream()
+                .<Key>map(key -> new PrefixedKed(this.prefix, key))
+                .collect(Collectors.toList())
+        );
+    }
+
+    @Override
+    public CompletableFuture<Integer> abortIncompleteUploads(final Key root) {
+        return this.origin.abortIncompleteUploads(new PrefixedKed(this.prefix, root));
+    }
+
+    /**
+     * This storage's prefix as the start of an origin key string: with the
+     * trailing delimiter, or empty when the prefix is the root.
+     * @return Prefix of every origin key string
+     */
+    private String ownPrefix() {
+        final String str = this.prefix.string();
+        final String own;
+        if (str.isEmpty()) {
+            own = str;
+        } else {
+            own = str + Key.DELIMITER;
+        }
+        return own;
+    }
+
+    /**
+     * Origin key string (or resume token) without this storage's prefix.
+     * @param own Prefix as returned by {@link #ownPrefix()}
+     * @param full Origin string
+     * @return Relative string
+     */
+    private static String relative(final String own, final String full) {
+        final String rel;
+        if (full.startsWith(own)) {
+            rel = full.substring(own.length());
+        } else {
+            rel = full;
+        }
+        return rel;
     }
 
     @Override

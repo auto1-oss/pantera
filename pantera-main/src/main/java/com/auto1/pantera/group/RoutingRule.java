@@ -57,7 +57,9 @@ public sealed interface RoutingRule permits RoutingRule.PathPrefix, RoutingRule.
         @Override
         public boolean matches(final String path) {
             final String normalized = path.startsWith("/") ? path.substring(1) : path;
-            return normalized.startsWith(this.prefix);
+            return normalized.startsWith(
+                this.prefix.startsWith("/") ? this.prefix.substring(1) : this.prefix
+            );
         }
     }
 

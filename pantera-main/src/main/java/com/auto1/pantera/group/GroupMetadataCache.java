@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.group;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry;
@@ -22,7 +23,9 @@ import io.lettuce.core.api.async.RedisAsyncCommands;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -62,6 +65,16 @@ import java.util.concurrent.TimeUnit;
  * metadata + filtered-envelope caches (those ARE cluster-wide and
  * event-invalidated).</p>
  *
+ * <p>Misses: a path no member has is remembered too (per node, same TTL
+ * and bound as a served entry), so a client that probes every configured
+ * repository for metadata that exists in none of them does not cost a member
+ * walk per request. Only {@link MavenGroupSlice} decides that a walk was
+ * authoritative; this class guarantees that a remembered miss never outlives
+ * the moment the metadata can exist: the package events above drop it, a
+ * miss that was being established while such an event arrived is discarded
+ * (see {@link #startWalk(String)}), and a path that maps to no package, and
+ * so could never be dropped by an event, is never remembered.</p>
+ *
  * <p>The stale tier is NOT invalidated by package events: it is only read
  * when every member failed, and a member's cooldown verdict is relayed by
  * {@link MavenGroupSlice} before the stale tier is ever consulted.</p>
@@ -91,9 +104,30 @@ public final class GroupMetadataCache {
     private static final int DEFAULT_MAX_SIZE = 1000;
 
     /**
+     * Bound of the remembered misses. An entry is a path and a flag; a
+     * build probes far more paths that do not exist than paths that do.
+     */
+    private static final int MISS_MAX_SIZE = 20_000;
+
+    /**
      * L1 cache (in-memory) — PRIMARY tier.
      */
     private final Cache<String, CachedMetadata> l1Cache;
+
+    /**
+     * Paths no member has (per node, same TTL as the primary tier).
+     */
+    private final Cache<String, Boolean> misses;
+
+    /**
+     * Member walks in flight, told when their package changes.
+     */
+    private final Set<Walk> walks;
+
+    /**
+     * Path &rarr; package mapping shared with the proxy.
+     */
+    private final MavenMetadataCoordinates coords;
 
     /**
      * Cooldown package-event listener; strongly held here because the
@@ -192,7 +226,13 @@ public final class GroupMetadataCache {
         // reference that keeps events flowing while this cache is alive.
         // Owner id is per instance so two live caches of one group (e.g. the
         // group slice built for two ports) are both invalidated.
-        this.invalidator = new PrimaryInvalidator(this.l1Cache);
+        this.misses = Caffeine.newBuilder()
+            .maximumSize(MISS_MAX_SIZE)
+            .expireAfterWrite(ttl.toMillis(), TimeUnit.MILLISECONDS)
+            .build();
+        this.walks = ConcurrentHashMap.newKeySet();
+        this.coords = new MavenMetadataCoordinates();
+        this.invalidator = new PrimaryInvalidator(this.l1Cache, this.misses, this.walks);
         FilteredMetadataCacheRegistry.instance().addPackageListener(
             "maven-group:" + groupName + "@" + System.identityHashCode(this),
             this.invalidator
@@ -240,9 +280,11 @@ public final class GroupMetadataCache {
         // 2. Stale L2 (bounded by staleL2Timeout, fully defensive)
         final CompletableFuture<Optional<byte[]>> l2Future;
         if (this.staleTwoTier) {
-            l2Future = this.staleL2.get(buildStaleL2Key(path))
+            l2Future = new CallerContext().resume(
+                this.staleL2.get(buildStaleL2Key(path))
                 .toCompletableFuture()
                 .orTimeout(this.staleL2Timeout.toMillis(), TimeUnit.MILLISECONDS)
+            )
                 .exceptionally(err -> null)
                 .thenApply(b -> b != null && b.length > 0
                     ? Optional.of(b)
@@ -324,6 +366,96 @@ public final class GroupMetadataCache {
             }
         }
         this.l1Cache.put(path, new CachedMetadata(data, Instant.now()));
+        this.misses.invalidate(path);
+    }
+
+    /**
+     * Whether a walk of every member found this path in none of them, and
+     * nothing since then says it may exist.
+     * @param path Metadata path
+     * @return True when the path is a remembered miss
+     */
+    public boolean knownMiss(final String path) {
+        final boolean known = this.misses.getIfPresent(path) != null;
+        if (known) {
+            recordCacheHit("negative");
+        }
+        return known;
+    }
+
+    /**
+     * Begin a member walk for a path. The walk is told of every package
+     * event that arrives while it runs, so a miss it establishes from
+     * answers that predate an upload or a refresh is not remembered. The
+     * caller MUST call {@link Walk#finish(boolean)} exactly once.
+     * @param path Metadata path
+     * @return Walk handle
+     */
+    public Walk startWalk(final String path) {
+        final Walk walk = new Walk(path, this.coords.packageName(path).orElse(null));
+        this.walks.add(walk);
+        return walk;
+    }
+
+    /**
+     * A member walk in flight.
+     */
+    public final class Walk {
+
+        /**
+         * Metadata path.
+         */
+        private final String path;
+
+        /**
+         * Dotted package of the path, {@code null} when it maps to none.
+         */
+        private final String pkg;
+
+        /**
+         * The package changed while the walk ran.
+         */
+        private volatile boolean outdated;
+
+        /**
+         * Ctor.
+         * @param path Metadata path
+         * @param pkg Dotted package, may be {@code null}
+         */
+        Walk(final String path, final String pkg) {
+            this.path = path;
+            this.pkg = pkg;
+        }
+
+        /**
+         * End the walk.
+         * @param missing True when every member answered an authoritative
+         *  404, so the path may be remembered as a miss
+         * @return True when the miss was remembered
+         */
+        public boolean finish(final boolean missing) {
+            // Remember first, deregister second: an event that arrives in
+            // between still finds the walk and the entry, and drops both.
+            final boolean remembered = missing && this.pkg != null && !this.outdated;
+            if (remembered) {
+                GroupMetadataCache.this.misses.put(this.path, Boolean.TRUE);
+            }
+            GroupMetadataCache.this.walks.remove(this);
+            if (remembered && this.outdated) {
+                GroupMetadataCache.this.misses.invalidate(this.path);
+            }
+            return remembered && !this.outdated;
+        }
+
+        /**
+         * A package changed.
+         * @param changed Dotted package, {@code null} for every package
+         */
+        void packageChanged(final String changed) {
+            if (changed == null || changed.equals(this.pkg)) {
+                this.outdated = true;
+            }
+        }
     }
 
     /**
@@ -405,6 +537,16 @@ public final class GroupMetadataCache {
         private final Cache<String, CachedMetadata> primary;
 
         /**
+         * Remembered misses to invalidate.
+         */
+        private final Cache<String, Boolean> misses;
+
+        /**
+         * Walks in flight to tell.
+         */
+        private final Set<Walk> walks;
+
+        /**
          * Path &rarr; package mapping shared with the proxy.
          */
         private final MavenMetadataCoordinates coords;
@@ -412,24 +554,38 @@ public final class GroupMetadataCache {
         /**
          * Ctor.
          * @param primary Primary tier
+         * @param misses Remembered misses
+         * @param walks Walks in flight
          */
-        PrimaryInvalidator(final Cache<String, CachedMetadata> primary) {
+        PrimaryInvalidator(
+            final Cache<String, CachedMetadata> primary,
+            final Cache<String, Boolean> misses,
+            final Set<Walk> walks
+        ) {
             this.primary = primary;
+            this.misses = misses;
+            this.walks = walks;
             this.coords = new MavenMetadataCoordinates();
         }
 
         @Override
         public void packageChanged(final String packageName) {
-            this.primary.asMap().keySet().removeIf(
-                path -> this.coords.packageName(path)
-                    .map(packageName::equals)
-                    .orElse(false)
-            );
+            // Walks first: a walk told here discards its miss, a walk that
+            // already stored one is covered by the removal below.
+            this.walks.forEach(walk -> walk.packageChanged(packageName));
+            this.primary.asMap().keySet().removeIf(path -> this.belongs(path, packageName));
+            this.misses.asMap().keySet().removeIf(path -> this.belongs(path, packageName));
         }
 
         @Override
         public void allChanged() {
+            this.walks.forEach(walk -> walk.packageChanged(null));
             this.primary.invalidateAll();
+            this.misses.invalidateAll();
+        }
+
+        private boolean belongs(final String path, final String packageName) {
+            return this.coords.packageName(path).map(packageName::equals).orElse(false);
         }
     }
 }

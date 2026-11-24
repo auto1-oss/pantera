@@ -13,6 +13,7 @@ package com.auto1.pantera.group;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.LocalRefusal;
+import com.auto1.pantera.http.PartialUpstreamFailure;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
@@ -268,7 +269,9 @@ public final class GoGroupSlice implements Slice {
                 Optional.empty(), Outcome.SKIPPED, GroupResolver.parseRetryAfterSeconds(resp)
             );
         }
-        member.recordFailure();
+        if (!new PartialUpstreamFailure(resp).present()) {
+            member.recordFailure();
+        }
         this.metric(member, "error", latency);
         EcsLogger.warn(LOGGER)
             .message("Go group member failed to answer the version list: " + member.name())

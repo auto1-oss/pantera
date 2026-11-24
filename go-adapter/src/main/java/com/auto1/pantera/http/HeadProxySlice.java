@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.cache.UpstreamMiss;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 
@@ -40,13 +41,16 @@ final class HeadProxySlice implements Slice {
      */
     private final Optional<Storage> storage;
 
+    /** Repository name. */
+    private final String rname;
+
     /**
      * Ctor. Pass-through HEAD (no cache check).
      *
      * @param remote Remote slice
      */
     HeadProxySlice(final Slice remote) {
-        this(remote, Optional.empty());
+        this(remote, Optional.empty(), "go-proxy");
     }
 
     /**
@@ -54,10 +58,12 @@ final class HeadProxySlice implements Slice {
      *
      * @param remote  Remote slice (fallback on cache miss).
      * @param storage Local storage consulted first.
+     * @param rname Repository name.
      */
-    HeadProxySlice(final Slice remote, final Optional<Storage> storage) {
+    HeadProxySlice(final Slice remote, final Optional<Storage> storage, final String rname) {
         this.remote = remote;
         this.storage = storage;
+        this.rname = rname;
     }
 
     @Override
@@ -67,7 +73,7 @@ final class HeadProxySlice implements Slice {
         final Content body
     ) {
         if (this.storage.isEmpty()) {
-            return this.upstreamHead(line);
+            return this.upstreamHead(line, headers);
         }
         final String rawPath = line.uri().getPath();
         final String keyPath = rawPath.startsWith("/") ? rawPath.substring(1) : rawPath;
@@ -75,7 +81,7 @@ final class HeadProxySlice implements Slice {
         final Storage raw = this.storage.get();
         return raw.exists(key).thenCompose(present -> {
             if (!present) {
-                return this.upstreamHead(line);
+                return this.upstreamHead(line, headers);
             }
             return raw.metadata(key).thenApply(meta -> {
                 final ResponseBuilder resp = ResponseBuilder.ok();
@@ -97,7 +103,20 @@ final class HeadProxySlice implements Slice {
         }).toCompletableFuture();
     }
 
-    private CompletableFuture<Response> upstreamHead(final RequestLine line) {
+    /**
+     * Ask the upstream. An upstream that fails or cannot be reached is not a
+     * missing file: only its 404 is answered 404 (see {@link UpstreamMiss}).
+     *
+     * @param line Request line
+     * @param request Headers of the client request
+     * @return Response
+     */
+    private CompletableFuture<Response> upstreamHead(
+        final RequestLine line, final Headers request
+    ) {
+        final UpstreamMiss miss = new UpstreamMiss(
+            "com.auto1.pantera.http", this.rname, line.uri().getPath(), request
+        );
         return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
             .thenCompose(
                 resp -> {
@@ -108,9 +127,10 @@ final class HeadProxySlice implements Slice {
                                 .headers(resp.headers())
                                 .build();
                         }
-                        return ResponseBuilder.notFound().build();
+                        return miss.answered(resp.status().code(), resp.headers());
                     });
                 }
-            );
+            )
+            .exceptionally(err -> miss.failed(err, "Go upstream HEAD failed"));
     }
 }

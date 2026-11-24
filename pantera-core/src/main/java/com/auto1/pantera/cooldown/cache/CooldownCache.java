@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.cooldown.cache;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.cache.ValkeyConnection;
 
@@ -201,9 +202,11 @@ public final class CooldownCache implements Cleanable<String> {
         if (this.twoTier) {
             final long l2StartNanos = System.nanoTime();
             
-            return this.l2.get(key)
+            return new CallerContext().resume(
+                this.l2.get(key)
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
+            )
                 .exceptionally(err -> {
                     // Track L2 error - metrics handled elsewhere
                     return null;  // L2 failure → skip to database

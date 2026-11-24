@@ -78,6 +78,20 @@ public final class ProxyArtifactEvent {
     private final String clientIp;
 
     /**
+     * How many times a package processor has already put this event back
+     * because the artifact was not in storage yet. Travels with the event:
+     * Quartz builds a new job instance for every run, so a counter held by
+     * the processor would start at zero each time.
+     */
+    private final int tries;
+
+    /**
+     * Epoch millis before which a processor must not look at this event
+     * again; {@code 0} for an event that was never put back.
+     */
+    private final long after;
+
+    /**
      * Ctor.
      * @param key Artifact key
      * @param rname Repository name
@@ -119,19 +133,75 @@ public final class ProxyArtifactEvent {
         final Key key, final String rname, final String rtype,
         final String owner, final Optional<Long> release
     ) {
-        this.key = key;
-        this.rname = rname;
-        this.rtype = rtype;
-        this.owner = owner;
-        this.release = release == null ? Optional.empty() : release;
         // Auto-capture request-thread context. ProxyArtifactEvent is built
         // synchronously by the proxy slice's response handler, which runs
         // on the request thread with MDC populated by EcsLoggingSlice.
         // These fields are forwarded to the downstream ArtifactEvent
         // (see PackageProcessor.toArtifactEvent) so the audit log written
         // from the consumer thread carries trace.id + client.ip.
-        this.traceId = MDC.get(EcsMdc.TRACE_ID);
-        this.clientIp = MDC.get(EcsMdc.CLIENT_IP);
+        this(
+            key, rname, rtype, owner, release,
+            new String[] {MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)},
+            0, 0L
+        );
+    }
+
+    /**
+     * Primary ctor.
+     * @param key Artifact key
+     * @param rname Repository name
+     * @param rtype Repository type (may be {@code null} for legacy callers)
+     * @param owner Artifact owner name
+     * @param release Release timestamp in millis since epoch (optional)
+     * @param origin Trace id and client IP of the originating request
+     * @param tries Times the event was put back so far
+     * @param after Epoch millis before which the event must not be processed
+     */
+    private ProxyArtifactEvent(
+        final Key key, final String rname, final String rtype,
+        final String owner, final Optional<Long> release,
+        final String[] origin, final int tries, final long after
+    ) {
+        this.key = key;
+        this.rname = rname;
+        this.rtype = rtype;
+        this.owner = owner;
+        this.release = release == null ? Optional.empty() : release;
+        this.traceId = origin[0];
+        this.clientIp = origin[1];
+        this.tries = tries;
+        this.after = after;
+    }
+
+    /**
+     * The same event, put back once more: one more attempt counted, not to
+     * be processed before the given time. The request context captured at
+     * construction is kept, whatever thread calls this.
+     * @param notBefore Epoch millis before which it must not be processed
+     * @return Event for the retry
+     */
+    public ProxyArtifactEvent retried(final long notBefore) {
+        return new ProxyArtifactEvent(
+            this.key, this.rname, this.rtype, this.owner, this.release,
+            new String[] {this.traceId, this.clientIp},
+            this.tries + 1, notBefore
+        );
+    }
+
+    /**
+     * Times a package processor has put this event back so far.
+     * @return Attempt count, {@code 0} for a fresh event
+     */
+    public int attempts() {
+        return this.tries;
+    }
+
+    /**
+     * Epoch millis before which a processor must leave this event queued.
+     * @return Time in millis, {@code 0} for a fresh event
+     */
+    public long notBefore() {
+        return this.after;
     }
 
     /**

@@ -249,6 +249,12 @@ public final class MetadataRegenerator {
         final long startTime = System.currentTimeMillis();
         return new MavenMetadataRegenerator(this.storage)
             .regenerate(baseKey, groupId, artifactId, version)
+            .thenRun(
+                // Groups that cached this metadata, or remembered that it was
+                // missing, must see the regenerated file.
+                () -> com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                    .instance().invalidateAfterUpload("maven", groupId + '.' + artifactId)
+            )
             .thenCompose(nothing -> this.generateMavenChecksums(artifactKey))
             .thenCompose(nothing -> this.generateAllVersionChecksums(versionKey))
             .whenComplete((result, error) -> {

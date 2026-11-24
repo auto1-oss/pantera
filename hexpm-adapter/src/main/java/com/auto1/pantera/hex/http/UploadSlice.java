@@ -260,6 +260,7 @@ public final class UploadSlice implements Slice {
                         );
                     }
                     com.auto1.pantera.http.log.EcsLogger.error("com.auto1.pantera.hex")
+                        .field("repository.name", this.rname)
                         .message("Failed to upload package")
                         .eventCategory("web")
                         .eventAction("package_upload")

@@ -28,14 +28,24 @@ public final class PackagePath extends NpmPath {
         super(prefix);
     }
 
+    /**
+     * Anything that is neither an asset ({@code <name>/-/<file>}) nor a
+     * registry API path. The API namespace starts with {@code -/}
+     * ({@code /-/npm/v1/attestations/...}, {@code /-/npm/v1/keys},
+     * {@code /-/whoami}); no package name does. The inner lookahead alone
+     * does not see it: the leading slash is consumed before the first
+     * position it tests.
+     *
+     * @return Pattern whose first group is the package name
+     */
     @Override
     public Pattern pattern() {
         final Pattern result;
         if (StringUtils.isEmpty(this.prefix())) {
-            result = Pattern.compile("^/(((?!/-/).)+)$");
+            result = Pattern.compile("^/(?!-/)(((?!/-/).)+)$");
         } else {
             result = Pattern.compile(
-                String.format("^/%1$s/(((?!/-/).)+)$", Pattern.quote(this.prefix()))
+                String.format("^/%1$s/(?!-/)(((?!/-/).)+)$", Pattern.quote(this.prefix()))
             );
         }
         return result;

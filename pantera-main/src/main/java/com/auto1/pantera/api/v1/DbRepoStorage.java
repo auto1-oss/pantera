@@ -86,7 +86,11 @@ final class DbRepoStorage implements Function<String, Optional<Storage>> {
             result = RepoConfig.from(
                 yaml,
                 DbStorageByAlias.from(this.aliases.apply(repo)),
-                new Key.From(repo),
+                repo,
+                // The data lives under the repository's immutable key.
+                new Key.From(
+                    com.auto1.pantera.settings.repo.RepoKeys.shared().key(repo).orElse(repo)
+                ),
                 this.cache,
                 false
             ).storageOpt();

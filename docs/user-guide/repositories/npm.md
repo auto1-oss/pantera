@@ -236,7 +236,7 @@ Local repositories sign every published version with the registry's own key (ECD
 npm audit signatures
 ```
 
-If you published with `npm publish --provenance`, the provenance/attestation bundle is stored and served back at `GET /-/npm/v1/attestations/<pkg>@<version>` — the bundle itself is verified client-side by the npm CLI/Sigstore tooling, exactly as it would be against any other registry.
+If you published with `npm publish --provenance`, the provenance/attestation bundle is stored and served back at `GET /-/npm/v1/attestations/<pkg>@<version>` — the bundle itself is verified client-side by the npm CLI/Sigstore tooling, exactly as it would be against any other registry. A proxy repository forwards `GET /-/npm/v1/attestations/<pkg>@<version>` and `GET /-/npm/v1/keys` to its upstream registry and relays the answer without caching it.
 
 ---
 

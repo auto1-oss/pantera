@@ -76,6 +76,8 @@ public final class ComposerProxyPackageProcessor implements Runnable {
                 if (event != null) {
                     final Key key = event.artifactKey();
                     EcsLogger.debug("com.auto1.pantera.composer")
+                        .traceContext(event.traceId(), event.clientIp())
+                        .field("repository.name", event.repoName())
                         .message("Processing Composer proxy event")
                         .eventCategory("web")
                         .eventAction("proxy_processor")
@@ -88,6 +90,8 @@ public final class ComposerProxyPackageProcessor implements Runnable {
                         final String[] parts = key.string().split("/");
                         if (parts.length < 3) {
                             EcsLogger.warn("com.auto1.pantera.composer")
+                                .traceContext(event.traceId(), event.clientIp())
+                                .field("repository.name", event.repoName())
                                 .message("Invalid event key format (expected vendor/package/version)")
                                 .eventCategory("web")
                                 .eventAction("proxy_processor")
@@ -152,6 +156,7 @@ public final class ComposerProxyPackageProcessor implements Runnable {
                         );
 
                         EcsLogger.info("com.auto1.pantera.composer")
+                            .traceContext(event.traceId(), event.clientIp())
                             .message("Recorded Composer proxy download")
                             .eventCategory("web")
                             .eventAction("proxy_processor")
@@ -171,6 +176,8 @@ public final class ComposerProxyPackageProcessor implements Runnable {
 
                     } catch (final Exception err) {
                         EcsLogger.error("com.auto1.pantera.composer")
+                            .traceContext(event.traceId(), event.clientIp())
+                            .field("repository.name", event.repoName())
                             .message("Failed to process composer proxy package")
                             .eventCategory("web")
                             .eventAction("proxy_processor")

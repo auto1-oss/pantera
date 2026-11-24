@@ -151,6 +151,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | `409 Conflict` on deploy | The release is already published with different content and the repository is immutable; bump the version or delete the published one first |
 | SNAPSHOT not updating | Run with `-U` flag: `mvn install -U` |
 | `was not found in ... during a previous attempt. This failure was cached in the local repository` | Maven remembers a failed download and does not ask again until the update interval has passed. Run once with `-U`, or delete the artifact's `*.lastUpdated` files from `~/.m2/repository` |
+| `Could not find artifact` for a dependency that exists, and Maven says it "was cached in the local repository, resolution will not be reattempted" | The upstream that hosts it could not be reached when the build asked, and Maven remembered the miss | Run the build once with `-U` (Gradle: `--refresh-dependencies`), or delete the artifact's `*.lastUpdated` files under `~/.m2/repository` |
 | `503 Service Unavailable` on a download during a large build | The repository had more downloads to serve than it runs at once and this one waited too long. Maven 3.9 and later repeats the request by itself; if builds still fail on it, tell your Pantera administrator |
 | Certificate errors | Add `<insecure>true</insecure>` under `<server>` or configure TLS |
 

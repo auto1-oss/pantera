@@ -160,9 +160,11 @@ function onBulkApplied(result: BulkAccessPolicyResult) {
 }
 
 function onBulkDeleted(result: BulkDeleteResult) {
-  const parts = [`${result.deleted.length} deleted`]
-  if (result.deleting.length) parts.push(`${result.deleting.length} deleting in background`)
+  const gone = result.deleted.length + result.deleting.length
+  const parts = [`${gone} deleted`]
   if (result.failed.length) parts.push(`${result.failed.length} failed`)
+  // The data of a deleted repository is purged later; say where to follow or undo it.
+  if (result.deleting.length) parts.push('data is purged in the background (see Repository Jobs)')
   const summary = parts.join(', ')
   if (result.failed.length) notify.warn('Delete repositories', summary)
   else if (result.deleting.length) notify.info('Delete repositories', summary)
@@ -186,13 +188,24 @@ defineExpose({ selected, typeFilter, modeFilter, sortField, sortOrder, rows, err
     <div class="space-y-4">
       <div class="flex items-center justify-between">
         <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Manage Repositories</h1>
-        <Button
-          v-if="can('create')"
-          label="Create Repository"
-          icon="pi pi-plus"
-          data-testid="create-repo-btn"
-          @click="router.push('/admin/repositories/create')"
-        />
+        <div class="flex items-center gap-2">
+          <Button
+            v-if="can('delete')"
+            label="Jobs &amp; deleted"
+            icon="pi pi-history"
+            severity="secondary"
+            outlined
+            data-testid="repo-jobs-btn"
+            @click="router.push('/admin/repository-jobs')"
+          />
+          <Button
+            v-if="can('create')"
+            label="Create Repository"
+            icon="pi pi-plus"
+            data-testid="create-repo-btn"
+            @click="router.push('/admin/repositories/create')"
+          />
+        </div>
       </div>
 
       <!-- Toolbar -->

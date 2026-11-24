@@ -152,6 +152,26 @@ final class BaseCachedProxySliceFailureLogTest {
         );
     }
 
+    @Test
+    void remoteConfiguredWithTrailingSlashIsLoggedWithOneSlash() {
+        // url.full read https://repository.jboss.org//software/... for a
+        // remote configured as https://repository.jboss.org/
+        new Proxy(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.from(RsStatus.INTERNAL_ERROR).build()
+            ),
+            new InMemoryStorage(), swr(false), "http://upstream/"
+        ).response(
+            new RequestLine(RqMethod.GET, PATH),
+            new Headers().add(EcsLoggingSlice.CTX_TRACE_ID_HEADER, TRACE),
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            this.capture.action("proxy_upstream").get(0).get("url.full"),
+            new IsEqual<>("http://upstream" + PATH)
+        );
+    }
+
     private static ProxyCacheConfig swr(final boolean enabled) {
         return new ProxyCacheConfig(
             Yaml.createYamlMappingBuilder()
@@ -221,8 +241,17 @@ final class BaseCachedProxySliceFailureLogTest {
             final Storage storage,
             final ProxyCacheConfig config
         ) {
+            this(upstream, storage, config, "http://upstream");
+        }
+
+        Proxy(
+            final com.auto1.pantera.http.Slice upstream,
+            final Storage storage,
+            final ProxyCacheConfig config,
+            final String remote
+        ) {
             super(
-                upstream, new Miss(), "test-repo", "failure-log-test", "http://upstream",
+                upstream, new Miss(), "test-repo", "failure-log-test", remote,
                 Optional.of(storage), Optional.empty(), config
             );
         }

@@ -25,9 +25,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
@@ -35,7 +35,8 @@ import java.util.function.Supplier;
  * Slice decorator that consults a per-host
  * {@link UpstreamCircuitBreaker} before delegating, fast-fails when
  * open, trips on qualifying failures, and schedules a daemon HEAD
- * probe at each block-expiry instant to test recovery.
+ * probe at each block-expiry instant to test recovery. The breaker
+ * stays open until a probe is answered.
  *
  * <p>Wired by
  * {@link com.auto1.pantera.http.client.jetty.JettyClientSlices} as the
@@ -52,11 +53,15 @@ import java.util.function.Supplier;
  *       via {@link UpstreamCircuitBreaker#recordFailure(int)} or
  *       {@link UpstreamCircuitBreaker#recordFailure(Throwable)}.
  *       A non-trip response calls
- *       {@link UpstreamCircuitBreaker#recordSuccess()}.</li>
+ *       {@link UpstreamCircuitBreaker#recordSuccess()}, which never
+ *       closes an open breaker.</li>
  *   <li>When a trip happens, schedule a single HEAD probe at the
- *       block-expiry instant. The probe goes through the wrapped
- *       slice directly, bypassing this decorator's open-check.
- *       On success the breaker is reset; on failure the next backoff
+ *       block-expiry instant. The probe asks for the path of the last
+ *       failed request — an upstream can answer {@code /} from its
+ *       front end while every artifact request hangs — and goes
+ *       through the wrapped slice directly, bypassing this decorator's
+ *       open-check. Requests keep fast-failing until it is answered.
+ *       On success the breaker closes; on failure the next backoff
  *       fires and a fresh probe is scheduled.</li>
  * </ol>
  *
@@ -80,13 +85,6 @@ public final class CircuitBreakingClientSlice implements Slice {
      * group resolver share it without depending on this module.
      */
     public static final String CIRCUIT_OPEN_HEADER = UpstreamCircuitOpenException.HEADER;
-
-    /**
-     * Request line used for HEAD recovery probes against the
-     * upstream's root path. Hosts that 404 on {@code /} are still
-     * proving "the upstream is alive" — which is what we care about.
-     */
-    private static final RequestLine PROBE_LINE = new RequestLine(RqMethod.HEAD, "/");
 
     /**
      * {@code 501 Not Implemented} to the HEAD probe: the upstream answered
@@ -128,20 +126,6 @@ public final class CircuitBreakingClientSlice implements Slice {
      * Single-threaded is fine — probes are rare (once per trip).
      */
     private final ScheduledExecutorService probeExecutor;
-
-    /**
-     * Guard against scheduling overlapping probes. CAS-based so a
-     * burst of concurrent trips on the same breaker only schedules
-     * one probe per block window.
-     */
-    private final AtomicBoolean probeScheduled = new AtomicBoolean(false);
-
-    /**
-     * Requests fast-failed since the breaker last opened. Snapshotted
-     * and reset by the recovery log line so operators can size the
-     * client-visible impact of each outage window.
-     */
-    private final AtomicLong fastfails = new AtomicLong();
 
     /**
      * Wall-clock instant of the trip that opened the current outage
@@ -201,11 +185,15 @@ public final class CircuitBreakingClientSlice implements Slice {
     ) {
         if (this.breaker.isOpen()) {
             this.recordFastfailMetric();
-            this.fastfails.incrementAndGet();
+            this.breaker.fastFailed();
+            // No-op while a probe is claimed. It only schedules one when
+            // the probe of this block was lost, so an open breaker can
+            // not stay open for want of a probe.
+            this.scheduleProbe();
             return CompletableFuture.completedFuture(synthesise502(this.breaker.timeRemaining()));
         }
         return this.delegate.response(line, headers, body).whenComplete(
-            (response, error) -> this.onResponse(response, error)
+            (response, error) -> this.onResponse(line, response, error)
         );
     }
 
@@ -239,8 +227,13 @@ public final class CircuitBreakingClientSlice implements Slice {
      * volume/rate gate), success-record otherwise. On trip, log the
      * transition and schedule the recovery HEAD probe.
      */
-    private void onResponse(final Response response, final Throwable error) {
+    private void onResponse(
+        final RequestLine line, final Response response, final Throwable error
+    ) {
         if (error != null) {
+            if (this.config.get().shouldTripOnException().test(error)) {
+                this.rememberFailing(line);
+            }
             if (this.breaker.recordFailure(error)) {
                 this.onTripped("exception: " + error.getClass().getSimpleName(), 0);
             }
@@ -251,11 +244,29 @@ public final class CircuitBreakingClientSlice implements Slice {
         }
         final int status = response.status().code();
         if (this.config.get().shouldTripOnStatus().test(status)) {
+            this.rememberFailing(line);
             if (this.breaker.recordFailure(status)) {
                 this.onTripped("upstream status " + status, status);
             }
         } else {
-            this.onSuccess();
+            this.breaker.recordSuccess();
+        }
+    }
+
+    /**
+     * Hand the breaker the target of a failed read, for the recovery
+     * probe to ask for. Only a {@code GET} or {@code HEAD}: the probe is
+     * a {@code HEAD}, and the path of a write says nothing to it.
+     */
+    private void rememberFailing(final RequestLine line) {
+        if (line.method() == RqMethod.GET || line.method() == RqMethod.HEAD) {
+            final java.net.URI uri = line.uri();
+            final String path = uri.getRawPath();
+            if (path != null && !path.isEmpty()) {
+                this.breaker.failedOn(
+                    uri.getRawQuery() == null ? path : path + '?' + uri.getRawQuery()
+                );
+            }
         }
     }
 
@@ -292,13 +303,13 @@ public final class CircuitBreakingClientSlice implements Slice {
     }
 
     /**
-     * Success bookkeeping: closes the breaker when a block was set and
-     * logs the recovery exactly once (INFO), including how many
-     * requests fast-failed during the outage window.
+     * The recovery probe was answered: closes the breaker and logs the
+     * recovery exactly once (INFO), including how many requests
+     * fast-failed during the outage window.
      */
-    private void onSuccess() {
-        if (this.breaker.recordSuccess()) {
-            final long failed = this.fastfails.getAndSet(0L);
+    private void onRecovered() {
+        if (this.breaker.probeSucceeded()) {
+            final long failed = this.breaker.drainFastFails();
             final long opened = this.openedAtMs.getAndSet(0L);
             final long openSeconds = opened == 0L
                 ? -1L
@@ -338,22 +349,26 @@ public final class CircuitBreakingClientSlice implements Slice {
     }
 
     /**
-     * Schedule one daemon HEAD probe at {@link UpstreamCircuitBreaker#blockedUntil()}.
-     * Multiple concurrent trips only schedule one probe per window via
-     * the {@code probeScheduled} CAS guard.
+     * Schedule one daemon HEAD probe at {@link UpstreamCircuitBreaker#blockedUntil()},
+     * at once when that instant has passed. The breaker hands out one
+     * probe per block ({@link UpstreamCircuitBreaker#claimProbe()}),
+     * whichever of the host's slices asks.
      */
     private void scheduleProbe() {
+        if (!this.breaker.claimProbe()) {
+            return;
+        }
         final Instant when = this.breaker.blockedUntil();
-        if (when == null) {
-            return;
+        final long delayMs = when == null
+            ? 0L
+            : Math.max(0L, Duration.between(this.clock.instant(), when).toMillis());
+        try {
+            this.probeExecutor.schedule(this::runProbe, delayMs, TimeUnit.MILLISECONDS);
+        } catch (final RejectedExecutionException ex) {
+            // Shutting down. The claim goes back so a later request can
+            // schedule the probe instead of the breaker staying open.
+            this.breaker.releaseProbe();
         }
-        if (!this.probeScheduled.compareAndSet(false, true)) {
-            return;
-        }
-        final long delayMs = Math.max(
-            0L, Duration.between(this.clock.instant(), when).toMillis()
-        );
-        this.probeExecutor.schedule(this::runProbe, delayMs, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -364,15 +379,13 @@ public final class CircuitBreakingClientSlice implements Slice {
      */
     private void runProbe() {
         try {
-            this.delegate.response(PROBE_LINE, Headers.EMPTY, Content.EMPTY).whenComplete(
-                (response, error) -> {
-                    this.probeScheduled.set(false);
-                    this.onProbeResult(response, error);
-                }
-            );
+            this.delegate.response(
+                new RequestLine(RqMethod.HEAD, this.breaker.probeTarget()),
+                Headers.EMPTY, Content.EMPTY
+            ).whenComplete(this::onProbeResult);
         } catch (final RuntimeException ex) {
-            this.probeScheduled.set(false);
             this.breaker.probeFailed(ex);
+            this.breaker.releaseProbe();
             this.logProbeFailure("probe dispatch failed: " + ex.getClass().getSimpleName());
             this.scheduleProbe();
         }
@@ -383,8 +396,8 @@ public final class CircuitBreakingClientSlice implements Slice {
      * unconditionally (the window gate does not apply to probes — the
      * breaker already convicted this upstream, and the probe is the
      * only traffic there is); anything else — including a 404, which
-     * just means "the upstream is reachable but doesn't have /", and a
-     * 501, which means "reachable but HEAD is not implemented" —
+     * just means "the upstream is reachable but doesn't have the path",
+     * and a 501, which means "reachable but HEAD is not implemented" —
      * closes the breaker.
      */
     private void onProbeResult(final Response response, final Throwable error) {
@@ -394,12 +407,12 @@ public final class CircuitBreakingClientSlice implements Slice {
                 this.logProbeFailure("exception: " + error.getClass().getSimpleName());
                 this.scheduleProbe();
             } else {
-                this.onSuccess();
+                this.onRecovered();
             }
             return;
         }
         if (response == null) {
-            this.onSuccess();
+            this.onRecovered();
             return;
         }
         final int status = response.status().code();
@@ -409,7 +422,7 @@ public final class CircuitBreakingClientSlice implements Slice {
             this.logProbeFailure("upstream status " + status);
             this.scheduleProbe();
         } else {
-            this.onSuccess();
+            this.onRecovered();
         }
     }
 
@@ -424,8 +437,8 @@ public final class CircuitBreakingClientSlice implements Slice {
         final Duration remaining = this.breaker.timeRemaining();
         EcsLogger.warn("com.auto1.pantera.http.client.circuitbreaker")
             .message(String.format(
-                "Upstream circuit breaker probe FAILED for %s (%s) — next probe in %ss",
-                this.host, reason,
+                "Upstream circuit breaker probe FAILED for %s (HEAD %s: %s) — next probe in %ss",
+                this.host, this.breaker.probeTarget(), reason,
                 remaining == null ? "?" : Long.toString(remaining.toSeconds())
             ))
             .eventCategory("network")

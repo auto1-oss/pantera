@@ -156,6 +156,13 @@ Credentials carried in a URL are masked as `***REDACTED***` in every URL field, 
 | `container.image.tag` | Image tag |
 | `container.image.hash.all` | Image digest |
 
+A manifest lookup that finds nothing writes one `manifest_get` record (logger `com.auto1.pantera.docker`) with `repository.name`, `container.image.name` and the reference as `container.image.tag` or `container.image.hash.all`:
+
+| Level | `event.reason` | Meaning |
+|---|---|---|
+| `DEBUG` | `manifest_unknown` | No manifest is stored under that tag or digest. Ordinary: a tag nobody pushed, or the first pull of an image through a proxy (the upstream is asked next). |
+| `WARN` | `manifest_blob_missing` | The tag or digest link exists, but the manifest blob it points at is not in storage: the stored image is inconsistent and has to be pushed (or, on a proxy, evicted and pulled) again. |
+
 ### Destination Fields (proxy/upstream)
 
 | Field | Description |
@@ -193,13 +200,15 @@ Audit-log entries inherit the originating HTTP request's `trace.id` so an artifa
 
 ## Why a Request Was Not Answered 2xx
 
+Every access record (logger `http.access`, `event.action: http_request`) carries `repository.name` and `repository.type` of the repository the request was for -- for a group the group itself, not the member that supplied the artifact -- and the client's `user_agent.original` (v2.2.14+; a request that matched no repository, such as an unknown repository name, has no `repository.*`).
+
 Every access record (logger `http.access`, `event.action: http_request`) with a status of 400 or above carries `event.reason`: a short token saying why (v2.2.12+). It is on the access record itself, so it needs no second record, no matching `trace.id` and no debug logging. A 404 from the negative cache and a 404 of the upstream, or a 503 for a full bulkhead and a 502 after a lost connection, are told apart by this one field.
 
 | `event.reason` | The request was answered this way because |
 |----------------|---------------------------------------------|
 | `negative_cache` | A proxy or a group answered 404 from its negative cache; the upstream was not asked. For a group it also means a member did. |
-| `upstream_status_<code>` | The upstream answered `<code>`: `upstream_status_404` is the upstream's own "not found", `upstream_status_403` its refusal, `upstream_status_503` its failure. |
-| `connection_closed`, `connection_refused`, `connect_timeout`, `read_timeout`, `idle_timeout`, `request_timeout`, `unknown_host`, `tls_error`, `egress_denied`, `request_rejected` | The call to the upstream failed that way. Also on a 404 of a Docker or file proxy, which answer 404 when they cannot fetch. |
+| `upstream_status_<code>` | The upstream answered `<code>`: `upstream_status_404` is the upstream's own "not found", `upstream_status_403` its refusal, `upstream_status_503` its failure. On a 404 with `upstream_status_401`, `_403`, `_400` and the like, see below. |
+| `connection_closed`, `connection_refused`, `connect_timeout`, `read_timeout`, `idle_timeout`, `request_timeout`, `unknown_host`, `tls_error`, `egress_denied`, `request_rejected` | The call to the upstream failed that way. The answer is a 5xx. |
 | `bulkhead_full` | The repository had no free permit within its wait bound (503). |
 | `circuit_open` | The circuit breaker of the upstream, or of every remaining group member, is open. |
 | `cooldown_active` | Cooldown blocks the artifact. |
@@ -208,7 +217,36 @@ Every access record (logger `http.access`, `event.action: http_request`) with a 
 
 When several things happened to one request, the one that explains most is reported: a failure, before a request Pantera refused to forward (`circuit_open`, `bulkhead_full`), before `cooldown_active`, before `negative_cache`, before an upstream 4xx, before `upstream_status_404`. So a group's 404 reads `negative_cache` if any of its members answered from its negative cache, and `upstream_status_404` only if every proxy member asked its upstream. A 401 or 403 that a group relays keeps the reason of the member that gave it.
 
-Reasons are specific for Maven and Gradle proxies, npm and PyPI proxies (negative cache and upstream 404), file proxies, Docker blob downloads, and groups of any of them. The other paths report the status name.
+Reasons are specific for Maven and Gradle proxies, npm, PyPI and Go proxies, file proxies, Composer dist archives, Docker blob and manifest downloads, and groups of any of them. The other paths report the status name.
+
+**A proxy answers 404 only when its upstream said the file does not exist** (v2.2.14+; Maven and npm proxies did so before). What the upstream did decides the status, for Go, PyPI, file, Composer and Docker proxies alike:
+
+| The upstream | Pantera answers | `event.reason` |
+|--------------|-----------------|----------------|
+| answered 404 or 410 | 404 | `upstream_status_404`, `upstream_status_410` |
+| answered another 4xx (401, 403, 400, ...) | 404, never negative-cached | `upstream_status_<code>` |
+| answered 429, or 503 with `Retry-After` | 503 with that `Retry-After` | `upstream_status_<code>` |
+| answered any other 5xx | 502 | `upstream_status_<code>` |
+| was not asked: its circuit breaker is open | 502 with `Retry-After` and `X-Pantera-Circuit-Open` | `circuit_open` |
+| could not be reached, or the connection was lost | 502 | `connection_refused`, `read_timeout`, `connection_closed`, ... |
+
+One exception: a Docker registry that answers 401, 403 or 412 for a manifest does not host that image, and the answer stays a plain 404 (`not_found`) without a log record; a Docker proxy with several remotes gets that answer from every remote but one on each pull.
+
+Before 2.2.14 the Go and PyPI proxies answered 404 in every one of these cases (the Go proxy logged `artifact_not_found`), the PyPI proxy also remembered that 404 in its negative cache, and the file and Docker proxies answered 404 with the failure as its reason. A client reads a 404 as "this dependency does not exist" and stops; a 5xx it repeats.
+
+**A group's 404 with a failure as its reason** (v2.2.14+). A proxy member that could not answer does not fail the group: when another member said "not found", the group answers 404 and the access record names what happened to the proxy (`circuit_open`, `idle_timeout`, `upstream_status_503`, ...). The 404 is not negative-cached. The group keeps a 5xx when a hosted member failed, when no member answered at all, or when a proxy had no free bulkhead permit. See [What a group answers when a member cannot be reached](../configuration-reference.md#what-a-group-answers-when-a-member-cannot-be-reached).
+
+```text
+event.action:"http_request" AND http.response.status_code:404 AND event.reason:("circuit_open" OR "idle_timeout" OR "connection_closed" OR "upstream_status_503")
+```
+
+**A 404 with `upstream_status_401` (or `_403`, `_400`).** The upstream refused the request Pantera sent, which says nothing about the client's own credentials: relaying the 401 would make the client ask its user for a password. The client gets 404, and in a group the walk goes on to the next member. Such a 404 is never negative-cached, by the proxy or by a group, so it stops the moment the upstream accepts the request. A steady rate of it on one proxy repository usually means that the upstream credentials configured for that repository are missing, wrong or expired, or that the upstream answers 401 instead of 404 for paths it does not serve (private registries often do). To find the repository:
+
+```text
+event.action:"http_request" AND http.response.status_code:404 AND event.reason:"upstream_status_401"
+```
+
+aggregated by `repository.name`. A group's 404 carries this reason when one of its members got the 401 and no member had the file.
 
 ```text
 # cached "not found" answers per repository
@@ -253,6 +291,20 @@ Besides `event.reason` on the access record, a 5xx has a cause record with the d
 **`event.action` of the cause records:** `proxy_upstream` (proxy fetch), `cache_write` (cache commit / verify-and-serve), `proxy_cache` and `proxy_fetch_coalesced_error` (Maven-style cache fill), `proxy_request` (npm), `bulkhead_dispatch` (per refused request), `bulkhead_overflow` (per repository, see Levels), `group_member_fallthrough` (per failed group member), `group_sibling_pin_failed`, `group_targeted_read_failed`, `group_all_members_circuit_open`, `group_index_timeout`, `group_index_error`, `group_all_members_unavailable` (docker group tags/catalog), `group_race` (a remote of a multi-remote proxy threw), `http_request_send` (outbound HTTP client), `response_stream` (body failed while streaming to the client), `request_routing`, `proxy_download` (Composer dist archive), `sumdb_fetch` (Go checksum database), `metadata_fetch` (Go / PyPI cooldown metadata), `artifact_serve` (hosted read of a `cache.mode: index` repository), `artifact_upload`, `package_search`, `metadata_merge`, `import_artifact`, `api_request` (REST API).
 
 **Levels.** Upstream and transient causes are `WARN`; unexpected internal failures are `ERROR`. Two per-request causes are `DEBUG`, because their state transitions are logged on their own: `circuit_open` (the breaker logs `circuit_breaker_trip` / `circuit_breaker_probe` / `circuit_breaker_close` at `WARN`/`INFO`) and `bulkhead_full` (the bulkhead logs `bulkhead_overflow` at `WARN`, at most once in 10 s per repository, with the number of requests refused since its previous record; each one is counted by `pantera_bulkhead_overflow_total`). Enable `DEBUG` on the adapter logger to see each refused request. Group-level records that name `circuit_open` (`group_sibling_pin_failed`, `group_all_members_circuit_open`) stay at `WARN`.
+
+**A download that ends early leaves one record.** When a response body does not reach the client in full, the server writes exactly one `response_stream` record (logger `com.auto1.pantera.vertx`) under the request's own `trace.id`, with `http.request.method`, `url.path`, `http.response.status_code` (the status already sent), `http.response.body.bytes` (bytes written) and the declared length in `message`:
+
+| Level | `event.reason` | Meaning |
+|---|---|---|
+| `WARN` | `client_disconnected` | The client closed the connection (HTTP/1.x) or reset the stream (HTTP/2) before the body was complete: an aborted download, a client-side timeout, a cancelled build. Nothing failed in Pantera. |
+| `ERROR` | `io_error`, `connection_closed`, ... (the cause tokens above) | The body failed on the server side — storage or the upstream broke off mid-body. The connection is closed (HTTP/2: the stream is reset) so the client does not take the truncated body for a complete one. |
+
+```
+# clients that give up on downloads, by path
+event.action:"response_stream" AND event.reason:"client_disconnected"
+```
+
+**Credentials withheld from an untrusted host.** Upstream credentials are sent only to the upstream host and to hosts in `upstream_credential_allow_hosts`. When a bearer-token realm (`event.action: bearer_realm_untrusted`, logger `com.auto1.pantera.http.client.auth`) or a PyPI file mirror (`event.action: mirror_credentials_withheld`, logger `com.auto1.pantera.pypi`) is on another host, the request goes out anonymously and one `WARN` is written for the first occurrence per upstream host and untrusted host (`destination.address`), then at most once an hour with the number of occurrences in between. The message names the setting to change. For Docker Hub the realm host is `auth.docker.io`: list it for authenticated pulls. A public mirror such as `files.pythonhosted.org` needs nothing.
 
 **One stack trace per failure.** A transport failure produces two records: the outbound client's single-line `http_request_send` record (`WARN`, `url.full`, `destination.address`, `event.reason`, `error.type` and `error.message`, no stack trace) and the answering slice's record with the full `error.stack_trace`. Both carry the same `trace.id`.
 

@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.FailedCompletionStage;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ListPage;
 import com.auto1.pantera.asto.ListResult;
 import com.auto1.pantera.asto.ManagedStorage;
 import com.auto1.pantera.asto.Meta;
@@ -611,6 +612,23 @@ public final class S3Storage implements ManagedStorage, BlobStore, Presigner {
                 return deleted;
             }
         );
+    }
+
+    @Override
+    public CompletableFuture<ListPage> listPage(
+        final Key prefix, final Optional<String> after, final int limit
+    ) {
+        return new S3KeyPages(this.client, this.bucket).page(prefix, after, limit);
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteBatch(final Collection<Key> keys) {
+        return new S3BatchDelete(this.client, this.bucket).delete(keys);
+    }
+
+    @Override
+    public CompletableFuture<Integer> abortIncompleteUploads(final Key prefix) {
+        return new S3UploadAbort(this.client, this.bucket).abort(prefix);
     }
 
     @Override

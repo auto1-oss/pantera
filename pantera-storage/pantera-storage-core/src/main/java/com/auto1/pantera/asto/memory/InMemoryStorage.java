@@ -14,9 +14,11 @@ import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Concatenation;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ListPage;
 import com.auto1.pantera.asto.ListResult;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.OneTimePublisher;
+import com.auto1.pantera.asto.PagedKeys;
 import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.UnderLockOperation;
@@ -30,7 +32,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentNavigableMap;
@@ -249,6 +253,43 @@ public final class InMemoryStorage implements Storage {
                     throw new PanteraIOException(
                         String.format("Key does not exist: %s", str)
                     );
+                }
+            }
+        );
+    }
+
+    @Override
+    public CompletableFuture<ListPage> listPage(
+        final Key root, final Optional<String> after, final int limit
+    ) {
+        return CompletableFuture.supplyAsync(
+            () -> {
+                final PagedKeys paged = new PagedKeys(root, after, limit);
+                final String inside = paged.inside();
+                final List<String> found = new ArrayList<>(16);
+                // Keys sharing a prefix are adjacent in the map, whatever
+                // the order among them: the scan stops at the first key
+                // outside the prefix.
+                for (final String key : this.data.navigableKeySet().tailSet(inside)) {
+                    if (!key.startsWith(inside)) {
+                        break;
+                    }
+                    if (paged.wanted(key)) {
+                        found.add(key);
+                    }
+                }
+                return paged.pageOf(found);
+            }
+        );
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteBatch(final Collection<Key> keys) {
+        final Collection<Key> batch = new ArrayList<>(keys);
+        return CompletableFuture.runAsync(
+            () -> {
+                for (final Key key : batch) {
+                    this.data.remove(key.string());
                 }
             }
         );

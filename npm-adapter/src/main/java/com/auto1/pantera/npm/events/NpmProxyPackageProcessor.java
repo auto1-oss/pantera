@@ -159,6 +159,8 @@ public final class NpmProxyPackageProcessor implements Runnable {
         final Optional<PackageCoords> coords = parsePackageCoords(item.artifactKey());
         if (coords.isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.npm")
+                .traceContext(item.traceId(), item.clientIp())
+                .field("repository.name", item.repoName())
                 .message("Could not parse package coords from path")
                 .eventCategory("web")
                 .eventAction("package_validation")
@@ -188,6 +190,8 @@ public final class NpmProxyPackageProcessor implements Runnable {
                     ).withContext(item.traceId(), item.clientIp())
                 );
                 EcsLogger.debug("com.auto1.pantera.npm")
+                    .traceContext(item.traceId(), item.clientIp())
+                    .field("repository.name", item.repoName())
                     .message("Package event created from path")
                     .eventCategory("web")
                     .eventAction("package_processing")
@@ -203,6 +207,8 @@ public final class NpmProxyPackageProcessor implements Runnable {
                     // client and this post-store indexer reading its metadata.
                     // The artifact re-indexes on next access — not an error.
                     EcsLogger.debug("com.auto1.pantera.npm")
+                        .traceContext(item.traceId(), item.clientIp())
+                        .field("repository.name", item.repoName())
                         .message("Skipped NPM package indexing: tarball evicted before metadata read")
                         .eventCategory("web")
                         .eventAction("package_processing")
@@ -214,6 +220,8 @@ public final class NpmProxyPackageProcessor implements Runnable {
                     return null;
                 }
                 EcsLogger.error("com.auto1.pantera.npm")
+                    .traceContext(item.traceId(), item.clientIp())
+                    .field("repository.name", item.repoName())
                     .message("Failed to process NPM package")
                     .eventCategory("web")
                     .eventAction("package_processing")
