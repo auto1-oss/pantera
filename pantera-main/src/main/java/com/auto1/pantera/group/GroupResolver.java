@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.LocalRefusal;
+import com.auto1.pantera.http.PartialUpstreamFailure;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
@@ -1618,9 +1619,16 @@ public final class GroupResolver implements Slice {
                     isTargetedLocalRead, walk, result, pinArtifactName);
                 return;
             }
-            // 429 or any 5xx -> record failure, cascade.
+            // 429 or any 5xx -> record failure, cascade. A proxy member of
+            // which only some remotes failed is not convicted: its other
+            // remotes answered, and blocking the member would take them out
+            // of the group together with the one that is down. The walk still
+            // ends in a 5xx when nobody has the file.
+            final boolean someRemotes = new PartialUpstreamFailure(resp).present();
             drainBody(resp.body());
-            member.recordFailure();
+            if (!someRemotes) {
+                member.recordFailure();
+            }
             walk.noteFailure(member);
             recordMemberOutcome(member, "error", memberLatency);
             EcsLogger.warn("com.auto1.pantera.group")
@@ -1717,6 +1725,11 @@ public final class GroupResolver implements Slice {
         final WalkState walk, final RequestLine line, final Headers headers
     ) {
         final long retry = Math.max(5L, walk.retryAfterHint.get());
+        // The 503 is caused by the member that was not asked. A member the
+        // group skipped on its own breaker gave no answer to take a reason
+        // from, and without this note the access record carried whatever
+        // another member said (an upstream 401, a cached miss).
+        RequestReasons.instance().note(headers, RequestReasons.CIRCUIT_OPEN);
         if (!walk.partial) {
             this.logAllMembersCircuitOpen(retry, line, headers);
         }

@@ -1273,6 +1273,76 @@ final class GroupResolverTest {
             "A genuine member 5xx still convicts the member");
     }
 
+    @Test
+    void failureOfOneRemoteOfAProxyDoesNotConvictTheMember() {
+        // PROXY_A has two remotes: one says "not found", the other times
+        // out. Its 502 stands, but the member is not blocked: its first
+        // remote still serves everything it has.
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        final Slice proxy = new com.auto1.pantera.http.group.RaceSlice(
+            notFoundSlice(),
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new java.util.concurrent.TimeoutException("idle timeout")
+            )
+        );
+        final GroupResolver resolver = resolverWithRegistry(
+            registry, proxy, notFoundSlice(), buildNegativeCache()
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the group cannot say the file is absent",
+            resp.status(), new IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+        MatcherAssert.assertThat(
+            "the member is not blocked for the failure of one remote",
+            registry.isBlocked(PROXY_A), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void failureOfEveryRemoteOfAProxyStillConvictsTheMember() {
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        final Slice proxy = new com.auto1.pantera.http.group.RaceSlice(
+            staticSlice(RsStatus.SERVICE_UNAVAILABLE),
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new java.util.concurrent.TimeoutException("idle timeout")
+            )
+        );
+        resolverWithRegistry(
+            registry, proxy, notFoundSlice(), buildNegativeCache()
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            registry.isBlocked(PROXY_A), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void unavailableGroupIsExplainedByTheMemberThatWasNotAsked() {
+        // PROXY_A is blocked by the group's breaker and is skipped without
+        // an answer; PROXY_B's upstream refused the request with a 401.
+        // The 503 is caused by the member that was not asked.
+        final AutoBlockRegistry registry = tripOnFirstFailureRegistry();
+        registry.recordFailure(PROXY_A);
+        final Response answer = new com.auto1.pantera.http.slice.ReasonSlice(
+            resolverWithRegistry(
+                registry, notFoundSlice(),
+                reasonedSlice(RsStatus.NOT_FOUND, "upstream_status_401"),
+                buildNegativeCache()
+            )
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "nobody answered and one member was not asked",
+            answer.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the reason is the open circuit, not the other member's 401",
+            new com.auto1.pantera.http.log.AnswerReason(answer).token(),
+            new IsEqual<>(Optional.of("circuit_open"))
+        );
+    }
+
     /**
      * Registry that blocks a member on its first recorded failure.
      */

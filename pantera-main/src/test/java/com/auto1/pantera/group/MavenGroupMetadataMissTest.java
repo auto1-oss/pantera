@@ -362,6 +362,38 @@ final class MavenGroupMetadataMissTest {
     }
 
     @Test
+    void unavailableAnswerIsExplainedByTheRefusalNotByAnotherMember() throws Exception {
+        final MavenGroupSlice group = group(
+            "refused-reason",
+            Map.of(
+                "a", (line, headers, body) -> CompletableFuture.completedFuture(
+                    new com.auto1.pantera.http.log.AnswerReason(
+                        ResponseBuilder.notFound().build()
+                    ).stamped("upstream_status_401")
+                ),
+                "open", (line, headers, body) -> CompletableFuture.completedFuture(
+                    ResponseBuilder.from(RsStatus.BAD_GATEWAY)
+                        .header(UpstreamCircuitOpenException.HEADER, "true")
+                        .header("Retry-After", "17").build()
+                )
+            ),
+            "a", "open"
+        );
+        final Response response = get(
+            new com.auto1.pantera.http.slice.ReasonSlice(group), PATH
+        );
+        MatcherAssert.assertThat(
+            "a refused member is not an absence",
+            response.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the reason is the open circuit, not the other member's 401",
+            new com.auto1.pantera.http.log.AnswerReason(response).token(),
+            new IsEqual<>(java.util.Optional.of("circuit_open"))
+        );
+    }
+
+    @Test
     void refusedMembersAnswerUnavailableNotNotFound() throws Exception {
         final AtomicInteger calls = new AtomicInteger();
         final MavenGroupSlice group = group(

@@ -698,6 +698,7 @@ public final class MavenGroupSlice implements Slice {
         final MetadataWalk walk, final Headers headers, final String path
     ) {
         final long retry = Math.max(5L, walk.retryAfter.get());
+        RequestReasons.instance().note(headers, RequestReasons.CIRCUIT_OPEN);
         EcsLogger.warn("com.auto1.pantera.group")
             .requestContext(headers)
             .message(

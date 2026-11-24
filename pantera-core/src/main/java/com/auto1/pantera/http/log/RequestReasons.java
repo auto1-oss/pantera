@@ -52,6 +52,12 @@ public final class RequestReasons {
     public static final String NEGATIVE_CACHE = "negative_cache";
 
     /**
+     * Reason: a repository was not asked because its circuit breaker is
+     * open.
+     */
+    public static final String CIRCUIT_OPEN = "circuit_open";
+
+    /**
      * The instance the serving path uses.
      */
     private static final RequestReasons INSTANCE = new RequestReasons();
