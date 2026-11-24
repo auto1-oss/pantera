@@ -245,6 +245,54 @@ final class RepoJobRunnerTest {
     }
 
     @Test
+    @Timeout(60)
+    void closingTheRunnerGivesBackTheJobInProgress() throws Exception {
+        RepoJobRunnerTest.db.repo("libs", "maven");
+        this.store.fill("libs", 2500);
+        final long job = this.life.delete("libs", false, Duration.ZERO, "admin", null).job();
+        final java.util.concurrent.CountDownLatch working =
+            new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch stopped =
+            new java.util.concurrent.CountDownLatch(1);
+        // The job is in the middle of its work when the node shuts down.
+        this.store.afterDelete(
+            ignored -> {
+                working.countDown();
+                try {
+                    stopped.await(30, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (final InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        );
+        final RepoJobRunner runner = this.runner("node-a", Duration.ZERO);
+        final Thread node = new Thread(runner::drain, "node-a-job");
+        node.start();
+        MatcherAssert.assertThat(
+            "the job is being worked on",
+            working.await(30, java.util.concurrent.TimeUnit.SECONDS), new IsEqual<>(true)
+        );
+        runner.close();
+        final RepoJob freed = this.jobs.get(job).orElseThrow();
+        stopped.countDown();
+        node.join(30_000L);
+        MatcherAssert.assertThat(
+            "the job waits for another node, with no owner and no attempt counted",
+            List.of(
+                freed.state(), String.valueOf(freed.owner()), String.valueOf(freed.attempts())
+            ),
+            new IsEqual<>(List.of(RepoJob.PENDING, "null", "0"))
+        );
+        try (RepoJobRunner other = this.runner("node-b", Duration.ZERO)) {
+            other.drain();
+        }
+        MatcherAssert.assertThat(
+            "and another node finishes it from the checkpoint",
+            this.store.left(), new IsEmptyCollection<>()
+        );
+    }
+
+    @Test
     void stopsWhenItsLeaseIsTaken() {
         RepoJobRunnerTest.db.repo("libs", "maven");
         this.store.fill("libs", 2500);

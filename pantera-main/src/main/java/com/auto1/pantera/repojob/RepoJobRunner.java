@@ -126,6 +126,16 @@ public final class RepoJobRunner implements AutoCloseable {
     private final ScheduledExecutorService keeper;
 
     /**
+     * Id of the job in progress, for {@link #close()} to give back.
+     */
+    private final java.util.concurrent.atomic.AtomicReference<Long> current;
+
+    /**
+     * Set by {@link #close()}: no further job is taken.
+     */
+    private final java.util.concurrent.atomic.AtomicBoolean closed;
+
+    /**
      * Ctor.
      * @param source Database
      * @param stores Storage of a storage config
@@ -148,6 +158,8 @@ public final class RepoJobRunner implements AutoCloseable {
         this.keeper = Executors.newSingleThreadScheduledExecutor(
             task -> RepoJobRunner.thread(task, "pantera-repo-jobs-lease")
         );
+        this.current = new java.util.concurrent.atomic.AtomicReference<>();
+        this.closed = new java.util.concurrent.atomic.AtomicBoolean();
     }
 
     /**
@@ -193,19 +205,75 @@ public final class RepoJobRunner implements AutoCloseable {
      */
     public int drain() {
         int count = 0;
-        Optional<RepoJob> job = this.jobs.claim(this.node, this.timing.lease());
+        Optional<RepoJob> job = this.next();
         while (job.isPresent()) {
             this.work(job.get());
             count += 1;
-            job = this.jobs.claim(this.node, this.timing.lease());
+            job = this.next();
         }
         return count;
     }
 
+    /**
+     * The next job that is due. None once the runner is closed: a job
+     * taken after that would be held by a node that is going away.
+     * @return Job, if any
+     */
+    private Optional<RepoJob> next() {
+        final Optional<RepoJob> job;
+        if (this.closed.get()) {
+            job = Optional.empty();
+        } else {
+            job = this.jobs.claim(this.node, this.timing.lease());
+        }
+        return job;
+    }
+
+    /**
+     * Stop working and give back the job in progress. Without that its
+     * lease stays with a node that is gone and another node only takes the
+     * job over when the lease runs out. A job continues from its checkpoint,
+     * so stopping it anywhere loses nothing.
+     */
     @Override
     public void close() {
+        this.closed.set(true);
         this.worker.shutdownNow();
         this.keeper.shutdownNow();
+        try {
+            this.worker.awaitTermination(3, TimeUnit.SECONDS);
+        } catch (final InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        final Long job = this.current.getAndSet(null);
+        if (job != null) {
+            try {
+                this.jobs.release(job, this.node, null, Duration.ZERO, false);
+                EcsLogger.info(RepoJobRunner.LOGGER)
+                    .message(
+                        "Repository job " + job
+                            + " given back at shutdown; another node continues it"
+                    )
+                    .eventCategory("process")
+                    .eventAction("repo_job_release")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+            } catch (final RuntimeException ex) {
+                EcsLogger.warn(RepoJobRunner.LOGGER)
+                    .message(
+                        "Repository job " + job
+                            + " could not be given back at shutdown; it is taken over"
+                            + " when its lease runs out"
+                    )
+                    .eventCategory("process")
+                    .eventAction("repo_job_release")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .field("log.source", "application")
+                    .log();
+            }
+        }
     }
 
     /**
@@ -238,6 +306,7 @@ public final class RepoJobRunner implements AutoCloseable {
                 job.id(), job.type().db(), job.name(), job.phase()
             )
         ).log();
+        this.current.set(job.id());
         final ScheduledFuture<?> renewal = this.keeper.scheduleWithFixedDelay(
             () -> this.jobs.renew(job.id(), this.node, this.timing.lease()),
             this.timing.lease().toMillis() / 3, this.timing.lease().toMillis() / 3,
@@ -284,6 +353,7 @@ public final class RepoJobRunner implements AutoCloseable {
             }
         } finally {
             renewal.cancel(false);
+            this.current.set(null);
         }
     }
 

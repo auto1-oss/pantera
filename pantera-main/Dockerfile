@@ -53,9 +53,12 @@ CMD [ "sh", "-c", "\
   echo 'Ulimits - nofile: '$(ulimit -n)' nproc: '$(ulimit -u) && \
   # Unique heap dump name per container start: the JVM never overwrites an existing dump \n\
   JVM_ARGS=$(printf '%s' \"$JVM_ARGS\" | sed -E \"s#(-XX:HeapDumpPath=[^ ]*)[.]hprof#\\1-$(date +%Y%m%d-%H%M%S)-$(hostname).hprof#\") && \
+  # BouncyCastle ships native libraries built for glibc; on this musl image they cannot be \n\
+  # loaded and the attempt ends in a stack trace on stderr. The Java implementation is used. \n\
   exec java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \
   $JVM_ARGS \
+  -Dorg.bouncycastle.native.cpu_variant=java \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* \

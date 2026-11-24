@@ -55,6 +55,13 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
     private static final java.time.Duration NEGATIVE_TTL = java.time.Duration.ofSeconds(60);
 
     /**
+     * Limits the record of a failed source fetch to one per repository
+     * type, package and minute.
+     */
+    private static final com.auto1.pantera.http.log.LogThrottle FETCH_FAILURES =
+        new com.auto1.pantera.http.log.LogThrottle(java.time.Duration.ofMinutes(1), 1024);
+
+    /**
      * In-flight upstream lookups, keyed by {@link CacheKey}. Coalesces
      * concurrent {@link #publishDate} calls for the same key into one
      * upstream HTTP request: the first caller starts the fetch, subsequent
@@ -255,18 +262,23 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
             .exceptionally(err -> {
                 this.negativeL1.put(key, Boolean.TRUE);
                 recordOutcome(repoType, "source_error", startNanos);
-                EcsLogger.warn("com.auto1.pantera.publishdate")
-                    .message("Source fetch failed for "
-                        + repoType + " " + name + "@" + version)
-                    .eventCategory("network")
-                    .eventAction("publish_date_fetch")
-                    .eventOutcome("failure")
-                    .field("repository.type", repoType)
-                    .field("package.name", name)
-                    .field("package.version", version)
-                    .error(err)
-                    .field("log.source", "application")
-                    .log();
+                // One record per package and minute: the versions of one
+                // package are looked up together and fail together.
+                DbPublishDateRegistry.FETCH_FAILURES.admit(repoType + '|' + name).ifPresent(
+                    skipped -> EcsLogger.warn("com.auto1.pantera.publishdate")
+                        .message("Source fetch failed for "
+                            + repoType + " " + name + "@" + version
+                            + " (" + skipped + " more failure(s) of this package not logged)")
+                        .eventCategory("network")
+                        .eventAction("publish_date_fetch")
+                        .eventOutcome("failure")
+                        .field("repository.type", repoType)
+                        .field("package.name", name)
+                        .field("package.version", version)
+                        .error(err)
+                        .field("log.source", "application")
+                        .log()
+                );
                 return Optional.<Instant>empty();
             })
             .whenComplete((opt, err) -> {

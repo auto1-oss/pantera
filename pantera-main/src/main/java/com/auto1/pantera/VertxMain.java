@@ -1251,6 +1251,31 @@ public final class VertxMain {
                     .log();
             }
         }
+        // 3'. Stop the repository job runner and give back the job in
+        //     progress, while the database is still there.
+        com.auto1.pantera.repojob.RepoJobRunner.shared().ifPresent(
+            runner -> {
+                try {
+                    runner.close();
+                    EcsLogger.info("com.auto1.pantera.repojob")
+                        .message("Repository job runner stopped")
+                        .eventCategory("process")
+                        .eventAction("repo_job_runner_stop")
+                        .eventOutcome("success")
+                        .field("log.source", "application")
+                        .log();
+                } catch (final RuntimeException ex) {
+                    EcsLogger.error("com.auto1.pantera.repojob")
+                        .message("Failed to stop the repository job runner")
+                        .eventCategory("process")
+                        .eventAction("repo_job_runner_stop")
+                        .eventOutcome("failure")
+                        .error(ex)
+                        .field("log.source", "application")
+                        .log();
+                }
+            }
+        );
         // 3a. Clear any cache-write callback the registry is still holding.
         //     The prefetch subsystem that owned this slot was deleted in M2;
         //     keeping the clear() so a future callback (Phase 4c, 2.3.0
@@ -1418,7 +1443,14 @@ public final class VertxMain {
      * @throws Exception If fails
      */
     public static void main(final String... args) throws Exception {
-        
+        // Log4j stops logging in a shutdown hook of its own, which runs
+        // beside the one below: every record of the shutdown after the
+        // first few milliseconds was lost, and with it the evidence of
+        // whether the stop finished. Pantera stops the logging itself,
+        // last.
+        if (System.getProperty("log4j2.shutdownHookEnabled") == null) {
+            System.setProperty("log4j2.shutdownHookEnabled", "false");
+        }
         final Path config;
         final int port;
         final int defp = 80;
@@ -1467,7 +1499,24 @@ public final class VertxMain {
                 .eventOutcome("success")
                 .field("log.source", "application")
                 .log();
-            app.stop();
+            final long started = System.nanoTime();
+            try {
+                app.stop();
+            } finally {
+                EcsLogger.info("com.auto1.pantera")
+                    .message(
+                        "Pantera stopped in "
+                            + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                                System.nanoTime() - started
+                            ) + " ms"
+                    )
+                    .eventCategory("process")
+                    .eventAction("server_stopped")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+                org.apache.logging.log4j.LogManager.shutdown();
+            }
         }, "pantera-shutdown-hook"));
 
         app.start(Integer.parseInt(cmd.getOptionValue(apiport, VertxMain.DEF_API_PORT)));
