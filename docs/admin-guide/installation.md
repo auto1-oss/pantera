@@ -125,7 +125,7 @@ Requires JDK 21+ and PostgreSQL 15+; Valkey is optional (HA clustering only).
 ```bash
 tar xzf pantera-<version>-dist.tar.gz
 
-java -XX:-UseBASE64Intrinsics \
+java \
   -cp 'pantera-main-<version>.jar:dependency/*' \
   com.auto1.pantera.VertxMain \
   --config-file=pantera.yml \
@@ -133,7 +133,7 @@ java -XX:-UseBASE64Intrinsics \
   --api-port=8086
 ```
 
-`-XX:-UseBASE64Intrinsics` is the mitigation for CVE-2026-114938: on x86-64 processors with AVX-512 VBMI the Base64 decoder of OpenJDK 17.0.6 and later can write past its buffer, and Pantera decodes Base64 from the `Authorization` header of every request. Keep the flag until the JDK you run carries the fix (Oracle JDK 21.0.13.1; ask your vendor about other builds). It costs some Base64 throughput and nothing else. The Docker image always passes it.
+**Run a JDK that carries the fix for CVE-2026-114938: 17.0.21.1, 21.0.13.1, 25.0.5.1 or later.** On x86-64 processors with AVX-512 VBMI the Base64 decoder of OpenJDK 17.0.6 and later can write past its buffer, and Pantera decodes Base64 from the `Authorization` header of every request, before authentication. If you have to run an older JDK, add `-XX:-UseBASE64Intrinsics` to the command line; it costs some Base64 throughput and nothing else. The Docker image runs a fixed JDK and does not pass the flag.
 
 The [JAR File](#jar-file) section below covers CLI options, the recommended directory layout, JVM flags, and a systemd unit — all of it applies equally to the released distribution; only the classpath differs.
 
@@ -145,7 +145,7 @@ The [JAR File](#jar-file) section below covers CLI options, the recommended dire
 
 ## Docker Standalone
 
-The Docker image is based on `eclipse-temurin:21-jre-alpine` and runs as user `2021:2020` (pantera:pantera).
+The Docker image is based on `eclipse-temurin:21.0.13.1_2-jre-alpine` (a pinned JDK release, raised with every JDK security release) and runs as user `2021:2020` (pantera:pantera).
 
 ### Basic Run Command
 
@@ -412,7 +412,6 @@ Group=pantera
 Environment=JVM_ARGS=-XX:+UseG1GC -XX:MaxRAMPercentage=75.0
 ExecStart=/usr/bin/java \
   ${JVM_ARGS} \
-  -XX:-UseBASE64Intrinsics \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* \
