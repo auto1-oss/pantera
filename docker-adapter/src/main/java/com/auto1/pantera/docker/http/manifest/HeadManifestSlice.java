@@ -89,7 +89,10 @@ public class HeadManifestSlice extends DockerActionSlice {
                         }
                     ).orElseGet(
                         () -> {
-                            EcsLogger.warn("com.auto1.pantera.docker")
+                            // A manifest this repository does not have is an
+                            // ordinary answer (a group asks each member in
+                            // turn); the access record carries the 404.
+                            EcsLogger.debug("com.auto1.pantera.docker")
                                 .message("Manifest not found")
                                 .eventCategory("web")
                                 .eventAction("manifest_head")

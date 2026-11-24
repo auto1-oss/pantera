@@ -1967,10 +1967,15 @@ The image runs a JDK that carries the fix for CVE-2026-114938 (the Base64
 decoder of OpenJDK 17.0.6 and later on x86-64 with AVX-512 VBMI), so the
 command no longer passes `-XX:-UseBASE64Intrinsics`.
 
+`-Dorg.bouncycastle.native.cpu_variant=java` selects BouncyCastle's Java
+implementation: its native libraries are built for glibc and cannot be loaded
+on the Alpine image. Leave it out on a glibc system to use the native code.
+
 ```
 java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \
   $JVM_ARGS \
+  -Dorg.bouncycastle.native.cpu_variant=java \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* \

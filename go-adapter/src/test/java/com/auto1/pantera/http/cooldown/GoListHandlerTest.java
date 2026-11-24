@@ -138,6 +138,36 @@ final class GoListHandlerTest {
     }
 
     @Test
+    void evaluatesOnlyTheNewestVersionsOfALongList() throws Exception {
+        final StringBuilder list = new StringBuilder();
+        for (int minor = 0; minor < 300; minor += 1) {
+            list.append("v1.").append(minor).append(".0\n");
+        }
+        this.upstream.put("/golang.org/toolchain/@v/list", list.toString());
+        // The newest version is inside the cooldown window. The old one is
+        // marked blocked too, to show that it is not asked about at all.
+        this.cooldown.block("v1.299.0", "v1.10.0");
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/golang.org/toolchain/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
+            "alice"
+        ).get();
+        final String body = new String(bodyToBytes(resp), StandardCharsets.UTF_8);
+        assertThat(
+            "cooldown is asked about the newest 50 versions, not all 300",
+            this.cooldown.asked.get(), equalTo(50)
+        );
+        assertThat(
+            "the newest version is filtered out",
+            body.contains("v1.299.0\n"), is(false)
+        );
+        assertThat(
+            "an old version is served without being evaluated",
+            body.contains("v1.10.0\n"), is(true)
+        );
+    }
+
+    @Test
     void returnsForbiddenWhenAllVersionsBlocked() throws Exception {
         this.upstream.put(
             "/github.com/foo/bar/@v/list",
@@ -317,6 +347,7 @@ final class GoListHandlerTest {
     /** Scripted {@link CooldownService}: flags listed versions as blocked. */
     private static final class ScriptedCooldown implements CooldownService {
         private final Set<String> blocked = new HashSet<>();
+        private final AtomicInteger asked = new AtomicInteger();
 
         void block(final String... versions) {
             for (final String v : versions) {
@@ -328,6 +359,7 @@ final class GoListHandlerTest {
         public CompletableFuture<CooldownResult> evaluate(
             final CooldownRequest request, final CooldownInspector inspector
         ) {
+            this.asked.incrementAndGet();
             if (!this.blocked.contains(request.version())) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }

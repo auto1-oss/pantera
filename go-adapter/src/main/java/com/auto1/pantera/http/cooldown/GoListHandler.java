@@ -18,6 +18,7 @@ import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
+import com.auto1.pantera.cooldown.metadata.VersionComparators;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -59,8 +60,8 @@ import java.util.concurrent.CompletableFuture;
  *       upstream errors.</li>
  *   <li>Parse the newline-delimited body via {@link GoMetadataParser}. If
  *       parsing fails, pass the upstream bytes through unchanged.</li>
- *   <li>Evaluate every parsed version against cooldown and collect the
- *       blocked set; hand that set plus the parsed list to
+ *   <li>Evaluate the newest {@code MAX_EVALUATED} parsed versions against
+ *       cooldown and collect the blocked set; hand that set plus the parsed list to
  *       {@link GoMetadataFilter#filter(List, Set)}.</li>
  *   <li>Re-serialise as newline-separated plain text (matching the
  *       wire format Go clients expect) and return 200 with
@@ -81,6 +82,13 @@ public final class GoListHandler {
      * upstream ambiguity being forwarded to the client.
      */
     private static final String CONTENT_TYPE = "text/plain; charset=utf-8";
+
+    /**
+     * Number of newest versions of a list that are evaluated against
+     * cooldown, the same bound the metadata filter of the other formats
+     * uses. An older version cannot be inside a cooldown window.
+     */
+    private static final int MAX_EVALUATED = 50;
 
     /**
      * Upstream slice, shared with the main Go proxy so cache / auth /
@@ -320,8 +328,22 @@ public final class GoListHandler {
      * inspector failure cannot cascade to denying every list response.
      */
     private CompletableFuture<Set<String>> blockedVersions(
-        final String module, final List<String> candidates, final String user
+        final String module, final List<String> versions, final String user
     ) {
+        // Only the newest versions can be inside a cooldown window. A
+        // module with thousands of versions (golang.org/toolchain has one
+        // per Go release and platform) asked the upstream for the release
+        // date of every one of them on a single list request; the lookups
+        // timed out together and every version was let through.
+        final List<String> candidates;
+        if (versions.size() > GoListHandler.MAX_EVALUATED) {
+            candidates = versions.stream()
+                .sorted(VersionComparators.semver().reversed())
+                .limit(GoListHandler.MAX_EVALUATED)
+                .toList();
+        } else {
+            candidates = versions;
+        }
         final List<CompletableFuture<Boolean>> futures =
             new ArrayList<>(candidates.size());
         for (final String version : candidates) {
