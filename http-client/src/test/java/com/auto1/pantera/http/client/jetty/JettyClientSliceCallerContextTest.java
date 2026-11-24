@@ -102,7 +102,8 @@ final class JettyClientSliceCallerContextTest {
     @Test
     void continuationSeesCallersTraceAndJettyThreadKeepsNothing() throws Exception {
         final CountDownLatch chained = new CountDownLatch(1);
-        final Thread upstream = new Thread(() -> this.answerOnce(chained));
+        final CountDownLatch read = new CountDownLatch(1);
+        final Thread upstream = new Thread(() -> this.answerOnce(chained, read));
         upstream.start();
         final Headers request = Headers.from(EcsLoggingSlice.CTX_TRACE_ID_HEADER, BOUND);
         final Thread caller = Thread.currentThread();
@@ -125,7 +126,12 @@ final class JettyClientSliceCallerContextTest {
         );
         ThreadContext.clearAll();
         chained.countDown();
-        final String[] result = seen.get(30, TimeUnit.SECONDS);
+        final String[] result;
+        try {
+            result = seen.get(30, TimeUnit.SECONDS);
+        } finally {
+            read.countDown();
+        }
         upstream.join(TimeUnit.SECONDS.toMillis(30));
         this.client.stop();
         this.pool.shutdown();
@@ -146,18 +152,39 @@ final class JettyClientSliceCallerContextTest {
 
     /**
      * Accept one connection and answer 200 once the client code has chained
-     * its continuation.
+     * its continuation. The request is read first and the connection stays
+     * open until the client has read the answer: an answer that arrives
+     * while the client is still writing its request makes Jetty close the
+     * connection, and the exchange fails with an AsynchronousCloseException.
+     * On a loaded machine the request was not written yet when the latch
+     * opened.
      * @param chained Released when the continuation is attached
+     * @param read Released when the client has read the answer
      */
-    private void answerOnce(final CountDownLatch chained) {
+    private void answerOnce(final CountDownLatch chained, final CountDownLatch read) {
         try (Socket socket = this.server.accept()) {
+            final java.io.InputStream input = socket.getInputStream();
+            // Read the request head, up to the empty line that ends it.
+            int matched = 0;
+            while (matched < 4) {
+                final int next = input.read();
+                if (next < 0) {
+                    break;
+                }
+                if (next == (matched % 2 == 0 ? '\r' : '\n')) {
+                    matched += 1;
+                } else {
+                    matched = next == '\r' ? 1 : 0;
+                }
+            }
             chained.await(30, TimeUnit.SECONDS);
             final OutputStream out = socket.getOutputStream();
             out.write(
-                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
                     .getBytes(StandardCharsets.US_ASCII)
             );
             out.flush();
+            read.await(30, TimeUnit.SECONDS);
         } catch (final Exception ex) {
             throw new IllegalStateException(ex);
         }
