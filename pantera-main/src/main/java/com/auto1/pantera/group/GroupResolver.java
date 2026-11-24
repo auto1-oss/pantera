@@ -655,7 +655,7 @@ public final class GroupResolver implements Slice {
                     miss == PinnedMiss.NOT_FOUND ? negCacheKey : null, pinKey,
                     Set.of(pinned.name())
                 ).thenApply(next -> this.afterPinnedMiss(
-                    pinned, line, headers, miss, parseRetryAfterSeconds(resp), next
+                    pinned, line, headers, miss, resp, next
                 ));
             })
         );
@@ -707,16 +707,19 @@ public final class GroupResolver implements Slice {
      * Fold the pinned member's outcome into the continuation's answer, with
      * the sequential walk's precedence: an authoritative answer wins; then a
      * genuine failure (502 / storage fault); then a circuit-open skip (503 +
-     * Retry-After, never 404); then 404.
+     * Retry-After); then 404. A pinned proxy that failed or was skipped does
+     * not turn the 404 of the remaining members into a 5xx: the 404 is
+     * relayed, marked so it is not remembered.
      */
     private Response afterPinnedMiss(
         final MemberSlice pinned,
         final RequestLine line,
         final Headers headers,
         final PinnedMiss miss,
-        final long retryAfter,
+        final Response pinnedAnswer,
         final Response next
     ) {
+        final long retryAfter = parseRetryAfterSeconds(pinnedAnswer);
         if (isAuthoritative(next)
             || miss == PinnedMiss.NOT_FOUND || miss == PinnedMiss.UNVERIFIED) {
             return next;
@@ -725,6 +728,21 @@ public final class GroupResolver implements Slice {
             && !new LocalRefusal(next).present();
         if (nextFailed || miss == PinnedMiss.SKIPPED && next.status().serverError()) {
             return next;
+        }
+        if (pinned.isProxy() && this.members.size() > 1
+            && next.status() == RsStatus.NOT_FOUND && !new LocalRefusal(pinnedAnswer).bulkhead()) {
+            // The pinned proxy could not answer and the other members do not
+            // have the file: the same 404 nobody remembers as at the end of
+            // a walk. A group of that one proxy keeps its 5xx — nobody said
+            // "not found".
+            if (miss == PinnedMiss.SKIPPED) {
+                RequestReasons.instance().note(headers, RequestReasons.CIRCUIT_OPEN);
+            }
+            return new Response(
+                next.status(),
+                next.headers().copy().add(new Header(NegativeCache.SKIP_HEADER, "true")),
+                next.body()
+            );
         }
         drainBody(next.body());
         if (miss == PinnedMiss.SKIPPED) {
@@ -1393,14 +1411,27 @@ public final class GroupResolver implements Slice {
         final String pinArtifactName
     ) {
         if (!iter.hasNext()) {
-            if (walk.anyServerError.get()) {
+            if (!isTargetedLocalRead && walk.onlyProxiesUnreachable()) {
+                // A member said "not found" and every member that did not
+                // answer is a proxy: failed, or skipped with its circuit
+                // open. An unreachable proxy does not fail the group — the
+                // client gets the 404 its build tool moves on from, as from
+                // Artifactory or Nexus. The 404 is marked so nobody
+                // remembers it: the file may exist on the proxy's upstream.
+                if (walk.skippedOpen.get()) {
+                    RequestReasons.instance().note(headers, RequestReasons.CIRCUIT_OPEN);
+                }
+                result.complete(
+                    walk.notFoundResponse()
+                        .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
+                        .build()
+                );
+            } else if (walk.anyServerError.get()) {
                 result.complete(ResponseBuilder.from(RsStatus.BAD_GATEWAY).build());
             } else if (walk.skippedOpen.get()) {
                 // At least one member was skipped with its circuit open and
-                // nobody answered — "temporarily unavailable" is the only
-                // honest answer. Returning 404 here poisoned the negative
-                // cache with "does not exist" for artifacts that were merely
-                // unreachable (2.2.0 breaker-cascade RCA).
+                // no member said "not found" — nobody answered at all, so
+                // "temporarily unavailable" is the only honest answer.
                 result.complete(this.circuitSkippedTerminal(walk, line, headers));
             } else if (walk.anyUnverified.get()) {
                 // Fix 2: every member 404'd but at least one 404 was a laundered
@@ -1425,7 +1456,7 @@ public final class GroupResolver implements Slice {
         }
         final MemberSlice member = iter.next();
         if (!isTargetedLocalRead && member.isCircuitOpen()) {
-            walk.skippedOpen.set(true);
+            walk.noteSkipped(member);
             walk.noteRetryAfter(member.retryAfterSeconds());
             // Circuit-open member: probe its warm cache before moving on
             // (Nexus-style serve-cached-while-blocked). Cache-only probes
@@ -1509,6 +1540,7 @@ public final class GroupResolver implements Slice {
                 return;
             }
             if (status == RsStatus.NOT_FOUND) {
+                walk.anyNotFound.set(true);
                 // Fix 2: propagate a member's non-authoritative 404 marker
                 // (upstream throttle laundered into a 404) so the terminal 404
                 // synthesized on walk exhaustion re-carries it and the caller
@@ -1592,7 +1624,10 @@ public final class GroupResolver implements Slice {
             final LocalRefusal refusal = new LocalRefusal(resp);
             if (refusal.present()) {
                 drainBody(resp.body());
-                walk.skippedOpen.set(true);
+                walk.noteSkipped(member);
+                if (refusal.bulkhead()) {
+                    walk.busy.set(true);
+                }
                 walk.noteRetryAfter(parseRetryAfterSeconds(resp));
                 recordMemberOutcome(
                     member, refusal.bulkhead() ? "bulkhead_full" : "circuit_open", -1L
@@ -1811,6 +1846,22 @@ public final class GroupResolver implements Slice {
         private final java.util.concurrent.atomic.AtomicBoolean anyUnverified =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
+        /** A member answered 404, authoritative or not. */
+        private final java.util.concurrent.atomic.AtomicBoolean anyNotFound =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        /**
+         * A member's bulkhead had no free permit. That is Pantera holding a
+         * request back for a moment, not an unreachable upstream: the walk
+         * keeps its 503 and {@code Retry-After}.
+         */
+        private final java.util.concurrent.atomic.AtomicBoolean busy =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        /** A hosted member was skipped with its circuit open. */
+        private final java.util.concurrent.atomic.AtomicBoolean hostedSkipped =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
         /** Largest Retry-After hint observed, seconds. */
         private final java.util.concurrent.atomic.AtomicLong retryAfterHint =
             new java.util.concurrent.atomic.AtomicLong(0L);
@@ -1840,6 +1891,31 @@ public final class GroupResolver implements Slice {
             if (!member.isProxy()) {
                 this.hostedFailed.set(true);
             }
+        }
+
+        /**
+         * Record a member that was not asked.
+         * @param member Skipped member
+         */
+        void noteSkipped(final MemberSlice member) {
+            this.skippedOpen.set(true);
+            if (!member.isProxy()) {
+                this.hostedSkipped.set(true);
+            }
+        }
+
+        /**
+         * Whether the walk ends in "not found" although members did not
+         * answer: at least one member said 404, and every member that
+         * failed or was skipped is a proxy. A hosted member that did not
+         * answer may hold the file, and a full bulkhead clears in a moment,
+         * so either keeps the walk's 5xx.
+         * @return True when the group answers a 404 nobody remembers
+         */
+        boolean onlyProxiesUnreachable() {
+            return (this.anyServerError.get() || this.skippedOpen.get())
+                && this.anyNotFound.get() && !this.busy.get()
+                && !this.hostedFailed.get() && !this.hostedSkipped.get();
         }
 
         /**

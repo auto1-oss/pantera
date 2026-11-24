@@ -476,15 +476,32 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 .instance()
                 .invalidateAfterProxyRefresh(this.repoType(), pkg)
         );
+        // Why the upstream gave no metadata, when it was not its own "not
+        // found": a 5xx, a refusal, an open circuit breaker.
+        final java.util.concurrent.atomic.AtomicReference<String> failed =
+            new java.util.concurrent.atomic.AtomicReference<>();
         final CompletableFuture<Optional<Content>> loaded = this.metadataCache.load(
             key,
-            request -> this.fetchMetadata(line, request),
+            request -> this.fetchMetadata(line, request, failed),
             onRefreshed
         );
         return loaded.thenCompose(opt -> {
             if (opt.isEmpty()) {
+                final String cause = failed.get();
+                if (cause == null) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.notFound().build()
+                    );
+                }
+                // The 404 stands for a failure: it says so, and it is marked
+                // so that a group in front does not remember the miss past
+                // the outage.
+                com.auto1.pantera.http.log.RequestReasons.instance()
+                    .note(inboundHeaders, cause);
                 return CompletableFuture.completedFuture(
-                    ResponseBuilder.notFound().build()
+                    ResponseBuilder.notFound()
+                        .header(NegativeCache.SKIP_HEADER, "true")
+                        .build()
                 );
             }
             if (this.cooldownMetadata == null) {
@@ -604,11 +621,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      *
      * @param line Inbound request line, reused for the upstream call.
      * @param request Cached validators (may be empty on cold miss).
+     * @param failed Receives the reason when the upstream answered neither
+     *  the metadata nor its own "not found"
      * @return Future with the {@link MetadataCache.MetadataFetchResult}.
      */
     private CompletableFuture<MetadataCache.MetadataFetchResult> fetchMetadata(
         final RequestLine line,
-        final MetadataCache.ConditionalRequest request
+        final MetadataCache.ConditionalRequest request,
+        final java.util.concurrent.atomic.AtomicReference<String> failed
     ) {
         final Headers upstreamHeaders = new Headers();
         request.etag().ifPresent(v -> upstreamHeaders.add("If-None-Match", v));
@@ -635,6 +655,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 // 404 or any other non-success — clear the cache entry so a
                 // subsequent fetch goes back to upstream cold. We never store
                 // upstream errors as cache content.
+                if (status != com.auto1.pantera.http.RsStatus.NOT_FOUND.code()
+                    && status != com.auto1.pantera.http.RsStatus.GONE.code()) {
+                    failed.set(
+                        new com.auto1.pantera.http.LocalRefusal(resp).present()
+                            ? com.auto1.pantera.http.log.RequestReasons.CIRCUIT_OPEN
+                            : com.auto1.pantera.http.log.RequestReasons.upstream(status)
+                    );
+                }
                 return resp.body().asBytesFuture().thenApply(
                     ignored -> MetadataCache.MetadataFetchResult.notFound()
                 );

@@ -33,6 +33,7 @@ import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -86,6 +87,11 @@ public final class MavenGroupSlice implements Slice {
      * Member repository names.
      */
     private final List<String> members;
+
+    /**
+     * Names of the members that are proxy repositories.
+     */
+    private final Set<String> proxies;
 
     /**
      * Slice resolver for getting member slices.
@@ -185,6 +191,31 @@ public final class MavenGroupSlice implements Slice {
         this(delegate, group, members, resolver, port, depth, cache, "maven-group");
     }
 
+    /**
+     * Constructor of a group that knows none of its members to be a proxy.
+     *
+     * @param delegate Delegate group slice
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param resolver Slice resolver
+     * @param port Server port
+     * @param depth Nesting depth
+     * @param cache Group metadata cache to use
+     * @param repoType Repo type ("maven-group" or "gradle-group")
+     */
+    public MavenGroupSlice(
+        final Slice delegate,
+        final String group,
+        final List<String> members,
+        final SliceResolver resolver,
+        final int port,
+        final int depth,
+        final GroupMetadataCache cache,
+        final String repoType
+    ) {
+        this(delegate, group, members, resolver, port, depth, cache, repoType, Set.of());
+    }
+
     /** Repo type ("maven-group" / "gradle-group") — used only for audit records. */
     private final String repoType;
 
@@ -209,6 +240,9 @@ public final class MavenGroupSlice implements Slice {
      * @param depth Nesting depth
      * @param cache Group metadata cache to use
      * @param repoType Repo type ("maven-group" or "gradle-group")
+     * @param proxies Names of the members that are proxy repositories: one
+     *  of them failing or being skipped does not fail the group, see
+     *  {@link #walkTerminal}
      */
     public MavenGroupSlice(
         final Slice delegate,
@@ -218,8 +252,10 @@ public final class MavenGroupSlice implements Slice {
         final int port,
         final int depth,
         final GroupMetadataCache cache,
-        final String repoType
+        final String repoType,
+        final Set<String> proxies
     ) {
+        this.proxies = Set.copyOf(proxies);
         this.delegate = delegate;
         this.group = group;
         this.members = members;
@@ -586,7 +622,7 @@ public final class MavenGroupSlice implements Slice {
                 // recurse to the next member. 404 is normal (artifact not
                 // present in this member); 5xx logs at WARN and falls
                 // through identically — the next member may still answer.
-                if (!walk.note(resp)) {
+                if (!walk.note(resp, this.proxies.contains(member))) {
                     EcsLogger.warn("com.auto1.pantera.group")
                         .requestContext(headers)
                         .message("Member returned non-OK status; trying next")
@@ -606,7 +642,7 @@ public final class MavenGroupSlice implements Slice {
                     ));
             })
             .exceptionally(err -> {
-                walk.threw();
+                walk.threw(this.proxies.contains(member));
                 EcsLogger.warn("com.auto1.pantera.group")
                     .requestContext(headers)
                     .message("Member fetch threw; trying next: " + member)
@@ -652,7 +688,10 @@ public final class MavenGroupSlice implements Slice {
     /**
      * Answer of a walk no member won, by the rules {@code GroupResolver}
      * applies to artifacts. Stale bytes, when there are any, are served as
-     * before. Without them: a member that failed makes it a 502; a member
+     * before. Without them: when a member said the metadata is absent and
+     * every member that failed or was not asked is a proxy, it is a 404 an
+     * outer group must not remember — an unreachable proxy does not fail the
+     * group. Otherwise a member that failed makes it a 502; a member
      * that was not asked (its upstream circuit is open, its bulkhead has no
      * free permit) makes it a 503 with {@code Retry-After} and the refusal
      * marker; a member that answered without saying the metadata is absent
@@ -672,6 +711,17 @@ public final class MavenGroupSlice implements Slice {
         if (answer.status() != RsStatus.NOT_FOUND) {
             walk.abandon();
             result = answer;
+        } else if (walk.onlyProxiesUnreachable()) {
+            // A member said "not found" and every member that failed or was
+            // not asked is a proxy: an unreachable proxy does not fail the
+            // group. The 404 is marked so nobody remembers it.
+            walk.abandon();
+            if (walk.refused.get()) {
+                RequestReasons.instance().note(headers, RequestReasons.CIRCUIT_OPEN);
+            }
+            result = ResponseBuilder.notFound()
+                .header(NegativeCache.SKIP_HEADER, "true")
+                .build();
         } else if (walk.failed.get()) {
             walk.abandon();
             result = ResponseBuilder.from(RsStatus.BAD_GATEWAY).build();
@@ -753,6 +803,18 @@ public final class MavenGroupSlice implements Slice {
         private final AtomicBoolean unverified = new AtomicBoolean();
 
         /**
+         * A member answered 404.
+         */
+        private final AtomicBoolean absent = new AtomicBoolean();
+
+        /**
+         * A member that is no proxy failed or was not asked: it may hold
+         * the metadata. Also set by a full bulkhead, which clears in a
+         * moment and keeps its 503.
+         */
+        private final AtomicBoolean hosted = new AtomicBoolean();
+
+        /**
          * Largest {@code Retry-After} of a refusal, seconds.
          */
         private final AtomicLong retryAfter = new AtomicLong();
@@ -764,25 +826,29 @@ public final class MavenGroupSlice implements Slice {
         /**
          * Note a member's non-2xx answer.
          * @param resp Answer
+         * @param proxy Whether the member is a proxy repository
          * @return True when the answer is no failure of the member: a 404
          *  or a request Pantera itself refused to forward
          */
-        boolean note(final Response resp) {
+        boolean note(final Response resp, final boolean proxy) {
             final RsStatus status = resp.status();
             final boolean quiet;
             if (status == RsStatus.NOT_FOUND) {
+                this.absent.set(true);
                 if (!resp.headers().values(NegativeCache.SKIP_HEADER).isEmpty()) {
                     this.unverified.set(true);
                 }
                 quiet = true;
             } else if (new LocalRefusal(resp).present()) {
                 this.refused.set(true);
+                this.hosted.compareAndSet(false, !proxy || new LocalRefusal(resp).bulkhead());
                 this.retryAfter.accumulateAndGet(
                     GroupResolver.parseRetryAfterSeconds(resp), Math::max
                 );
                 quiet = true;
             } else if (status.serverError() || status == RsStatus.TOO_MANY_REQUESTS) {
                 this.failed.set(true);
+                this.hosted.compareAndSet(false, !proxy);
                 quiet = false;
             } else {
                 this.unverified.set(true);
@@ -793,9 +859,22 @@ public final class MavenGroupSlice implements Slice {
 
         /**
          * A member threw.
+         * @param proxy Whether the member is a proxy repository
          */
-        void threw() {
+        void threw(final boolean proxy) {
             this.failed.set(true);
+            this.hosted.compareAndSet(false, !proxy);
+        }
+
+        /**
+         * Whether the walk ends in "not found" although members did not
+         * answer: a member said 404, and every member that failed or was
+         * not asked is a proxy.
+         * @return True when the group answers a 404 nobody remembers
+         */
+        boolean onlyProxiesUnreachable() {
+            return (this.failed.get() || this.refused.get())
+                && this.absent.get() && !this.hosted.get();
         }
 
         /**

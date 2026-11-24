@@ -1069,6 +1069,7 @@ other groups). Requests are resolved against members in order; the first match w
 | `type` | string | Yes | -- | Must end in `-group` (e.g., `maven-group`) |
 | `members` | list | Yes | -- | Ordered list of member repository names |
 | `url` | string | No | -- | Client-facing base URL for the group itself -- same optionality and derivation as [2.2](#22-local-repository) |
+| `routing` | list | No | -- | Rules that limit a member to the paths it can have, see [Routing rules](#routing-rules) |
 
 A group's members never contribute their own `url` (set or derived) to URLs
 emitted through the group. The client-facing base is stamped for the
@@ -1102,6 +1103,98 @@ repo:
     - npm
     - npm_proxy
 ```
+
+#### What a group answers when a member cannot be reached
+
+A group answers `404` when no member has the file. A proxy member that
+cannot answer -- its upstream failed, timed out, or its circuit breaker is
+open -- does not change that (v2.2.14+): if at least one other member said
+"not found", the group answers `404`, as Artifactory and Nexus do, so a
+build tool moves on to its next repository instead of failing. Pantera does
+not remember such a `404`, because the file may exist on the upstream that
+did not answer, and its access record names the cause in `event.reason`
+(`circuit_open`, `idle_timeout`, `upstream_status_503`, ...) instead of
+`not_found`.
+
+The group keeps a `5xx` in three cases:
+
+| Case | Answer |
+|------|--------|
+| A hosted member failed -- it may hold the file | `500` / `502` |
+| No member answered at all (every member failed or was skipped) | `502`, or `503` with `Retry-After` |
+| A proxy member had no free bulkhead permit -- that clears in a moment | `503` with `Retry-After` |
+
+A file the search index knows to be stored in a member that then fails to
+serve it is also a `5xx`: it exists.
+
+The client side of the trade-off: Maven remembers a `404` for a release
+artifact until the repository's `updatePolicy` interval ends (a day by
+default). A build that asked during an upstream outage needs `mvn -U`
+(Gradle: `--refresh-dependencies`) once the upstream is back.
+
+A request sent to a proxy repository directly, not through a group, is not
+affected: it answers `502` / `503` when its upstream fails.
+
+#### Routing rules
+
+`routing` limits a member to the paths it can have. A member named by at
+least one rule is asked only for the paths its rules match; for any other
+path it counts as "not found" without being asked, so the request reaches
+neither its storage nor its upstream. A member without rules is asked for
+everything.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `member` | string | Yes | Name of a repository that is a direct member of the group |
+| `prefix` | string | One of `prefix` / `pattern` | The path starts with this text, e.g. `org/jboss/` |
+| `pattern` | string | One of `prefix` / `pattern` | Java regular expression that must match the whole path |
+
+The path is the one inside the repository, without a leading slash: the
+part of the URL after the group's name (`com/acme/app/1.0/app-1.0.jar`).
+Several rules for one member are alternatives: the member is asked when any
+of them matches.
+
+```yaml
+# File: libs-release.yaml
+repo:
+  type: maven-group
+  members:
+    - libs-release-local
+    - maven-central
+    - jboss
+  routing:
+    # Internal coordinates are never sent to a public upstream.
+    - member: maven-central
+      pattern: '(?!com/acme/|internal/).*'
+    # A slow or narrow upstream is asked only for what it hosts.
+    - member: jboss
+      prefix: org/jboss/
+    - member: jboss
+      prefix: org/wildfly/
+```
+
+Use routing rules for two things:
+
+- **Keep internal names away from public upstreams.** Without a rule, a
+  request for an internal artifact that no hosted member has is forwarded
+  to every proxy member, which tells the upstream the name and lets a
+  package published there under that name be served to your builds.
+- **Contain a slow upstream.** A proxy that is asked only for its own
+  group ids cannot delay or fail the lookups of everything else.
+
+Notes:
+
+- A rule that names a repository which is not a member has no effect. A
+  rule without `member`, or with neither `prefix` nor `pattern`, or with an
+  invalid regular expression, keeps the group from loading; the error is
+  logged.
+- Rules apply to every request through the group, `maven-metadata.xml`
+  included, and to every group type.
+- A nested group keeps its own rules. To limit a repository inside a nested
+  group, put the rule in that group.
+- A request sent to the member repository directly is not limited.
+- Do not use the per-repository [`filters`](#27-repository-filters) for
+  this: a filtered path answers `403`, which a group relays as final.
 
 ---
 

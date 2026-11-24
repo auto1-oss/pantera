@@ -1307,7 +1307,7 @@ public class RepositorySlices {
             case "npm-group":
                 final List<String> npmFlatMembers = flattenMembers(cfg.name());
                 final Slice npmGroupSlice = new GroupResolver(
-                    this::slice, cfg.name(), npmFlatMembers, port, depth,
+                    this.routedMembers(cfg), cfg.name(), npmFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
@@ -1470,7 +1470,7 @@ public class RepositorySlices {
             case "php-group":
                 final List<String> composerFlatMembers = flattenMembers(cfg.name());
                 final GroupResolver composerDelegate = new GroupResolver(
-                    this::slice, cfg.name(), composerFlatMembers, port, depth,
+                    this.routedMembers(cfg), cfg.name(), composerFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
@@ -1484,7 +1484,7 @@ public class RepositorySlices {
                     new CombinedAuthzSliceWrap(
                         new ComposerGroupSlice(
                             composerDelegate,
-                            this::slice, cfg.name(), cfg.members(), port,
+                            this.routedMembers(cfg), cfg.name(), cfg.members(), port,
                             this.settings.prefixes().prefixes().stream()
                                 .findFirst().orElse(""),
                             // Proxy (or proxy-containing) members are asked
@@ -1511,7 +1511,7 @@ public class RepositorySlices {
                 // GroupResolver case which can't merge metadata.
                 final List<String> mavenFlatMembers = flattenMembers(cfg.name());
                 final GroupResolver mavenDelegate = new GroupResolver(
-                    this::slice, cfg.name(), mavenFlatMembers, port, depth,
+                    this.routedMembers(cfg), cfg.name(), mavenFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
@@ -1527,7 +1527,7 @@ public class RepositorySlices {
                             mavenDelegate,
                             cfg.name(),
                             cfg.members(),
-                            this::slice,
+                            this.routedMembers(cfg),
                             port,
                             depth,
                             new com.auto1.pantera.group.GroupMetadataCache(cfg.name()),
@@ -1535,7 +1535,12 @@ public class RepositorySlices {
                             // member filters its own maven-metadata.xml and
                             // records blocks under its own repo identity. The
                             // group only relays the winning member's bytes.
-                            cfg.type()
+                            cfg.type(),
+                            cfg.members().stream().filter(
+                                name -> this.repos.config(name)
+                                    .map(member -> member.type().endsWith("-proxy"))
+                                    .orElse(false)
+                            ).collect(java.util.stream.Collectors.toSet())
                         ),
                         authentication(),
                         tokens.auth(),
@@ -1555,7 +1560,7 @@ public class RepositorySlices {
                     new CombinedAuthzSliceWrap(
                         new com.auto1.pantera.group.GoGroupSlice(
                             new GroupResolver(
-                                this::slice, cfg.name(), goFlatMembers, port, depth,
+                                this.routedMembers(cfg), cfg.name(), goFlatMembers, port, depth,
                                 cfg.groupMemberTimeout().orElse(120L),
                                 java.util.Collections.emptyList(),
                                 Optional.of(this.settings.artifactIndex()),
@@ -1580,7 +1585,7 @@ public class RepositorySlices {
             case "docker-group":
                 final List<String> genericFlatMembers = flattenMembers(cfg.name());
                 final GroupResolver genericResolver = new GroupResolver(
-                    this::slice, cfg.name(), genericFlatMembers, port, depth,
+                    this.routedMembers(cfg), cfg.name(), genericFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
@@ -2391,6 +2396,47 @@ public class RepositorySlices {
      * @param members Member repository names
      * @return Set of member names that are proxy repositories
      */
+    /**
+     * Resolver of a group's members that applies the group's routing rules:
+     * a member that has rules is asked only for the paths they match.
+     * @param cfg Group configuration
+     * @return Resolver of member slices
+     */
+    private com.auto1.pantera.group.SliceResolver routedMembers(final RepoConfig cfg) {
+        final List<com.auto1.pantera.group.RoutingRule> rules =
+            this.routingRules(cfg, new java.util.HashSet<>());
+        final com.auto1.pantera.group.SliceResolver result;
+        if (rules.isEmpty()) {
+            result = this::slice;
+        } else {
+            result = new com.auto1.pantera.group.RoutedMembers(this::slice, rules);
+        }
+        return result;
+    }
+
+    /**
+     * Routing rules of a group and of the groups nested in it. A group
+     * walks the repositories of a nested group itself, so the nested
+     * group's rules have to come along.
+     * @param cfg Group configuration
+     * @param seen Names of the groups already visited
+     * @return Rules
+     */
+    private List<com.auto1.pantera.group.RoutingRule> routingRules(
+        final RepoConfig cfg, final Set<String> seen
+    ) {
+        final List<com.auto1.pantera.group.RoutingRule> rules =
+            new java.util.ArrayList<>(cfg.routingRules());
+        if (seen.add(cfg.name())) {
+            for (final String member : cfg.members()) {
+                this.repos.config(member)
+                    .filter(nested -> nested.type().endsWith("-group"))
+                    .ifPresent(nested -> rules.addAll(this.routingRules(nested, seen)));
+            }
+        }
+        return rules;
+    }
+
     private Set<String> proxyMembers(final List<String> members) {
         return members.stream()
             .filter(this::isProxyOrContainsProxy)

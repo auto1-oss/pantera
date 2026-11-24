@@ -265,7 +265,7 @@ final class GroupResolverRoutingTest {
     }
 
     @Test
-    void pinnedMemberCircuitOpenWithNoOtherSourceIsA503NotACachedNotFound() {
+    void pinnedProxyWithAnOpenCircuitDoesNotFailTheGroupNorIsTheMissRemembered() {
         final NegativeCache cache = negativeCache();
         final AtomicReference<Boolean> circuitOpen = new AtomicReference<>(false);
         final Slice central = (line, headers, body) -> {
@@ -299,13 +299,13 @@ final class GroupResolverRoutingTest {
         ).join();
         resp.body().asBytesFuture().join();
         MatcherAssert.assertThat(
-            "an unreachable pinned member with no other source is 503",
+            "the other member said not found, so the group does",
             resp.status().code(),
-            new IsEqual<>(503)
+            new IsEqual<>(404)
         );
         MatcherAssert.assertThat(
-            "the 503 carries Retry-After",
-            resp.headers().values("Retry-After").isEmpty(),
+            "marked so that an outer group does not remember it",
+            resp.headers().values(NegativeCache.SKIP_HEADER).isEmpty(),
             new IsEqual<>(false)
         );
         MatcherAssert.assertThat(

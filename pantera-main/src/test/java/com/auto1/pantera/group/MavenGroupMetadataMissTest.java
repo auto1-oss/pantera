@@ -474,6 +474,93 @@ final class MavenGroupMetadataMissTest {
         );
     }
 
+    /**
+     * A group of the member {@code a}, which answers 404, and the proxy
+     * member {@code p}.
+     */
+    private static MavenGroupSlice withProxy(
+        final String name, final AtomicInteger calls, final Slice proxy
+    ) {
+        final Map<String, Slice> map = Map.of(
+            "a", new Counting(calls, new Fixed(RsStatus.NOT_FOUND)), "p", proxy
+        );
+        final SliceResolver resolver = (Key member, int port, int depth) ->
+            map.get(member.string());
+        return new MavenGroupSlice(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.notFound().build()
+            ),
+            name, List.of("a", "p"), resolver, 8080, 0, new GroupMetadataCache(name),
+            "maven-group", java.util.Set.of("p")
+        );
+    }
+
+    @Test
+    void failedProxyDoesNotFailTheGroupNorIsTheMissRemembered() throws Exception {
+        final AtomicInteger calls = new AtomicInteger();
+        final MavenGroupSlice group = withProxy(
+            "proxy-failed", calls, new Fixed(RsStatus.BAD_GATEWAY)
+        );
+        final Response response = get(group, PATH);
+        MatcherAssert.assertThat(
+            "the other member said not found, so the group does",
+            response.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "marked so that an outer group does not remember it",
+            response.headers().values(NegativeCache.SKIP_HEADER).isEmpty(),
+            new IsEqual<>(false)
+        );
+        get(group, PATH);
+        MatcherAssert.assertThat(
+            "and not remembered here: members are asked again",
+            calls.get(), new IsEqual<>(2)
+        );
+    }
+
+    @Test
+    void skippedProxyDoesNotFailTheGroupAndIsNamedAsTheReason() throws Exception {
+        final MavenGroupSlice group = withProxy(
+            "proxy-open", new AtomicInteger(),
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.from(RsStatus.BAD_GATEWAY)
+                    .header(UpstreamCircuitOpenException.HEADER, "true")
+                    .header("Retry-After", "17").build()
+            )
+        );
+        final Response response = get(
+            new com.auto1.pantera.http.slice.ReasonSlice(group), PATH
+        );
+        MatcherAssert.assertThat(
+            "the other member said not found, so the group does",
+            response.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "the access record says a member was not asked, not not_found",
+            new com.auto1.pantera.http.log.AnswerReason(response).token(),
+            new IsEqual<>(java.util.Optional.of("circuit_open"))
+        );
+    }
+
+    @Test
+    void proxyWithoutAFreePermitKeepsTheGroupUnavailable() throws Exception {
+        final Response response = get(
+            withProxy(
+                "proxy-busy", new AtomicInteger(),
+                (line, headers, body) -> CompletableFuture.completedFuture(
+                    ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+                        .header(LocalRefusal.BULKHEAD, "true")
+                        .header("Retry-After", "3").build()
+                )
+            ),
+            PATH
+        );
+        // A full bulkhead clears in a moment: the client is told to retry.
+        MatcherAssert.assertThat(
+            response.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+    }
+
     private static Response get(final Slice slice, final String path) throws Exception {
         final Response response = slice.response(
             new RequestLine(RqMethod.GET, path), Headers.EMPTY, Content.EMPTY

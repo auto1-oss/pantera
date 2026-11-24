@@ -234,6 +234,12 @@ One exception: a Docker registry that answers 401, 403 or 412 for a manifest doe
 
 Before 2.2.14 the Go and PyPI proxies answered 404 in every one of these cases (the Go proxy logged `artifact_not_found`), the PyPI proxy also remembered that 404 in its negative cache, and the file and Docker proxies answered 404 with the failure as its reason. A client reads a 404 as "this dependency does not exist" and stops; a 5xx it repeats.
 
+**A group's 404 with a failure as its reason** (v2.2.14+). A proxy member that could not answer does not fail the group: when another member said "not found", the group answers 404 and the access record names what happened to the proxy (`circuit_open`, `idle_timeout`, `upstream_status_503`, ...). The 404 is not negative-cached. The group keeps a 5xx when a hosted member failed, when no member answered at all, or when a proxy had no free bulkhead permit. See [What a group answers when a member cannot be reached](../configuration-reference.md#what-a-group-answers-when-a-member-cannot-be-reached).
+
+```text
+event.action:"http_request" AND http.response.status_code:404 AND event.reason:("circuit_open" OR "idle_timeout" OR "connection_closed" OR "upstream_status_503")
+```
+
 **A 404 with `upstream_status_401` (or `_403`, `_400`).** The upstream refused the request Pantera sent, which says nothing about the client's own credentials: relaying the 401 would make the client ask its user for a password. The client gets 404, and in a group the walk goes on to the next member. Such a 404 is never negative-cached, by the proxy or by a group, so it stops the moment the upstream accepts the request. A steady rate of it on one proxy repository usually means that the upstream credentials configured for that repository are missing, wrong or expired, or that the upstream answers 401 instead of 404 for paths it does not serve (private registries often do). To find the repository:
 
 ```text
