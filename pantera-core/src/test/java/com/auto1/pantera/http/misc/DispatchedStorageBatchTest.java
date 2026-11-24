@@ -88,13 +88,16 @@ final class DispatchedStorageBatchTest {
         final CompletableFuture<String> thread = count
             .thenApply(nothing -> Thread.currentThread().getName());
         delegate.release();
-        MatcherAssert.assertThat(
-            "the delegate's count is returned",
-            count.get(10, TimeUnit.SECONDS), new IsEqual<>(42)
-        );
+        // The thread is read before the count: a thread that waits in
+        // count.get() helps run the dependents of that future when it
+        // completes, and would then be the one the continuation ran on.
         MatcherAssert.assertThat(
             "the completion runs on the write pool",
             thread.get(10, TimeUnit.SECONDS), new StringStartsWith("pantera-io-write-")
+        );
+        MatcherAssert.assertThat(
+            "the delegate's count is returned",
+            count.get(10, TimeUnit.SECONDS), new IsEqual<>(42)
         );
     }
 
