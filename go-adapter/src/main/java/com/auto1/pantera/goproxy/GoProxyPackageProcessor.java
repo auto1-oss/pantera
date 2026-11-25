@@ -99,7 +99,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             return;
         }
 
-        EcsLogger.info("com.auto1.pantera.goproxy")
+        EcsLogger.debug("com.auto1.pantera.goproxy")
             .message("Processing Go batch (size: " + batch.size() + ")")
             .eventCategory("web")
             .eventAction("proxy_processor")
@@ -114,7 +114,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            EcsLogger.info("com.auto1.pantera.goproxy")
+            EcsLogger.debug("com.auto1.pantera.goproxy")
                 .message("Go batch processing complete (size: " + batch.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
@@ -221,7 +221,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         ).withContext(event.traceId(), event.clientIp())
                     );
 
-                    EcsLogger.info("com.auto1.pantera.goproxy")
+                    EcsLogger.debug("com.auto1.pantera.goproxy")
 
                         .traceContext(event.traceId(), event.clientIp())
 

@@ -82,7 +82,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
         }
 
         final long startTime = System.currentTimeMillis();
-        EcsLogger.info("com.auto1.pantera.pypi")
+        EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Processing PyPI batch (size: " + batch.size() + ")")
             .eventCategory("web")
             .eventAction("batch_processing")
@@ -98,7 +98,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
             final long duration = System.currentTimeMillis() - startTime;
-            EcsLogger.info("com.auto1.pantera.pypi")
+            EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("PyPI batch processing complete (size: " + batch.size() + ")")
                 .eventCategory("web")
                 .eventAction("batch_processing")

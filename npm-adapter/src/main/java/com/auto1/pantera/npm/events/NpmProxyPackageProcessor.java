@@ -113,7 +113,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 .join();
 
             final long duration = System.currentTimeMillis() - startTime;
-            EcsLogger.info("com.auto1.pantera.npm")
+            EcsLogger.debug("com.auto1.pantera.npm")
                 .message("NPM batch processing complete (size: " + batch.size() + ")")
                 .eventCategory("web")
                 .eventAction("batch_processing")

@@ -243,7 +243,7 @@ final class CachedProxySlice implements Slice {
         final Content body
     ) {
         final String path = line.uri().getPath();
-        EcsLogger.info("com.auto1.pantera.http")
+        EcsLogger.debug("com.auto1.pantera.http")
             .message("Processing Go proxy request")
             .eventCategory("web")
             .eventAction("proxy_request")

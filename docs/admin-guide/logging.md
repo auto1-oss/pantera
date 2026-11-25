@@ -361,6 +361,8 @@ Wave D-5d of the v2.2.0 logging audit reclassified 161 sites that previously swa
 
 Mount a custom `log4j2.xml` to override the default logging configuration.
 
+The bundled configuration sets the logger `io.micrometer.core.instrument.MeterRegistry` to `error`: Vert.x registers its pool gauges more than once and Micrometer warns about the repeat (`This Gauge has been already registered`), although the first gauge stays in place. Copy that line into a custom configuration to keep the warning out.
+
 ### Docker Compose
 
 ```yaml
