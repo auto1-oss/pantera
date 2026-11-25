@@ -141,6 +141,13 @@ final class JdbcCooldownService implements CooldownService {
 
     private static final String SYSTEM_ACTOR = "system";
 
+    /**
+     * Limits the record of a failed release-date lookup to one per
+     * repository, package and minute.
+     */
+    private static final com.auto1.pantera.http.log.LogThrottle DATE_FAILURES =
+        new com.auto1.pantera.http.log.LogThrottle(Duration.ofMinutes(1), 1024);
+
     JdbcCooldownService(final CooldownSettings settings, final CooldownRepository repository) {
         this(settings, repository, ForkJoinPool.commonPool(), new CooldownCache(), new CooldownCircuitBreaker());
     }
@@ -633,7 +640,7 @@ final class JdbcCooldownService implements CooldownService {
             () -> this.evaluateFromDatabase(request, inspector)
         ).thenCompose(blocked -> {
             if (blocked) {
-                EcsLogger.info("com.auto1.pantera.cooldown")
+                EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message("Artifact BLOCKED by cooldown (cache/db)")
                     .eventCategory("database")
                     .eventAction("evaluate")
@@ -927,7 +934,7 @@ final class JdbcCooldownService implements CooldownService {
             );
             if (record.isPresent()) {
                 final DbBlockRecord rec = record.get();
-                EcsLogger.info("com.auto1.pantera.cooldown")
+                EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message(String.format(
                         "Block record found in database: status=%s, reason=%s, blockedAt=%s, blockedUntil=%s",
                         rec.status().name(), rec.reason().name(), rec.blockedAt(), rec.blockedUntil()))
@@ -1058,16 +1065,27 @@ final class JdbcCooldownService implements CooldownService {
         return inspector.releaseDate(request.artifact(), request.version())
             .orTimeout(1_700, java.util.concurrent.TimeUnit.MILLISECONDS)
             .exceptionally(error -> {
-                EcsLogger.warn("com.auto1.pantera.cooldown")
-                    .message("Failed to fetch release date (allowing)")
-                    .eventCategory("database")
-                    .eventAction("release_date_fetch")
-                    .eventOutcome("failure")
-                    .field("package.name", request.artifact())
-                    .field("package.version", request.version())
-                    .error(error)
-                    .field("log.source", "application")
-                    .log();
+                // One record per package and minute: a listing asks for many
+                // versions of one package and they fail together.
+                JdbcCooldownService.DATE_FAILURES.admit(
+                    request.repoName() + '|' + request.artifact()
+                ).ifPresent(
+                    skipped -> EcsLogger.warn("com.auto1.pantera.cooldown")
+                        .message(
+                            "Failed to fetch release date; the version is allowed ("
+                                + skipped + " more failure(s) of this package not logged)"
+                        )
+                        .eventCategory("database")
+                        .eventAction("release_date_fetch")
+                        .eventOutcome("failure")
+                        .field("repository.name", request.repoName())
+                        .field("repository.type", request.repoType())
+                        .field("package.name", request.artifact())
+                        .field("package.version", request.version())
+                        .error(error)
+                        .field("log.source", "application")
+                        .log()
+                );
                 return Optional.empty();
             })
             .thenCompose(release -> {
@@ -1130,8 +1148,9 @@ final class JdbcCooldownService implements CooldownService {
         final Duration fresh = this.effectiveDuration(request);
         final Instant date = release.get();
         
-        // Debug logging to diagnose blocking decisions
-        EcsLogger.info("com.auto1.pantera.cooldown")
+        // Per evaluated version: DEBUG. The decision that matters, a block,
+        // is logged at INFO below.
+        EcsLogger.debug("com.auto1.pantera.cooldown")
             .message(String.format(
                 "Evaluating freshness: cooldown=%s, release+cooldown=%s, requestTime=%s, isFresh=%s",
                 fresh, date.plus(fresh), now, date.plus(fresh).isAfter(now)))

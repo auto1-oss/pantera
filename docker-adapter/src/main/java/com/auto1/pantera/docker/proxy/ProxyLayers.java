@@ -17,6 +17,7 @@ import com.auto1.pantera.docker.Layers;
 import com.auto1.pantera.docker.asto.BlobSource;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.UpstreamStatusException;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.ContentLength;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -92,7 +93,11 @@ public final class ProxyLayers implements Layers {
                     } else if (response.status() == RsStatus.NOT_FOUND) {
                         result = Optional.empty();
                     } else {
-                        throw new IllegalArgumentException("Unexpected status: " + response.status());
+                        // Not "absent": the status and headers (Retry-After,
+                        // circuit-open marker) travel to the answering slice.
+                        throw new UpstreamStatusException(
+                            response.status().code(), response.headers()
+                        );
                     }
                     return result;
                 });

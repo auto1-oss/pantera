@@ -1,4 +1,7 @@
-FROM eclipse-temurin:21-jre-alpine
+# The JDK is pinned to a release that carries the fix for CVE-2026-114938
+# (21.0.13.1 or later); scripts/check-jvm-cve-2026-114938.sh fails an older
+# or an unpinned one. Raise the tag for every JDK security release.
+FROM eclipse-temurin:21.0.13.1_2-jre-alpine
 ARG JAR_FILE
 ARG APM_VERSION=1.57.1
 
@@ -27,7 +30,7 @@ RUN addgroup -g 2020 -S pantera && \
     chown pantera:pantera /opt/apm/elastic-apm-agent.jar
 
 ENV TMPDIR=/var/pantera/cache/tmp
-ENV PANTERA_VERSION=2.2.13
+ENV PANTERA_VERSION=2.2.14
 
 USER 2021:2020
 
@@ -50,14 +53,12 @@ CMD [ "sh", "-c", "\
   echo 'Ulimits - nofile: '$(ulimit -n)' nproc: '$(ulimit -u) && \
   # Unique heap dump name per container start: the JVM never overwrites an existing dump \n\
   JVM_ARGS=$(printf '%s' \"$JVM_ARGS\" | sed -E \"s#(-XX:HeapDumpPath=[^ ]*)[.]hprof#\\1-$(date +%Y%m%d-%H%M%S)-$(hostname).hprof#\") && \
-  # CVE-2026-114938: the Base64 decoder intrinsic of OpenJDK 17.0.6+ writes past its buffer on \n\
-  # x86-64 with AVX-512 VBMI. Pantera decodes Base64 from every Authorization header, before \n\
-  # authentication. The flag turns the intrinsic off; it comes after JVM_ARGS so that an \n\
-  # override of JVM_ARGS cannot drop it. Remove it once the base image has a fixed JDK. \n\
+  # BouncyCastle ships native libraries built for glibc; on this musl image they cannot be \n\
+  # loaded and the attempt ends in a stack trace on stderr. The Java implementation is used. \n\
   exec java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \
   $JVM_ARGS \
-  -XX:-UseBASE64Intrinsics \
+  -Dorg.bouncycastle.native.cpu_variant=java \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* \

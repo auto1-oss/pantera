@@ -84,8 +84,20 @@ final class FilteredMetadataCacheProbeTest {
         )) {
             final String repo = "qa_ct_" + UUID.randomUUID();
             final String key = FilteredMetadataCache.cacheKey("npm-proxy", repo, "full", "qa-ct-pkg");
-            conn.async().setex(key, 120L, "env".getBytes(StandardCharsets.UTF_8))
-                .get(2, TimeUnit.SECONDS);
+            // Written through another instance, as on a peer node: the
+            // envelope and its package-index entry land together.
+            FilteredMetadataCacheProbeTest.load(
+                new FilteredMetadataCache(
+                    100, Duration.ofMinutes(5), Duration.ofMinutes(5), conn
+                ),
+                "npm-proxy", repo, "full", "qa-ct-pkg"
+            );
+            final long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (conn.async().exists(key).get(2, TimeUnit.SECONDS) == 0L) {
+                if (System.nanoTime() > deadline) {
+                    throw new AssertionError("L2 envelope write never landed");
+                }
+            }
             final FilteredMetadataCache cache = new FilteredMetadataCache(
                 100, Duration.ofMinutes(5), Duration.ofMinutes(5), conn
             );

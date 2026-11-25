@@ -296,7 +296,7 @@ Since 2.2.9 the security limits introduced in that release are DB-backed admin s
 | `fs_storage_roots` | string (path-separator delimited absolute directories) | `/var/pantera/data` | Directories under which a local-filesystem storage `path` (`fs` or `vertx-file`) submitted through the REST API or admin UI may live -- an inline repository storage block or a storage alias (`PUT /api/v1/storages/<name>`, `PUT /api/v1/repositories/<name>/storages/<alias>`). The check follows symlinks: a path is accepted only when its real location is under an approved root. An update that keeps a repository's (or alias's) saved path is not re-validated, so repositories and aliases created before the roots existed stay editable; changing the path is validated. Env fallback `PANTERA_FS_STORAGE_ROOTS`. |
 | `egress_block_private` | boolean | `false` | Outbound egress strictness for every connection Pantera makes on its own behalf (proxy remotes, index links, bearer realms, storage-alias endpoints). Link-local, any-local, multicast and the cloud metadata service (`169.254.169.254`, `fd00:ec2::254`, `fd20:ce::254`, `100.100.100.200`, `metadata.google.internal`, matched with or without a trailing dot) are always refused; `true` also refuses loopback and private ranges (RFC1918, `fc00::/7` unique-local, `100.64.0.0/10` shared address space). Enforced after DNS resolution on every connect, redirect hops included. Behind an outbound HTTP proxy (`meta.http_client.proxies` or the JVM `http.proxyHost`/`https.proxyHost` properties), each request target and redirect hop is checked by name and against Pantera's own DNS answer before the connection to the proxy opens; the proxy resolves the name itself, so a target Pantera cannot resolve is left to the proxy -- enforce the same deny list on the proxy. Env fallback `PANTERA_EGRESS_BLOCK_PRIVATE`. |
 | `egress_allow_hosts` | string (comma-separated host names) | `` (empty) | Hosts exempt from the strict-mode loopback/private-range refusal, e.g. an internal mirror that must stay reachable in strict mode. The allowlist never exempts the cloud metadata service, link-local, any-local or multicast destinations, even when an allowlisted name resolves to one. Env fallback `PANTERA_EGRESS_ALLOW_HOSTS`. |
-| `upstream_credential_allow_hosts` | string (comma-separated host names) | `` (empty) | Additional hosts a bearer-token realm may live on before an upstream's configured credentials are released to it; by default only the upstream host itself or a host under its parent domain qualifies. Env fallback `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS`. |
+| `upstream_credential_allow_hosts` | string (comma-separated host names) | `` (empty) | Additional hosts that may receive an upstream's configured credentials: the host of a bearer-token realm, or of an index/mirror link. Only the upstream host itself qualifies by default: there is no parent-domain rule, because on shared suffixes a sibling subdomain is a different tenant. **Docker Hub is the common case:** its registry is `registry-1.docker.io` and its token realm is `auth.docker.io`, a different host, so a Docker Hub proxy with credentials pulls as anonymous (and hits the anonymous rate limit, and cannot see private images) until `auth.docker.io` is listed here. Pantera logs it once per upstream and host, then at most hourly (`event.action: bearer_realm_untrusted` or `mirror_credentials_withheld`). Env fallback `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS`. |
 | `login_throttle_max_failures` | integer (≥ 1) | `5` | Password sign-in attempts per (user, client IP) before further attempts are refused for the window; a user is also refused after 4× this many attempts from any address. The client IP is the TCP peer unless `trust_forwarded_headers` is on; then it is the address the proxy recorded: the rightmost `X-Forwarded-For` entry, else `X-Real-IP` when no `X-Forwarded-For` arrived. The leftmost entry is client-supplied and never used for throttling, and `X-Real-IP` never outranks `X-Forwarded-For` because a load balancer such as an ALB passes a client-sent `X-Real-IP` through unchanged. The per-user budget means repeated wrong passwords from anyone can lock a known account out of password sign-in (`POST /api/v1/auth/token`) for the window; SSO and already-issued tokens keep working. Env fallback `PANTERA_LOGIN_THROTTLE_MAX_FAILURES`. |
 | `login_throttle_window_seconds` | integer (≥ 1) | `900` | Window, in seconds, in which those attempts are counted; a successful login clears the (user, client IP) counter. Counters are per node, shared by all API workers on it. A refused login answers `429` with `Retry-After` set to the rest of the window. Env fallback `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS`. |
 
@@ -1069,6 +1069,7 @@ other groups). Requests are resolved against members in order; the first match w
 | `type` | string | Yes | -- | Must end in `-group` (e.g., `maven-group`) |
 | `members` | list | Yes | -- | Ordered list of member repository names |
 | `url` | string | No | -- | Client-facing base URL for the group itself -- same optionality and derivation as [2.2](#22-local-repository) |
+| `routing` | list | No | -- | Rules that limit a member to the paths it can have, see [Routing rules](#routing-rules) |
 
 A group's members never contribute their own `url` (set or derived) to URLs
 emitted through the group. The client-facing base is stamped for the
@@ -1102,6 +1103,98 @@ repo:
     - npm
     - npm_proxy
 ```
+
+#### What a group answers when a member cannot be reached
+
+A group answers `404` when no member has the file. A proxy member that
+cannot answer -- its upstream failed, timed out, or its circuit breaker is
+open -- does not change that (v2.2.14+): if at least one other member said
+"not found", the group answers `404`, as Artifactory and Nexus do, so a
+build tool moves on to its next repository instead of failing. Pantera does
+not remember such a `404`, because the file may exist on the upstream that
+did not answer, and its access record names the cause in `event.reason`
+(`circuit_open`, `idle_timeout`, `upstream_status_503`, ...) instead of
+`not_found`.
+
+The group keeps a `5xx` in three cases:
+
+| Case | Answer |
+|------|--------|
+| A hosted member failed -- it may hold the file | `500` / `502` |
+| No member answered at all (every member failed or was skipped) | `502`, or `503` with `Retry-After` |
+| A proxy member had no free bulkhead permit -- that clears in a moment | `503` with `Retry-After` |
+
+A file the search index knows to be stored in a member that then fails to
+serve it is also a `5xx`: it exists.
+
+The client side of the trade-off: Maven remembers a `404` for a release
+artifact until the repository's `updatePolicy` interval ends (a day by
+default). A build that asked during an upstream outage needs `mvn -U`
+(Gradle: `--refresh-dependencies`) once the upstream is back.
+
+A request sent to a proxy repository directly, not through a group, is not
+affected: it answers `502` / `503` when its upstream fails.
+
+#### Routing rules
+
+`routing` limits a member to the paths it can have. A member named by at
+least one rule is asked only for the paths its rules match; for any other
+path it counts as "not found" without being asked, so the request reaches
+neither its storage nor its upstream. A member without rules is asked for
+everything.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `member` | string | Yes | Name of a repository that is a direct member of the group |
+| `prefix` | string | One of `prefix` / `pattern` | The path starts with this text, e.g. `org/jboss/` |
+| `pattern` | string | One of `prefix` / `pattern` | Java regular expression that must match the whole path |
+
+The path is the one inside the repository, without a leading slash: the
+part of the URL after the group's name (`com/acme/app/1.0/app-1.0.jar`).
+Several rules for one member are alternatives: the member is asked when any
+of them matches.
+
+```yaml
+# File: libs-release.yaml
+repo:
+  type: maven-group
+  members:
+    - libs-release-local
+    - maven-central
+    - jboss
+  routing:
+    # Internal coordinates are never sent to a public upstream.
+    - member: maven-central
+      pattern: '(?!com/acme/|internal/).*'
+    # A slow or narrow upstream is asked only for what it hosts.
+    - member: jboss
+      prefix: org/jboss/
+    - member: jboss
+      prefix: org/wildfly/
+```
+
+Use routing rules for two things:
+
+- **Keep internal names away from public upstreams.** Without a rule, a
+  request for an internal artifact that no hosted member has is forwarded
+  to every proxy member, which tells the upstream the name and lets a
+  package published there under that name be served to your builds.
+- **Contain a slow upstream.** A proxy that is asked only for its own
+  group ids cannot delay or fail the lookups of everything else.
+
+Notes:
+
+- A rule that names a repository which is not a member has no effect. A
+  rule without `member`, or with neither `prefix` nor `pattern`, or with an
+  invalid regular expression, keeps the group from loading; the error is
+  logged.
+- Rules apply to every request through the group, `maven-metadata.xml`
+  included, and to every group type.
+- A nested group keeps its own rules. To limit a repository inside a nested
+  group, put the rule in that group.
+- A request sent to the member repository directly is not limited.
+- Do not use the per-repository [`filters`](#27-repository-filters) for
+  this: a filtered path answers `403`, which a group relays as final.
 
 ---
 
@@ -1649,6 +1742,7 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_DB_LEAK_DETECTION_MS` | `300000` | Leak detection threshold (ms) -- 5 minutes |
 | `PANTERA_DB_WRITE_POOL_MAX` | `10` | Maximum connections in the dedicated `DbConsumer` write pool |
 | `PANTERA_DB_WRITE_POOL_MIN` | `2` | Minimum idle connections in the `DbConsumer` write pool |
+| `PANTERA_REPO_DELETE_RETENTION_HOURS` | `24` | Restore window of a deleted repository: hours between `DELETE /api/v1/repositories/:name` and the start of the purge of its data, `0`-`8760`. `0` purges at once. A delete can override it with `retention_hours`. See [Repository rename and delete](admin-guide/repository-lifecycle.md). |
 
 ### 7.2 I/O Thread Pools
 
@@ -1698,7 +1792,7 @@ Group response-body drain concurrency is sized automatically per repository by t
 | `PANTERA_METRICS_BIND` | `0.0.0.0` | Interface the unauthenticated Prometheus metrics listener binds to; restrict to a private address on hosts with a public interface (2.2.9). |
 | `PANTERA_EGRESS_BLOCK_PRIVATE` | `false` | **Fallback tier only** -- the DB-backed `egress_block_private` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Egress policy strictness: link-local/metadata/any-local/multicast destinations are always denied; `true` also denies loopback and private ranges (RFC1918, `fc00::/7` unique-local, `100.64.0.0/10` shared address space) (2.2.9). |
 | `PANTERA_EGRESS_ALLOW_HOSTS` | *(empty)* | **Fallback tier only** -- the DB-backed `egress_allow_hosts` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Hostnames exempt from the strict-mode loopback/private-range refusal; never from the always-denied metadata, link-local, any-local and multicast destinations (2.2.9). |
-| `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` | *(empty)* | **Fallback tier only** -- the DB-backed `upstream_credential_allow_hosts` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Extra hosts allowed to receive an upstream's credentials on Bearer realms / mirror links; default is same host or parent domain only (2.2.9). |
+| `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` | *(empty)* | **Fallback tier only** -- the DB-backed `upstream_credential_allow_hosts` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Extra hosts allowed to receive an upstream's credentials on Bearer realms / mirror links; the default is the upstream host only (2.2.9) -- Docker Hub needs `auth.docker.io` listed for authenticated pulls. |
 | `PANTERA_LOGIN_THROTTLE_MAX_FAILURES` | `5` | **Fallback tier only** -- the DB-backed `login_throttle_max_failures` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary. Password sign-in attempts per (user, client IP) before further attempts are refused; 4× this many per user from any address (2.2.9). |
 | `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS` | `900` | **Fallback tier only** -- the DB-backed `login_throttle_window_seconds` admin setting is primary. Window, in seconds, in which login failures are counted (2.2.9). |
 
@@ -1869,15 +1963,19 @@ Before starting Java, the command adds the start time and host name to a
 (`heapdump.hprof` becomes `heapdump-20261028-090100-<host>.hprof`), because the
 JVM never overwrites an existing dump.
 
-`-XX:-UseBASE64Intrinsics` is the mitigation for CVE-2026-114938 (the Base64
-decoder of OpenJDK 17.0.6 and later on x86-64 with AVX-512 VBMI). It follows
-`JVM_ARGS`, so a custom `JVM_ARGS` keeps it.
+The image runs a JDK that carries the fix for CVE-2026-114938 (the Base64
+decoder of OpenJDK 17.0.6 and later on x86-64 with AVX-512 VBMI), so the
+command no longer passes `-XX:-UseBASE64Intrinsics`.
+
+`-Dorg.bouncycastle.native.cpu_variant=java` selects BouncyCastle's Java
+implementation: its native libraries are built for glibc and cannot be loaded
+on the Alpine image. Leave it out on a glibc system to use the native code.
 
 ```
 java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \
   $JVM_ARGS \
-  -XX:-UseBASE64Intrinsics \
+  -Dorg.bouncycastle.native.cpu_variant=java \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* \

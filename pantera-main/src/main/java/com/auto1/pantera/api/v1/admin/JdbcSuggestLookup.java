@@ -168,10 +168,20 @@ public final class JdbcSuggestLookup implements SuggestLookup {
             }
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    out.add(new SuggestRow(
-                        source, rs.getString("repo_type"), rs.getString("repo_name"),
-                        rs.getString("name"), rs.getString("path_prefix")
-                    ));
+                    // Index rows carry the repository key, cooldown rows the
+                    // name; a key of no repository is a deleted repository.
+                    final String repo;
+                    if (SuggestRow.INDEX.equals(source)) {
+                        repo = com.auto1.pantera.settings.repo.RepoKeys.shared().name(rs.getString("repo_name")).orElse(null);
+                    } else {
+                        repo = rs.getString("repo_name");
+                    }
+                    if (repo != null) {
+                        out.add(new SuggestRow(
+                            source, rs.getString("repo_type"), repo,
+                            rs.getString("name"), rs.getString("path_prefix")
+                        ));
+                    }
                 }
             }
         }

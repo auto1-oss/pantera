@@ -106,11 +106,18 @@ public final class DbSyncArtifactIndexer implements SyncArtifactIndexer {
     }
 
     private void upsert(final ArtifactEvent event) {
+        // The index stores the repository's immutable key, not its name; a
+        // name no repository has (it was deleted) is not written at all.
+        final Optional<String> key = com.auto1.pantera.settings.repo.RepoKeys.shared()
+            .key(normalize(event.repoName()));
+        if (key.isEmpty()) {
+            return;
+        }
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(UPSERT_SQL)) {
             final long release = event.releaseDate().orElse(event.createdDate());
             stmt.setString(1, event.repoType());
-            stmt.setString(2, normalize(event.repoName()));
+            stmt.setString(2, key.get());
             stmt.setString(3, event.artifactName());
             stmt.setString(4, event.artifactVersion());
             stmt.setDouble(5, event.size());

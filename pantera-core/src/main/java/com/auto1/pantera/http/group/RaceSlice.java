@@ -13,6 +13,7 @@ package com.auto1.pantera.http.group;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.LocalRefusal;
+import com.auto1.pantera.http.PartialUpstreamFailure;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
@@ -170,6 +171,13 @@ public final class RaceSlice implements Slice {
         final java.util.concurrent.atomic.AtomicBoolean anyServerError =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
+        // Whether ANY remote answered about the file without failing (a 404,
+        // another 4xx). With it, a 5xx of another remote is a failure of
+        // that remote only: the 502 is marked so a group does not count it
+        // against the whole repository (PartialUpstreamFailure).
+        final java.util.concurrent.atomic.AtomicBoolean anyAnswered =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
         // First 403 captured (status, headers, drained bytes) so we can
         // forward it verbatim if the priority rules pick "forbidden" as
         // the final answer. Saved drained-form to avoid leaking the
@@ -274,6 +282,8 @@ public final class RaceSlice implements Slice {
                 final boolean circuitOpen = new LocalRefusal(res).present();
                 if (is5xx && !circuitOpen) {
                     anyServerError.set(true);
+                } else if (!is5xx) {
+                    anyAnswered.set(true);
                 }
                 EcsLogger.debug("com.auto1.pantera.http")
                     .message("Repository returned " + code
@@ -317,7 +327,7 @@ public final class RaceSlice implements Slice {
                     }
                     if (failedCount.incrementAndGet() == targets.size()) {
                         completeBasedOnPriority(
-                            result, firstForbidden, firstNotFound, anyServerError,
+                            result, firstForbidden, firstNotFound, anyServerError, anyAnswered,
                             notAllowedCount.get() == targets.size()
                                 ? firstNotAllowed.get() : null,
                             firstCircuitOpen.get()
@@ -351,7 +361,7 @@ public final class RaceSlice implements Slice {
                 anyServerError.set(true);
                 if (failedCount.incrementAndGet() == targets.size()) {
                     completeBasedOnPriority(
-                        result, firstForbidden, firstNotFound, anyServerError, null,
+                        result, firstForbidden, firstNotFound, anyServerError, anyAnswered, null,
                         firstCircuitOpen.get()
                     );
                 }
@@ -371,7 +381,10 @@ public final class RaceSlice implements Slice {
      *       drained body, headers, status). 403 says "exists but blocked";
      *       outranks 404 (definitively absent) and 5xx (transient).</li>
      *   <li>If any target returned an unmarked 5xx (or threw) — return
-     *       502, since at least one upstream's true state is unknown.</li>
+     *       502, since at least one upstream's true state is unknown. When
+     *       another target answered (a 404, another 4xx) the 502 carries
+     *       {@link PartialUpstreamFailure#HEADER}: only some remotes failed,
+     *       so a group does not convict the repository on it.</li>
      *   <li>If a target refused the request locally (see
      *       {@link LocalRefusal}: its outbound circuit breaker fast-failed,
      *       or its bulkhead had no permit) — relay that response with its
@@ -391,6 +404,7 @@ public final class RaceSlice implements Slice {
         final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstForbidden,
         final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstNotFound,
         final java.util.concurrent.atomic.AtomicBoolean anyServerError,
+        final java.util.concurrent.atomic.AtomicBoolean anyAnswered,
         final DrainedResponse allNotAllowed,
         final DrainedResponse circuitOpen
     ) {
@@ -402,11 +416,16 @@ public final class RaceSlice implements Slice {
             return;
         }
         if (anyServerError.get()) {
-            result.complete(
-                ResponseBuilder.badGateway()
-                    .textBody("All upstream remotes failed")
-                    .build()
-            );
+            final ResponseBuilder failed = ResponseBuilder.badGateway();
+            if (anyAnswered.get()) {
+                result.complete(
+                    failed.header(PartialUpstreamFailure.HEADER, "true")
+                        .textBody("An upstream remote failed")
+                        .build()
+                );
+            } else {
+                result.complete(failed.textBody("All upstream remotes failed").build());
+            }
             return;
         }
         if (circuitOpen != null) {

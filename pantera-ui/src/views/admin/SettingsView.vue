@@ -1554,8 +1554,9 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
                 <label class="text-sm text-gray-500 block mb-1">Credential-trusted realm hosts</label>
                 <InputText v-model="upstreamCredentialAllowHosts" class="w-full" placeholder="auth.docker.io" />
                 <span class="text-xs text-gray-400">
-                  Comma-separated hosts a bearer-token realm may live on besides the
-                  upstream itself and its parent domain.
+                  Comma-separated hosts, besides the upstream host itself, that may
+                  receive an upstream's credentials (token realm, mirror). Docker Hub
+                  needs auth.docker.io here for authenticated pulls.
                 </span>
               </div>
             </div>

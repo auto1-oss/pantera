@@ -57,14 +57,31 @@ public final class AstoManifests implements Manifests {
     private final String name;
 
     /**
+     * Name of the Pantera repository (registry) the image lives in, or null
+     * when the caller does not know it. Log records only.
+     */
+    private final String registry;
+
+    /**
      * @param asto Asto storage
      * @param blobs Blobs storage.
      * @param name Repository name
      */
     public AstoManifests(Storage asto, Blobs blobs, String name) {
+        this(asto, blobs, name, null);
+    }
+
+    /**
+     * @param asto Asto storage
+     * @param blobs Blobs storage.
+     * @param name Image (docker repository) name
+     * @param registry Name of the Pantera repository, for log records
+     */
+    public AstoManifests(Storage asto, Blobs blobs, String name, String registry) {
         this.storage = asto;
         this.blobs = blobs;
         this.name = name;
+        this.registry = registry;
     }
 
     @Override
@@ -134,30 +151,66 @@ public final class AstoManifests implements Manifests {
                                         })
                                 )
                                 .orElseGet(() -> {
-                                    EcsLogger.warn("com.auto1.pantera.docker")
-                                        .message("Blob not found for digest")
-                                        .eventCategory("web")
-                                        .eventAction("manifest_get")
-                                        .eventOutcome("failure")
-                                        .field("package.checksum", digest.string())
-                                        .field("log.source", "application")
-                                        .log();
+                                    // The tag (or digest link) exists but the
+                                    // manifest blob it points at does not: the
+                                    // stored image is inconsistent.
+                                    this.identified(
+                                        EcsLogger.warn("com.auto1.pantera.docker")
+                                            .message(
+                                                String.format(
+                                                    "Manifest link of %s:%s points at blob %s, which is not in storage",
+                                                    this.name, ref.digest(), digest.string()
+                                                )
+                                            )
+                                            .eventCategory("web")
+                                            .eventAction("manifest_get")
+                                            .eventOutcome("failure")
+                                            .field("event.reason", "manifest_blob_missing")
+                                            .field("package.checksum", digest.string()),
+                                        ref
+                                    ).field("log.source", "application").log();
                                     return CompletableFuture.completedFuture(Optional.empty());
                                 })
                         );
                 }
             ).orElseGet(() -> {
-                EcsLogger.warn("com.auto1.pantera.docker")
-                    .message("No link found for manifest reference")
-                    .eventCategory("web")
-                    .eventAction("manifest_get")
-                    .eventOutcome("failure")
-                    .field("container.image.hash.all", ref.digest())
-                    .field("log.source", "application")
-                    .log();
+                // An ordinary miss: a tag nobody pushed, or a proxy / group
+                // member that has not cached the image yet. The caller
+                // answers 404 or asks the upstream; nothing to act on.
+                this.identified(
+                    EcsLogger.debug("com.auto1.pantera.docker")
+                        .message(
+                            String.format(
+                                "No manifest link for %s:%s", this.name, ref.digest()
+                            )
+                        )
+                        .eventCategory("web")
+                        .eventAction("manifest_get")
+                        .eventOutcome("failure")
+                        .field("event.reason", "manifest_unknown"),
+                    ref
+                ).field("log.source", "application").log();
                 return CompletableFuture.completedFuture(Optional.empty());
             })
         );
+    }
+
+    /**
+     * Say which image a record is about: the Pantera repository, the image
+     * name, and the reference as a tag or as a digest.
+     * @param logger Record under construction
+     * @param ref Manifest reference
+     * @return The record
+     */
+    private EcsLogger identified(final EcsLogger logger, final ManifestReference ref) {
+        logger.field("repository.name", this.registry)
+            .field("container.image.name", this.name);
+        if (new Digest.FromString(ref.digest()).valid()) {
+            logger.field("container.image.hash.all", ref.digest());
+        } else {
+            logger.field("container.image.tag", ref.digest());
+        }
+        return logger;
     }
 
     @Override

@@ -84,20 +84,13 @@ public class GetManifestSlice extends DockerActionSlice {
                             .build()
                     )
                 )
-                .exceptionally(err -> {
-                    com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.docker")
-                        .message("Manifest GET failed with exception, returning 404")
-                        .eventCategory("web")
-                        .eventAction("manifest_get")
-                        .eventOutcome("failure")
-                        .field("container.image.name", request.name())
-                        .error(err)
-                        .field("log.source", "application")
-                        .log();
-                    return ResponseBuilder.notFound()
-                        .jsonBody(new ManifestError(request.reference()).json())
-                        .build();
-                });
+                // A failed fetch is not a manifest that does not exist:
+                // 5xx with its cause (and the circuit-open marker), never
+                // the 404 MANIFEST_UNKNOWN that reads as "absent".
+                .exceptionally(err -> new com.auto1.pantera.http.cache.UpstreamMiss(
+                        "com.auto1.pantera.docker", this.docker.registryName(),
+                        line.uri().getPath(), headers
+                    ).failed(err, "Manifest GET failed"));
         });
     }
 

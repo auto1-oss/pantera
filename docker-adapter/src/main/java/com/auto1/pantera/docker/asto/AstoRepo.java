@@ -33,12 +33,27 @@ public final class AstoRepo implements Repo {
     private final String name;
 
     /**
+     * Name of the Pantera repository, for log records (nullable).
+     */
+    private final String registry;
+
+    /**
      * @param asto Asto storage
      * @param name Repository name
      */
     public AstoRepo(Storage asto, String name) {
+        this(asto, name, null);
+    }
+
+    /**
+     * @param asto Asto storage
+     * @param name Image (docker repository) name
+     * @param registry Name of the Pantera repository, for log records
+     */
+    public AstoRepo(Storage asto, String name, String registry) {
         this.asto = asto;
         this.name = name;
+        this.registry = registry;
     }
 
     @Override
@@ -48,7 +63,7 @@ public final class AstoRepo implements Repo {
 
     @Override
     public Manifests manifests() {
-        return new AstoManifests(this.asto, this.blobs(), this.name);
+        return new AstoManifests(this.asto, this.blobs(), this.name, this.registry);
     }
 
     @Override

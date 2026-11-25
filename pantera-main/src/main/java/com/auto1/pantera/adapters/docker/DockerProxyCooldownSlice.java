@@ -233,6 +233,7 @@ public final class DockerProxyCooldownSlice implements Slice {
      */
     private Response unreadableManifest(final ManifestRequest request, final Throwable err) {
         EcsLogger.warn("com.auto1.pantera.adapters.docker")
+            .field("repository.name", this.repoName)
             .message("Failed to read upstream manifest body")
             .eventCategory("web")
             .eventAction("manifest_process")
@@ -333,6 +334,7 @@ public final class DockerProxyCooldownSlice implements Slice {
         final Throwable ex
     ) {
         EcsLogger.warn("com.auto1.pantera.adapters.docker")
+            .field("repository.name", this.repoName)
             .message("Failed to process manifest for cooldown; serving it unevaluated")
             .eventCategory("web")
             .eventAction("manifest_process")
@@ -444,6 +446,7 @@ public final class DockerProxyCooldownSlice implements Slice {
         return this.configCreated(name, manifest.get()).whenComplete((release, error) -> {
             if (error != null) {
                 EcsLogger.warn("com.auto1.pantera.adapters.docker")
+                    .field("repository.name", this.repoName)
                     .message("Failed to extract release date from config")
                     .eventCategory("web")
                     .eventAction("release_date_extract")
@@ -469,6 +472,7 @@ public final class DockerProxyCooldownSlice implements Slice {
             }
         }).exceptionally(ex -> {
             EcsLogger.warn("com.auto1.pantera.adapters.docker")
+                .field("repository.name", this.repoName)
                 .message("Exception extracting release date")
                 .eventCategory("web")
                 .eventAction("release_date_extract")
@@ -579,6 +583,7 @@ public final class DockerProxyCooldownSlice implements Slice {
             return Optional.of(new Manifest(digest, bytes));
         } catch (final IllegalArgumentException ex) {
             EcsLogger.warn("com.auto1.pantera.adapters.docker")
+                .field("repository.name", this.repoName)
                 .message("Failed to build manifest from response headers")
                 .eventCategory("web")
                 .eventAction("manifest_build")

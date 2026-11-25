@@ -22,6 +22,7 @@ import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.AnswerReason;
+import com.auto1.pantera.http.log.AnsweringRepository;
 import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.log.FailureCause;
 import com.auto1.pantera.http.log.RequestReasons;
@@ -31,9 +32,11 @@ import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.observability.StructuredLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.trace.SpanContext;
+import org.apache.logging.log4j.ThreadContext;
 import org.slf4j.MDC;
 
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -128,6 +131,11 @@ public final class EcsLoggingSlice implements Slice {
     private final String repoType;
 
     /**
+     * Trace context the server derived for the request, or null.
+     */
+    private final SpanContext known;
+
+    /**
      * Ctor.
      * @param origin Origin slice
      */
@@ -153,14 +161,69 @@ public final class EcsLoggingSlice implements Slice {
      */
     public EcsLoggingSlice(final Slice origin, final String remoteAddress,
         final String repoName, final String repoType) {
+        this(origin, remoteAddress, repoName, repoType, null);
+    }
+
+    /**
+     * Ctor for a server that already derived the trace context of the
+     * request: the access record, the context headers and the server's own
+     * records of the exchange then share one {@code trace.id}.
+     * @param origin Origin slice
+     * @param remoteAddress Remote client address
+     * @param span Trace context of the request
+     */
+    public EcsLoggingSlice(final Slice origin, final String remoteAddress,
+        final SpanContext span) {
+        this(origin, remoteAddress, null, null, span);
+    }
+
+    /**
+     * Primary ctor.
+     * @param origin Origin slice
+     * @param remoteAddress Remote client address
+     * @param repoName Repository name (nullable)
+     * @param repoType Repository type (nullable)
+     * @param span Trace context of the request, or null to derive it from
+     *  the request headers
+     */
+    private EcsLoggingSlice(final Slice origin, final String remoteAddress,
+        final String repoName, final String repoType, final SpanContext span) {
         this.origin = origin;
         this.remoteAddress = remoteAddress;
         this.repoName = repoName;
         this.repoType = repoType;
+        this.known = span;
     }
 
     @Override
     public CompletableFuture<Response> response(
+        final RequestLine line,
+        final Headers headers,
+        final Content body
+    ) {
+        // The request's context is on this thread only while the slice chain
+        // runs on it. An event loop serves many connections: left behind, the
+        // trace.id of this request would mark every later record the thread
+        // writes for somebody else, so the thread gets its own context back.
+        final Map<String, String> prior = ThreadContext.getImmutableContext();
+        try {
+            return this.serve(line, headers, body);
+        } finally {
+            ThreadContext.clearMap();
+            if (!prior.isEmpty()) {
+                ThreadContext.putAll(prior);
+            }
+        }
+    }
+
+    /**
+     * Serve the request with its context bound to the current thread.
+     * @param line Request line
+     * @param headers Request headers
+     * @param body Request body
+     * @return Response
+     */
+    private CompletableFuture<Response> serve(
         final RequestLine line,
         final Headers headers,
         final Content body
@@ -176,7 +239,7 @@ public final class EcsLoggingSlice implements Slice {
         // layer reports the verified principal on the response instead.
 
         // Extract or generate trace context from request headers (B3 / W3C / fallback)
-        final SpanContext span = SpanContext.extract(headers);
+        final SpanContext span = this.known == null ? SpanContext.extract(headers) : this.known;
 
         // Set MDC context for this request thread (constants from EcsMdc — no key drift)
         MDC.put(EcsMdc.TRACE_ID, span.traceId());
@@ -224,7 +287,8 @@ public final class EcsLoggingSlice implements Slice {
             headers, INTERNAL_ROUTING_HEADER, AuthzSlice.LOGIN_HDR,
             CTX_TRACE_ID_HEADER, CTX_CLIENT_IP_HEADER,
             BaseCachedProxySlice.CACHE_ONLY_HEADER,
-            RequestReasons.SLOT_HEADER, AnswerReason.HEADER, RequestTrace.HEADER
+            RequestReasons.SLOT_HEADER, AnswerReason.HEADER, RequestTrace.HEADER,
+            AnsweringRepository.NAME_HEADER, AnsweringRepository.TYPE_HEADER
         );
         if (span.traceId() != null && !span.traceId().isEmpty()) {
             downstreamHeaders.add(new Header(CTX_TRACE_ID_HEADER, span.traceId()));
@@ -241,7 +305,11 @@ public final class EcsLoggingSlice implements Slice {
                 // (see ReasonSlice); it goes to the access record and not
                 // to the client.
                 final AnswerReason answer = new AnswerReason(principal.stripped());
-                final Response response = answer.stripped();
+                // ... and its own name and type (see AnsweringRepository):
+                // this slice sits above the routing and does not know which
+                // repository the request was for.
+                final AnsweringRepository repo = new AnsweringRepository(answer.stripped());
+                final Response response = repo.stripped();
                 final int status = response.status().code();
                 final String reason = status < EcsLoggingSlice.ERRORS
                     ? null
@@ -259,7 +327,11 @@ public final class EcsLoggingSlice implements Slice {
                 // RequestContext; http.request.method is passed explicitly
                 // from the RequestLine below (the record carries no method).
                 final RequestContext rctx = buildRequestContext(
-                    span, clientIp, userName, line);
+                    span, clientIp, userName, line,
+                    EcsLoggingSlice.userAgent(headers),
+                    repo.name().orElse(this.repoName),
+                    repo.type().orElse(this.repoType)
+                );
                 StructuredLogger.access().forRequest(rctx)
                     .status(status)
                     .method(line.method().value())
@@ -331,7 +403,8 @@ public final class EcsLoggingSlice implements Slice {
         final SpanContext span,
         final String clientIp,
         final String userName,
-        final RequestLine line
+        final RequestLine line,
+        final String... request
     ) {
         // transaction.id is sourced from MDC (set above at request entry). If MDC
         // somehow lost it on this thread (e.g. an executor hop that didn't
@@ -352,9 +425,9 @@ public final class EcsLoggingSlice implements Slice {
             /* httpRequestId */ null,
             userName == null ? "anonymous" : userName,
             clientIp,
-            /* userAgent */ null,
-            this.repoName,
-            this.repoType,
+            /* userAgent */ request[0],
+            /* repository.name */ request[1],
+            /* repository.type */ request[2],
             RequestContext.ArtifactRef.EMPTY,
             // A /t/<token>/ path segment is a credential (conda channel
             // tokens, anaconda upload tickets): never log it.
@@ -362,6 +435,20 @@ public final class EcsLoggingSlice implements Slice {
             LogSanitizer.sanitizeUrl(line.uri().getPath()),
             com.auto1.pantera.http.context.Deadline.in(java.time.Duration.ofSeconds(30))
         );
+    }
+
+    /**
+     * The client's {@code User-Agent}, for {@code user_agent.original}.
+     *
+     * @param headers Request headers
+     * @return Header value with credentials masked, or null when absent
+     */
+    private static String userAgent(final Headers headers) {
+        return headers.values("User-Agent").stream()
+            .filter(val -> !val.isBlank())
+            .findFirst()
+            .map(LogSanitizer::sanitizeText)
+            .orElse(null);
     }
 
     /**

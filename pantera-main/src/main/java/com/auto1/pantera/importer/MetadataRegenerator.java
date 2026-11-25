@@ -377,6 +377,15 @@ public final class MetadataRegenerator {
         return this.storage.save(
             metadataKey,
             new Content.From(metadata.getBytes(StandardCharsets.UTF_8))
+        ).thenRun(
+            // Groups that cached this metadata, or remembered that it was
+            // missing, must see the regenerated file.
+            () -> new com.auto1.pantera.maven.cooldown.MavenMetadataCoordinates()
+                .packageName(metadataKey.string())
+                .ifPresent(
+                    pkg -> com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                        .instance().invalidateAfterUpload("maven", pkg)
+                )
         );
     }
 

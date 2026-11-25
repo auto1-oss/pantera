@@ -98,7 +98,7 @@ Two metadata code paths are supported, with separate SPI implementations.
 
 **Filtered-output cache.** The proxy keeps no private filtered-bytes cache: the filtered result is cached only in the shared envelope cache (`FilteredMetadataCache`), which every block, unblock, expiry, upstream refresh and upload invalidates. Both metadata levels are keyed by the dotted artifact package (`com.example.my-lib`) — the same name snapshot downloads record block rows under — and the snapshot-level envelope uses its own variant (`snapshot-1.0-SNAPSHOT`) so it never collides with the artifact-level envelope. When every version is blocked the proxy answers `403` with `X-Pantera-Cooldown: all-blocked`.
 
-**Groups.** A Maven/Gradle group relays the winning member's already-filtered `maven-metadata.xml` and caches it per node for 10 minutes. The cache listens for cooldown package-change events (delivered on every node) and drops that package's artifact- and snapshot-level entries, and everything on a policy change; there is no distributed primary tier. A member answer carrying `X-Pantera-Cooldown` (any status) ends the walk and is relayed verbatim — never cached, never replaced by the stale fallback — and the `.sha1` / `.md5` of such metadata relays the same answer. Gradle uses the same components; Gradle Module Metadata (`.module`) files are admission-gated like any other primary artifact — they carry no version list of their own, so no filter rewriting applies.
+**Groups.** A Maven/Gradle group relays the winning member's already-filtered `maven-metadata.xml` and caches it per node for 10 minutes. The cache listens for cooldown package-change events (delivered on every node) and drops that package's artifact- and snapshot-level entries, and everything on a policy change; there is no distributed primary tier. A `maven-metadata.xml` that no member has is remembered the same way (per node, 10 minutes, answered `404` with `event.reason` `negative_cache` and no member walk), but only when every member answered a plain `404`: a member that failed (5xx, 429, exception) makes the group answer `502`, a member whose upstream circuit is open or whose bulkhead is full makes it `503` with `Retry-After`, and any other member answer makes it a `404` that is not remembered. The remembered miss is dropped by the same package-change events, which a hosted member also sends when a `maven-metadata.xml` is uploaded to it and a proxy member when new metadata lands in its cache, so a `mvn deploy` is visible through every group, nested groups included, at once. A member answer carrying `X-Pantera-Cooldown` (any status) ends the walk and is relayed verbatim — never cached, never replaced by the stale fallback — and the `.sha1` / `.md5` of such metadata relays the same answer. Gradle uses the same components; Gradle Module Metadata (`.module`) files are admission-gated like any other primary artifact — they carry no version list of their own, so no filter rewriting applies.
 
 ### SNAPSHOT classifier knob
 
@@ -423,16 +423,48 @@ only on block-state changes:
   hiding a version just published to a member local repository.
 
 Both funnel into `FilteredMetadataCache.invalidateByPackageName`, which
-drops matching L1 entries, sweeps L2 (Valkey) by key pattern via cursor-based
-SCAN **independently of what L1 holds** (in L2-only mode L1 holds nothing),
+drops matching L1 entries, deletes the package's L2 (Valkey) envelopes
+**independently of what L1 holds** (in L2-only mode L1 holds nothing),
 and broadcasts every dropped key on the `cooldown-envelope` pub/sub channel
 so peer nodes drop their L1 too. Outcomes are logged as
 `envelope_invalidate_on_refresh` / `envelope_invalidate_on_upload` (L1) and
-`envelope_invalidate_l2` (async L2 sweep).
+`envelope_invalidate_l2` (L2: a failure at WARN, a delete at DEBUG).
+
+### Per-package L2 index (2.2.14)
+
+The L2 delete never walks the keyspace. Every envelope is listed in the
+index SET `metadata-idx:{packageName}`; the envelope and its index entry are
+written by one Lua script (`SADD` + `EXPIRE` + `SETEX`), and the index's
+TTL is only ever raised, so an envelope that is missing from its index
+cannot exist. An invalidation is one script on that SET (`SMEMBERS`, then
+`DEL` + `SREM` per member): its cost is the number of envelopes of the
+package. An index entry whose envelope has expired is harmless.
+
+2.2.7–2.2.13 ran `SCAN MATCH metadata:*:{package}` over every key of the
+Valkey on each refresh; the cost grew with all keys of all caches, the
+command ran into the Valkey timeout, and the stale envelope then stayed
+until its TTL. Only a whole-repository or policy invalidation
+(`invalidateAll(type, repo)`, `clear()` — an administrative change) still
+walks the keyspace, with a cursor `SCAN`.
+
+**Upgrade from 2.2.13.** Keys carry a generation marker in the variant
+segment (`...:{variant}.v2:{package}`). Envelopes written by 2.2.13 have no
+marker and no index entry: 2.2.14 never reads them and they expire by TTL.
+During a rolling upgrade:
+
+- a 2.2.13 node's sweep patterns still match — and delete — the `.v2`
+  envelopes, and a key it publishes drops the `.v2` twin from the L1 of
+  2.2.14 nodes;
+- a 2.2.14 node, for two L2 TTLs after its first invalidation, also deletes
+  and publishes the unmarked keys of the invalidated package for every
+  `type:repo:variant` it has served, so a 2.2.13 node cannot keep serving
+  the stale envelope. An unmarked envelope of a repository the 2.2.14 node
+  has not served yet is not covered and expires by its TTL.
 
 ### Envelope Key Shape and L2 Transport (2.2.7)
 
-Envelope keys are `metadata:{repoType}:{repoName}:{variant}:{packageName}`.
+Envelope keys are `metadata:{repoType}:{repoName}:{variant}.v2:{packageName}`
+(`.v2`: key generation, since 2.2.14 — see above).
 The **variant** names the body shape being cached. Since 2.2.11 the npm
 proxy caches one `skeleton` envelope per package (the cooldown verdict on
 the packument's skeleton), shared by full, abbreviated and single-version

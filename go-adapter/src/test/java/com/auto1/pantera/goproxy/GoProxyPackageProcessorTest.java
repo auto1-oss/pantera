@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.ProxyEventRetry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.quartz.JobExecutionContext;
@@ -172,5 +173,41 @@ class GoProxyPackageProcessorTest {
 
         // Assert
         assertEquals(3, this.events.size(), "Should have three artifact events");
+    }
+
+    @Test
+    void givesUpOnAZipThatNeverLands() {
+        ProxyArtifactEvent event = new ProxyArtifactEvent(
+            new Key.From("github.com/example/gone/@v/1.0.0"), "go_proxy", "u", Optional.empty()
+        );
+        for (int idx = 0; idx < ProxyEventRetry.MAX_ATTEMPTS; idx += 1) {
+            event = event.retried(0L);
+        }
+        this.packages.add(event);
+        // Quartz builds a new job instance for every run.
+        final GoProxyPackageProcessor fresh = new GoProxyPackageProcessor();
+        fresh.setStorage(this.storage);
+        fresh.setEvents(this.events);
+        fresh.setPackages(this.packages);
+        fresh.execute(mock(JobExecutionContext.class));
+        assertEquals(0, this.packages.size(), "an exhausted event is dropped, not put back");
+        assertEquals(0, this.events.size(), "nothing is recorded for it");
+    }
+
+    @Test
+    void waitsBeforeLookingAtAMissingZipAgain() {
+        this.packages.add(
+            new ProxyArtifactEvent(
+                new Key.From("github.com/example/slow/@v/1.0.0"), "go_proxy", "u", Optional.empty()
+            )
+        );
+        this.processor.execute(mock(JobExecutionContext.class));
+        this.processor.execute(mock(JobExecutionContext.class));
+        this.processor.execute(mock(JobExecutionContext.class));
+        assertEquals(1, this.packages.size(), "the event stays queued");
+        assertEquals(
+            1, this.packages.peek().attempts(),
+            "runs inside the wait do not look at the event again"
+        );
     }
 }

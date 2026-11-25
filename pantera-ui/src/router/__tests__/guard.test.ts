@@ -2,6 +2,38 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 import { createAppRouter } from '@/router'
+import { useAuthStore } from '@/stores/auth'
+
+describe('router guard: the repository jobs page', () => {
+  function signIn(actions: string[]) {
+    localStorage.clear()
+    localStorage.setItem('access_token', 't')
+    setActivePinia(createPinia())
+    const auth = useAuthStore()
+    auth.user = {
+      name: 'u', context: 'c',
+      permissions: { api_repository_permissions: actions },
+    } as unknown as typeof auth.user
+  }
+
+  it('opens for a user who may delete repositories', async () => {
+    signIn(['read', 'delete'])
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/admin/repository-jobs')
+
+    expect(router.currentRoute.value.name).toBe('admin-repository-jobs')
+  })
+
+  it('sends a user who may only edit repositories to the dashboard', async () => {
+    signIn(['read', 'create', 'update', 'move'])
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/admin/repository-jobs')
+
+    expect(router.currentRoute.value.name).toBe('dashboard')
+  })
+})
 
 describe('router guard: a visitor who is not signed in', () => {
   beforeEach(() => {

@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.index.reindex;
 
+import com.auto1.pantera.settings.repo.RepoKeys;
 import com.auto1.pantera.backfill.ArtifactRecord;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -168,6 +169,15 @@ public final class JdbcReindexStore implements ReindexStore {
         return res;
     }
 
+    /**
+     * Key of a repository name: what {@code artifacts.repo_name} holds.
+     * @param repo Repository name
+     * @return Repository key, the name itself when no repository has it
+     */
+    private static String keyOf(final String repo) {
+        return RepoKeys.shared().key(repo).orElse(repo);
+    }
+
     @Override
     public List<String> indexedRepos() throws SQLException {
         final List<String> names = new ArrayList<>();
@@ -175,7 +185,14 @@ public final class JdbcReindexStore implements ReindexStore {
             Statement stmt = conn.createStatement();
             ResultSet rs = stmt.executeQuery(JdbcReindexStore.REPOS_SQL)) {
             while (rs.next()) {
-                names.add(rs.getString(1));
+                // Rows carry the repository key; the job works with names.
+                // A key no repository holds is reported as is: it names no
+                // configured repository and is pruned.
+                final String key = rs.getString(1);
+                final String name = RepoKeys.shared().name(key).orElse(key);
+                if (!names.contains(name)) {
+                    names.add(name);
+                }
             }
         }
         return names;
@@ -185,7 +202,7 @@ public final class JdbcReindexStore implements ReindexStore {
     public long pruneBatch(final String repo, final int limit) throws SQLException {
         try (Connection conn = this.source.getConnection();
             PreparedStatement stmt = conn.prepareStatement(JdbcReindexStore.PRUNE_SQL)) {
-            stmt.setString(1, repo);
+            stmt.setString(1, JdbcReindexStore.keyOf(repo));
             stmt.setInt(2, limit);
             return stmt.executeUpdate();
         }
@@ -208,7 +225,7 @@ public final class JdbcReindexStore implements ReindexStore {
                     }
                 }
             }
-            return new JdbcSession(conn, repo, maxId, startedMillis);
+            return new JdbcSession(conn, JdbcReindexStore.keyOf(repo), maxId, startedMillis);
         } catch (final SQLException ex) {
             conn.close();
             throw ex;

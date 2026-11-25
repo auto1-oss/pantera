@@ -17,6 +17,7 @@ import com.auto1.pantera.docker.asto.BlobSource;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Multi-read {@link Layers} implementation.
@@ -55,23 +56,53 @@ public final class MultiReadLayers implements Layers {
     @Override
     public CompletableFuture<Optional<Blob>> get(final Digest digest) {
         final CompletableFuture<Optional<Blob>> promise = new CompletableFuture<>();
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
         CompletableFuture.allOf(
             this.layers.stream()
                 .map(
-                    layer -> layer.get(digest)
-                        .thenAccept(
-                            opt -> {
-                                if (opt.isPresent()) {
+                    layer -> MultiReadLayers.read(layer, digest)
+                        .handle(
+                            (opt, err) -> {
+                                if (err != null) {
+                                    failure.accumulateAndGet(err, ReadFailure::graver);
+                                } else if (opt.isPresent()) {
                                     promise.complete(opt);
                                 }
+                                return null;
                             }
                         )
-                        .toCompletableFuture()
                 )
                 .toArray(CompletableFuture[]::new)
         ).handle(
-            (nothing, throwable) -> promise.complete(Optional.empty())
+            (nothing, throwable) -> {
+                // "Nobody has it" is only known when everybody answered: a
+                // source that failed may hold the blob.
+                if (failure.get() == null) {
+                    promise.complete(Optional.empty());
+                } else {
+                    promise.completeExceptionally(failure.get());
+                }
+                return null;
+            }
         );
         return promise;
+    }
+
+    /**
+     * Read one source; a source that throws instead of returning a failed
+     * future counts as failed.
+     *
+     * @param layer Source
+     * @param digest Blob digest
+     * @return Blob of the source
+     */
+    private static CompletableFuture<Optional<Blob>> read(final Layers layer, final Digest digest) {
+        CompletableFuture<Optional<Blob>> res;
+        try {
+            res = layer.get(digest);
+        } catch (final RuntimeException ex) {
+            res = CompletableFuture.failedFuture(ex);
+        }
+        return res;
     }
 }

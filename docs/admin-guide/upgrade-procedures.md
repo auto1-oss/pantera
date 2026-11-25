@@ -8,6 +8,14 @@ This page covers the process for upgrading Pantera to a new version, including p
 
 ## Version-Specific Notes
 
+### Upgrading to 2.2.14
+
+- **Migration `V148`** adds `repositories.repo_key`, `repository_tombstones`, `repository_aliases` and `repo_jobs`. Every existing repository gets `repo_key = name`; no data moves and no index row changes. The migration touches only the `repositories` table (one row per repository) and is quick whatever the size of the artifact index.
+- **Do not rename or delete a repository while nodes of different versions are running.** A 2.2.13 node does not know repository keys: a rename it performs copies the data to a directory named after the new name, which 2.2.14 nodes do not read. Finish the rolling upgrade first.
+- **Repository delete answers `202`, never `200`** (with a database), and its data is purged in the background after a restore window of 24 hours (`PANTERA_REPO_DELETE_RETENTION_HOURS`). Scripts that waited for `200` to know the data is gone must follow the purge job instead (`GET /api/v1/repository-jobs/:id`), and pass `retention_hours=0` to purge at once. A delete of a repository that is a member of a group now answers `409` unless `force=true` is given.
+- **Rollback.** Before rolling the application back, rename back every repository that was renamed under 2.2.14 (`SELECT name, repo_key FROM repositories WHERE name <> repo_key`): 2.2.13 looks for a repository's data in the directory named after it. Let running purge jobs finish, or restore the deleted repositories.
+- After the upgrade, scan for files left by earlier deletes: **Repository Jobs → Unowned storage directories → Scan storages**, or `GET /api/v1/repository-orphans`. See [Repository rename and delete](repository-lifecycle.md#unowned-storage-directories).
+
 ### Upgrading to 2.2.10
 
 **Coming from 2.2.8 or earlier: skip 2.2.9.** The 2.2.9 image cannot start against a database created by an earlier release: it shipped a comment edit inside the already-applied migration `V116`, and Flyway stops with `Migration checksum mismatch for migration version 116`. 2.2.10 restores the original file, so upgrade from 2.2.8 directly to 2.2.10 with no database action.
@@ -193,6 +201,8 @@ For zero-downtime upgrades in HA deployments:
 Database migrations run on the first node that starts with the new version. Subsequent nodes detect that migrations have already been applied and skip them.
 
 **Token revocations while versions are mixed (upgrading to 2.2.9 from an earlier release).** Revocations (sign-out, password change, `revoke-user`, API-token revoke) keep propagating in both directions during the rollout: a 2.2.9 node publishes each revocation in both the 2.2.9 message format and the earlier one, and it still applies messages from nodes not yet upgraded. The earlier release handles what it receives its own way: it records the revocation at the time it receives the message and keeps it for 2 hours, and it rejects every session of a revoked user on that node for those 2 hours, including one opened after the revocation. When a 2.2.9 node restarts, it reloads each user revocation that an earlier release wrote to Valkey as a revocation of every token issued before the restart. To keep this window short, finish the rollout promptly.
+
+**Valkey cache keys while versions are mixed (upgrading to 2.2.14 from an earlier release).** 2.2.14 writes the cooldown-filtered metadata envelopes and the negative (404) cache under new keys (`metadata:...:{variant}.v2:{package}` with the index `metadata-idx:{package}`; `negative2:...` with the index `negative2-idx:{name}`) and does not read the keys an earlier release wrote: both caches start cold on the upgraded nodes, and the old keys expire by their TTL — no manual cleanup is needed. Invalidations keep reaching both key sets during the rollout: a 2.2.14 node also deletes the earlier release's keys of the package or artifact it invalidates (for the negative cache with the keyspace `SCAN` the earlier release used, for 24 hours after the first 2.2.14 node started; for metadata envelopes by key name, for the repositories that node has served), and it applies the invalidations that nodes not yet upgraded publish. Finish the rollout within 24 hours; after that, no upload or metadata refresh scans the Valkey keyspace.
 
 ---
 

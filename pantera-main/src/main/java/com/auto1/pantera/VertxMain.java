@@ -43,11 +43,6 @@ import com.auto1.pantera.db.DbManager;
 import com.auto1.pantera.db.migration.YamlToDbMigrator;
 import com.auto1.pantera.vertx.VertxSliceServer;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.binder.jvm.ClassLoaderMetrics;
-import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics;
-import io.micrometer.core.instrument.binder.jvm.JvmMemoryMetrics;
-import io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics;
-import io.micrometer.core.instrument.binder.system.ProcessorMetrics;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.config.MeterFilter;
 import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
@@ -88,6 +83,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * @since 1.0
  */
 public final class VertxMain {
+
+    /**
+     * Interval of the repository config reload that lets a node converge
+     * after a lost repository event.
+     */
+    private static final long REPO_RELOAD_MS = 30_000L;
+
 
     /**
      * Default port to start Pantera Rest API service.
@@ -284,6 +286,19 @@ public final class VertxMain {
                 settings.caches().storagesCache(),
                 settings.metrics().storage()
             );
+            // The artifact index and the storage address a repository by
+            // its immutable key; names are translated at those boundaries.
+            com.auto1.pantera.settings.repo.RepoKeys.install((DbRepositories) repos);
+            // Repository jobs (purge of deleted repositories, rename
+            // follow-up): every node runs them, the database lease decides
+            // which node works on which job.
+            new com.auto1.pantera.repojob.RepoJobRunner(
+                sharedDs.get(),
+                new com.auto1.pantera.repojob.RepoStorages(settings.caches().storagesCache())
+                    .andThen(com.auto1.pantera.repojob.StoragePurgeStore::new),
+                VertxMain.nodeId(),
+                com.auto1.pantera.repojob.RepoJobRunner.Timing.standard()
+            ).share().start();
         } else {
             repos = new MapRepositories(settings);
         }
@@ -809,7 +824,14 @@ public final class VertxMain {
                                         return;
                                     }
                                     VertxMain.this.vertx.getDelegate().runOnContext(
-                                        nothing -> slices.invalidateRepo(name)
+                                        nothing -> {
+                                            slices.invalidateRepo(name);
+                                            // Unless the name already
+                                            // belongs to a new repository.
+                                            if (repos.config(name).isEmpty()) {
+                                                VertxMain.forgetRepoName(slices, settings, name);
+                                            }
+                                        }
                                     );
                                 }
                             );
@@ -832,6 +854,12 @@ public final class VertxMain {
                                         nothing -> {
                                             slices.invalidateRepo(name);
                                             slices.invalidateRepo(target);
+                                            // A routable alias keeps the old
+                                            // name alive; anything else under
+                                            // it is dropped.
+                                            if (repos.config(name).isEmpty()) {
+                                                VertxMain.forgetRepoName(slices, settings, name);
+                                            }
                                         }
                                     );
                                 }
@@ -850,6 +878,29 @@ public final class VertxMain {
                 }
             }
         );
+        if (repos instanceof DbRepositories dbRepos) {
+            // Repository events reach peers over the cluster bus, which may
+            // lose a message. Every node also reloads on a timer and drops
+            // the state of whatever changed or went away since its last
+            // load, so a missed rename or delete is picked up within the
+            // interval instead of at the next restart.
+            dbRepos.onChange(
+                (changed, removed) -> VertxMain.this.vertx.getDelegate().runOnContext(
+                    nothing -> {
+                        changed.forEach(slices::invalidateRepo);
+                        removed.forEach(
+                            name -> {
+                                slices.invalidateRepo(name);
+                                VertxMain.forgetRepoName(slices, settings, name);
+                            }
+                        );
+                    }
+                )
+            );
+            this.vertx.getDelegate().setPeriodic(
+                VertxMain.REPO_RELOAD_MS, ignored -> repos.refreshAsync()
+            );
+        }
         // Warm up all configured repository slices before accepting traffic, so
         // the first request per repo does not block its Vert.x event-loop thread
         // on SharedClient.startFuture.join() during Jetty client initialisation.
@@ -1131,6 +1182,31 @@ public final class VertxMain {
                     .log();
             }
         }
+        // 3'. Stop the repository job runner and give back the job in
+        //     progress, while the database is still there.
+        com.auto1.pantera.repojob.RepoJobRunner.shared().ifPresent(
+            runner -> {
+                try {
+                    runner.close();
+                    EcsLogger.info("com.auto1.pantera.repojob")
+                        .message("Repository job runner stopped")
+                        .eventCategory("process")
+                        .eventAction("repo_job_runner_stop")
+                        .eventOutcome("success")
+                        .field("log.source", "application")
+                        .log();
+                } catch (final RuntimeException ex) {
+                    EcsLogger.error("com.auto1.pantera.repojob")
+                        .message("Failed to stop the repository job runner")
+                        .eventCategory("process")
+                        .eventAction("repo_job_runner_stop")
+                        .eventOutcome("failure")
+                        .error(ex)
+                        .field("log.source", "application")
+                        .log();
+                }
+            }
+        );
         // 3a. Clear any cache-write callback the registry is still holding.
         //     The prefetch subsystem that owned this slot was deleted in M2;
         //     keeping the clear() so a future callback (Phase 4c, 2.3.0
@@ -1298,7 +1374,14 @@ public final class VertxMain {
      * @throws Exception If fails
      */
     public static void main(final String... args) throws Exception {
-        
+        // Log4j stops logging in a shutdown hook of its own, which runs
+        // beside the one below: every record of the shutdown after the
+        // first few milliseconds was lost, and with it the evidence of
+        // whether the stop finished. Pantera stops the logging itself,
+        // last.
+        if (System.getProperty("log4j2.shutdownHookEnabled") == null) {
+            System.setProperty("log4j2.shutdownHookEnabled", "false");
+        }
         final Path config;
         final int port;
         final int defp = 80;
@@ -1347,7 +1430,24 @@ public final class VertxMain {
                 .eventOutcome("success")
                 .field("log.source", "application")
                 .log();
-            app.stop();
+            final long started = System.nanoTime();
+            try {
+                app.stop();
+            } finally {
+                EcsLogger.info("com.auto1.pantera")
+                    .message(
+                        "Pantera stopped in "
+                            + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                                System.nanoTime() - started
+                            ) + " ms"
+                    )
+                    .eventCategory("process")
+                    .eventAction("server_stopped")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+                org.apache.logging.log4j.LogManager.shutdown();
+            }
         }, "pantera-shutdown-hook"));
 
         app.start(Integer.parseInt(cmd.getOptionValue(apiport, VertxMain.DEF_API_PORT)));
@@ -1619,13 +1719,48 @@ public final class VertxMain {
     }
 
     /**
+     * Identity of this process in repository job leases: the host name and
+     * a suffix that changes at every start, so a restarted node never
+     * mistakes its predecessor's lease for its own.
+     * @return Node id
+     */
+    private static String nodeId() {
+        String host;
+        try {
+            host = java.net.InetAddress.getLocalHost().getHostName();
+        } catch (final java.net.UnknownHostException ex) {
+            host = "pantera";
+        }
+        return String.format(
+            "%s-%s", host, java.util.UUID.randomUUID().toString().substring(0, 6)
+        );
+    }
+
+    /**
+     * Drop what this node keeps under a repository name that no longer
+     * names a repository: slices, breaker, bulkhead, negative cache, and
+     * the proxy metadata jobs and queues.
+     * @param slices Repository slices
+     * @param settings Settings
+     * @param name Former repository name
+     */
+    private static void forgetRepoName(
+        final RepositorySlices slices, final Settings settings, final String name
+    ) {
+        slices.forgetRepo(name);
+        settings.artifactMetadata().ifPresent(
+            queues -> queues.stopProxyMetadataProcessing(name)
+        );
+    }
+
+    /**
      * Obtain and configure Vert.x instance. If vertx metrics are configured,
      * this method enables Micrometer metrics options with Prometheus. Check
      * <a href="https://vertx.io/docs/3.9.13/vertx-micrometer-metrics/java/#_prometheus">docs</a>.
      * @param mctx Metrics context
      * @return Vert.x instance
      */
-    private static Vertx vertx(final MetricsContext mctx) {
+    static Vertx vertx(final MetricsContext mctx) {
         final Vertx res;
         final Optional<Pair<String, Integer>> endpoint = mctx.endpointAndPort();
         // NOTE: APM registry removed - using Elastic APM Java Agent via -javaagent (safe mode)
@@ -1654,8 +1789,9 @@ public final class VertxMain {
         if (apm != null || endpoint.isPresent()) {
             final MicrometerMetricsOptions micrometer = new MicrometerMetricsOptions()
                 .setEnabled(true)
-                // Enable comprehensive Vert.x metrics with labels
-                .setJvmMetricsEnabled(true)
+                // JVM meters (class loader, memory, GC, processor, threads)
+                // are bound by Vert.x, once, when the `jvm` metric type is on.
+                .setJvmMetricsEnabled(mctx.jvm())
                 // Add labels for HTTP metrics (method, status code)
                 // NOTE: HTTP_PATH label removed to avoid high cardinality
                 // Repository-level metrics use pantera_http_requests_total with repo_name label instead
@@ -1684,91 +1820,25 @@ public final class VertxMain {
                         .setStartEmbeddedServer(false)  // Disabled - using AsyncMetricsVerticle instead
                 );
             }
+            // The registry is created and configured BEFORE Vert.x starts:
+            // Vert.x registers its pool, HTTP and JVM meters while it boots,
+            // and a common tag or MeterFilter added afterwards does not
+            // apply to a meter that already exists (Micrometer warns "A
+            // MeterFilter is being configured after a Meter has been
+            // registered"), so those meters lacked the job tag, the
+            // repo/method cardinality caps and the SLO buckets.
+            final MeterRegistry registry;
+            if (apm == null) {
+                registry = new io.micrometer.prometheus.PrometheusMeterRegistry(
+                    io.micrometer.prometheus.PrometheusConfig.DEFAULT
+                );
+                micrometer.setMicrometerRegistry(registry);
+            } else {
+                registry = apm;
+            }
+            VertxMain.configureMeters(registry);
             options.setMetricsOptions(micrometer);
             res = Vertx.vertx(options);
-
-            // CRITICAL FIX: Get MeterRegistry AFTER Vertx.vertx() to avoid NullPointerException
-            // BackendRegistries.getDefaultNow() requires Vertx to be initialized first
-            final MeterRegistry registry = BackendRegistries.getDefaultNow();
-
-            // Add common tags to all metrics
-            registry.config().commonTags("job", "pantera");
-
-            // Add repo_name cardinality control filter (default max 50 distinct repos)
-            registry.config().meterFilter(
-                new RepoNameMeterFilter(
-                    ConfigDefaults.getInt("PANTERA_METRICS_MAX_REPOS", 50)
-                )
-            );
-
-            // The method tag of the HTTP server metrics is whatever token a
-            // client sends, credentials or not: keep it to the methods HTTP
-            // defines, or a client can grow the registry without bound.
-            registry.config().meterFilter(
-                new com.auto1.pantera.http.misc.HttpMethodMeterFilter()
-            );
-
-            // Histogram buckets for Timer metrics, opt-in via
-            // PANTERA_METRICS_PERCENTILES_HISTOGRAM (default: false).
-            //
-            // Curated SLO ladders instead of percentilesHistogram(true):
-            // Micrometer's auto mode emits ~70 buckets per timer series;
-            // these ladders emit 16-18 spent where the SLOs live. Two
-            // ladders because the timer families measure different things:
-            //
-            //  - TRANSFER timers span full body streaming — a multi-GB
-            //    docker layer to a slow client legitimately runs minutes,
-            //    so the ladder extends to 20 min or p99 clamps at the top
-            //    bucket and lies.
-            //  - CONTROL-PLANE timers (cooldown, phases, cache ops) live
-            //    in the 1-500 ms band and get denser low boundaries; 30 s
-            //    is already pathological there.
-            //
-            // Recording cost is bucket-count-insensitive (binary search +
-            // one lock-free increment, single ns); the cost axis is series
-            // count at scrape/TSDB time (~buckets+1 series per tag combo).
-            // Bucket shapes are fixed at meter creation — changing the
-            // ladders requires a restart, unlike DB-backed settings.
-            if (Boolean.parseBoolean(
-                ConfigDefaults.get("PANTERA_METRICS_PERCENTILES_HISTOGRAM", "false")
-            )) {
-                final java.util.Set<String> transferTimers = java.util.Set.of(
-                    "pantera.http.request.duration",
-                    "pantera.proxy.request.duration",
-                    "pantera.upstream.request.duration",
-                    "pantera.storage.operation.duration",
-                    "vertx.http.server.response.time"
-                );
-                final double[] transferSlos = slosNanos(
-                    10, 25, 50, 100, 250, 500, 750,
-                    1_000, 2_500, 5_000, 10_000, 20_000, 30_000,
-                    60_000, 120_000, 300_000, 600_000, 1_200_000
-                );
-                final double[] controlSlos = slosNanos(
-                    1, 2.5, 5, 10, 25, 50, 75, 100, 250, 500, 750,
-                    1_000, 2_500, 5_000, 10_000, 30_000
-                );
-                registry.config().meterFilter(
-                    new MeterFilter() {
-                        @Override
-                        public DistributionStatisticConfig configure(
-                            final Meter.Id id,
-                            final DistributionStatisticConfig config
-                        ) {
-                            if (id.getType() == Meter.Type.TIMER) {
-                                return DistributionStatisticConfig.builder()
-                                    .serviceLevelObjectives(
-                                        transferTimers.contains(id.getName())
-                                            ? transferSlos : controlSlos
-                                    )
-                                    .build()
-                                    .merge(config);
-                            }
-                            return config;
-                        }
-                    }
-                );
-            }
 
             // Initialize MicrometerMetrics with the registry
             com.auto1.pantera.metrics.MicrometerMetrics.initialize(registry);
@@ -1783,13 +1853,9 @@ public final class VertxMain {
             // Initialize storage metrics recorder
             com.auto1.pantera.metrics.StorageMetricsRecorder.initialize();
 
-            if (mctx.jvm()) {
-                new ClassLoaderMetrics().bindTo(registry);
-                new JvmMemoryMetrics().bindTo(registry);
-                new JvmGcMetrics().bindTo(registry);
-                new ProcessorMetrics().bindTo(registry);
-                new JvmThreadMetrics().bindTo(registry);
-            }
+            // The JVM binders are not bound here: Vert.x binds the same five
+            // (setJvmMetricsEnabled above), and binding them twice registered
+            // every JVM meter a second time.
             if (endpoint.isPresent()) {
                 EcsLogger.info("com.auto1.pantera")
                     .message("Micrometer metrics (JVM, Vert.x, Storage, Cache, Repository) enabled on port " + endpoint.get().getValue())
@@ -1814,6 +1880,93 @@ public final class VertxMain {
             .log();
 
         return res;
+    }
+
+    /**
+     * Common tags, cardinality caps and histogram ladders of the meter
+     * registry. Has to run before the first meter is registered.
+     *
+     * @param registry Registry without meters
+     */
+    private static void configureMeters(final MeterRegistry registry) {
+        // Add common tags to all metrics
+        registry.config().commonTags("job", "pantera");
+
+        // Add repo_name cardinality control filter (default max 50 distinct repos)
+        registry.config().meterFilter(
+            new RepoNameMeterFilter(
+                ConfigDefaults.getInt("PANTERA_METRICS_MAX_REPOS", 50)
+            )
+        );
+
+        // The method tag of the HTTP server metrics is whatever token a
+        // client sends, credentials or not: keep it to the methods HTTP
+        // defines, or a client can grow the registry without bound.
+        registry.config().meterFilter(
+            new com.auto1.pantera.http.misc.HttpMethodMeterFilter()
+        );
+
+        // Histogram buckets for Timer metrics, opt-in via
+        // PANTERA_METRICS_PERCENTILES_HISTOGRAM (default: false).
+        //
+        // Curated SLO ladders instead of percentilesHistogram(true):
+        // Micrometer's auto mode emits ~70 buckets per timer series;
+        // these ladders emit 16-18 spent where the SLOs live. Two
+        // ladders because the timer families measure different things:
+        //
+        //  - TRANSFER timers span full body streaming — a multi-GB
+        //    docker layer to a slow client legitimately runs minutes,
+        //    so the ladder extends to 20 min or p99 clamps at the top
+        //    bucket and lies.
+        //  - CONTROL-PLANE timers (cooldown, phases, cache ops) live
+        //    in the 1-500 ms band and get denser low boundaries; 30 s
+        //    is already pathological there.
+        //
+        // Recording cost is bucket-count-insensitive (binary search +
+        // one lock-free increment, single ns); the cost axis is series
+        // count at scrape/TSDB time (~buckets+1 series per tag combo).
+        // Bucket shapes are fixed at meter creation — changing the
+        // ladders requires a restart, unlike DB-backed settings.
+        if (Boolean.parseBoolean(
+            ConfigDefaults.get("PANTERA_METRICS_PERCENTILES_HISTOGRAM", "false")
+        )) {
+            final java.util.Set<String> transferTimers = java.util.Set.of(
+                "pantera.http.request.duration",
+                "pantera.proxy.request.duration",
+                "pantera.upstream.request.duration",
+                "pantera.storage.operation.duration",
+                "vertx.http.server.response.time"
+            );
+            final double[] transferSlos = slosNanos(
+                10, 25, 50, 100, 250, 500, 750,
+                1_000, 2_500, 5_000, 10_000, 20_000, 30_000,
+                60_000, 120_000, 300_000, 600_000, 1_200_000
+            );
+            final double[] controlSlos = slosNanos(
+                1, 2.5, 5, 10, 25, 50, 75, 100, 250, 500, 750,
+                1_000, 2_500, 5_000, 10_000, 30_000
+            );
+            registry.config().meterFilter(
+                new MeterFilter() {
+                    @Override
+                    public DistributionStatisticConfig configure(
+                        final Meter.Id id,
+                        final DistributionStatisticConfig config
+                    ) {
+                        if (id.getType() == Meter.Type.TIMER) {
+                            return DistributionStatisticConfig.builder()
+                                .serviceLevelObjectives(
+                                    transferTimers.contains(id.getName())
+                                        ? transferSlos : controlSlos
+                                )
+                                .build()
+                                .merge(config);
+                        }
+                        return config;
+                    }
+                }
+            );
+        }
     }
 
     /**

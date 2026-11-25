@@ -44,6 +44,9 @@ const adminItems = computed<NavItem[]>(() => {
   if (canWrite('api_repository_permissions')) {
     items.push({ label: 'Repository Management', icon: 'pi pi-server', to: '/admin/repositories' })
   }
+  if (auth.hasAction('api_repository_permissions', 'delete')) {
+    items.push({ label: 'Repository Jobs', icon: 'pi pi-history', to: '/admin/repository-jobs' })
+  }
   if (canWrite('api_user_permissions')) {
     items.push({ label: 'User Management', icon: 'pi pi-users', to: '/admin/users' })
   }

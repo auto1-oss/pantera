@@ -22,8 +22,11 @@ import com.auto1.pantera.docker.asto.BlobSource;
 import com.auto1.pantera.docker.asto.Uploads;
 import com.auto1.pantera.docker.misc.Pagination;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.LocalRefusal;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
+import com.auto1.pantera.http.UpstreamStatusException;
 import com.auto1.pantera.http.log.AnswerReason;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.ReasonSlice;
@@ -37,10 +40,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * A blob that could not be fetched is answered 404, like a blob that does
- * not exist. The reason on the answer says which: on 2026-11-17 a registry
+ * A blob that could not be fetched is not a blob that does not exist: it is
+ * answered 5xx, with the reason on the answer. On 2026-11-17 a registry
  * closed a connection under a layer download, and the 404 that followed
- * read as "the layer is not there".
+ * read as "the layer is not there" (and a group may remember a 404).
  *
  * @since 2.2.12
  */
@@ -62,12 +65,80 @@ final class GetBlobsSliceReasonTest {
             Headers.EMPTY, Content.EMPTY
         ).get(10, TimeUnit.SECONDS);
         MatcherAssert.assertThat(
-            "the client still gets 404",
-            answer.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+            "a lost connection is not a missing blob",
+            answer.status(), new IsEqual<>(RsStatus.BAD_GATEWAY)
         );
         MatcherAssert.assertThat(
             "the record says the upstream closed the connection",
             new AnswerReason(answer).token(), new IsEqual<>(Optional.of("connection_closed"))
+        );
+    }
+
+    @Test
+    @Timeout(20)
+    void headOfABlobThatCouldNotBeFetchedIsBadGateway() throws Exception {
+        final Response answer = new ReasonSlice(
+            new HeadBlobsSlice(new FailingDocker(new EOFException("early EOF")))
+        ).response(
+            new RequestLine("HEAD", "/v2/test/blobs/" + GetBlobsSliceReasonTest.DIGEST, "HTTP/1.1"),
+            Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "a lost connection is not a missing blob",
+            answer.status(), new IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+        MatcherAssert.assertThat(
+            "the record says the upstream closed the connection",
+            new AnswerReason(answer).token(), new IsEqual<>(Optional.of("connection_closed"))
+        );
+    }
+
+    @Test
+    @Timeout(20)
+    void anOpenCircuitKeepsItsMarker() throws Exception {
+        final Response answer = new ReasonSlice(
+            new GetBlobsSlice(
+                new FailingDocker(
+                    new UpstreamStatusException(
+                        502,
+                        Headers.from(UpstreamCircuitOpenException.HEADER, "true")
+                    )
+                )
+            )
+        ).response(
+            new RequestLine("GET", "/v2/test/blobs/" + GetBlobsSliceReasonTest.DIGEST, "HTTP/1.1"),
+            Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "a group must be able to skip this member: the refusal is marked",
+            new LocalRefusal(answer).present(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the open breaker is the reason",
+            new AnswerReason(answer).token(), new IsEqual<>(Optional.of("circuit_open"))
+        );
+    }
+
+    @Test
+    @Timeout(20)
+    void aThrottlingUpstreamIsUnavailableNotNotFound() throws Exception {
+        final Response answer = new ReasonSlice(
+            new GetBlobsSlice(
+                new FailingDocker(
+                    new UpstreamStatusException(429, Headers.from("Retry-After", "7"))
+                )
+            )
+        ).response(
+            new RequestLine("GET", "/v2/test/blobs/" + GetBlobsSliceReasonTest.DIGEST, "HTTP/1.1"),
+            Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "upstream 429 asks the client to repeat",
+            answer.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the upstream's Retry-After is relayed",
+            answer.headers().values("Retry-After"), new IsEqual<>(java.util.List.of("7"))
         );
     }
 

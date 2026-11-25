@@ -732,7 +732,11 @@ public final class CooldownRepository {
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, repoType);
-            stmt.setString(2, repoName);
+            // The artifact index carries the repository's immutable key.
+            stmt.setString(
+                2,
+                com.auto1.pantera.settings.repo.RepoKeys.shared().key(repoName).orElse(repoName)
+            );
             stmt.setString(3, artifact);
             try (ResultSet rs = stmt.executeQuery()) {
                 final List<String> result = new ArrayList<>();

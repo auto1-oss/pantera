@@ -30,7 +30,7 @@ versions are invisible to client resolvers) as of v2.2.0.
 | npm-proxy          | `GET /{pkg}` (full and abbreviated packument), `GET /{pkg}/latest`. `dist-tags.latest` is rewritten; dist-tags pointing at blocked versions are dropped. |
 | pypi-proxy         | `/simple/{pkg}/` and `/pypi/{pkg}/json`. `info.version` + `urls` rewritten using PEP 440 ordering. |
 | docker-proxy       | `/v2/{name}/tags/list` filters the tags array; `/v2/{name}/manifests/{tag}` returns `MANIFEST_UNKNOWN` (404) when the tag is blocked or resolves to a blocked digest. |
-| go-proxy           | `/{module}/@v/list` and `/{module}/@latest`. If `@latest` is blocked, the response is rewritten to the highest non-blocked version; 403 if every version is blocked. |
+| go-proxy           | `/{module}/@v/list` and `/{module}/@latest`. If `@latest` is blocked, the response is rewritten to the highest non-blocked version; 403 if every version is blocked. Of a `@v/list` the newest 50 versions are evaluated; an older version cannot be inside a cooldown window. |
 | php-proxy (Composer) | `/packages/{vendor}/{pkg}.json` and `/p2/{vendor}/{pkg}.json`. The root `/packages.json` / `/repo.json` is served by the proxy itself and points Composer at `/p2/`, where versions are filtered. |
 | file-proxy         | **No metadata filtering.** See "file-proxy scope" below. |
 

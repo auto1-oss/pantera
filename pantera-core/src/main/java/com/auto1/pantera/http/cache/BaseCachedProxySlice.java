@@ -34,6 +34,7 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.context.ContextualExecutor;
+import com.auto1.pantera.http.log.UpstreamUrl;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -131,6 +132,12 @@ public abstract class BaseCachedProxySlice implements Slice {
     public static final String CACHE_ONLY_HEADER = "X-Pantera-Cache-Only";
 
     private final Cache cache;
+
+    /**
+     * Largest checksum or signature file that is read into memory to be
+     * stored; a longer answer is relayed as it is.
+     */
+    private static final int CHECKSUM_LIMIT = 64 * 1024;
 
     /**
      * Repository name.
@@ -1235,7 +1242,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     });
                 }
                 this.recordProxyMetric("success", duration);
-                final String upstreamUri = this.upstreamUrl + line.uri().getPath();
+                final String upstreamUri = new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath());
                 final com.auto1.pantera.http.context.RequestContext ctx =
                     new com.auto1.pantera.http.context.RequestContext(
                         org.apache.logging.log4j.ThreadContext.get("trace.id"),
@@ -1291,7 +1298,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 new ServerErrorLog(this.logger(), "proxy_upstream", headers)
                     .repository(this.repoName)
                     .path(line.uri().getPath())
-                    .upstream(this.upstreamUrl + line.uri().getPath())
+                    .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                     .status(RsStatus.BAD_GATEWAY.code())
                     .failure(error)
                     .warnUnlessExpected("Streaming cache write failed after " + duration + " ms");
@@ -1348,7 +1355,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     return this.staleOrUnavailable(
                         key, line,
                         new ServerErrorLog(this.logger(), "proxy_upstream", headers)
-                            .upstream(this.upstreamUrl + line.uri().getPath())
+                            .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                             .failure(error),
                         true,
                         "Upstream request failed with exception after " + duration + " ms"
@@ -1408,7 +1415,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 return this.staleOrUnavailable(
                     key, line,
                     new ServerErrorLog(this.logger(), "proxy_fetch_coalesced_error", headers)
-                        .upstream(this.upstreamUrl + line.uri().getPath())
+                        .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                         .reason(
                             failure == null ? "cache_write_failed"
                                 : new com.auto1.pantera.http.log.FailureCause(failure).reason()
@@ -1710,7 +1717,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                         new ServerErrorLog(this.logger(), "proxy_upstream", incomingHeaders)
                             .repository(this.repoName)
                             .path(line.uri().getPath())
-                            .upstream(this.upstreamUrl + line.uri().getPath())
+                            .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                             .status(RsStatus.SERVICE_UNAVAILABLE.code())
                             .reason(upstreamReason(resp, code))
                             .warnUnlessExpected("Upstream answered " + code + " for an uncacheable path");
@@ -1746,7 +1753,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 new ServerErrorLog(this.logger(), "proxy_upstream", incomingHeaders)
                     .repository(this.repoName)
                     .path(line.uri().getPath())
-                    .upstream(this.upstreamUrl + line.uri().getPath())
+                    .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                     .status(RsStatus.SERVICE_UNAVAILABLE.code())
                     .failure(error)
                     .warnUnlessExpected("Direct upstream request failed with exception after "
@@ -1811,7 +1818,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 this.staleOrUnavailable(
                     key, line,
                     new ServerErrorLog(this.logger(), "proxy_upstream", headers)
-                        .upstream(this.upstreamUrl + line.uri().getPath())
+                        .upstream(new UpstreamUrl(this.upstreamUrl).of(line.uri().getPath()))
                         .reason(reason),
                     false,
                     "Upstream answered " + code
@@ -2012,8 +2019,81 @@ public abstract class BaseCachedProxySlice implements Slice {
                             .build()
                     );
                 }
-                return this.fetchDirect(line, key, incomingHeaders, owner);
+                return this.fetchDirect(line, key, incomingHeaders, owner)
+                    .thenCompose(resp -> this.keepChecksum(key, resp));
             }).toCompletableFuture();
+    }
+
+    /**
+     * Store a checksum file the upstream just answered. A checksum file
+     * that is not in the storage (the artifact was stored before checksums
+     * were kept, or is not cached at all and a client only asks for its
+     * checksum to see whether its own copy is current) sent every request
+     * for it to the upstream: a build of nothing but cached artifacts
+     * still failed when the upstream was down. It is now fetched once.
+     *
+     * <p>Storing it writes one small file and nothing else: a checksum path
+     * produces no artifact event, so the search index gets no row for it,
+     * and the artifact's own fetch later overwrites it with the checksums
+     * verified against the artifact.</p>
+     *
+     * @param key Key of the checksum file
+     * @param resp Answer of the upstream
+     * @return The answer, with a body that can still be read
+     */
+    private CompletableFuture<Response> keepChecksum(final Key key, final Response resp) {
+        final String path = key.string();
+        if (!resp.status().success() || this.storage.isEmpty()
+            || BaseCachedProxySlice.declaredLength(resp) > BaseCachedProxySlice.CHECKSUM_LIMIT) {
+            return CompletableFuture.completedFuture(resp);
+        }
+        final Storage store = this.storage.get();
+        return resp.body().asBytesFuture().thenCompose(
+            bytes -> {
+                final Response answer = new Response(
+                    resp.status(), resp.headers(), new Content.From(bytes)
+                );
+                if (bytes.length == 0 || bytes.length > BaseCachedProxySlice.CHECKSUM_LIMIT) {
+                    return CompletableFuture.completedFuture(answer);
+                }
+                return store.save(key, new Content.From(bytes))
+                    .handle(
+                        (ignored, err) -> {
+                            if (err != null) {
+                                EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                                    .message("Could not store the checksum file fetched"
+                                        + " from the upstream; it is served and will be"
+                                        + " fetched again")
+                                    .eventCategory("file")
+                                    .eventAction("checksum_store")
+                                    .eventOutcome("failure")
+                                    .field("repository.name", this.repoName)
+                                    .field("url.path", path)
+                                    .error(err)
+                                    .field("log.source", "application")
+                                    .log();
+                            }
+                            return answer;
+                        }
+                    );
+            }
+        );
+    }
+
+    /**
+     * Length a response declares, or 0 when it declares none.
+     */
+    private static long declaredLength(final Response resp) {
+        long length = 0L;
+        final List<String> values = resp.headers().values("Content-Length");
+        if (!values.isEmpty()) {
+            try {
+                length = Long.parseLong(values.get(0).trim());
+            } catch (final NumberFormatException ignored) {
+                length = 0L;
+            }
+        }
+        return length;
     }
 
     private CompletableFuture<Response> handleRootPath(

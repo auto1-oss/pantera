@@ -89,7 +89,10 @@ public class HeadManifestSlice extends DockerActionSlice {
                         }
                     ).orElseGet(
                         () -> {
-                            EcsLogger.warn("com.auto1.pantera.docker")
+                            // A manifest this repository does not have is an
+                            // ordinary answer (a group asks each member in
+                            // turn); the access record carries the 404.
+                            EcsLogger.debug("com.auto1.pantera.docker")
                                 .message("Manifest not found")
                                 .eventCategory("web")
                                 .eventAction("manifest_head")
@@ -104,7 +107,13 @@ public class HeadManifestSlice extends DockerActionSlice {
                                 .build();
                         }
                     )
-                );
+                )
+                // A failed fetch is not a manifest that does not exist:
+                // 5xx with its cause (and the circuit-open marker).
+                .exceptionally(err -> new com.auto1.pantera.http.cache.UpstreamMiss(
+                        "com.auto1.pantera.docker", this.docker.registryName(),
+                        line.uri().getPath(), headers
+                    ).failed(err, "Manifest HEAD failed"));
         });
     }
 

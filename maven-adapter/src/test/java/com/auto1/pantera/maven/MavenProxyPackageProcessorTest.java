@@ -16,6 +16,10 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.ProxyEventRetry;
+import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
@@ -136,6 +140,71 @@ class MavenProxyPackageProcessorTest {
         MatcherAssert.assertThat(
             "Same items were removed from packages queue", this.packages.isEmpty()
         );
+    }
+
+    @Test
+    void givesUpOnAFileThatVanishedAfterListing() {
+        final Key key = new Key.From("com/pantera/asto/0.15");
+        ProxyArtifactEvent event =
+            new ProxyArtifactEvent(key, MavenProxyPackageProcessorTest.RNAME);
+        for (int idx = 0; idx < ProxyEventRetry.MAX_ATTEMPTS; idx += 1) {
+            event = event.retried(0L);
+        }
+        this.packages.add(event);
+        // Quartz builds a new job instance for every run, so the attempt
+        // count has to come with the event.
+        final MavenProxyPackageProcessor processor = new MavenProxyPackageProcessor();
+        processor.setEvents(this.events);
+        processor.setPackages(this.packages);
+        processor.setStorage(new ListedButGone(key));
+        processor.execute(null);
+        MatcherAssert.assertThat(
+            "an exhausted event is dropped, not put back",
+            this.packages.isEmpty(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void countsRetriesAcrossJobInstances() {
+        final Key key = new Key.From("com/pantera/asto/0.15");
+        this.packages.add(new ProxyArtifactEvent(key, MavenProxyPackageProcessorTest.RNAME));
+        for (int run = 0; run < 3; run += 1) {
+            final MavenProxyPackageProcessor processor = new MavenProxyPackageProcessor();
+            processor.setEvents(this.events);
+            processor.setPackages(this.packages);
+            processor.setStorage(new ListedButGone(key));
+            processor.execute(null);
+        }
+        MatcherAssert.assertThat(
+            "the event stays queued", this.packages.size(), new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "the attempt is counted on the event and runs inside the wait leave it alone",
+            this.packages.peek().attempts(), new IsEqual<>(1)
+        );
+    }
+
+    /**
+     * Storage that lists a jar which is gone by the time it is read.
+     */
+    private static final class ListedButGone extends Storage.Wrap {
+
+        /**
+         * Version directory.
+         */
+        private final Key dir;
+
+        ListedButGone(final Key dir) {
+            super(new InMemoryStorage());
+            this.dir = dir;
+        }
+
+        @Override
+        public CompletableFuture<Collection<Key>> list(final Key prefix) {
+            return CompletableFuture.completedFuture(
+                List.of(new Key.From(this.dir, "asto-0.15.jar"))
+            );
+        }
     }
 
 }

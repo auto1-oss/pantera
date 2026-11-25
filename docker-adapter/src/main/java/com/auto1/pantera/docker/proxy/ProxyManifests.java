@@ -20,7 +20,9 @@ import com.auto1.pantera.docker.http.DigestHeader;
 import com.auto1.pantera.docker.manifest.Manifest;
 import com.auto1.pantera.docker.misc.Pagination;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.UpstreamStatusException;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -152,7 +154,7 @@ public final class ProxyManifests implements Manifests {
                 } else {
                     // CRITICAL: Consume body even on error to prevent request leak
                     result = response.body().asBytesFuture().thenCompose(
-                        ignored -> unexpected(response.status())
+                        ignored -> unexpected(response)
                     );
                 }
                 return result;
@@ -177,7 +179,7 @@ public final class ProxyManifests implements Manifests {
                 } else {
                     // CRITICAL: Consume body even on error to prevent request leak
                     result = response.body().asBytesFuture().thenCompose(
-                        ignored -> unexpected(response.status())
+                        ignored -> unexpected(response)
                     );
                 }
                 return result;
@@ -186,15 +188,17 @@ public final class ProxyManifests implements Manifests {
     }
 
     /**
-     * Creates completion stage failed with unexpected status exception.
+     * Creates completion stage failed with the upstream answer: its status
+     * and headers (Retry-After, circuit-open marker) travel to the slice
+     * that answers the client, which must not read it as "not found".
      *
-     * @param status Status to be reported in error.
+     * @param response Upstream answer to be reported in error.
      * @param <T> Completion stage result type.
      * @return Failed completion stage.
      */
-    private static <T> CompletableFuture<T> unexpected(RsStatus status) {
+    private static <T> CompletableFuture<T> unexpected(final Response response) {
         return CompletableFuture.failedFuture(
-            new IllegalArgumentException("Unexpected status: " + status)
+            new UpstreamStatusException(response.status().code(), response.headers())
         );
     }
 }

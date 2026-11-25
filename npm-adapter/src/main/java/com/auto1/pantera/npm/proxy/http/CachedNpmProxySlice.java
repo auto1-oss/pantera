@@ -196,10 +196,11 @@ public final class CachedNpmProxySlice implements Slice {
      * @return True if path is a special endpoint
      */
     private static boolean isSpecialEndpoint(final String path) {
-        return path.startsWith("/-/whoami")
-            || path.startsWith("/-/npm/v1/security/")
-            || path.startsWith("/-/v1/search")
-            || path.startsWith("/-/user/")
+        // The whole registry API namespace: "/-/whoami", "/-/user/...",
+        // "/-/v1/search", "/-/npm/v1/security/...", "/-/npm/v1/keys",
+        // "/-/npm/v1/attestations/...". None of it is a package or a
+        // tarball, so none of it is negative-cached or coalesced as one.
+        return path.startsWith("/-/")
             || path.contains("/auth");
     }
 

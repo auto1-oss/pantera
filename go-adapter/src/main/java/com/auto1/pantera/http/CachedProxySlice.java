@@ -25,6 +25,8 @@ import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
+import com.auto1.pantera.http.cache.UpstreamMiss;
+import com.auto1.pantera.http.log.FailureCause;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.context.ContextualExecutor;
@@ -37,7 +39,6 @@ import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -242,7 +243,7 @@ final class CachedProxySlice implements Slice {
         final Content body
     ) {
         final String path = line.uri().getPath();
-        EcsLogger.info("com.auto1.pantera.http")
+        EcsLogger.debug("com.auto1.pantera.http")
             .message("Processing Go proxy request")
             .eventCategory("web")
             .eventAction("proxy_request")
@@ -258,7 +259,7 @@ final class CachedProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .field("log.source", "application")
                 .log();
-            return this.handleRootPath(line);
+            return this.handleRootPath(line, headers);
         }
         // Cooldown-aware @latest rewrite: intercepts before generic
         // fetchThroughCache so "go get <module>" (no pseudo-version) is
@@ -452,7 +453,8 @@ final class CachedProxySlice implements Slice {
                                 Optional.of(module + "/@v/" + version),
                                 releaseDate,
                                 new AtomicReference<>(Headers.EMPTY),
-                                ctx
+                                ctx,
+                                headers
                             );
                         });
                 });
@@ -521,7 +523,7 @@ final class CachedProxySlice implements Slice {
                 .log();
             return this.fetchFromRemoteAndCache(
                 line, key, owner, artifactPath, releaseDate, rshdr,
-                this.captureAuditContext(request)
+                this.captureAuditContext(request), request
             );
         }).toCompletableFuture();
     }
@@ -536,6 +538,8 @@ final class CachedProxySlice implements Slice {
      * @param artifactPath Optional artifact path for events
      * @param releaseDate Optional release date
      * @param rshdr Atomic reference to store response headers
+     * @param ctx Audit context of the request
+     * @param request Headers of the client request
      * @return Response future
      */
     private CompletableFuture<Response> fetchFromRemoteAndCache(
@@ -545,7 +549,8 @@ final class CachedProxySlice implements Slice {
         final Optional<String> artifactPath,
         final Optional<Instant> releaseDate,
         final AtomicReference<Headers> rshdr,
-        final AuditContext ctx
+        final AuditContext ctx,
+        final Headers request
     ) {
         // WI-07 §9.5 — integrity-verified atomic primary+sidecar write for
         // Go module archives. Only *.zip has an upstream .ziphash (SHA-256)
@@ -556,6 +561,12 @@ final class CachedProxySlice implements Slice {
             && key.string().endsWith(".zip")) {
             return this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr, ctx);
         }
+        // What the upstream said when it gave no content: the answer for the
+        // client. An upstream that could not be asked is not a missing file.
+        final UpstreamMiss miss = new UpstreamMiss(
+            "com.auto1.pantera.http", this.rname, key.string(), request
+        );
+        final AtomicReference<Response> missed = new AtomicReference<>();
         // Get checksum headers from remote HEAD for validation
         return new RepoHead(this.client)
             .head(line.uri().getPath())
@@ -563,12 +574,15 @@ final class CachedProxySlice implements Slice {
                 // Network error during HEAD - log and continue with empty headers
                 // This allows cache to work in degraded mode (no checksum validation)
                 EcsLogger.warn("com.auto1.pantera.http")
+                    .traceContext(ctx.traceId(), ctx.clientIp())
+                    .field("repository.name", this.rname)
                     .message("Remote HEAD failed, proceeding without checksum validation")
                     .eventCategory("web")
                     .eventAction("proxy_request")
-                    .eventOutcome("success")
-                    .field("event.reason", "degraded_response")
+                    .eventOutcome("failure")
+                    .field("event.reason", new FailureCause(err).reason())
                     .field("package.name", key.string())
+                    .field("repository.name", this.rname)
                     .field("error.message", err.getMessage())
                     .field("log.source", "application")
                     .log();
@@ -590,6 +604,9 @@ final class CachedProxySlice implements Slice {
                                             .doOnTerminate(() -> term.complete(null));
                                     promise.complete(Optional.of(new Content.From(res)));
                                 } else {
+                                    missed.set(
+                                        miss.answered(resp.status().code(), resp.headers())
+                                    );
                                     // CRITICAL: Consume body to prevent Vert.x request leak
                                     resp.body().asBytesFuture().whenComplete((ignored, error) -> {
                                         promise.complete(Optional.empty());
@@ -600,16 +617,9 @@ final class CachedProxySlice implements Slice {
                                 return term;
                             })
                             .exceptionally(err -> {
-                                // Network error during fetch - complete with empty
-                                EcsLogger.warn("com.auto1.pantera.http")
-                                    .message("Remote fetch failed")
-                                    .eventCategory("web")
-                                    .eventAction("proxy_request")
-                                    .eventOutcome("failure")
-                                    .field("package.name", key.string())
-                                    .field("error.message", err.getMessage())
-                                    .field("log.source", "application")
-                                    .log();
+                                // Network error during fetch: no content,
+                                // and the cause is kept for the answer.
+                                missed.set(miss.failed(err, "Go upstream fetch failed"));
                                 promise.complete(Optional.empty());
                                 return null;
                             });
@@ -658,37 +668,40 @@ final class CachedProxySlice implements Slice {
                             .body(content.get())
                             .build();
                     }
-                    if (throwable != null) {
-                        EcsLogger.error("com.auto1.pantera.http")
-                            .message("Failed to fetch through cache")
-                            .eventCategory("web")
-                            .eventAction("proxy_request")
-                            .eventOutcome("failure")
-                            .error(throwable)
-                            .field("log.source", "application")
-                            .log();
+                    final Response answer;
+                    if (missed.get() != null) {
+                        // The upstream answered non-2xx or the call failed:
+                        // already logged with its cause by UpstreamMiss.
+                        answer = missed.get();
+                    } else if (throwable != null) {
+                        // The cache load itself failed (body lost mid-way,
+                        // storage write): a failure, never "not found".
+                        answer = miss.failed(throwable, "Go fetch through cache failed");
                     } else {
-                        EcsLogger.warn("com.auto1.pantera.http")
-                            .message("Cache load returned empty, returning 404")
+                        // The cache gave nothing and the upstream was not
+                        // asked: nothing more is known than the status.
+                        EcsLogger.debug("com.auto1.pantera.http")
+                            .traceContext(ctx.traceId(), ctx.clientIp())
+                            .message("Cache load returned empty without an upstream answer, returning 404")
                             .eventCategory("web")
                             .eventAction("proxy_request")
                             .eventOutcome("failure")
-                            .field("event.reason", "artifact_not_found")
                             .field("package.name", key.string())
                             .field("repository.name", this.rname)
                             .field("log.source", "application")
                             .log();
+                        answer = ResponseBuilder.notFound().build();
                     }
                     if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
                         this.auditZipAccess(
                             ctx, key, owner, 0L,
                             AuditLogger.OUTCOME_FAILURE,
-                            throwable != null
+                            answer.status().serverError()
                                 ? AuditLogger.REASON_UPSTREAM_UNAVAILABLE
                                 : AuditLogger.REASON_NOT_FOUND
                         );
                     }
-                    return ResponseBuilder.notFound().build();
+                    return answer;
                 }
             ).toCompletableFuture();
     }
@@ -709,6 +722,7 @@ final class CachedProxySlice implements Slice {
                 .map(val -> Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(val)));
         } catch (final DateTimeParseException ex) {
             EcsLogger.warn("com.auto1.pantera.http")
+                .field("repository.name", this.rname)
                 .message("Failed to parse Last-Modified header: " + ex.getParsedString())
                 .eventCategory("web")
                 .eventAction("header_parse")
@@ -806,6 +820,7 @@ final class CachedProxySlice implements Slice {
     private void addEventToQueue(final Key key, final String owner, final Optional<Long> release) {
         if (this.events.isEmpty()) {
             EcsLogger.error("com.auto1.pantera.http")
+                .field("repository.name", this.rname)
                 .message("Events queue is NOT present - cannot enqueue events")
                 .eventCategory("web")
                 .eventAction("proxy_request")
@@ -900,17 +915,27 @@ final class CachedProxySlice implements Slice {
         return res;
     }
 
-    private CompletableFuture<Response> handleRootPath(final RequestLine line) {
+    private CompletableFuture<Response> handleRootPath(
+        final RequestLine line, final Headers request
+    ) {
+        final UpstreamMiss miss = new UpstreamMiss(
+            "com.auto1.pantera.http", this.rname, line.uri().getPath(), request
+        );
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenApply(resp -> {
+            .thenCompose(resp -> {
                 if (resp.status().success()) {
-                    return ResponseBuilder.ok()
-                        .headers(resp.headers())
-                        .body(resp.body())
-                        .build();
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok()
+                            .headers(resp.headers())
+                            .body(resp.body())
+                            .build()
+                    );
                 }
-                return ResponseBuilder.notFound().build();
-            });
+                return resp.body().asBytesFuture().thenApply(
+                    ignored -> miss.answered(resp.status().code(), resp.headers())
+                );
+            })
+            .exceptionally(err -> miss.failed(err, "Go upstream root request failed"));
     }
 
     // ===== T-P08: stream-through primary path =====
@@ -974,13 +999,9 @@ final class CachedProxySlice implements Slice {
                 this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr, auditCtx)
             );
         }).exceptionally(err -> {
-            new ServerErrorLog("com.auto1.pantera.http", "cache_write", auditCtx.requestHeaders())
-                .repository(this.rname)
-                .path(key.string())
-                .status(RsStatus.BAD_GATEWAY.code())
-                .failure(err)
-                .warnUnlessExpected("Go primary-artifact verify-and-serve failed");
-            return ResponseBuilder.badGateway().build();
+            return new UpstreamMiss(
+                "com.auto1.pantera.http", this.rname, key.string(), auditCtx.requestHeaders()
+            ).failed(err, "Go primary-artifact verify-and-serve failed");
         }).toCompletableFuture();
     }
 
@@ -1018,36 +1039,22 @@ final class CachedProxySlice implements Slice {
                     if (!leaderGate.isDone()) {
                         leaderGate.complete(null);
                     }
-                    final int status = resp.status().code();
+                    // 404/410 and other 4xx: 404 with the upstream status
+                    // as its reason; 429, 5xx and local refusals: 5xx with
+                    // their Retry-After and marker (see UpstreamMiss).
+                    final Response answer = new UpstreamMiss(
+                        "com.auto1.pantera.http", this.rname, key.string(),
+                        auditCtx.requestHeaders()
+                    ).answered(resp.status().code(), resp.headers());
                     if (artifactPath.isPresent()) {
                         this.auditZipAccess(
                             auditCtx, key, owner, 0L, AuditLogger.OUTCOME_FAILURE,
-                            status >= 400 && status < 500
-                                ? AuditLogger.REASON_NOT_FOUND
-                                : AuditLogger.REASON_UPSTREAM_UNAVAILABLE
+                            answer.status().serverError()
+                                ? AuditLogger.REASON_UPSTREAM_UNAVAILABLE
+                                : AuditLogger.REASON_NOT_FOUND
                         );
                     }
-                    if (status >= 400 && status < 500) {
-                        return CompletableFuture.completedFuture(
-                            ResponseBuilder.notFound().build()
-                        );
-                    }
-                    new ServerErrorLog(
-                        "com.auto1.pantera.http", "proxy_upstream", auditCtx.requestHeaders()
-                    )
-                        .repository(this.rname)
-                        .path(key.string())
-                        .status(RsStatus.BAD_GATEWAY.code())
-                        .reason(
-                            resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()
-                                ? "upstream_status_" + status : "circuit_open"
-                        )
-                        .warnUnlessExpected("Upstream answered " + status + " for module artifact");
-                    return CompletableFuture.completedFuture(
-                        ResponseBuilder.badGateway()
-                            .textBody("Upstream temporarily unavailable")
-                            .build()
-                    );
+                    return CompletableFuture.completedFuture(answer);
                 }
                 rshdr.set(resp.headers());
                 return this.cacheWriter.streamThroughAndCommit(
@@ -1093,13 +1100,6 @@ final class CachedProxySlice implements Slice {
                     final ProxyCacheWriter.StreamedArtifact artifact =
                         ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) result).value();
                     if (artifactPath.isPresent()) {
-                        // Genuine cache miss + successful upstream fetch —
-                        // the only branch that should publish.
-                        this.bindContext(auditCtx);
-                        this.enqueueEvent(
-                            owner, artifactPath,
-                            releaseDate.or(() -> this.parseLastModified(rshdr.get()))
-                        );
                         this.auditZipAccess(
                             auditCtx, key, owner, artifact.body().size().orElse(0L),
                             AuditLogger.OUTCOME_SUCCESS, null
@@ -1108,6 +1108,20 @@ final class CachedProxySlice implements Slice {
                     // Release followers only after the cache write commits.
                     artifact.verificationOutcome()
                         .whenComplete((r2, e2) -> {
+                            if (e2 == null && r2 instanceof Result.Ok && artifactPath.isPresent()) {
+                                // Genuine cache miss + successful upstream
+                                // fetch — the only branch that should
+                                // publish. Queued only now that the zip is
+                                // committed: the package processor reads it
+                                // from storage, and a zip that failed
+                                // verification or whose client hung up
+                                // never lands at all.
+                                this.bindContext(auditCtx);
+                                this.enqueueEvent(
+                                    owner, artifactPath,
+                                    releaseDate.or(() -> this.parseLastModified(rshdr.get()))
+                                );
+                            }
                             if (!leaderGate.isDone()) {
                                 leaderGate.complete(null);
                             }
@@ -1119,17 +1133,10 @@ final class CachedProxySlice implements Slice {
                 if (!leaderGate.isDone()) {
                     leaderGate.complete(null);
                 }
-                new ServerErrorLog(
-                    "com.auto1.pantera.http", "proxy_upstream", auditCtx.requestHeaders()
-                )
-                    .repository(this.rname)
-                    .path(key.string())
-                    .status(RsStatus.BAD_GATEWAY.code())
-                    .failure(err)
-                    .warnUnlessExpected("Go stream-through primary fetch failed");
-                return ResponseBuilder.badGateway()
-                    .textBody("Upstream temporarily unavailable")
-                    .build();
+                return new UpstreamMiss(
+                    "com.auto1.pantera.http", this.rname, key.string(),
+                    auditCtx.requestHeaders()
+                ).failed(err, "Go stream-through primary fetch failed");
             });
     }
 

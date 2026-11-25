@@ -15,6 +15,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.context.CallerContext;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -374,7 +375,11 @@ final class JettyClientSlice implements Slice {
                     }
                 }
         );
-        return res;
+        // Jetty completes the answer on one of its own threads, which the
+        // whole client shares: resume the caller under its logging context
+        // and give the Jetty thread its own back afterwards, so nothing the
+        // continuation binds stays behind for the next upstream answer.
+        return new CallerContext().resume(res);
     }
 
     /**

@@ -109,6 +109,32 @@ public final class StorageAliasDao {
         return result;
     }
 
+    /**
+     * Every repository-scoped alias, grouped by repository, in one query.
+     * @return Alias records by repository name
+     */
+    public java.util.Map<String, List<JsonObject>> listPerRepo() {
+        final java.util.Map<String, List<JsonObject>> result = new java.util.HashMap<>();
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT repo_name, name, config FROM storage_aliases"
+                     + " WHERE repo_name IS NOT NULL ORDER BY repo_name, name"
+             );
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                result.computeIfAbsent(rs.getString("repo_name"), key -> new ArrayList<>())
+                    .add(Json.createObjectBuilder()
+                        .add("name", rs.getString("name"))
+                        .add("config", Json.createReader(
+                            new StringReader(rs.getString("config"))).readObject())
+                        .build());
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to list aliases", ex);
+        }
+        return result;
+    }
+
     private List<JsonObject> listByRepo(final String repoName) {
         final List<JsonObject> result = new ArrayList<>();
         final String sql = repoName == null

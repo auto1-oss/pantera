@@ -228,6 +228,7 @@ Admin panels appear in the sidebar under **Administration** only if you have the
 | Panel | Permission Required | Purpose |
 |-------|-------------------|---------|
 | Repository Management | `api_repository_permissions:write` | Create, edit, delete repositories |
+| Repository Jobs | `api_repository_permissions:delete` | Restore deleted repositories, follow and retry background purge jobs, purge unowned storage directories |
 | User Management | `api_user_permissions:write` | Create, edit, enable/disable users |
 | Roles & Permissions | `api_role_permissions:write` | Manage RBAC roles |
 | Storage Configuration | `api_storage_alias_permissions:create` | Manage storage aliases |
@@ -244,7 +245,8 @@ The **Manage Repositories** page lists every repository you may read, with the c
 - **Toolbar**: search as you type (the list updates without pressing Enter), a **Format** filter and a **Mode** filter (Hosted, Proxy, Group). The filters, sort and page are kept in the URL, so a reload or the browser's back button returns to the same view.
 - **Columns**: Name, Format, Mode, Storage (`fs`, `s3` or the storage alias), Anonymous (`read` / `write` chips when anonymous access is allowed) and Updated (when and by whom). Name, Format and Updated are sortable.
 - **Opening a repository**: click its row to open its edit page. Browsing contents and Set Me Up live under **Repositories**.
-- **Selection bar**: tick rows and a bar appears with **Anonymous access…** (set anonymous download and upload for all selected repositories at once) and **Delete…** (type `delete` to confirm; the result reports how many were deleted, how many are being removed in the background, and which failed).
+- **Selection bar**: tick rows and a bar appears with **Anonymous access…** (set anonymous download and upload for all selected repositories at once) and **Delete…** (type `delete` to confirm). The repositories disappear at once and their data is purged in the background after the server's default restore window (24 hours unless configured otherwise). A repository that is a member of a group is refused and reported by name unless **Also remove them from the groups they are members of** is ticked; after a run the dialog keeps only the repositories that failed, so they can be retried. The result reports how many were deleted and how many failed, and points to **Repository Jobs**.
+- **Jobs & deleted** (header, with the `delete` permission) opens [Repository Jobs](#repository-jobs-adminrepository-jobs).
 
 ### Creating Repositories
 
@@ -256,7 +258,18 @@ Each format supports Hosted, Proxy, and/or Group variants where applicable. For 
 
 ### Editing Repositories
 
-The edit page holds the repository's configuration and, for proxy repositories, a **Cooldown** card with the repository-specific window and the cooldown **Exemptions**. The save bar stays at the bottom of the window: one **Save** writes everything that changed and keeps you on the page, **Discard** returns to the last saved state, and leaving with unsaved changes asks for confirmation. **Manage Repositories** at the top returns to the list, with its filters kept when you came from it. **Rename…** and **Delete repository…** live in the **Danger zone** card.
+The edit page holds the repository's configuration and, for proxy repositories, a **Cooldown** card with the repository-specific window and the cooldown **Exemptions**. The save bar stays at the bottom of the window: one **Save** writes everything that changed and keeps you on the page, **Discard** returns to the last saved state, and leaving with unsaved changes asks for confirmation. **Manage Repositories** at the top returns to the list, with its filters kept when you came from it. **Rename…** and **Delete repository…** live in the **Danger zone** card:
+
+- **Rename…** is instant and moves no data, whatever the repository's size. Clients must use the new name; tick **Keep the old name working for N days** (1-365, 30 when ticked) to keep old client URLs working for that time. No other repository can take the old name meanwhile.
+- **Delete repository…** makes the repository disappear at once. Its data is purged in the background after the restore window: the server default (24 hours unless configured otherwise), a custom window of 1-8760 hours, or immediately. Until the purge starts the repository can be restored from **Repository Jobs**, where the UI takes you after the delete. A repository that is a member of a group is refused first; **Remove from groups and delete** deletes it and takes it out of those groups.
+
+### Repository Jobs (/admin/repository-jobs)
+
+Requires the repository `delete` permission and a deployment with a database.
+
+- **Deleted repositories**: name, type, who deleted it and when, and when its purge may start. **Restore** brings it back with its data and group memberships, optionally under another name if its name was taken meanwhile. **Purge now** ends the restore window; it cannot be undone.
+- **Jobs**: type, repository, state, phase, objects and rows done, attempts, node, last update and last error. Phases: *waiting* (restore window), *objects* (removing files), *verify* (checking nothing was written meanwhile), *rows* (removing index entries). A **failed** job stays failed until you press **Retry**; it then continues where it stopped. The page refreshes every 5 seconds while a job is pending or running.
+- **Unowned storage directories** lists top-level storage directories that hold files but belong to no repository, no deleted repository and no running purge: files left by repository deletes made before 2.2.14 (a removal that failed or was interrupted, or files written while it ran) or by an interrupted rename. Directories whose name starts with `.` or `_` are never listed. The list is empty until you press **Scan storages**; the scan lists every storage that repositories use and can take several seconds on S3, so it never runs on its own. Each row shows the storage location, the directory and the number of objects, counted up to 1,000 (`1,000+` means there are more). Pantera cannot know whether a storage also holds data it does not own, so nothing is removed until you purge a specific directory: **Purge…** asks you to type the directory name, has no restore window, and then appears in **Jobs** as an orphan purge. If a repository owns the directory by then, the purge is refused.
 
 For local repositories of every format except Docker, the form has a **Publishing** card with an **Immutable artifacts** checkbox (the repository's `immutable` setting). It is checked for a new repository: a stored artifact can then never be overwritten, and a re-upload is refused (usually with `409 Conflict`). Uncheck it to let users with `write` permission overwrite. Users with `delete` permission can delete artifacts either way. Editing a repository shows its current value, and saving writes the choice explicitly. Proxy, group and Docker repositories do not show the card (Docker tag moves are controlled by the `overwrite` permission). See [Overwrite rules](getting-started.md#overwrite-rules-immutable).
 

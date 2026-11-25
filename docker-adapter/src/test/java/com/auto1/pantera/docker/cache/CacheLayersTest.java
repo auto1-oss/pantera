@@ -12,8 +12,10 @@ package com.auto1.pantera.docker.cache;
 
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.fake.FakeLayers;
+import java.util.concurrent.CompletionException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -30,7 +32,6 @@ final class CacheLayersTest {
         "full,empty,true",
         "faulty,full,true",
         "full,faulty,true",
-        "faulty,empty,false",
         "empty,faulty,false"
     })
     void shouldReturnExpectedValue(
@@ -46,6 +47,23 @@ final class CacheLayersTest {
                 .toCompletableFuture().join()
                 .isPresent(),
             new IsEqual<>(expected)
+        );
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "faulty,empty",
+        "faulty,faulty"
+    })
+    void failsWhenOriginFailedAndNothingIsCached(final String origin, final String cache) {
+        final CacheLayers layers = new CacheLayers(
+            new FakeLayers(origin), new FakeLayers(cache)
+        );
+        // An origin that could not answer is not a blob that does not
+        // exist: "absent" here was served as 404 BLOB_UNKNOWN.
+        Assertions.assertThrows(
+            CompletionException.class,
+            () -> layers.get(new Digest.FromString("123")).toCompletableFuture().join()
         );
     }
 }

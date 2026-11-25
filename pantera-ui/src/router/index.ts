@@ -90,6 +90,14 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiredPermission: 'api_repository_permissions' },
   },
   {
+    // Rename/delete background jobs and deleted repositories; the API behind
+    // it needs the repository `delete` action.
+    path: '/admin/repository-jobs',
+    name: 'admin-repository-jobs',
+    component: () => import('@/views/admin/RepoJobsView.vue'),
+    meta: { requiredPermission: 'api_repository_permissions', requiredAction: 'delete' },
+  },
+  {
     path: '/admin/users',
     name: 'admin-users',
     component: () => import('@/views/admin/UserListView.vue'),
@@ -211,10 +219,16 @@ export function createAppRouter(history: RouterHistory = createWebHistory()) {
     }
     const requiredPerm = to.meta.requiredPermission as string | undefined
     if (requiredPerm) {
-      // Admin routes (under /admin/) require write access;
+      // A route that names its action requires exactly that one. Otherwise
+      // admin routes (under /admin/) require write access;
       // read-only views just need any access
+      const requiredAction = to.meta.requiredAction as string | undefined
       const needsWrite = to.path.startsWith('/admin/')
-      if (needsWrite) {
+      if (requiredAction) {
+        if (!auth.hasAction(requiredPerm, requiredAction)) {
+          return { name: 'dashboard' }
+        }
+      } else if (needsWrite) {
         if (!auth.hasAction(requiredPerm, 'write')) {
           return { name: 'dashboard' }
         }

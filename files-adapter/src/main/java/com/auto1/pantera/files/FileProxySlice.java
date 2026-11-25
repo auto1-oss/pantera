@@ -389,6 +389,14 @@ public final class FileProxySlice implements Slice {
                     );
                 }
                 final long startTime = System.currentTimeMillis();
+                // What the upstream said when it gave no content: the answer
+                // for the client. Only the upstream's own 404 is a 404; a
+                // failure is a 5xx, which no group or cache remembers.
+                final com.auto1.pantera.http.cache.UpstreamMiss miss =
+                    new com.auto1.pantera.http.cache.UpstreamMiss(
+                        "com.auto1.pantera.files", this.rname, artifact, headers
+                    );
+                final AtomicReference<Response> missed = new AtomicReference<>();
                 return this.cache.load(key,
                 new Remote.WithErrorHandling(
                     () -> {
@@ -440,13 +448,12 @@ public final class FileProxySlice implements Slice {
                                             });
                                         }
                                     } else {
-                                        // CRITICAL: Consume body to prevent Vert.x request leak
-                                        com.auto1.pantera.http.log.RequestReasons.instance().note(
-                                            headers,
-                                            com.auto1.pantera.http.log.RequestReasons.upstream(
-                                                response.status().code()
+                                        missed.set(
+                                            miss.answered(
+                                                response.status().code(), response.headers()
                                             )
                                         );
+                                        // CRITICAL: Consume body to prevent Vert.x request leak
                                         response.body().asBytesFuture().whenComplete((ignored, error) -> {
                                             final String metricResult = response.status().code() == 404 ? "not_found" :
                                                 (response.status().code() >= 500 ? "error" : "client_error");
@@ -462,10 +469,7 @@ public final class FileProxySlice implements Slice {
                                 })
                             .exceptionally(error -> {
                                 final long duration = System.currentTimeMillis() - startTime;
-                                com.auto1.pantera.http.log.RequestReasons.instance().note(
-                                    headers,
-                                    new com.auto1.pantera.http.log.FailureCause(error).reason()
-                                );
+                                missed.set(miss.failed(error, "File upstream fetch failed"));
                                 this.recordProxyMetric("exception", duration);
                                 this.recordUpstreamErrorMetric(error);
                                 promise.complete(Optional.empty());
@@ -486,7 +490,15 @@ public final class FileProxySlice implements Slice {
                             .body(content.get())
                             .build();
                     }
-                    return ResponseBuilder.notFound().build();
+                    final Response answer;
+                    if (missed.get() != null) {
+                        answer = missed.get();
+                    } else if (throwable != null) {
+                        answer = miss.failed(throwable, "File fetch through cache failed");
+                    } else {
+                        answer = ResponseBuilder.notFound().build();
+                    }
+                    return answer;
                 }
             );
             });

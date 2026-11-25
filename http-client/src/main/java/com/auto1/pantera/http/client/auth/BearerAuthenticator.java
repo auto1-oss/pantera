@@ -55,6 +55,11 @@ public final class BearerAuthenticator implements Authenticator {
     private final RealmTrust trust;
 
     /**
+     * Record of credentials withheld from an untrusted realm.
+     */
+    private final WithheldCredentialsLog withheld;
+
+    /**
      * Ctor with an explicit token-request authenticator that is used for
      * every realm — the caller owns that decision.
      *
@@ -89,10 +94,35 @@ public final class BearerAuthenticator implements Authenticator {
         final Authenticator auth,
         final RealmTrust trust
     ) {
+        this(
+            client, format, auth, trust,
+            new WithheldCredentialsLog(
+                "com.auto1.pantera.http.client.auth", "bearer_realm_untrusted", "Bearer realm"
+            )
+        );
+    }
+
+    /**
+     * Primary ctor.
+     *
+     * @param client Client slices.
+     * @param format Token format.
+     * @param auth Token request authenticator.
+     * @param trust Realm trust (nullable: trust every realm)
+     * @param withheld Record of credentials not sent to an untrusted realm
+     */
+    BearerAuthenticator(
+        final ClientSlices client,
+        final TokenFormat format,
+        final Authenticator auth,
+        final RealmTrust trust,
+        final WithheldCredentialsLog withheld
+    ) {
         this.client = client;
         this.format = format;
         this.auth = auth;
         this.trust = trust;
+        this.withheld = withheld;
     }
 
     @Override
@@ -188,16 +218,18 @@ public final class BearerAuthenticator implements Authenticator {
         if (this.trust == null || this.auth == Authenticator.ANONYMOUS || this.trust.trusts(realm)) {
             return this.auth;
         }
-        com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.http.client.auth")
-            .message("Bearer realm is not the configured upstream; requesting token anonymously")
-            .eventCategory("authentication")
-            .eventAction("bearer_realm_untrusted")
-            .eventOutcome("failure")
-            .field("url.full", realm.toString())
-            .field("destination.address", realm.getHost())
-            .field("event.reason", "realm_origin_untrusted")
-            .field("log.source", "application")
-            .log();
+        // The decision repeats on every token request until the allowlist
+        // changes: logged once per upstream and realm host, then hourly.
+        this.withheld.record(
+            this.trust.upstreamHost(), realm,
+            "the token is requested without the configured credentials, so the upstream treats the request as anonymous"
+        ).ifPresent(
+            record -> record
+                .eventCategory("authentication")
+                .eventOutcome("failure")
+                .field("event.reason", "realm_origin_untrusted")
+                .log()
+        );
         return Authenticator.ANONYMOUS;
     }
 }

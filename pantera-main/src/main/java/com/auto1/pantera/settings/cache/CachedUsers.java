@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.settings.cache;
 
+import com.auto1.pantera.http.context.CallerContext;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.asto.misc.UncheckedIOScalar;
@@ -297,9 +298,11 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
             final String redisKey = "auth:" + key;
             final long l2StartNanos = System.nanoTime();
 
-            return this.l2.get(redisKey)
+            return new CallerContext().resume(
+                this.l2.get(redisKey)
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
+            )
                 .exceptionally(err -> {
                     // L2 error - treat as miss
                     if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
@@ -454,12 +457,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         // Also wipe L2 if enabled, mirroring invalidateByUsername.
         if (this.twoTier && this.l2 != null) {
             try {
-                final java.util.List<String> keys = this.l2.keys("auth:*")
-                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
-                if (keys != null && !keys.isEmpty()) {
-                    this.l2.del(keys.toArray(new String[0]))
-                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
-                }
+                this.flushL2();
             } catch (final Exception ex) {
                 EcsLogger.warn("com.auto1.pantera.settings.cache")
                     .message("invalidateAll: failed to flush L2 auth cache")
@@ -484,9 +482,10 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
      * cases and races). A full wipe is simpler and always correct.</p>
      *
      * <p>Cost: L1 is small (≤10K entries) and re-populates with one
-     * DB query per subsequent login. L2 is flushed via a {@code KEYS
-     * auth:*} + {@code DEL} round trip — blocking but run on the
-     * worker thread of the password-change request, not the hot path.</p>
+     * DB query per subsequent login. L2 is flushed with a cursor
+     * {@code SCAN MATCH auth:*} + {@code DEL} (see {@link #flushL2()}),
+     * run on the worker thread of the password-change request, not the
+     * hot path.</p>
      *
      * <p>The username parameter is kept only for the log line, not
      * for filtering. Every cache entry is dropped.</p>
@@ -499,12 +498,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         // L2: best-effort scan + delete every auth:* key.
         if (this.twoTier && this.l2 != null) {
             try {
-                final java.util.List<String> keys = this.l2.keys("auth:*")
-                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
-                if (keys != null && !keys.isEmpty()) {
-                    this.l2.del(keys.toArray(new String[0]))
-                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
-                }
+                this.flushL2();
             } catch (final Exception ex) {
                 EcsLogger.warn("com.auto1.pantera.settings.cache")
                     .message("Failed to flush L2 auth cache on password change "
@@ -526,6 +520,30 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
             .field("user.name", username)
             .field("log.source", "application")
             .log();
+    }
+
+    /**
+     * Delete every {@code auth:*} key from L2 with a cursor SCAN. Never the
+     * {@code KEYS} command: that one blocks the Valkey for every client
+     * while it walks the whole keyspace, and when it ran into the command
+     * timeout the old credentials stayed valid in L2 until their TTL. A
+     * SCAN page is short, so each round trip stays inside the timeout
+     * whatever the size of the keyspace.
+     *
+     * @throws Exception When a page or a delete fails or times out
+     */
+    private void flushL2() throws Exception {
+        io.lettuce.core.ScanCursor cursor = io.lettuce.core.ScanCursor.INITIAL;
+        do {
+            final io.lettuce.core.KeyScanCursor<String> page = this.l2.scan(
+                cursor, io.lettuce.core.ScanArgs.Builder.matches("auth:*").limit(1000)
+            ).get(2, java.util.concurrent.TimeUnit.SECONDS);
+            if (!page.getKeys().isEmpty()) {
+                this.l2.del(page.getKeys().toArray(new String[0]))
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            }
+            cursor = page;
+        } while (!cursor.isFinished());
     }
 
     /**

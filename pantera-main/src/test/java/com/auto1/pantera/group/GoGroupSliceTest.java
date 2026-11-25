@@ -209,6 +209,32 @@ final class GoGroupSliceTest {
         );
     }
 
+    @Test
+    void failureOfOneRemoteOfAProxyDoesNotConvictTheMember() {
+        final AutoBlockRegistry registry = new AutoBlockRegistry(
+            new AutoBlockSettings(0.5, 1, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+        final Slice partial = (line, headers, body) -> CompletableFuture.completedFuture(
+            ResponseBuilder.from(RsStatus.BAD_GATEWAY)
+                .header(com.auto1.pantera.http.PartialUpstreamFailure.HEADER, "true")
+                .build()
+        );
+        final Response resp = new GoGroupSlice(
+            counting(new AtomicInteger()),
+            "go-group",
+            List.of(new MemberSlice("proxy", partial, registry, true))
+        ).response(new RequestLine("GET", LIST), Headers.EMPTY, Content.EMPTY).join();
+        body(resp);
+        MatcherAssert.assertThat(
+            "the list is not complete without the failed remote",
+            resp.status().serverError(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the member is not blocked for the failure of one remote",
+            registry.isBlocked("proxy"), new IsEqual<>(false)
+        );
+    }
+
     private static Slice text(final String body) {
         return (line, headers, content) -> CompletableFuture.completedFuture(
             ResponseBuilder.ok().textBody(body).build()

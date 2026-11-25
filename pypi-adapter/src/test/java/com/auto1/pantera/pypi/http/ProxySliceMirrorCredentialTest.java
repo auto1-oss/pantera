@@ -77,6 +77,39 @@ final class ProxySliceMirrorCredentialTest {
         );
     }
 
+    @Test
+    void untrustedMirrorIsReportedOncePerHostNotPerFile() {
+        // Every file of an index on another host takes this path: 239
+        // identical warnings for files.pythonhosted.org in four days.
+        final String host = "files.once-per-host.example";
+        try (LogCapture capture = LogCapture.of("com.auto1.pantera.pypi")) {
+            for (int idx = 0; idx < 3; idx += 1) {
+                this.fetchThroughMirror(
+                    URI.create("https://index.once-per-host.example/simple/"),
+                    "https://" + host + LINK,
+                    new AtomicReference<>()
+                );
+            }
+            final java.util.List<java.util.Map<String, Object>> records =
+                capture.action("mirror_credentials_withheld").stream()
+                    .filter(event -> host.equals(event.get("destination.address")))
+                    .toList();
+            MatcherAssert.assertThat(
+                "one record for the host, however many files are fetched from it",
+                records.size(), new IsEqual<>(1)
+            );
+            MatcherAssert.assertThat(
+                "the record names the setting that releases the credentials",
+                String.valueOf(records.get(0).get("message")),
+                new org.hamcrest.core.StringContains("upstream_credential_allow_hosts")
+            );
+            MatcherAssert.assertThat(
+                "the record names the repository",
+                records.get(0).get("repository.name"), new IsEqual<>("my-pypi-proxy")
+            );
+        }
+    }
+
     /**
      * Serve an index whose only link points at {@code link}, then request the
      * package so the proxy dials the mirror; the headers of that dial are

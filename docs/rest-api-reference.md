@@ -558,6 +558,10 @@ Supported `repo.type` values: `file`, `file-proxy`, `file-group`, `maven`, `mave
 
 The body replaces the repository's whole configuration: when updating a repository that has `"immutable": false`, send the key again, or the repository becomes immutable.
 
+**Response (409):** Creating a repository under the former name of a renamed repository that still serves it (`keep_old_name_days` of the rename).
+
+A new repository's data directory is named after it, unless that directory already holds files (left by a delete made before 2.2.14) or belongs to a deleted repository that is not purged yet: then the repository gets a directory of its own (`<name>~<n>`) and starts empty.
+
 **curl example:**
 
 ```bash
@@ -577,27 +581,46 @@ curl -X PUT http://localhost:8086/api/v1/repositories/maven-central \
 
 ### DELETE /api/v1/repositories/:name
 
-Delete a repository and its data.
+Delete a repository.
 
-The repository's own data (everything under `<storage root>/<name>/`, including directories left empty on a filesystem storage; a symbolic link to a directory is kept) is removed first, then its rows in the search index, then its configuration; uploads still waiting to be indexed when the delete runs are not indexed afterwards; other repositories that share the same storage root are not touched. The storage is found the same way requests are served, including a storage given as an alias name (global or repository-scoped, from the database or `_storages.yaml`). A group repository has no data of its own, so only its configuration is removed. Re-creating a repository with the same name starts empty.
+The repository stops existing in one database transaction: its name is free, it is no longer served or returned by search on any node, and it leaves the groups' member lists it is removed from. No file is removed inside the request, so the answer does not depend on the repository's size. Its data is removed afterwards by a background purge job ([Repository jobs](#repository-jobs)), after the restore window. Until the purge starts the delete can be undone ([POST /api/v1/deleted-repositories/:key/restore](#post-apiv1deleted-repositorieskeyrestore)).
+
+The purge removes everything under the repository's directory in its storage (S3: `DeleteObjects` in batches of 1000, plus unfinished multipart uploads; filesystem: the files and the directories they leave empty), then its rows in the search index and its cooldown history. It is resumable: a node that stops is replaced by another, which continues after the last object removed. Other repositories that share the storage are not touched. A group repository has no data of its own. A repository created later under the same name never sees the old data: it gets a directory of its own until the purge has finished.
+
+With the delete, role grants that name the repository exactly are removed from the roles (pattern grants such as `*` or `maven-*` are kept), and its repository-scoped storage aliases, cooldown exemptions and live cooldown blocks are removed. A restore puts the grants, aliases, exemptions and group memberships back.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:delete`
 
-The response waits up to 5 seconds for the removal. A large repository takes longer (one storage delete per object), so the response can be `202` while the removal continues on the server; the repository stays listed until its data is removed and disappears when the delete finishes. The final outcome is written to the application log (`event.action=repository_delete`) and the audit log either way. While a removal is running on a node, another `DELETE` of the same name sent to that node answers `202` without starting a second removal, and `PUT` or `move` of that name (or a move onto it) answers `409`.
+**Query parameters:**
 
-**Response (200):** Empty body. The data, index rows and configuration were removed.
+| Parameter | Default | Description |
+|---|---|---|
+| `force` | `false` | Delete a repository that is a member of group repositories, removing it from their member lists. Without it such a delete answers `409`. |
+| `retention_hours` | `PANTERA_REPO_DELETE_RETENTION_HOURS` (24) | Restore window before the purge starts, `0`–`8760`. `0` purges at once. |
 
-**Response (202):** The removal is still running.
+**Response (202):**
 
 ```json
 {
   "status": "deleting",
-  "message": "Repository 'old-repo' is being deleted; it disappears from the list when its data is removed"
+  "job_id": 42,
+  "repo_key": "old-repo",
+  "purge_after": "2026-11-24T10:15:30Z",
+  "removed_from_groups": [],
+  "message": "Repository 'old-repo' is deleted; its data is purged in the background after 2026-11-24T10:15:30Z and can be restored until the purge starts"
 }
 ```
 
-**Response (500):** The data could not be removed within the wait. The repository is kept so the delete can be retried. A removal that fails after a `202` also keeps the repository; the failure is in the log and audit record.
+**Response (409):** The repository is a member of one or more groups and `force` is not set. Nothing was changed.
+
+```json
+{
+  "error": "CONFLICT",
+  "message": "Repository 'old-repo' is a member of group(s) all-maven; remove it from them or delete with force=true",
+  "status": 409
+}
+```
 
 **Response (404):**
 
@@ -609,18 +632,26 @@ The response waits up to 5 seconds for the removal. A large repository takes lon
 }
 ```
 
+**Response (400):** `retention_hours` is not an integer between 0 and 8760.
+
 **curl example:**
 
 ```bash
-curl -X DELETE http://localhost:8086/api/v1/repositories/old-repo \
+curl -X DELETE "http://localhost:8086/api/v1/repositories/old-repo?retention_hours=0" \
   -H "Authorization: Bearer eyJhbGciOi..."
 ```
+
+**Without a database** the repository's data is removed inside the request, one storage delete per object: the response waits up to 5 seconds, then answers `202` with `{"status": "deleting", "message": ...}` while the removal continues on that node, `200` with an empty body when it finished in time, or `500` when it failed (the repository is kept). `force` and `retention_hours` are ignored and there is no restore. This mode is not meant for large repositories.
 
 ---
 
 ### PUT /api/v1/repositories/:name/move
 
-Rename/move a repository to a new name.
+Rename a repository.
+
+One database transaction changes the name. The repository keeps its immutable key, which is the directory of its data in its storage and its identity in the search index, so no object is copied and no index row is rewritten: the answer does not depend on the repository's size, and requests in flight are not interrupted. The same transaction rewrites what refers to the repository by name: the member lists of the groups that contain it, role grants that name it exactly (pattern grants are not touched: the repository matches them by its new name or not at all), its repository-scoped storage aliases, cooldown exemptions and live cooldown blocks. Its cooldown history is moved to the new name by a background job.
+
+Clients must use the new name. With `keep_old_name_days` the old name keeps serving the repository for that many days, and no other repository can take the old name until then.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:move`
@@ -629,11 +660,38 @@ Rename/move a repository to a new name.
 
 ```json
 {
-  "new_name": "maven-central-v2"
+  "new_name": "maven-central-v2",
+  "keep_old_name_days": 30
 }
 ```
 
-**Response (200):** Empty body on success.
+| Field | Required | Description |
+|---|---|---|
+| `new_name` | yes | New repository name. |
+| `keep_old_name_days` | no | Days the old name keeps serving requests, `0`–`365`. Default `0`: the old name answers `404` at once. |
+
+**Response (200):**
+
+```json
+{
+  "name": "maven-central-v2",
+  "previous_name": "maven-central",
+  "repo_key": "maven-central",
+  "keep_old_name_days": 30,
+  "groups_updated": ["all-maven"],
+  "roles_updated": ["developers"]
+}
+```
+
+**Response (409):** A repository named `new_name` exists, or `new_name` is the former name of another repository that still serves it.
+
+```json
+{
+  "error": "CONFLICT",
+  "message": "Repository 'maven-central-v2' already exists",
+  "status": 409
+}
+```
 
 **Response (404):**
 
@@ -651,7 +709,155 @@ Rename/move a repository to a new name.
 curl -X PUT http://localhost:8086/api/v1/repositories/maven-central/move \
   -H "Authorization: Bearer eyJhbGciOi..." \
   -H "Content-Type: application/json" \
-  -d '{"new_name": "maven-central-v2"}'
+  -d '{"new_name": "maven-central-v2", "keep_old_name_days": 30}'
+```
+
+**Without a database** the repository's data is copied to a directory named after the new name and the old directory is removed, inside the request; the response is `200` with an empty body. `keep_old_name_days` is ignored. This mode is not meant for large repositories.
+
+---
+
+### Repository jobs
+
+Background work on repositories. Every node runs jobs; a job is worked on by the node that holds its lease, and continues on another node from its checkpoint when that node stops. Requires a database.
+
+| `type` | Work |
+|---|---|
+| `purge` | Remove the objects, index rows and cooldown history of a deleted repository. |
+| `orphan_purge` | Remove a storage directory no repository owns. |
+| `rename_followup` | Move the cooldown history of a renamed repository to its new name. |
+
+| `state` | Meaning |
+|---|---|
+| `pending` | Waiting: for its start time (the restore window, or the delay after a failed attempt) or for a node. |
+| `running` | A node (`node`) works on it. |
+| `failed` | Gave up after 8 failed attempts; `last_error` says why. It stays failed until retried. |
+| `done` | Finished. |
+| `cancelled` | The delete was restored. |
+
+| `phase` | Meaning |
+|---|---|
+| `waiting` | Not started. A delete in this phase can be restored. |
+| `objects` | Removing storage objects. |
+| `verify` | Checking that nothing was written to the directory while it was purged. For a deleted repository this check runs once the repository has been gone for 30 minutes, so that requests that were in flight at the delete have ended. |
+| `rows` | Removing or rewriting database rows. |
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_repository_permissions:delete` for every endpoint below.
+
+#### GET /api/v1/repository-jobs
+
+Jobs, unfinished first, then newest first (at most 200). Finished jobs are kept for 30 days.
+
+```json
+{
+  "items": [
+    {
+      "id": 42,
+      "type": "purge",
+      "repo_key": "old-repo",
+      "repo_name": "old-repo",
+      "state": "running",
+      "phase": "objects",
+      "objects_done": 1250000,
+      "rows_done": 0,
+      "attempts": 0,
+      "last_error": null,
+      "not_before": "2026-11-24T10:15:30Z",
+      "node": "pantera-1-3f9c2a",
+      "created_by": "admin",
+      "created_at": "2026-11-23T10:15:30Z",
+      "updated_at": "2026-11-24T10:42:07Z",
+      "finished_at": null
+    }
+  ]
+}
+```
+
+#### GET /api/v1/repository-jobs/:id
+
+One job, as an item of the list above. `404` when there is no such job.
+
+#### POST /api/v1/repository-jobs/:id/retry
+
+Queue a `failed` job again. Answers the job; `409` when the job is not failed.
+
+#### POST /api/v1/repository-jobs/:id/start
+
+End the restore window of a delete whose purge is still `pending` in phase `waiting`: the purge starts now and the delete can no longer be restored. Answers the job; `409` when the job has started or ended.
+
+#### GET /api/v1/deleted-repositories
+
+Repositories that were deleted and whose data is not purged yet.
+
+```json
+{
+  "items": [
+    {
+      "repo_key": "old-repo",
+      "name": "old-repo",
+      "type": "maven",
+      "deleted_at": "2026-11-23T10:15:30Z",
+      "deleted_by": "admin",
+      "purge_after": "2026-11-24T10:15:30Z"
+    }
+  ]
+}
+```
+
+#### POST /api/v1/deleted-repositories/:key/restore
+
+Undo a delete whose purge has not started. The repository comes back with its data, configuration, exact role grants, repository-scoped storage aliases, cooldown exemptions and its place in the groups that still exist. Live cooldown blocks are not restored; they are evaluated again on the next request.
+
+**Request Body** (optional):
+
+```json
+{ "name": "old-repo-restored" }
+```
+
+`name` restores the repository under another name, for when its old name was taken meanwhile.
+
+**Response (200):**
+
+```json
+{ "name": "old-repo", "repo_key": "old-repo", "rejoined_groups": ["all-maven"] }
+```
+
+**Response (409):** The purge has started, or the name is taken. **Response (404):** No deleted repository has that key.
+
+#### GET /api/v1/repository-orphans
+
+Storage directories that no repository owns: files left by deletes made before 2.2.14 (a removal that failed or was interrupted, files written while it ran) or by an interrupted rename. Every storage that a repository uses is scanned at its top level; a directory is reported when it holds at least one object and matches no repository key, no deleted repository and no running purge. Names starting with `.` or `_` are never reported. The scan only reports.
+
+```json
+{
+  "items": [
+    {
+      "storage": "5f2b9c1e0a7d4e38",
+      "location": "s3 bucket=artifacts region=eu-west-1",
+      "directory": "old-maven",
+      "objects": 1000,
+      "more": true
+    }
+  ]
+}
+```
+
+`objects` is counted up to 1000; `more` tells there are more.
+
+#### POST /api/v1/repository-orphans/purge
+
+Queue the purge of one reported directory. The storage may hold data Pantera does not own: check the directory before purging it. The directory is checked again when the request arrives and refused (`409`) if a repository owns it by then.
+
+**Request Body:**
+
+```json
+{ "storage": "5f2b9c1e0a7d4e38", "directory": "old-maven" }
+```
+
+**Response (202):**
+
+```json
+{ "status": "purging", "job_id": 57 }
 ```
 
 ---
@@ -3067,7 +3273,7 @@ Retrieve the outbound egress policy (2.2.9) applied to every connection Pantera 
 |-------|------|-------------|
 | `egress_block_private` | string (`"true"`/`"false"`) | Also refuse loopback and private ranges (RFC1918, `fc00::/7` unique-local, `100.64.0.0/10` shared address space). Default `"false"`. |
 | `egress_allow_hosts` | string (comma-separated host names) | Hosts exempt from the strict-mode loopback/private-range refusal; never from the metadata, link-local, any-local or multicast refusal. Default empty. |
-| `upstream_credential_allow_hosts` | string (comma-separated host names) | Additional hosts a bearer-token realm may live on before an upstream's credentials are released to it; by default only the upstream host or a host under its parent domain. Default empty. |
+| `upstream_credential_allow_hosts` | string (comma-separated host names) | Additional hosts that may receive an upstream's credentials (the host of a bearer-token realm or of an index/mirror link); by default only the upstream host itself, with no parent-domain rule -- Docker Hub needs `auth.docker.io`. Default empty. |
 
 **curl example:**
 
@@ -3583,7 +3789,7 @@ Diagnostics and invalidation for the negative (404) cache, plus the request
 troubleshooter. All endpoints are admin only (`api_admin_permissions:admin`), and
 every response names the answering `node`. With Valkey configured the
 negative cache is cluster-wide: listings, probes and invalidations read and
-write the shared L2 tier (cursor `SCAN` of `negative:*`, bounded at 100,000
+write the shared L2 tier (cursor `SCAN` of `negative2:*`, bounded at 100,000
 keys) merged with the answering node's L1, and peers drop their L1 entries
 over pub/sub. Without Valkey everything is the answering node's L1
 (`"source": "L1-only"`). Mutations are audit-logged (`CACHE_CLEAR`).
