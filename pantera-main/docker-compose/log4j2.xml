@@ -74,6 +74,11 @@
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
 
+        <!-- Vert.x looks a pool gauge up by registering it again; Micrometer
+             answers the second registration with a warning. The first gauge
+             stays in place, so the warning reports nothing. -->
+        <Logger name="io.micrometer.core.instrument.MeterRegistry" level="error"/>
+
         <!-- Root logger -->
         <Root level="info">
             <AppenderRef ref="AsyncConsole"/>

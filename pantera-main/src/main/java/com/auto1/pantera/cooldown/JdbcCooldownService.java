@@ -640,7 +640,7 @@ final class JdbcCooldownService implements CooldownService {
             () -> this.evaluateFromDatabase(request, inspector)
         ).thenCompose(blocked -> {
             if (blocked) {
-                EcsLogger.info("com.auto1.pantera.cooldown")
+                EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message("Artifact BLOCKED by cooldown (cache/db)")
                     .eventCategory("database")
                     .eventAction("evaluate")
@@ -934,7 +934,7 @@ final class JdbcCooldownService implements CooldownService {
             );
             if (record.isPresent()) {
                 final DbBlockRecord rec = record.get();
-                EcsLogger.info("com.auto1.pantera.cooldown")
+                EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message(String.format(
                         "Block record found in database: status=%s, reason=%s, blockedAt=%s, blockedUntil=%s",
                         rec.status().name(), rec.reason().name(), rec.blockedAt(), rec.blockedUntil()))

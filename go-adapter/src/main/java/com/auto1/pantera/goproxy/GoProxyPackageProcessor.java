@@ -103,7 +103,7 @@ public final class GoProxyPackageProcessor implements Runnable {
             return;
         }
 
-        EcsLogger.info("com.auto1.pantera.goproxy")
+        EcsLogger.debug("com.auto1.pantera.goproxy")
             .message("Processing Go batch (size: " + batch.size() + ")")
             .eventCategory("web")
             .eventAction("proxy_processor")
@@ -118,7 +118,7 @@ public final class GoProxyPackageProcessor implements Runnable {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            EcsLogger.info("com.auto1.pantera.goproxy")
+            EcsLogger.debug("com.auto1.pantera.goproxy")
                 .message("Go batch processing complete (size: " + batch.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
@@ -229,7 +229,7 @@ public final class GoProxyPackageProcessor implements Runnable {
                         ).withContext(event.traceId(), event.clientIp())
                     );
 
-                    EcsLogger.info("com.auto1.pantera.goproxy")
+                    EcsLogger.debug("com.auto1.pantera.goproxy")
 
                         .traceContext(event.traceId(), event.clientIp())
 

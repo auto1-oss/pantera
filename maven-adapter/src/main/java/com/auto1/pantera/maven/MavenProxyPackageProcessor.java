@@ -134,7 +134,7 @@ public final class MavenProxyPackageProcessor implements Runnable {
                 .join();
 
             final long duration = System.currentTimeMillis() - startTime;
-            EcsLogger.info("com.auto1.pantera.maven")
+            EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Maven batch processing complete (" + uniquePackages.size() + " packages)")
                 .eventCategory("web")
                 .eventAction("batch_processing")
