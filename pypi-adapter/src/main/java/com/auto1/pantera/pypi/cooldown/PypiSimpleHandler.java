@@ -26,6 +26,7 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -286,6 +287,14 @@ public final class PypiSimpleHandler {
         final Headers acceptJson = Headers.from(new Header(
             "Accept", "application/vnd.pypi.simple.v1+json"
         ));
+        if (RequestTrace.instance().traced(headers)) {
+            // A Troubleshoot replay stays one for the proxy behind this
+            // handler, which must not store the page it fetches for it. The
+            // header is internal: the proxy sends its own to the upstream.
+            acceptJson.add(
+                RequestTrace.HEADER, headers.values(RequestTrace.HEADER).get(0)
+            );
+        }
         return this.upstream.response(line, acceptJson, Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {

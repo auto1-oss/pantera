@@ -206,7 +206,7 @@ public final class PypiJsonHandler {
         if (this.baseLoader == null) {
             return this.upstream.response(line, Headers.EMPTY, Content.EMPTY);
         }
-        return this.baseLoader.load(line.uri().getPath()).thenApply(outcome -> {
+        return this.baseLoader.load(line.uri().getPath(), headers).thenApply(outcome -> {
             if (outcome.isAvailable()) {
                 return ResponseBuilder.ok().body(outcome.body()).build();
             }

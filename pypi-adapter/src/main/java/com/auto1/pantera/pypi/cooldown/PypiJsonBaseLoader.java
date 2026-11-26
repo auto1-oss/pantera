@@ -21,6 +21,7 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -31,6 +32,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -144,8 +146,29 @@ public final class PypiJsonBaseLoader {
      *         failed / returned non-2xx)
      */
     public CompletableFuture<Outcome> load(final String path) {
+        return this.load(path, Headers.EMPTY);
+    }
+
+    /**
+     * Resolve the base document at {@code path} for a request. A
+     * Troubleshoot replay ({@link RequestTrace}) is served what the cache
+     * holds, as a client is; what the cache lacks it gets from the upstream
+     * without the document being stored, and it neither leads nor joins
+     * the single flight of a fill, so it leaves the proxy as it found it.
+     *
+     * @param path Request path, e.g. {@code /pypi/requests/json}
+     * @param headers Headers of the request the document is resolved for
+     * @return Future outcome, as for {@link #load(String)}
+     */
+    public CompletableFuture<Outcome> load(final String path, final Headers headers) {
         final Key key = namespacedKey(path);
-        return this.singleFlight.load(key, () -> this.fetch(path, key));
+        final CompletableFuture<Outcome> res;
+        if (RequestTrace.instance().traced(headers)) {
+            res = this.fetch(path, key, false);
+        } else {
+            res = this.singleFlight.load(key, () -> this.fetch(path, key, true));
+        }
+        return res;
     }
 
     /**
@@ -171,7 +194,9 @@ public final class PypiJsonBaseLoader {
      * {@link Cache#load} evaluates its {@code remote} argument eagerly
      * regardless of whether the cache-hit branch ends up being used.
      */
-    private CompletableFuture<Outcome> fetch(final String path, final Key key) {
+    private CompletableFuture<Outcome> fetch(
+        final String path, final Key key, final boolean store
+    ) {
         final CacheControl control = new CacheTimeControl(this.storage);
         return this.cache.load(key, Remote.EMPTY, control)
             .thenCompose(cached -> {
@@ -179,7 +204,7 @@ public final class PypiJsonBaseLoader {
                     return cached.get().asBytesFuture()
                         .thenApply(bytes -> Outcome.available(bytes, false));
                 }
-                return this.fetchFromUpstream(path, key, control);
+                return this.fetchFromUpstream(path, key, control, store);
             })
             .toCompletableFuture();
     }
@@ -187,10 +212,11 @@ public final class PypiJsonBaseLoader {
     /**
      * Confirmed miss (absent or TTL-expired) — perform the real upstream
      * fetch, cache it on success, and fall back to a stale copy (if any)
-     * on failure.
+     * on failure. With {@code store} false the upstream's document is
+     * handed on without being cached.
      */
     private CompletableFuture<Outcome> fetchFromUpstream(
-        final String path, final Key key, final CacheControl control
+        final String path, final Key key, final CacheControl control, final boolean store
     ) {
         final RequestLine line = new RequestLine(RqMethod.GET, path);
         final AtomicReference<Outcome> forward = new AtomicReference<>(
@@ -224,7 +250,13 @@ public final class PypiJsonBaseLoader {
                     .log();
                 return Optional.empty();
             });
-        return this.cache.load(key, remote, control)
+        final CompletionStage<Optional<? extends Content>> loaded;
+        if (store) {
+            loaded = this.cache.load(key, remote, control);
+        } else {
+            loaded = remote.get();
+        }
+        return loaded
             .thenCompose(opt -> {
                 if (opt.isPresent()) {
                     return opt.get().asBytesFuture()

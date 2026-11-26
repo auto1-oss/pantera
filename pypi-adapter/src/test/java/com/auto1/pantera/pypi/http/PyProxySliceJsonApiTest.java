@@ -23,6 +23,8 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import java.net.URI;
@@ -136,6 +138,66 @@ final class PyProxySliceJsonApiTest {
         final Response response = this.get();
         response.body().asBytesFuture().get(60, TimeUnit.SECONDS);
         MatcherAssert.assertThat(response.status(), new IsEqual<>(RsStatus.NOT_FOUND));
+    }
+
+    @Test
+    @Timeout(120)
+    void replayIsServedTheDocumentAndStoresNothing() throws Exception {
+        this.upstream.files.put(PyProxySliceJsonApiTest.PATH, PyProxySliceJsonApiTest.DOCUMENT);
+        final Response replay = this.replay();
+        MatcherAssert.assertThat(
+            "the replay says the document is there", replay.status(), new IsEqual<>(RsStatus.OK)
+        );
+        final byte[] replayed = replay.body().asBytesFuture().get(60, TimeUnit.SECONDS);
+        // A write would come from a callback after the answer: one that
+        // should not exist gets the time to show itself.
+        for (int idx = 0; idx < 20; idx += 1) {
+            MatcherAssert.assertThat(
+                "the replay stores nothing",
+                this.storage.list(Key.ROOT).join().isEmpty(), new IsEqual<>(true)
+            );
+            TimeUnit.MILLISECONDS.sleep(15L);
+        }
+        final byte[] served = this.get().body().asBytesFuture().get(60, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "the replay got the document a client gets", replayed, new IsEqual<>(served)
+        );
+        for (
+            int idx = 0;
+            idx < 400 && this.storage.list(Key.ROOT).join().isEmpty();
+            idx += 1
+        ) {
+            TimeUnit.MILLISECONDS.sleep(25L);
+        }
+        MatcherAssert.assertThat(
+            "the upstream was asked once for the replay and once for the client",
+            this.upstream.asked.get(), new IsEqual<>(2)
+        );
+        MatcherAssert.assertThat(
+            "a replay of a document the proxy holds is served from the proxy",
+            this.replay().body().asBytesFuture().get(60, TimeUnit.SECONDS),
+            new IsEqual<>(served)
+        );
+        MatcherAssert.assertThat(
+            "without asking the upstream", this.upstream.asked.get(), new IsEqual<>(2)
+        );
+    }
+
+    /**
+     * Ask the proxy for the document as the Troubleshoot page does.
+     * @return Response
+     * @throws Exception On failure or timeout
+     */
+    private Response replay() throws Exception {
+        final String trace = RequestTrace.instance().open();
+        try {
+            return this.proxy.response(
+                new RequestLine(RqMethod.GET, PyProxySliceJsonApiTest.PATH),
+                Headers.from(new Header(RequestTrace.HEADER, trace)), Content.EMPTY
+            ).get(60, TimeUnit.SECONDS);
+        } finally {
+            RequestTrace.instance().close(trace);
+        }
     }
 
     /**

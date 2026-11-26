@@ -32,6 +32,7 @@ import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
@@ -747,13 +748,18 @@ final class ProxySlice implements Slice {
         final SimpleApiFormat format = SimpleApiFormat.fromHeaders(rqheaders);
         final Key key = ProxySlice.keyFromPath(line, format);
         final RequestLine upstream = this.upstreamLine(line);
+        final boolean replay = RequestTrace.instance().traced(rqheaders);
         // Stale-while-revalidate: check if we have stale cached content
         return this.asyncStorage.exists(key).thenCompose(exists -> {
             if (exists) {
                 return this.indexCacheControl.validate(key, Remote.EMPTY).thenCompose(fresh -> {
                     if (!fresh) {
-                        // Stale content - serve immediately + background refresh
-                        this.backgroundRefreshIndex(key, line, upstream, format);
+                        // Stale content - serve immediately + background refresh.
+                        // A Troubleshoot replay gets the stale page as a client
+                        // does, without the refresh: it replaces the stored page.
+                        if (!replay) {
+                            this.backgroundRefreshIndex(key, line, upstream, format);
+                        }
                         return this.asyncStorage.value(key).thenCompose(cached ->
                             this.afterHit(line, rqheaders, key, cached, Headers.EMPTY, false)
                         );
@@ -835,7 +841,12 @@ final class ProxySlice implements Slice {
     ) {
         final UpstreamMiss miss = this.miss(line, rqheaders);
         final AtomicReference<Response> missed = new AtomicReference<>();
-        return this.cache.load(
+        // A Troubleshoot replay is answered with what the upstream sent and
+        // leaves nothing behind: no stored page, no validator of one, no
+        // artifact event, no mirror learned from its links.
+        final boolean replay = RequestTrace.instance().traced(rqheaders);
+        return this.load(
+            replay,
             key,
             new Remote.WithErrorHandling(
                 () -> {
@@ -847,8 +858,10 @@ final class ProxySlice implements Slice {
                             remote.set(response.headers());
                             if (response.status().success()) {
                                 remoteSuccess.set(true);
-                                this.storeLastModified(key, response.headers());
-                                if (ProxySlice.this.extract(line).isPresent()) {
+                                if (!replay) {
+                                    this.storeLastModified(key, response.headers());
+                                }
+                                if (!replay && ProxySlice.this.extract(line).isPresent()) {
                                     ProxySlice.this.extract(line).ifPresent(info -> {
                                         final Optional<Instant> releaseDate =
                                             ProxySlice.this.releaseInstant(
@@ -875,7 +888,7 @@ final class ProxySlice implements Slice {
                                     return res;
                                 }
                                 return ProxySlice.this.preRewriteContent(
-                                    response.body(), response.headers(), line
+                                    response.body(), response.headers(), line, replay
                                 ).<Optional<? extends Content>>thenApply(opt -> opt);
                             }
                             missed.set(
@@ -907,6 +920,42 @@ final class ProxySlice implements Slice {
                 );
             }
         ).thenCompose(Function.identity()).toCompletableFuture();
+    }
+
+    /**
+     * Load content for a request. For a client it is loaded through the
+     * cache, which keeps a copy of what the upstream sent. A Troubleshoot
+     * replay must leave the repository as it found it: what the upstream
+     * sent is handed on without a copy. When the upstream sent nothing the
+     * cache is asked as it is for a client whose upstream sent nothing, so
+     * that the replay ends with the answer a client gets.
+     *
+     * @param replay Whether the request is a Troubleshoot replay
+     * @param key Storage key
+     * @param remote Upstream fetch
+     * @param control Cache control
+     * @return Content, empty when there is none
+     */
+    private CompletionStage<Optional<? extends Content>> load(
+        final boolean replay, final Key key, final Remote remote, final CacheControl control
+    ) {
+        final CompletionStage<Optional<? extends Content>> res;
+        if (replay) {
+            res = remote.get().thenCompose(
+                content -> {
+                    final CompletionStage<Optional<? extends Content>> found;
+                    if (content.isPresent()) {
+                        found = CompletableFuture.completedFuture(content);
+                    } else {
+                        found = this.cache.load(key, Remote.EMPTY, control);
+                    }
+                    return found;
+                }
+            );
+        } else {
+            res = this.cache.load(key, remote, control);
+        }
+        return res;
     }
 
     /**
@@ -966,9 +1015,10 @@ final class ProxySlice implements Slice {
     /**
      * Pre-rewrite index content at write time.
      * Rewrites URLs once before caching so reads serve pre-rewritten content.
+     * For a Troubleshoot replay the links are rewritten and not remembered.
      */
     private CompletableFuture<Optional<Content>> preRewriteContent(
-        final Content body, final Headers headers, final RequestLine line
+        final Content body, final Headers headers, final RequestLine line, final boolean replay
     ) {
         return body.asBytesFuture().thenApply(bytes -> {
             try {
@@ -983,7 +1033,7 @@ final class ProxySlice implements Slice {
                 }
                 final String original = new String(bytes, StandardCharsets.UTF_8);
                 final Header ctype = ProxySlice.contentType(headers, line);
-                final String rewritten = this.rewriteIndexBody(original, ctype, line);
+                final String rewritten = this.rewriteIndexBody(original, ctype, line, replay);
                 // Check for package index pages with no download links
                 if (this.packageIndexWithoutLinks(line, rewritten)) {
                     return Optional.<Content>empty();
@@ -1185,7 +1235,7 @@ final class ProxySlice implements Slice {
             );
         } else {
             rewritten = this.preRewriteContent(
-                response.body(), response.headers(), line
+                response.body(), response.headers(), line, false
             );
         }
         return rewritten.thenCompose(opt -> {
@@ -1271,8 +1321,13 @@ final class ProxySlice implements Slice {
         final AtomicReference<Headers> remote = new AtomicReference<>(Headers.EMPTY);
         final Key key = ProxySlice.keyFromPath(line);
         final RequestLine upstream = this.upstreamLine(line);
+        // A Troubleshoot replay gets the file the upstream sent; it is
+        // neither stored nor announced to the search index, where it would
+        // change which member a group asks from then on.
+        final boolean replay = RequestTrace.instance().traced(rqheaders);
 
-        return this.cache.load(
+        return this.load(
+            replay,
             key,
             new Remote.WithErrorHandling(
                 () -> ProxySlice.recorded(() -> {
@@ -1338,17 +1393,19 @@ final class ProxySlice implements Slice {
                             // value. Bounded ProxyArtifactEvent queue —
                             // offer() + drop counter.
                             ProxySlice.this.bindContext(ctx);
-                            ProxySlice.this.events.ifPresent(queue -> {
-                                if (!queue.offer(new ProxyArtifactEvent(
-                                    key,
-                                    ProxySlice.this.rname,
-                                    user,
-                                    ProxySlice.this.releaseInstant(response.headers()).map(Instant::toEpochMilli)
-                                ))) {
-                                    com.auto1.pantera.metrics.EventsQueueMetrics
-                                        .recordDropped(ProxySlice.this.rname);
-                                }
-                            });
+                            if (!replay) {
+                                ProxySlice.this.events.ifPresent(queue -> {
+                                    if (!queue.offer(new ProxyArtifactEvent(
+                                        key,
+                                        ProxySlice.this.rname,
+                                        user,
+                                        ProxySlice.this.releaseInstant(response.headers()).map(Instant::toEpochMilli)
+                                    ))) {
+                                        com.auto1.pantera.metrics.EventsQueueMetrics
+                                            .recordDropped(ProxySlice.this.rname);
+                                    }
+                                });
+                            }
                             // The access record is written once the body
                             // is cached (below), where its size is known
                             // even for a chunked upstream answer (R43).
@@ -1509,7 +1566,9 @@ final class ProxySlice implements Slice {
             }
             // For cache hits: rewrite may be needed for pre-optimization cached content.
             // For post-optimization cached content, rewrite patterns won't match (no-op).
-            return this.rewriteIndex(content, ctype, line)
+            return this.rewriteIndex(
+                content, ctype, line, RequestTrace.instance().traced(rqheaders)
+            )
                 .thenApply(
                     updated -> updated
                         .map(
@@ -1531,7 +1590,8 @@ final class ProxySlice implements Slice {
         // flows save to storage inside this.cache.load(...), not here.
         return this.resolveRelease(info, remote, remoteSuccess)
             .thenApply(ctx -> {
-                if (!remoteSuccess && this.events.isPresent()) {
+                if (!remoteSuccess && this.events.isPresent()
+                    && !RequestTrace.instance().traced(rqheaders)) {
                     this.events.get().add(
                         new ProxyArtifactEvent(
                             key,
@@ -1570,7 +1630,8 @@ final class ProxySlice implements Slice {
     private CompletableFuture<Optional<Content>> rewriteIndex(
         final Content content,
         final Header header,
-        final RequestLine line
+        final RequestLine line,
+        final boolean replay
     ) {
         return new com.auto1.pantera.asto.streams.ContentAsStream<Optional<Content>>(content)
             .process(stream -> {
@@ -1596,7 +1657,7 @@ final class ProxySlice implements Slice {
                     }
                     // Process in single pass to minimize memory copies
                     final String original = new String(bytes, StandardCharsets.UTF_8);
-                    final String rewritten = this.rewriteIndexBody(original, header, line);
+                    final String rewritten = this.rewriteIndexBody(original, header, line, replay);
                     if (this.packageIndexWithoutLinks(line, rewritten)) {
                         return Optional.empty();
                     }
@@ -1665,7 +1726,9 @@ final class ProxySlice implements Slice {
             .collect(Collectors.toList());
     }
 
-    private String rewriteIndexBody(final String body, final Header header, final RequestLine line) {
+    private String rewriteIndexBody(
+        final String body, final Header header, final RequestLine line, final boolean replay
+    ) {
         // Extract base path from request URI, removing the package-specific trailing path.
         // Example: /test_prefix/api/pypi/pypi_group/workday/ -> /test_prefix/api/pypi/pypi_group
         // This ensures download links preserve the correct path prefix for proxy routing.
@@ -1680,10 +1743,10 @@ final class ProxySlice implements Slice {
             .log();
         String result = body;
         if (this.isHtml(header) || this.looksLikeHtml(body)) {
-            result = this.rewriteHtmlLinks(result, base);
+            result = this.rewriteHtmlLinks(result, base, replay);
         }
         if (this.isJson(header) || this.looksLikeJson(body)) {
-            result = this.rewriteJsonLinks(result, base);
+            result = this.rewriteJsonLinks(result, base, replay);
         }
         return result;
     }
@@ -1734,7 +1797,17 @@ final class ProxySlice implements Slice {
             || (trimmed.startsWith("[") && trimmed.endsWith("]"));
     }
 
-    private String rewriteHtmlLinks(final String body, final String base) {
+    /**
+     * Point the package links of an HTML page at this proxy and remember
+     * the upstream location of each file.
+     *
+     * @param body Page
+     * @param base Path the links are rewritten to
+     * @param replay Whether the page is rewritten for a Troubleshoot replay,
+     *  which must not teach the proxy where the files are
+     * @return Rewritten page
+     */
+    private String rewriteHtmlLinks(final String body, final String base, final boolean replay) {
         final Matcher matcher = HREF_PACKAGES.matcher(body);
         // Use StringBuilder instead of StringBuffer (30-40% faster, no synchronization overhead)
         final StringBuilder buffer = new StringBuilder(body.length());
@@ -1746,7 +1819,9 @@ final class ProxySlice implements Slice {
             final String fragment = Optional.ofNullable(matcher.group(4)).orElse(""); // #sha256=...
             final String suffix = matcher.group(5);          // attributes after href (including data-yanked)
             final URI upstream = URI.create(upstreamHost + upstreamPath);
-            this.registerMirror(String.format("%s%s", base, upstreamPath), upstream);
+            if (!replay) {
+                this.registerMirror(String.format("%s%s", base, upstreamPath), upstream);
+            }
             // CRITICAL: Preserve all attributes (especially data-yanked for PEP 592)
             buffer.append(body, lastAppend, matcher.start());
             buffer.append("<a ").append(prefix).append(base).append(upstreamPath)
@@ -1757,7 +1832,17 @@ final class ProxySlice implements Slice {
         return buffer.toString();
     }
 
-    private String rewriteJsonLinks(final String body, final String base) {
+    /**
+     * Point the package links of a PEP 691 document at this proxy and
+     * remember the upstream location of each file.
+     *
+     * @param body Document
+     * @param base Path the links are rewritten to
+     * @param replay Whether the document is rewritten for a Troubleshoot
+     *  replay, which must not teach the proxy where the files are
+     * @return Rewritten document
+     */
+    private String rewriteJsonLinks(final String body, final String base, final boolean replay) {
         final Matcher matcher = JSON_PACKAGES.matcher(body);
         // Use StringBuilder instead of StringBuffer (30-40% faster, no synchronization overhead)
         final StringBuilder buffer = new StringBuilder(body.length());
@@ -1767,7 +1852,9 @@ final class ProxySlice implements Slice {
             final String upstreamPath = matcher.group(2);
             final String fragment = Optional.ofNullable(matcher.group(3)).orElse("");
             final URI upstream = URI.create(upstreamHost + upstreamPath);
-            this.registerMirror(String.format("%s%s", base, upstreamPath), upstream);
+            if (!replay) {
+                this.registerMirror(String.format("%s%s", base, upstreamPath), upstream);
+            }
             buffer.append(body, lastAppend, matcher.start());
             buffer.append("\"url\":\"").append(base).append(upstreamPath)
                   .append(fragment).append("\"");

@@ -21,6 +21,7 @@ import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -626,6 +627,20 @@ public final class CachedPyProxySlice implements Slice {
                         );
                     }
                     return CompletableFuture.completedFuture(answer);
+                }
+                if (RequestTrace.instance().traced(headers)) {
+                    // A Troubleshoot replay asks what a client would get and
+                    // leaves the proxy as it was. The origin handed the
+                    // upstream's file on without storing it; so does this
+                    // slice. The cache writer would store the file and the
+                    // checksum sidecars it fetches for it. Followers are
+                    // released at once: there is no write to wait for.
+                    if (!leaderGate.isDone()) {
+                        leaderGate.complete(null);
+                    }
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok().body(resp.body()).build()
+                    );
                 }
                 return this.cacheWriter.streamThroughAndCommit(
                     key,
