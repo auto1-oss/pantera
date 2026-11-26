@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.cache.UpstreamMiss;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
@@ -332,7 +333,10 @@ final class CachedProxySlice implements Slice {
                     return new CacheTimeControl(this.repo.storage()).validate(
                         cachedKey, Remote.EMPTY
                     ).thenCompose(fresh -> {
-                        if (!fresh) {
+                        // A Troubleshoot replay is served the stale copy as a
+                        // client is, but starts no refresh: the refresh
+                        // writes the document it fetched.
+                        if (!fresh && !RequestTrace.instance().traced(headers)) {
                             this.backgroundRefresh(line, headers, name);
                         }
                         return this.serveCachedMetadata(bytes, headers);
@@ -525,13 +529,12 @@ final class CachedProxySlice implements Slice {
         // malformed body) as opposed to answering "no such package": only
         // the latter may become a 404.
         final UpstreamFailure failure = new UpstreamFailure();
-        return this.cache.load(
+        return this.load(
+            headers,
             new Key.From(name),  // Cache key keeps ~dev to prevent collision
             CachedProxySlice.recording(
                 failure,
-                () -> this.repo.packages().thenApply(
-                        pckgs -> pckgs.orElse(new JsonPackages())
-                    ).thenCompose(Packages::content)
+                () -> this.localPackages(headers).thenCompose(Packages::content)
                     .thenCombine(
                         this.packageFromRemote(line, headers, failure),
                         (lcl, rmt) -> new MergePackage.WithRemote(packageName, lcl).merge(rmt)
@@ -578,6 +581,18 @@ final class CachedProxySlice implements Slice {
             // archive requests. Per-version cooldown is handled by
             // ComposerPackageMetadataHandler upstream of this slice.
             return pkgs.get().asBytesFuture().thenCompose(bytes -> {
+                if (RequestTrace.instance().traced(headers)) {
+                    // A Troubleshoot replay gets the document a client would
+                    // get. It is not kept: the replay must leave the proxy as
+                    // it found it.
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok()
+                            .header("Content-Type", "application/json")
+                            .varyHeader(this.base.vary(headers))
+                            .body(new Content.From(bytes))
+                            .build()
+                    );
+                }
                 final Key metadataKey = new Key.From(name + ".json");
                 return this.repo.storage().save(metadataKey, new Content.From(bytes))
                     .thenApply(ignored -> {
@@ -607,6 +622,60 @@ final class CachedProxySlice implements Slice {
                 .log();
             return this.missResponse(failure, name, headers, foreground);
         }).toCompletableFuture();
+    }
+
+    /**
+     * Load a package document through the cache. For a Troubleshoot replay
+     * ({@link RequestTrace}) the cache is only read: what it holds is served
+     * as for a client, and what it lacks is fetched from the remote without
+     * being stored, so the replay leaves the proxy as it found it.
+     *
+     * @param headers Request headers
+     * @param key Cache key of the package
+     * @param origin Remote the document is fetched from on a miss
+     * @param control Freshness check of a cached document
+     * @return The document, empty when neither the cache nor the remote has it
+     */
+    private CompletionStage<Optional<? extends Content>> load(
+        final Headers headers, final Key key, final Remote origin, final CacheControl control
+    ) {
+        final CompletionStage<Optional<? extends Content>> res;
+        if (RequestTrace.instance().traced(headers)) {
+            res = this.cache.load(key, Remote.EMPTY, control).thenCompose(
+                held -> {
+                    final CompletionStage<Optional<? extends Content>> found;
+                    if (held.isPresent()) {
+                        found = CompletableFuture.completedFuture(held);
+                    } else {
+                        found = origin.get();
+                    }
+                    return found;
+                }
+            );
+        } else {
+            res = this.cache.load(key, origin, control);
+        }
+        return res;
+    }
+
+    /**
+     * The repository's own packages, which the remote's are merged with.
+     * Reading them writes the root {@code packages.json} anew
+     * ({@link Repository#packages()}), and that root names no package. A
+     * Troubleshoot replay ({@link RequestTrace}) writes nothing: it merges
+     * with an empty registry, which is what the read would have given it.
+     *
+     * @param headers Request headers
+     * @return Packages of the repository
+     */
+    private CompletionStage<Packages> localPackages(final Headers headers) {
+        final CompletionStage<Packages> res;
+        if (RequestTrace.instance().traced(headers)) {
+            res = CompletableFuture.completedFuture(new JsonPackages());
+        } else {
+            res = this.repo.packages().thenApply(pckgs -> pckgs.orElse(new JsonPackages()));
+        }
+        return res;
     }
 
     /**
@@ -1166,6 +1235,18 @@ final class CachedProxySlice implements Slice {
                     return CompletableFuture.completedFuture(
                         new UpstreamMiss("com.auto1.pantera.composer", this.rname, path, headers)
                             .answered(resp.status().code(), resp.headers())
+                    );
+                }
+                if (RequestTrace.instance().traced(headers)) {
+                    // A Troubleshoot replay asks what a client would get: the
+                    // upstream's archive is handed on as it comes. It is not
+                    // stored, and the requests parked behind this one are
+                    // let go to fetch it for themselves.
+                    if (!leaderGate.isDone()) {
+                        leaderGate.complete(null);
+                    }
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok().body(resp.body()).build()
                     );
                 }
                 return this.cacheWriter.streamThroughAndCommit(
