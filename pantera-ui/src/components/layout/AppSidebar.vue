@@ -50,6 +50,10 @@ const adminItems = computed<NavItem[]>(() => {
   if (canWrite('api_user_permissions')) {
     items.push({ label: 'User Management', icon: 'pi pi-users', to: '/admin/users' })
   }
+  // The report is read-only and served to whoever may read users.
+  if (canRead('api_user_permissions')) {
+    items.push({ label: 'Sign-in failures', icon: 'pi pi-sign-in', to: '/admin/sign-in-failures' })
+  }
   if (canWrite('api_role_permissions')) {
     items.push({ label: 'Roles & Permissions', icon: 'pi pi-shield', to: '/admin/roles' })
   }

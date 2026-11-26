@@ -14,8 +14,12 @@ import {
   getLoginThrottleSettings, updateLoginThrottleSettings,
 } from '@/api/auth'
 import { getFailedLoginsSettings, updateFailedLoginsSettings } from '@/api/failedLogins'
+import {
+  getSignInReportSettings, updateSignInReportSettings, type SignInReportSettings,
+} from '@/api/signInFailures'
 import type { RuntimeSettingKey } from '@/api/runtimeSettings'
 import { useRuntimeSettings } from '@/composables/useRuntimeSettings'
+import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { useNotificationStore } from '@/stores/notifications'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -31,6 +35,7 @@ import Tag from 'primevue/tag'
 import type { Settings, CooldownConfig } from '@/types'
 import { apiErrorMessage } from '@/utils/apiError'
 
+const auth = useAuthStore()
 const config = useConfigStore()
 const notify = useNotificationStore()
 const uiVersion = __APP_VERSION__
@@ -48,7 +53,7 @@ type SectionId =
   | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker' | 'upstream_breaker'
   | 'cooldown' | 'http_client' | 'bulkhead' | 'http_server'
   | 'external_links' | 'client_base_url'
-  | 'request_limits' | 'egress' | 'login_throttle' | 'failed_logins'
+  | 'request_limits' | 'egress' | 'login_throttle' | 'failed_logins' | 'sign_in_report'
 
 interface SectionMeta {
   /** Human-readable name shown in toasts and the dirty list. */
@@ -113,6 +118,10 @@ const SECTION_META: Record<SectionId, SectionMeta> = {
   },
   failed_logins: {
     label: 'Failed logins',
+    hotReload: true,
+  },
+  sign_in_report: {
+    label: 'Sign-in report',
     hotReload: true,
   },
   cooldown: {
@@ -210,6 +219,12 @@ const failedLoginsCountRejectedKeys = ref(false)
 const failedLoginsLockAllCredentials = ref(true)
 /** The card's list of locked names; loaded again after a save of the policy. */
 const lockedUsersList = ref<{ reload: () => Promise<void> } | null>(null)
+// Sign-in report (2.2.15): whether Pantera notes who fails to sign in, and
+// for how many days a line is kept. The report itself is the Sign-in
+// failures page, which is served to accounts that may read users.
+const signInReportEnabled = ref(true)
+const signInReportRetentionDays = ref(90)
+const canOpenSignInFailures = computed(() => auth.hasAction('api_user_permissions', 'read'))
 
 // Client-facing base URL derivation (ClientBaseUrl, pantera-core) — governs
 // absolute URLs Pantera emits (e.g. npm dist.tarball) when a repository has
@@ -426,6 +441,11 @@ onMounted(async () => {
         failedLoginsCountRejectedKeys.value = s.failed_logins_count_rejected_keys === 'true'
         // On unless the server says off: a missing value must not read as the weaker lock.
         failedLoginsLockAllCredentials.value = s.failed_logins_lock_all_credentials !== 'false'
+      }),
+      getSignInReportSettings().then(s => {
+        // On unless the server says off, as the server reads a missing value.
+        signInReportEnabled.value = s.sign_in_report_enabled !== 'false'
+        signInReportRetentionDays.value = parseInt(s.sign_in_report_retention_days ?? '90')
       }),
       runtime.load(),
     ])
@@ -749,6 +769,57 @@ async function saveFailedLoginsSettings(): Promise<boolean> {
   }
 }
 
+/** Days the server accepts for the retention of the sign-in report (`SignInReportConfig`). */
+const SIGN_IN_REPORT_RETENTION = { label: 'Keep lines for (days)', min: 1, max: 3650 }
+
+/**
+ * What keeps the sign-in report card from being saved, or null. Shown in
+ * the card while editing and checked again by the save; the server
+ * validates the same range and answers 400.
+ */
+const signInReportProblem = computed<string | null>(() => {
+  const range = SIGN_IN_REPORT_RETENTION
+  // An emptied number field holds null.
+  const days: number | null = signInReportRetentionDays.value
+  if (days === null || !Number.isInteger(days) || days < range.min || days > range.max) {
+    return `${range.label} must be a whole number from ${range.min} to ${range.max}`
+  }
+  return null
+})
+
+/**
+ * Save the sign-in report settings. Applies on every node without a
+ * restart. Only the keys that differ from the loaded values are sent: the
+ * endpoint takes any subset, and a key that was not touched here keeps
+ * what another administrator may have set meanwhile.
+ */
+async function saveSignInReportSettings(): Promise<boolean> {
+  const problem = signInReportProblem.value
+  if (problem) {
+    notify.error(problem)
+    return false
+  }
+  const saved = baseline.value
+  const changed: Partial<SignInReportSettings> = {}
+  if (!saved || saved.signInReportEnabled !== signInReportEnabled.value) {
+    changed.sign_in_report_enabled = String(signInReportEnabled.value)
+  }
+  if (!saved || saved.signInReportRetentionDays !== signInReportRetentionDays.value) {
+    changed.sign_in_report_retention_days = String(signInReportRetentionDays.value)
+  }
+  saving.value = 'sign-in-report'
+  try {
+    await updateSignInReportSettings(changed)
+    notify.success('Sign-in report settings saved')
+    return true
+  } catch (err) {
+    notify.error('Failed to save sign-in report settings', apiErrorMessage(err, 'Request failed'))
+    return false
+  } finally {
+    saving.value = null
+  }
+}
+
 /**
  * Client-side sanity check mirroring (not replacing) the server-side
  * validation in `ClientBaseUrlSettings`'s compact constructor: must parse as
@@ -977,6 +1048,8 @@ const TRACKED = {
   failedLoginsForgetAfterMinutes,
   failedLoginsCountRejectedKeys,
   failedLoginsLockAllCredentials,
+  signInReportEnabled,
+  signInReportRetentionDays,
   cooldownEnabled,
   cooldownAge,
   cooldownHistoryRetentionDays,
@@ -1034,6 +1107,7 @@ const SECTION_FIELDS: Record<Exclude<SectionId, 'bulkhead'>, BaselineKey[]> = {
     'failedLoginsUnlockAfterMinutes', 'failedLoginsForgetAfterMinutes',
     'failedLoginsCountRejectedKeys', 'failedLoginsLockAllCredentials',
   ],
+  sign_in_report: ['signInReportEnabled', 'signInReportRetentionDays'],
   cooldown: [
     'cooldownEnabled', 'cooldownAge', 'cooldownHistoryRetentionDays',
     'cooldownCleanupBatchLimit', 'cooldownSnapshotEnabled', 'cooldownSnapshotAge',
@@ -1077,6 +1151,7 @@ const isDirtyRequestLimits = sectionDirty('request_limits')
 const isDirtyEgress = sectionDirty('egress')
 const isDirtyLoginThrottle = sectionDirty('login_throttle')
 const isDirtyFailedLogins = sectionDirty('failed_logins')
+const isDirtySignInReport = sectionDirty('sign_in_report')
 const isDirtyCooldown = sectionDirty('cooldown')
 const isDirtyHttpClient = sectionDirty('http_client')
 const isDirtyHttpServer = sectionDirty('http_server')
@@ -1100,6 +1175,7 @@ const DIRTY_PER_SECTION: Record<SectionId, { value: boolean }> = {
   egress: isDirtyEgress,
   login_throttle: isDirtyLoginThrottle,
   failed_logins: isDirtyFailedLogins,
+  sign_in_report: isDirtySignInReport,
   cooldown: isDirtyCooldown,
   http_client: isDirtyHttpClient,
   bulkhead: isDirtyBulkhead,
@@ -1131,6 +1207,7 @@ function saveSectionById(id: SectionId): Promise<boolean> {
     case 'egress': return saveEgressSettings()
     case 'login_throttle': return saveLoginThrottleSettings()
     case 'failed_logins': return saveFailedLoginsSettings()
+    case 'sign_in_report': return saveSignInReportSettings()
     case 'cooldown': return saveCooldown()
     case 'http_client': return saveHttpClient()
     case 'bulkhead': return runtime.saveAllDirty()
@@ -1865,6 +1942,75 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
             </div>
             <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
               <LockedUsersList ref="lockedUsersList" />
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Sign-in report: what the Sign-in failures page records, and for how long (2.2.15) -->
+      <Card class="shadow-sm" data-testid="sign-in-report-card">
+        <template #title>
+          <SectionHeader id="sign_in_report" :dirty="isDirtySignInReport" />
+        </template>
+        <template #subtitle>
+          Pantera notes who fails to sign in, with what, and from where: rejected
+          API keys, failed password logins, and logins the sign-in form's own limit
+          refused. Stored in the database; the PANTERA_SIGN_IN_REPORT_* environment
+          variables are only the fallback.
+        </template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="flex items-center gap-3">
+              <InputSwitch v-model="signInReportEnabled" />
+              <div>
+                <div class="text-sm">Record sign-in failures</div>
+                <div class="text-xs text-gray-400">
+                  Default: on. Off = nothing is noted or stored. Lines already stored
+                  stay until their retention ends.
+                </div>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Keep lines for (days)</label>
+                <InputNumber
+                  v-model="signInReportRetentionDays"
+                  :min="1"
+                  :max="3650"
+                  class="w-full"
+                />
+                <span class="text-xs text-gray-400">
+                  Default: 90. From 1 to 3650. A line is removed this many days after
+                  its last event.
+                </span>
+              </div>
+            </div>
+            <div
+              v-if="signInReportProblem"
+              class="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded p-2"
+              data-testid="sign-in-report-problem"
+            >
+              <i class="pi pi-times-circle mr-1" />
+              {{ signInReportProblem }}.
+            </div>
+            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+              <i class="pi pi-info-circle mr-1" />
+              Applies on every node — no restart needed. A line holds the user name,
+              client address and client program of a failed sign-in, and the id of a
+              rejected key. No password and no key is stored.
+            </div>
+            <div class="text-sm">
+              <router-link
+                v-if="canOpenSignInFailures"
+                to="/admin/sign-in-failures"
+                class="text-blue-500 hover:underline"
+                data-testid="sign-in-report-link"
+              >
+                Open the Sign-in failures page <i class="pi pi-arrow-right text-xs ml-1" />
+              </router-link>
+              <span v-else class="text-gray-500">
+                The lists are on the Sign-in failures page, for accounts that may read users.
+              </span>
             </div>
           </div>
         </template>

@@ -111,6 +111,14 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiredPermission: 'api_user_permissions' },
   },
   {
+    // The sign-in failures report. Its lists are served to whoever may read
+    // users, so the page needs that action and no write access.
+    path: '/admin/sign-in-failures',
+    name: 'admin-sign-in-failures',
+    component: () => import('@/views/admin/SignInFailuresView.vue'),
+    meta: { requiredPermission: 'api_user_permissions', requiredAction: 'read' },
+  },
+  {
     path: '/admin/roles',
     name: 'admin-roles',
     component: () => import('@/views/admin/RoleListView.vue'),
