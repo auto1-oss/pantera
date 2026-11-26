@@ -11,11 +11,23 @@
 package com.auto1.pantera.auth;
 
 /**
- * Thread-local context for Okta authentication extras (e.g. MFA code).
+ * Thread-local context of the sign-in being checked, for the Okta password
+ * provider: the second-factor code a person typed, and whether a person is
+ * there at all.
+ *
+ * <p>Only an entry point where a person signs in (the sign-in form and the
+ * token API behind it) marks the thread {@link #setInteractive(boolean)
+ * interactive}. A repository request never does, so the provider knows
+ * that nobody can answer a push or type a code.</p>
  */
 public final class OktaAuthContext {
 
     private static final ThreadLocal<String> MFA_CODE = new ThreadLocal<>();
+
+    /**
+     * Whether a person is signing in on this thread.
+     */
+    private static final ThreadLocal<Boolean> INTERACTIVE = new ThreadLocal<>();
 
     private OktaAuthContext() {
     }
@@ -28,11 +40,34 @@ public final class OktaAuthContext {
         }
     }
 
+    /**
+     * Mark the sign-in on this thread as one a person makes.
+     *
+     * @param interactive True when a person can answer a second factor
+     */
+    public static void setInteractive(final boolean interactive) {
+        if (interactive) {
+            INTERACTIVE.set(Boolean.TRUE);
+        } else {
+            INTERACTIVE.remove();
+        }
+    }
+
     public static void clear() {
         MFA_CODE.remove();
+        INTERACTIVE.remove();
     }
 
     public static String mfaCode() {
         return MFA_CODE.get();
+    }
+
+    /**
+     * Whether a person is signing in on this thread.
+     *
+     * @return False for a repository login, the default
+     */
+    public static boolean interactive() {
+        return Boolean.TRUE.equals(INTERACTIVE.get());
     }
 }

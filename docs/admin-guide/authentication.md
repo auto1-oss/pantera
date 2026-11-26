@@ -249,6 +249,10 @@ curl -X POST http://pantera-host:8086/api/v1/auth/token \
 
 The `mfa_code` field is only required when the Okta organization enforces MFA. If MFA is not configured, omit the field.
 
+Without `mfa_code`, a sign-in through this endpoint (the sign-in form uses it) starts an Okta Verify push and waits up to 30 seconds for the person to approve it.
+
+**A repository login never starts a push and never sends a code** (v2.2.15+). When a build tool sends a directory password as its HTTP Basic password and Okta asks for a second factor, Pantera refuses the login with `401`, verifies no factor, and records `event.reason: mfa_required` in the application log and on the access record of the request. Before 2.2.15 every such request sent a push to the user's phone and held a sign-in thread for up to 30 seconds. Users whose Okta policy asks for a second factor on this path have to use an API key for build tools.
+
 ### Okta Setup Steps
 
 1. Create an OIDC application in the Okta admin console (Web Application type).

@@ -130,7 +130,7 @@ public final class CombinedAuthScheme implements AuthScheme {
                 AuthScheme.result(Optional.empty(), CombinedAuthScheme.CHALLENGE)
             );
         }
-        final CompletionStage<Optional<AuthUser>> resolved;
+        final CompletionStage<PasswordCheck.Outcome> resolved;
         if (AuthWorkerPool.jwtShaped(basic.password())) {
             // Snapshot MDC on the calling (event-loop) thread — tokenAuth.user()
             // completes on whatever thread the JWT validator's own async chain
@@ -177,23 +177,21 @@ public final class CombinedAuthScheme implements AuthScheme {
                 .thenApply(user -> user.filter(usr -> usr.name().equals(basic.username())))
                 .thenCompose(
                     user -> user.isPresent()
-                        ? CompletableFuture.completedFuture(user)
-                        : CompletableFuture.supplyAsync(
-                            () -> this.basicAuth.user(basic.username(), basic.password()),
-                            AuthWorkerPool.AUTH_EXECUTOR
+                        ? CompletableFuture.completedFuture(
+                            new PasswordCheck.Outcome(user, Optional.empty())
                         )
+                        : new PasswordCheck(this.basicAuth)
+                            .run(basic.username(), basic.password())
                 );
         } else {
             // Offload the (potentially blocking, DB/IdP-backed) password
             // check off the calling thread — mirrors BasicAuthScheme. The
             // /v2/ Docker ping runs this on a Vert.x event-loop thread.
-            resolved = CompletableFuture.supplyAsync(
-                            () -> this.basicAuth.user(basic.username(), basic.password()),
-                            AuthWorkerPool.AUTH_EXECUTOR
-                        );
+            resolved = new PasswordCheck(this.basicAuth)
+                .run(basic.username(), basic.password());
         }
         return resolved.thenApply(
-            user -> AuthScheme.result(user, CombinedAuthScheme.CHALLENGE)
+            outcome -> AuthScheme.result(outcome, CombinedAuthScheme.CHALLENGE)
         );
     }
 

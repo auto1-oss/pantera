@@ -156,9 +156,7 @@ public final class CombinedAuthzSlice implements Slice {
                 ResponseBuilder.forbidden().build()
             );
         }
-        return ResponseBuilder.unauthorized()
-            .header(new WwwAuthenticate(result.challenge()))
-            .completedFuture();
+        return new FailedLogin(result, headers).response();
     }
 
     /**
@@ -254,7 +252,7 @@ public final class CombinedAuthzSlice implements Slice {
                 )
             );
         }
-        final CompletionStage<Optional<AuthUser>> resolved;
+        final CompletionStage<PasswordCheck.Outcome> resolved;
         if (AuthWorkerPool.jwtShaped(basic.password())) {
             // Package-manager clients (mvn, npm, pip, …) submit API tokens
             // as the Basic password. Validate token-shaped passwords as
@@ -312,26 +310,24 @@ public final class CombinedAuthzSlice implements Slice {
                             usr -> usr.name().equals(basic.username())
                         );
                         if (bound.isPresent()) {
-                            return CompletableFuture.completedFuture(bound);
+                            return CompletableFuture.completedFuture(
+                                new PasswordCheck.Outcome(bound, Optional.empty())
+                            );
                         }
-                        return CompletableFuture.supplyAsync(
-                            () -> this.basicAuth.user(basic.username(), basic.password()),
-                            AuthWorkerPool.AUTH_EXECUTOR
-                        );
+                        return new PasswordCheck(this.basicAuth)
+                            .run(basic.username(), basic.password());
                     }
                 );
         } else {
             // Offload to worker thread to prevent blocking event loop
             // This is critical for auth providers that make external calls
             // (Okta, Keycloak, etc.)
-            resolved = CompletableFuture.supplyAsync(
-                () -> this.basicAuth.user(basic.username(), basic.password()),
-                AuthWorkerPool.AUTH_EXECUTOR
-            );
+            resolved = new PasswordCheck(this.basicAuth)
+                .run(basic.username(), basic.password());
         }
         return resolved.thenApply(
-            user -> AuthScheme.result(
-                user,
+            outcome -> AuthScheme.result(
+                outcome,
                 String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                     BasicAuthScheme.NAME, BearerAuthScheme.NAME)
             )
