@@ -44,12 +44,17 @@ public final class PasswordCheck {
     private final Headers request;
 
     /**
+     * Where the login comes from.
+     */
+    private final LoginSource source;
+
+    /**
      * Ctor.
      *
      * @param auth Sign-in chain
      */
     public PasswordCheck(final Authentication auth) {
-        this(auth, Headers.EMPTY);
+        this(auth, Headers.EMPTY, LoginSource.UNKNOWN);
     }
 
     /**
@@ -59,8 +64,39 @@ public final class PasswordCheck {
      * @param request Headers of the request that carries the login
      */
     public PasswordCheck(final Authentication auth, final Headers request) {
+        this(
+            auth, request,
+            new LoginSource(
+                PasswordCheck.first(request, EcsLoggingSlice.CTX_CLIENT_IP_HEADER),
+                PasswordCheck.first(request, "User-Agent"),
+                LoginSource.REPOSITORY
+            )
+        );
+    }
+
+    /**
+     * Ctor for an entry point that is not a repository request.
+     *
+     * @param auth Sign-in chain
+     * @param source Where the login comes from
+     */
+    public PasswordCheck(final Authentication auth, final LoginSource source) {
+        this(auth, Headers.EMPTY, source);
+    }
+
+    /**
+     * Primary ctor.
+     *
+     * @param auth Sign-in chain
+     * @param request Headers of the request that carries the login
+     * @param source Where the login comes from
+     */
+    private PasswordCheck(
+        final Authentication auth, final Headers request, final LoginSource source
+    ) {
         this.auth = auth;
         this.request = request;
+        this.source = source;
     }
 
     /**
@@ -88,8 +124,10 @@ public final class PasswordCheck {
         final Map<String, String> prior = MDC.getCopyOfContextMap();
         try {
             this.bind(username);
+            this.source.bind();
             return this.checked(username, password);
         } finally {
+            LoginSource.unbind();
             if (prior == null) {
                 MDC.clear();
             } else {
@@ -123,6 +161,10 @@ public final class PasswordCheck {
         } else {
             MDC.put(EcsMdc.USER_NAME, username);
         }
+    }
+
+    private static String first(final Headers headers, final String name) {
+        return headers.find(name).stream().findFirst().map(hdr -> hdr.getValue()).orElse("");
     }
 
     /**

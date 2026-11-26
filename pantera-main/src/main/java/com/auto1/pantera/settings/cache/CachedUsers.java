@@ -79,6 +79,11 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
     private final Authentication origin;
 
     /**
+     * Users whose logins are never answered from this cache.
+     */
+    private volatile java.util.function.Predicate<String> bypass = name -> false;
+
+    /**
      * Ctor with default configuration.
      * Here an instance of cache is created. It is important that cache
      * is a local variable.
@@ -190,6 +195,16 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         this.ttl = Duration.ofMinutes(5);
     }
 
+    /**
+     * Name the users whose logins are never answered from this cache.
+     *
+     * @param users Predicate over user names; it runs on every login and
+     *  has to answer from memory
+     */
+    public void bypassFor(final java.util.function.Predicate<String> users) {
+        this.bypass = users;
+    }
+
     @Override
     public Optional<AuthUser> user(final String user, final String pass) {
         return new UncheckedIOScalar<>(
@@ -197,8 +212,10 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 // JWT-as-password: Skip cache, validate directly.
                 // JWT tokens have their own expiry (exp claim), caching would
                 // override that expiry. Also, JWT validation is O(1) - no need to cache.
-                if (looksLikeJwt(pass)) {
-                    // JWT tokens bypass cache - validated directly using exp claim
+                if (looksLikeJwt(pass) || this.bypass.test(user)) {
+                    // JWT tokens bypass cache - validated directly using exp claim.
+                    // So does a user the bypass names (a locked one): a
+                    // remembered login must not pass, the chain decides.
                     return this.origin.user(user, pass);
                 }
                 

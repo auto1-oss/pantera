@@ -343,10 +343,10 @@ public final class CombinedAuthzSlice implements Slice {
      * @return Authentication result.
      */
     private CompletionStage<AuthScheme.Result> authenticateBearer(final Authorization auth) {
-        return this.tokenAuth.user(new Authorization.Bearer(auth.credentials()).token())
+        return this.tokenAuth.check(new Authorization.Bearer(auth.credentials()).token())
             .thenApply(
-                user -> AuthScheme.result(
-                    user,
+                outcome -> AuthScheme.result(
+                    outcome,
                     String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                         BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                 )

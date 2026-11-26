@@ -266,6 +266,44 @@ public final class MicrometerMetrics {
             .record(java.time.Duration.ofMillis(durationMs));
     }
 
+    // ========== Sign-in Metrics ==========
+
+    /**
+     * A login that was refused without being checked.
+     * @param reason Why: {@code login_delayed}, {@code account_locked} or
+     *  {@code sign_in_busy}
+     */
+    public void recordLoginRefused(final String reason) {
+        Counter.builder("pantera.auth.login.refused")
+            .description("Logins refused by the login delay or the account lock")
+            .tags("reason", reason)
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
+     * A user was locked after failed logins.
+     */
+    public void recordAccountLock() {
+        Counter.builder("pantera.auth.account.locks")
+            .description("Users locked after failed logins")
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
+     * Locks that ended.
+     * @param cause How: {@code admin}, {@code automatic} or {@code lock_off}
+     * @param count Number of locks
+     */
+    public void recordAccountUnlock(final String cause, final int count) {
+        Counter.builder("pantera.auth.account.unlocks")
+            .description("Account locks that ended")
+            .tags("cause", cause)
+            .register(this.registry)
+            .increment(count);
+    }
+
     // ========== Cache Metrics ==========
 
     public void recordCacheHit(String cacheType, String cacheTier) {

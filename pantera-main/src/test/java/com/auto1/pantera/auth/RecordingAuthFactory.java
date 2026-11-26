@@ -33,12 +33,12 @@ public final class RecordingAuthFactory implements AuthFactory {
     /**
      * The one password this provider accepts, for any user name.
      */
-    static final String PASSWORD = "correct horse battery staple";
+    public static final String PASSWORD = "correct horse battery staple";
 
     /**
      * Passwords this provider was asked about, in order.
      */
-    static final List<String> SEEN = new CopyOnWriteArrayList<>();
+    public static final List<String> SEEN = new CopyOnWriteArrayList<>();
 
     @Override
     public Authentication getAuthentication(final YamlMapping conf) {

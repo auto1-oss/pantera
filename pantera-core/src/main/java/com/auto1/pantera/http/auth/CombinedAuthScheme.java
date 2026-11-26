@@ -205,7 +205,7 @@ public final class CombinedAuthScheme implements AuthScheme {
      * @return Authentication result
      */
     private CompletionStage<AuthScheme.Result> authenticateBearer(final Authorization auth) {
-        return this.tokenAuth.user(new Authorization.Bearer(auth.credentials()).token())
-            .thenApply(user -> AuthScheme.result(user, CombinedAuthScheme.CHALLENGE));
+        return this.tokenAuth.check(new Authorization.Bearer(auth.credentials()).token())
+            .thenApply(outcome -> AuthScheme.result(outcome, CombinedAuthScheme.CHALLENGE));
     }
 }

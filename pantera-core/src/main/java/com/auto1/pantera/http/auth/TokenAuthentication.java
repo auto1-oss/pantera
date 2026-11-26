@@ -27,4 +27,18 @@ public interface TokenAuthentication {
      * @return User if authenticated.
      */
     CompletionStage<Optional<AuthUser>> user(String token);
+
+    /**
+     * Check a token and say why it is refused, when the check knows a
+     * reason beyond "not a valid token": its owner is locked. The default
+     * knows none.
+     *
+     * @param token Token
+     * @return The user, or the refusal the check noted
+     */
+    default CompletionStage<PasswordCheck.Outcome> check(final String token) {
+        return this.user(token).thenApply(
+            user -> new PasswordCheck.Outcome(user, Optional.empty())
+        );
+    }
 }

@@ -41,4 +41,19 @@ public interface UserEnabledCheck {
      *     otherwise. Implementations must fail closed on errors.
      */
     boolean isEnabled(String username);
+
+    /**
+     * Whether the user is locked after failed logins. A locked user can
+     * use no credential: the token check refuses a token of such a user
+     * with 403 and "Account locked", where a disabled user's token is just
+     * invalid.
+     *
+     * @param username The username (JWT {@code sub} claim)
+     * @return {@code true} if the user is locked; the default knows no lock.
+     *  Implementations answer from memory: this is asked on every
+     *  authenticated request.
+     */
+    default boolean isLocked(final String username) {
+        return false;
+    }
 }

@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.auth;
 
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -39,10 +41,11 @@ public final class AuthFromKeycloak implements Authentication {
 
     @Override
     public Optional<AuthUser> user(final String username, final String password) {
-        final AuthzClient client = AuthzClient.create(this.config);
         Optional<AuthUser> res;
         try {
-            client.obtainAccessToken(username, password);
+            // Creating the client reads Keycloak's configuration over the
+            // network: an unreachable Keycloak fails here already.
+            AuthzClient.create(this.config).obtainAccessToken(username, password);
             res = Optional.of(new AuthUser(username, "keycloak"));
         } catch (final HttpResponseException err) {
             // NOTE: client.ip, user.name, trace.id are in MDC (set by EcsLoggingSlice).
@@ -68,6 +71,11 @@ public final class AuthFromKeycloak implements Authentication {
                 logger.field("repository.name", repoName);
             }
             logger.log();
+            if (!isCredentialFailure) {
+                // Keycloak did not say the password is wrong: not a failed
+                // login of this user.
+                AuthFromKeycloak.unavailable().note();
+            }
             res = Optional.empty();
         } catch (final Throwable err) {
             // System failures (network, timeout, Keycloak down) — alert-worthy.
@@ -88,9 +96,25 @@ public final class AuthFromKeycloak implements Authentication {
                 logger.field("repository.name", repoName);
             }
             logger.log();
+            // Keycloak cannot be reached: not a failed login of this user.
+            AuthFromKeycloak.unavailable().note();
             res = Optional.empty();
         }
         return res;
+    }
+
+    /**
+     * The refusal of a login that could not be checked because Keycloak
+     * cannot be reached or fails.
+     *
+     * @return Refusal answered 503: the client is told to come back, not
+     *  that its password is wrong
+     */
+    private static AuthRefusal unavailable() {
+        return new AuthRefusal(
+            "identity_provider_unavailable", RsStatus.SERVICE_UNAVAILABLE, 0L,
+            "Sign-in is temporarily unavailable"
+        );
     }
 
     @Override

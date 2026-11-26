@@ -17,7 +17,10 @@ import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.db.dao.UserTokenDao;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.PasswordCheck;
 import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
@@ -126,6 +129,52 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                 .map(ValidatedToken::user));
     }
 
+    @Override
+    public CompletionStage<PasswordCheck.Outcome> check(final String token) {
+        // The refusal is noted on the thread that validates: it is read
+        // there, and nothing of it stays on a shared thread.
+        return CompletableFuture.supplyAsync(
+            TraceContextExecutor.wrapSupplier(
+                () -> {
+                    AuthRefusal.take();
+                    final Optional<AuthUser> user = this.validate(token)
+                        .filter(valid -> valid.type() != TokenType.REFRESH)
+                        .map(ValidatedToken::user);
+                    final Optional<AuthRefusal> refusal = AuthRefusal.take();
+                    final PasswordCheck.Outcome outcome;
+                    if (user.isPresent()) {
+                        outcome = new PasswordCheck.Outcome(user, Optional.empty());
+                    } else {
+                        outcome = new PasswordCheck.Outcome(user, refusal);
+                    }
+                    return outcome;
+                }
+            ),
+            ForkJoinPool.commonPool()
+        );
+    }
+
+    /**
+     * Whether a token is one of a locked user: it carries a valid
+     * signature of this installation, is not expired, and its subject is
+     * locked. For a caller that has to tell "locked" from "invalid" after
+     * a failed validation.
+     *
+     * @param token JWT string
+     * @return True for a token whose owner is locked
+     */
+    public boolean ownerLocked(final String token) {
+        boolean locked;
+        try {
+            final String sub = this.verifier.verify(token).getSubject();
+            locked = sub != null && this.enabledCheck.isLocked(sub);
+        } catch (final JWTVerificationException ex) {
+            // Not a token of ours, or expired: it says nothing about a lock.
+            locked = false;
+        }
+        return locked;
+    }
+
     /**
      * Full validation returning the verified type and JTI alongside the
      * principal. Same signature / expiry / JTI-ownership / blocklist /
@@ -135,7 +184,10 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
      * @return Validated token, or empty when the token is not acceptable
      */
     public Optional<ValidatedToken> validated(final String token) {
-        return this.validate(token);
+        final Optional<ValidatedToken> res = this.validate(token);
+        // This caller reads no refusal: none may stay on its thread.
+        AuthRefusal.take();
+        return res;
     }
 
     /**
@@ -150,7 +202,7 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
         // on them: the check runs under the caller's, so its records carry
         // the trace and the client address of this request.
         return CompletableFuture.supplyAsync(
-            TraceContextExecutor.wrapSupplier(() -> this.validate(token)),
+            TraceContextExecutor.wrapSupplier(() -> this.validated(token)),
             ForkJoinPool.commonPool()
         );
     }
@@ -275,6 +327,27 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                 break;
             default:
                 return Optional.empty();
+        }
+        // A locked user can use no credential. The refusal says so: the
+        // client is answered 403 "Account locked", not 401.
+        if (this.enabledCheck.isLocked(sub)) {
+            new AuthRefusal(
+                "account_locked", RsStatus.FORBIDDEN, 0L, "Account locked"
+            ).note();
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                    .recordLoginRefused("account_locked");
+            }
+            EcsLogger.warn("com.auto1.pantera.auth")
+                .message("Token rejected: user is locked after failed logins")
+                .eventCategory("authentication")
+                .eventAction("token_validate")
+                .eventOutcome("failure")
+                .field("event.reason", "account_locked")
+                .field("user.name", sub)
+                .field("log.source", "application")
+                .log();
+            return Optional.empty();
         }
         // Per-request enabled-state gate. If the subject has been
         // disabled in Pantera since the token was issued, reject here.

@@ -61,7 +61,7 @@ public final class SecurityPolicySettingsSync {
 
     /**
      * Tell peers a section was written.
-     * @param section Section name ({@code request_limits}, {@code egress}, {@code login_throttle})
+     * @param section Section name ({@code request_limits}, {@code egress}, {@code login_throttle}, {@code failed_logins})
      */
     public void broadcast(final String section) {
         if (this.bus != null) {
@@ -83,6 +83,12 @@ public final class SecurityPolicySettingsSync {
         }
         if (all || "login_throttle".equals(section)) {
             invalidate(LoginThrottleSettingsLoader.installed());
+        }
+        if (all || "failed_logins".equals(section)) {
+            final FailedLoginsSettingsLoader failed = FailedLoginsSettingsLoader.installed();
+            if (failed != null) {
+                failed.invalidate();
+            }
         }
         EcsLogger.info(LOGGER)
             .message("Reloaded " + section + " settings after a peer node's update")

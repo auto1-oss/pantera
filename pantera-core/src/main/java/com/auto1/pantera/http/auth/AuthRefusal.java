@@ -102,6 +102,17 @@ public final class AuthRefusal {
     }
 
     /**
+     * The refusal noted on this thread, which stays noted. For code inside
+     * the chain: a wrapper that counts failed logins must not count a
+     * login that a provider refused for a reason of its own.
+     *
+     * @return The refusal, if one was noted
+     */
+    public static Optional<AuthRefusal> noted() {
+        return Optional.ofNullable(AuthRefusal.NOTED.get());
+    }
+
+    /**
      * Take the refusal noted on this thread, leaving none.
      *
      * @return The refusal, if one was noted

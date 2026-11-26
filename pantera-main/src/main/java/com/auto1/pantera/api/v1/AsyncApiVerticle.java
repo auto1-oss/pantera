@@ -444,7 +444,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.dataSource != null ? new AuthProviderDao(this.dataSource) : null,
             this.dataSource != null ? new UserTokenDao(this.dataSource) : null,
             this.dataSource != null ? new AuthSettingsDao(this.dataSource) : null,
-            AsyncApiVerticle.LOGIN_THROTTLE
+            AsyncApiVerticle.LOGIN_THROTTLE,
+            this.settings.failedLogins().orElse(null)
         );
         authHandler.register(router);
         // JWT auth for all /api/v1/* routes EXCEPT download-direct (uses HMAC token auth).
@@ -508,6 +509,13 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                         ctx.setUser(io.vertx.ext.auth.User.fromToken(rawToken));
                         ctx.user().principal().mergeIn(principal);
                         ctx.next();
+                    } else if (unifiedAuth.ownerLocked(rawToken)) {
+                        // The session or key is fine; its user is locked
+                        // after failed logins. The UI shows this message.
+                        ApiResponse.sendError(
+                            ctx, 403, "ACCOUNT_LOCKED",
+                            "Account locked. Ask an administrator to unlock it."
+                        );
                     } else {
                         ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid or expired token");
                     }
@@ -572,6 +580,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 this.settings.cachedLocalEnabledFilter().orElse(null)
             ).register(router);
         }
+        // Account lock: who is locked, and the unlock of one user or all.
+        // A locked name need not be a Pantera user, so these routes do not
+        // depend on a users store.
+        this.settings.failedLogins().ifPresent(
+            logins -> new LockedUsersHandler(logins, this.security.policy()).register(router)
+        );
         if (roles != null) {
             new RoleHandler(
                 roles, this.caches.policyCache(), this.security.policy()
