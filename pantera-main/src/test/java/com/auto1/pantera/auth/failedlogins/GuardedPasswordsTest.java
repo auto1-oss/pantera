@@ -109,7 +109,8 @@ final class GuardedPasswordsTest {
             outcome.user().isPresent(), new IsEqual<>(false)
         );
         MatcherAssert.assertThat(
-            "with 429", refusal.status(), new IsEqual<>(RsStatus.TOO_MANY_REQUESTS)
+            "with 403, as Artifactory answers a suspended login",
+            refusal.status(), new IsEqual<>(RsStatus.FORBIDDEN)
         );
         MatcherAssert.assertThat(
             "the reason for the access record",

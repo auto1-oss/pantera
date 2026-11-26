@@ -103,19 +103,23 @@ final class AuthRefusalSliceTest {
 
     @ParameterizedTest
     @EnumSource(Kind.class)
-    void delayedLoginIsAnswered429WithRetryAfter(final Kind kind) {
+    void delayedLoginIsAnswered403WithRetryAfter(final Kind kind) {
         final Answer answer = AuthRefusalSliceTest.ask(
             kind,
             (name, pass) -> {
                 new AuthRefusal(
-                    "login_delayed", RsStatus.TOO_MANY_REQUESTS, 9L, "Try again in 9 seconds"
+                    "login_delayed", RsStatus.FORBIDDEN, 9L, "Try again in 9 seconds"
                 ).note();
                 return Optional.empty();
             }
         );
         MatcherAssert.assertThat(
             "the refusal's status is the answer",
-            answer.response.status(), new IsEqual<>(RsStatus.TOO_MANY_REQUESTS)
+            answer.response.status(), new IsEqual<>(RsStatus.FORBIDDEN)
+        );
+        MatcherAssert.assertThat(
+            "a client that is told to wait is not asked for other credentials",
+            answer.response.headers().values("WWW-Authenticate"), new IsEqual<>(List.of())
         );
         MatcherAssert.assertThat(
             "the client is told when to try again",

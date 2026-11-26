@@ -57,7 +57,7 @@ The API key your tool sent was rejected, and the answer says why. Create a new k
 
 Your profile page lists your **rejected API keys** with the client address and program that still send them, so you can find the tool.
 
-### 429 "Too many failed logins"
+### 403 "Too many failed logins"
 
 Logins for your user are delayed for a few seconds after failed logins. The answer says how long (`Retry-After`). Correct the credential; repeating the request does not help.
 
