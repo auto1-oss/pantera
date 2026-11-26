@@ -157,6 +157,9 @@ curl -X POST http://localhost:8086/api/v1/auth/token \
 | Cause | Solution |
 |-------|----------|
 | JWT token expired | Generate a new token via `POST /api/v1/auth/token` |
+| `403` "Account locked" (`event.reason: account_locked`) | The user is locked after failed logins. Unlock it in *Users*, with `POST /api/v1/users/:name/unlock`, or in the database; see [Failed Logins](failed-logins.md). Find the tool that keeps failing first: `GET /api/v1/locked-users` shows its client address and program. |
+| `429` "Too many failed logins" (`event.reason: login_delayed`) | Logins of that user are delayed after failed logins. The delay ends by itself (`Retry-After`). |
+| `503` "Sign-in is temporarily unavailable" (`event.reason: identity_provider_unavailable`) | Keycloak or Okta cannot be reached, limits the rate or fails. No failed login is counted. |
 | Username does not match token subject | For jwt-password auth, the username must match the `sub` claim |
 | User lacks read permissions | Check user roles and permissions via API or YAML files |
 | Keycloak/Okta `user-domains` mismatch | Verify the user's email domain matches the configured domains |

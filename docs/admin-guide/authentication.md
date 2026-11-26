@@ -83,6 +83,20 @@ A credential that has the form of an API key is checked by the `jwt-password` pr
 
 This holds for repository requests (the password of HTTP Basic authentication) and for the sign-in form. Before 2.2.15 a rejected key went on to the providers listed after `jwt-password`, and with an Okta or Keycloak provider every repeat of the request was a failed login for that user at the identity provider.
 
+### Which credentials reach an identity provider
+
+The `keycloak`, `okta` and `github` providers send the credential to a service outside Pantera. Every wrong one is a failed login of that user there, and at the directory behind it. This is what reaches them:
+
+| Credential | Reaches an identity provider? |
+|------------|-------------------------------|
+| A password, for a user name the provider's `user-domains` match | Yes, once per login. A login the credential cache still remembers after a success is not sent again. |
+| A password during a login delay, or for a locked user | No. See [Failed Logins](failed-logins.md). |
+| A credential with the form of an API key, valid or not | No. |
+| A Bearer token | No. |
+| A password of a local user who has a password in Pantera | No: the local check decides, also when it fails. |
+
+`pantera_auth_provider_checks_total` counts every such check by `provider` and `outcome` (`accepted`, `rejected`, `refused`, `unavailable`), and the **Pantera - Sign-in** dashboard charts it. Watch `rejected` after an upgrade or a configuration change: before 2.2.15 nothing showed that Pantera had started to send credentials to an identity provider.
+
 ---
 
 ## Environment Variables Provider (type: env)
