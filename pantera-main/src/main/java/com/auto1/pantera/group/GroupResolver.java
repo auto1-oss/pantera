@@ -932,6 +932,16 @@ public final class GroupResolver implements Slice {
      * <p>On 404 from the targeted member (TOCTOU drift, A11 fix), falls through
      * to proxy fanout instead of returning 500 -- this is the key behaviour
      * change from the old GroupSlice.
+     *
+     * <p>The index matches by artifact name, without the version. For a
+     * hosted member that is authoritative enough: it is asked, and its
+     * answer counts. For a proxy member it is only a hint: the proxy is
+     * asked for its cache alone ({@code X-Pantera-Cache-Only}), a cached
+     * file is served, and anything else falls through to the walk over the
+     * members in their order. Asking the named proxy as an ordinary request
+     * made it the group's answer for versions it does not hold: its cooldown
+     * verdict, or the open circuit of its upstream, where an earlier member
+     * serves the file, and a 5xx for a file that exists nowhere.
      */
     private CompletableFuture<Response> targetedLocalRead(
         final List<String> repos,
@@ -1000,8 +1010,11 @@ public final class GroupResolver implements Slice {
         // index-hit reads are authoritative on hosted state — a tripped
         // breaker against the hosted member would otherwise mask the
         // index-vs-storage drift behind a fanout.
+        // Hosted members that say "not found" here are not asked again. A
+        // proxy was only asked for its cache: the walk that follows a miss
+        // asks it in its place, as it asks every member.
         final Set<String> tried = new HashSet<>(excluded);
-        targeted.forEach(m -> tried.add(m.name()));
+        targeted.stream().filter(m -> !m.isProxy()).forEach(m -> tried.add(m.name()));
         final WalkState walk = new WalkState();
         return querySequentially(targeted, line, headers, body, true, pinKey, walk)
             .thenCompose(resp -> {
@@ -1455,6 +1468,46 @@ public final class GroupResolver implements Slice {
             return;
         }
         final MemberSlice member = iter.next();
+        if (isTargetedLocalRead && !walk.partial && member.isProxy()) {
+            // The index names a proxy (a sibling-pin read, the other targeted
+            // walk, is partial and asks its member as an ordinary request). It matches by artifact name, without
+            // the version, so it is a hint that this proxy may hold the file
+            // in its cache and no more: the proxy is asked for its cache
+            // only, and only a served file is taken. Its upstream is not
+            // contacted here, and nothing else it says (a refusal, a
+            // cooldown verdict, an upstream failure of a slice that does not
+            // know the cache-only header) is the group's answer: the walk
+            // over the members in their order decides that.
+            final long probeStartMs = System.currentTimeMillis();
+            queryMemberCacheOnly(member, line, headers, requestBytes)
+                .whenComplete((resp, err) -> {
+                    if (err == null && resp != null
+                        && (resp.status().success()
+                            || resp.status() == RsStatus.NOT_MODIFIED)) {
+                        recordMemberOutcome(
+                            member, "success", System.currentTimeMillis() - probeStartMs
+                        );
+                        result.complete(resp);
+                        return;
+                    }
+                    if (resp != null) {
+                        drainBody(resp.body());
+                    }
+                    EcsLogger.debug("com.auto1.pantera.group")
+                        .message("Index names a proxy member that has no cached copy,"
+                            + " walking the members in order")
+                        .eventCategory("web")
+                        .eventAction("group_index_proxy_cache_miss")
+                        .field("repository.name", this.group)
+                        .field("member.name", member.name())
+                        .field("url.path", line.uri().getPath())
+                        .field("log.source", "application")
+                        .log();
+                    tryNextSequentialMember(iter, line, headers, requestBytes,
+                        isTargetedLocalRead, walk, result, pinArtifactName);
+                });
+            return;
+        }
         if (!isTargetedLocalRead && member.isCircuitOpen()) {
             walk.noteSkipped(member);
             walk.noteRetryAfter(member.retryAfterSeconds());

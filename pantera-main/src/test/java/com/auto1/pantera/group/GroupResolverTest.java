@@ -695,60 +695,189 @@ final class GroupResolverTest {
 
     // ---- Index hit on a proxy member: upstream fault, not storage fault ----
 
+    // ---- Index hit on a proxy member: its cache only, then the ordered walk ----
+
     @Test
-    void indexHit_proxyMemberUpstreamFailure_isProxiesFailedNotStorage() {
-        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_A)));
+    void indexHitOnProxy_isReadFromItsCacheOnly() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_B)));
+        final ProxyCalls named = new ProxyCalls(RsStatus.OK, RsStatus.OK);
+        final AtomicInteger central = new AtomicInteger();
+        final AtomicInteger hosted = new AtomicInteger();
         final Map<String, Slice> slices = new HashMap<>();
-        slices.put(PROXY_A, staticSlice(RsStatus.BAD_GATEWAY));
-        final GroupResolver resolver = buildResolver(
-            idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
-        );
-        final Response resp = resolver.response(
-            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
-        ).join();
+        slices.put(HOSTED, countingSlice(hosted, RsStatus.NOT_FOUND));
+        slices.put(PROXY_A, countingSlice(central, RsStatus.OK));
+        slices.put(PROXY_B, named);
+        final Response resp = buildResolver(
+            idx, List.of(HOSTED, PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+            buildNegativeCache(), slices
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
         MatcherAssert.assertThat(
-            "a proxy member's upstream failure is a 502",
-            resp.status(), new IsEqual<>(RsStatus.BAD_GATEWAY)
+            "the cached file is served", resp.status(), new IsEqual<>(RsStatus.OK)
         );
         MatcherAssert.assertThat(
-            "the fault names the proxies, not the storage",
-            resp.headers().values(FaultTranslator.HEADER_FAULT).get(0).startsWith("proxies-failed"),
-            new IsEqual<>(true)
+            "the proxy the index names is asked for its cache, once",
+            List.of(named.cacheOnly.get(), named.normal.get()), new IsEqual<>(List.of(1, 0))
+        );
+        MatcherAssert.assertThat(
+            "nobody else is asked",
+            List.of(hosted.get(), central.get()), new IsEqual<>(List.of(0, 0))
         );
     }
 
     @Test
-    void indexHit_proxyMemberCircuitOpen_is503WithRetryAfter() {
-        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_A)));
+    void indexHitOnProxy_notCached_walksTheMembersInOrder() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_B)));
+        final ProxyCalls named = new ProxyCalls(RsStatus.NOT_FOUND, RsStatus.OK);
+        final AtomicInteger central = new AtomicInteger();
+        final AtomicInteger hosted = new AtomicInteger();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(HOSTED, countingSlice(hosted, RsStatus.NOT_FOUND));
+        slices.put(PROXY_A, countingSlice(central, RsStatus.OK));
+        slices.put(PROXY_B, named);
+        final Response resp = buildResolver(
+            idx, List.of(HOSTED, PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+            buildNegativeCache(), slices
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "the file is served", resp.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the members are walked in their order: hosted, then the first proxy, which has it",
+            List.of(hosted.get(), central.get()), new IsEqual<>(List.of(1, 1))
+        );
+        MatcherAssert.assertThat(
+            "the named proxy was asked for its cache only and never sent to its upstream",
+            List.of(named.cacheOnly.get(), named.normal.get()), new IsEqual<>(List.of(1, 0))
+        );
+    }
+
+    @Test
+    void indexHitOnProxy_itsRefusalIsNotTheGroupsAnswer() {
+        // The index matches by name: it named a proxy that blocks the version
+        // (cooldown 403), while an earlier member serves it.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_B)));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, okSlice());
+        slices.put(PROXY_B, cooldownSlice(RsStatus.FORBIDDEN, "blocked"));
+        final Response resp = buildResolver(
+            idx, List.of(HOSTED, PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+            buildNegativeCache(), slices
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            resp.status(), new IsEqual<>(RsStatus.OK)
+        );
+    }
+
+    @Test
+    void indexHitOnProxy_whoseUpstreamIsDown_isServedByAnotherMember() {
+        // The index named a proxy whose upstream circuit is open, while an
+        // earlier member serves the file.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_B)));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, okSlice());
+        slices.put(PROXY_B, circuitOpenSlice("17"));
+        final Response resp = buildResolver(
+            idx, List.of(HOSTED, PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+            buildNegativeCache(), slices
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            resp.status(), new IsEqual<>(RsStatus.OK)
+        );
+    }
+
+    @Test
+    void indexHitOnProxy_fileThatExistsNowhere_isNotFoundNotAServerError() {
+        // Only the name is indexed. The named proxy cannot be reached and no
+        // member has this file: the build tool gets its 404.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_B)));
         final NegativeCache negCache = buildNegativeCache();
         final Map<String, Slice> slices = new HashMap<>();
-        slices.put(PROXY_A, circuitOpenSlice("17"));
-        final GroupResolver resolver = buildResolver(
-            idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), negCache, slices
-        );
-        final Response resp = resolver.response(
-            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
-        ).join();
+        slices.put(PROXY_B, circuitOpenSlice("17"));
+        final Response resp = buildResolver(
+            idx, List.of(HOSTED, PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B), negCache, slices
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
         MatcherAssert.assertThat(
-            "an open upstream circuit is temporary unavailability",
-            resp.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+            "the other members said not found, and the one that could not answer is a proxy",
+            resp.status(), new IsEqual<>(RsStatus.NOT_FOUND)
         );
         MatcherAssert.assertThat(
-            "the breaker's Retry-After reaches the client",
-            resp.headers().values("Retry-After"), new IsEqual<>(List.of("17"))
-        );
-        MatcherAssert.assertThat(
-            "the answer carries the circuit-open marker",
-            resp.headers().values(
-                com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER
-            ).isEmpty(),
-            new IsEqual<>(false)
-        );
-        MatcherAssert.assertThat(
-            "nothing is negative-cached",
+            "the 404 is not remembered: the file may exist on the unreachable upstream",
             negCache.isKnown404(new com.auto1.pantera.http.cache.NegativeCacheKey(
                 GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION)),
             new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void indexHitOnProxy_failingUpstream_isNotFoundWhenAnotherMemberSaysSo() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_A)));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, staticSlice(RsStatus.BAD_GATEWAY));
+        final Response resp = buildResolver(
+            idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "an unreachable proxy does not fail the group when a member said not found",
+            resp.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+    }
+
+    @Test
+    void indexHitOnProxy_onlyMember_isAskedNormallyAfterItsCacheMiss() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_A)));
+        final ProxyCalls named = new ProxyCalls(RsStatus.NOT_FOUND, RsStatus.OK);
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, named);
+        final Response resp = buildResolver(
+            idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "the file is fetched from the upstream", resp.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "first its cache, then, in the walk, the proxy itself",
+            List.of(named.cacheOnly.get(), named.normal.get()), new IsEqual<>(List.of(1, 1))
+        );
+    }
+
+    @Test
+    void indexHitOnHostedAndProxy_hostedDrift_isServedFromTheProxysCache() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(HOSTED, PROXY_A)));
+        final ProxyCalls named = new ProxyCalls(RsStatus.OK, RsStatus.OK);
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, named);
+        final Response resp = buildResolver(
+            idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+        ).response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "served", resp.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "from the proxy's cache",
+            List.of(named.cacheOnly.get(), named.normal.get()), new IsEqual<>(List.of(1, 0))
+        );
+    }
+
+    @Test
+    void indexHitOnProxy_cacheHitPinsNoSiblingToIt() {
+        // A pin would send the artifact's other files to this proxy as
+        // ordinary requests; a name match is no reason to prefer it.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_B)));
+        final ProxyCalls named = new ProxyCalls(RsStatus.OK, RsStatus.NOT_FOUND);
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_B, named);
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(HOSTED, PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+            buildNegativeCache(), slices
+        );
+        resolver.response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        resolver.response(
+            new RequestLine("GET", JAR_PATH.replace(".jar", ".pom")), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the sibling file is looked up again, not sent to the proxy as a pinned read",
+            List.of(idx.locateByNameCalls.size(), named.normal.get()),
+            new IsEqual<>(List.of(2, 0))
         );
     }
 
@@ -1610,6 +1739,54 @@ final class GroupResolverTest {
                 .jsonBody("{\"error\":\"version in cooldown\"}")
                 .build()
         );
+    }
+
+    /**
+     * Proxy member that tells a cache-only read from an ordinary one.
+     */
+    private static final class ProxyCalls implements Slice {
+
+        /**
+         * Cache-only reads.
+         */
+        private final AtomicInteger cacheOnly = new AtomicInteger();
+
+        /**
+         * Ordinary reads, which may go to the upstream.
+         */
+        private final AtomicInteger normal = new AtomicInteger();
+
+        /**
+         * Answer of the cache.
+         */
+        private final RsStatus cached;
+
+        /**
+         * Answer of an ordinary read.
+         */
+        private final RsStatus fetched;
+
+        ProxyCalls(final RsStatus cached, final RsStatus fetched) {
+            this.cached = cached;
+            this.fetched = fetched;
+        }
+
+        @Override
+        public CompletableFuture<Response> response(
+            final RequestLine line, final Headers headers, final Content body
+        ) {
+            final RsStatus status;
+            if (headers.find(
+                com.auto1.pantera.http.cache.BaseCachedProxySlice.CACHE_ONLY_HEADER
+            ).isEmpty()) {
+                this.normal.incrementAndGet();
+                status = this.fetched;
+            } else {
+                this.cacheOnly.incrementAndGet();
+                status = this.cached;
+            }
+            return CompletableFuture.completedFuture(ResponseBuilder.from(status).build());
+        }
     }
 
     private static Slice staticSlice(final RsStatus status) {
