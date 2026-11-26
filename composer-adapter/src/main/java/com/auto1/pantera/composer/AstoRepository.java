@@ -270,16 +270,13 @@ public final class AstoRepository implements Repository {
      * @return Packages found by name, might be empty.
      */
     private CompletionStage<Optional<Packages>> packages(final Key key) {
-        // If reading root packages.json (ALL_PACKAGES), generate it on-demand from p2/
+        // The root packages.json (ALL_PACKAGES) names no package and points
+        // Composer at the per-package documents under p2/: it is built for
+        // the read, without a storage write or read.
         if (key.equals(AstoRepository.ALL_PACKAGES)) {
-            return this.satis.generateRootPackagesJson()
-                .thenCompose(nothing -> this.asto.value(key))
-                .<Packages>thenApply(content -> new JsonPackages(content))
-                .thenApply(Optional::of)
-                .exceptionally(err -> {
-                    // If generation fails, return empty (repo might be empty)
-                    return Optional.empty();
-                });
+            return CompletableFuture.completedFuture(
+                Optional.of(new JsonPackages(new Content.From(this.satis.rootPackagesJson())))
+            );
         }
         
         // For per-package reads, use existing logic
