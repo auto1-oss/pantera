@@ -1,5 +1,11 @@
 # Changelog
 
+## Version 2.2.15
+
+### 🔒 Security
+
+- **An API key is never passed to an identity provider.** With an Okta or Keycloak password provider configured, an API key that Pantera rejected (expired, revoked, or issued by another installation) went on to that provider as if it were the user's password, and a client that repeated the request added failed logins to the user's directory account. A credential that has the form of an API key is now checked as an API key only, in whatever order the providers are configured, and a rejected one is answered with `401`. ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.14
 
 ### ⚠️ Breaking changes

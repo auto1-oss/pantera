@@ -175,7 +175,7 @@ credentials:
 
 #### Provider: `jwt-password`
 
-No additional keys. Validates JWT tokens (access tokens or API tokens) submitted as the password in HTTP Basic Authentication. Tokens are verified using the RS256 public key configured in `meta.jwt.public-key-path`. Access tokens are verified purely from the signature (no DB query). API tokens are additionally checked against the `user_tokens` table.
+No additional keys. Validates JWT tokens (access tokens or API tokens) submitted as the password in HTTP Basic Authentication. Tokens are verified using the RS256 public key configured in `meta.jwt.public-key-path`. Access tokens are verified purely from the signature (no DB query). API tokens are additionally checked against the `user_tokens` table. A credential that has the form of a JWT is checked by this provider only, wherever it stands in the list: a rejected token is answered with `401` and is never passed to another provider. Without this provider such a credential is rejected.
 
 ```yaml
 credentials:

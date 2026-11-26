@@ -110,9 +110,11 @@ public final class CombinedAuthScheme implements AuthScheme {
      *
      * <p>A token-shaped password is validated as a JWT first and must
      * resolve to the supplied username; anything else (malformed token,
-     * foreign subject, plain password) goes through the regular
-     * password check, so passwords that merely look like a JWT keep
-     * working.
+     * foreign subject, plain password) goes to the {@link Authentication}
+     * this scheme was built with. Pantera's own chain answers a
+     * token-shaped credential with its key provider alone
+     * ({@link ApiKeyOnlyAuth}), so a rejected key reaches no password
+     * provider.
      *
      * @param auth Authorization header
      * @return Authentication result
