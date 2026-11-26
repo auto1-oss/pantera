@@ -35,6 +35,20 @@ class AsyncApiVerticleTest extends AsyncApiTestBase {
     }
 
     @Test
+    void browserMayReadHowLongToWait(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        // The UI is served from another origin: without this a 429 of the
+        // API reaches it, but the Retry-After of that answer does not.
+        request(vertx, ctx, HttpMethod.GET, "/api/v1/health", null, null,
+            res -> assertThat(
+                java.util.Arrays.asList(
+                    res.getHeader("Access-Control-Expose-Headers").split("\\s*,\\s*")
+                ).contains("Retry-After"),
+                is(true)
+            ));
+    }
+
+    @Test
     void returns401WithoutToken(final Vertx vertx,
         final VertxTestContext ctx) throws Exception {
         request(vertx, ctx, HttpMethod.GET, "/api/v1/repositories", null, null,

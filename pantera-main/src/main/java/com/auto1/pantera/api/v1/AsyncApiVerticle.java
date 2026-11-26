@@ -393,8 +393,9 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     "Access-Control-Expose-Headers",
                     // Let the browser read the traceparent response
                     // header so APM and debugging tools can see the
-                    // server-generated span id.
-                    "traceparent"
+                    // server-generated span id, and Retry-After, so the
+                    // UI can say how long a delayed login has to wait.
+                    "traceparent,Retry-After"
                 )
                 .putHeader("Access-Control-Max-Age", "3600");
             if ("OPTIONS".equals(ctx.request().method().name())) {

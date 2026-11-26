@@ -216,6 +216,57 @@ final class AuthHandlerRefusalTest {
     }
 
     @Test
+    void lockedUserIsToldSoHoweverOftenTheFormIsTried(final Vertx vertx) throws Exception {
+        // The form has a limit of its own (here two tries). It must not
+        // take the place of the answer that says what is wrong.
+        final KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
+        gen.initialize(2048);
+        final KeyPair pair = gen.generateKeyPair();
+        final java.util.concurrent.atomic.AtomicInteger asked =
+            new java.util.concurrent.atomic.AtomicInteger();
+        final Router router = Router.router(vertx);
+        router.route().handler(BodyHandler.create());
+        new AuthHandler(
+            new JwtTokens(
+                (RSAPrivateKey) pair.getPrivate(), (RSAPublicKey) pair.getPublic(),
+                null, null, null
+            ),
+            (name, pass) -> {
+                asked.incrementAndGet();
+                return Optional.empty();
+            },
+            null, Policy.FREE, null, null, null,
+            new LoginThrottle(2, Duration.ofMinutes(15), System::nanoTime),
+            this.logins
+        ).register(router);
+        final HttpServer limited = vertx.createHttpServer().requestHandler(router)
+            .listen(0, "127.0.0.1")
+            .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+        try {
+            for (int idx = 0; idx < 3; idx += 1) {
+                this.logins.failed("alice", LoginOrigin.UNKNOWN);
+            }
+            final java.util.List<String> answers = new java.util.ArrayList<>(5);
+            for (int idx = 0; idx < 5; idx += 1) {
+                final HttpResponse<Buffer> resp = this.client
+                    .post(limited.actualPort(), "127.0.0.1", "/api/v1/auth/token")
+                    .sendJsonObject(new JsonObject().put("name", "Alice").put("pass", "secret"))
+                    .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+                answers.add(resp.statusCode() + " " + resp.bodyAsJsonObject().getString("error"));
+            }
+            MatcherAssert.assertThat(
+                "every try is answered as locked",
+                answers, new IsEqual<>(java.util.Collections.nCopies(5, "403 ACCOUNT_LOCKED"))
+            );
+            MatcherAssert.assertThat(
+                "and no provider is asked", asked.get(), new IsEqual<>(0)
+            );
+        } finally {
+            limited.close().toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void okaButtonSignsInAUserWhoIsNotLocked() {
         MatcherAssert.assertThat(
             this.handler.ssoSession("alice", "okta").accessToken().isEmpty(),

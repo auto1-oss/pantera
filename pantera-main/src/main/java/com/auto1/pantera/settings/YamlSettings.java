@@ -1172,9 +1172,11 @@ public final class YamlSettings implements Settings {
         } else {
             users = new CachedUsers(res, null, jwtSettings);
         }
-        // A login the cache remembers must not pass for a locked user: the
-        // cache steps aside and the chain refuses it.
-        users.bypassFor(logins::passwordLocked);
+        // A login the cache remembers must not pass for a locked user, and
+        // must not hide a success from the count: while a name has failed
+        // logins on record or is locked, the cache steps aside and the
+        // chain decides, so the right password ends the count.
+        users.bypassFor(logins::pending);
         // Nor may a login remembered from the sign-in form answer a
         // repository request while a provider takes passwords on the
         // form only, or one remembered before that setting changed.

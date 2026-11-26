@@ -220,6 +220,56 @@ final class FailedLoginsTest {
         );
     }
 
+    @Test
+    void nameWithAFailureIsPendingUntilALoginSucceeds() {
+        final FailedLogins node = this.node();
+        MatcherAssert.assertThat(
+            "nothing is pending for a name without failures",
+            node.pending("alice"), new IsEqual<>(false)
+        );
+        node.failed("Alice", LoginOrigin.UNKNOWN);
+        MatcherAssert.assertThat(
+            "one failure makes the next login one to check, not to remember",
+            node.pending("alice"), new IsEqual<>(true)
+        );
+        node.succeeded("alice");
+        MatcherAssert.assertThat(
+            "a success ends it", node.pending("alice"), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void lockedNameIsPending() {
+        final FailedLogins node = this.node();
+        FailedLoginsTest.lock(node, "alice");
+        MatcherAssert.assertThat(node.pending("alice"), new IsEqual<>(true));
+    }
+
+    @Test
+    void failureCountedOnAnotherNodeIsPendingHereAfterALoad() {
+        final FailedLogins first = this.node();
+        final FailedLogins second = this.node();
+        first.failed("alice", LoginOrigin.UNKNOWN);
+        second.refresh();
+        MatcherAssert.assertThat(
+            "the other node knows of the failure",
+            second.pending("alice"), new IsEqual<>(true)
+        );
+        first.succeeded("alice");
+        second.refresh();
+        MatcherAssert.assertThat(
+            "and of its end", second.pending("alice"), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void unlockEndsWhatIsPending() {
+        final FailedLogins node = this.node();
+        node.failed("alice", LoginOrigin.UNKNOWN);
+        node.unlock("alice", "admin");
+        MatcherAssert.assertThat(node.pending("alice"), new IsEqual<>(false));
+    }
+
     private FailedLogins node() {
         return new FailedLogins(this.store, this.policy::get);
     }

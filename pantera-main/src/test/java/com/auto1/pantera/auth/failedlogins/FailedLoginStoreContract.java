@@ -106,6 +106,23 @@ abstract class FailedLoginStoreContract {
     }
 
     @Test
+    void namesWithFailuresAreListedUntilTheyAreForgotten() {
+        final FailedLoginStore store = this.store();
+        FailedLoginStoreContract.fail(store, "alice", 1);
+        FailedLoginStoreContract.fail(store, "Bob", 3);
+        MatcherAssert.assertThat(
+            "a name with a failure, locked or not, is listed in lower case",
+            new java.util.TreeSet<>(store.counted()),
+            new IsEqual<>(new java.util.TreeSet<>(java.util.List.of("alice", "bob")))
+        );
+        store.forget("alice");
+        MatcherAssert.assertThat(
+            "and no longer once its failures are forgotten",
+            store.counted(), new IsEqual<>(java.util.List.of("bob"))
+        );
+    }
+
+    @Test
     void nameThatIsNotLockedIsNotListed() {
         final FailedLoginStore store = this.store();
         FailedLoginStoreContract.fail(store, "alice", 2);

@@ -21,6 +21,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 /**
@@ -68,6 +69,19 @@ public final class FailedLogins {
     private volatile Set<String> lockedNow;
 
     /**
+     * Names with failed logins on record: what the store listed at the
+     * last load, with the changes this node made since. A login of such a
+     * name is checked, not answered from a remembered one, so that its
+     * success ends the count.
+     */
+    private volatile Set<String> countedNow;
+
+    /**
+     * Guards the swap of {@link #countedNow} against a change made to it.
+     */
+    private final Object countedLock = new Object();
+
+    /**
      * Ctor.
      *
      * @param store Where the counts live
@@ -77,6 +91,7 @@ public final class FailedLogins {
         this.store = store;
         this.config = config;
         this.lockedNow = Set.of();
+        this.countedNow = ConcurrentHashMap.newKeySet();
     }
 
     /**
@@ -139,6 +154,9 @@ public final class FailedLogins {
         final FailedLoginsConfig policy = this.config.get();
         final FailedLoginStore.Seen seen = this.store.fail(name, policy, origin);
         final LoginState state = seen.state();
+        if (state.failures() > 0) {
+            this.count(name, true);
+        }
         if (state.locked() && state.lockedAt().equals(state.lastFailure())) {
             this.mark(name, true);
             if (MicrometerMetrics.isInitialized()) {
@@ -170,6 +188,9 @@ public final class FailedLogins {
             this.store.forget(name);
             this.mark(name, false);
         }
+        // Also when another node has forgotten them already: the name is
+        // no longer one whose logins have to be checked.
+        this.count(name, false);
     }
 
     /**
@@ -195,6 +216,20 @@ public final class FailedLogins {
     public boolean passwordLocked(final String name) {
         return new FailedLoginStore.Counted(name).name()
             .map(this.lockedNow::contains)
+            .orElse(false);
+    }
+
+    /**
+     * Whether the next login of a name has to be checked, not answered
+     * from a remembered one: the name has failed logins on record or is
+     * locked. Answers from memory.
+     *
+     * @param name User name
+     * @return True when a remembered login must not answer
+     */
+    public boolean pending(final String name) {
+        return new FailedLoginStore.Counted(name).name()
+            .map(counted -> this.countedNow.contains(counted) || this.lockedNow.contains(counted))
             .orElse(false);
     }
 
@@ -255,6 +290,14 @@ public final class FailedLogins {
             names.add(one.name());
         }
         this.lockedNow = Set.copyOf(names);
+        synchronized (this.countedLock) {
+            // Read under the lock a local change takes: a failure counted
+            // on this node is in the store before it is noted here, so it
+            // is either in this list or added to the new set after it.
+            final Set<String> counted = ConcurrentHashMap.newKeySet();
+            counted.addAll(this.store.counted());
+            this.countedNow = counted;
+        }
     }
 
     /**
@@ -267,6 +310,7 @@ public final class FailedLogins {
     public boolean unlock(final String name, final String actor) {
         final LoginState was = this.store.forget(name);
         this.mark(name, false);
+        this.count(name, false);
         if (was.locked()) {
             FailedLogins.unlocked("admin", 1);
             EcsLogger.info(FailedLogins.LOG)
@@ -290,6 +334,9 @@ public final class FailedLogins {
     public List<String> unlockAll(final String actor) {
         final List<String> names = this.store.unlockAll();
         this.lockedNow = Set.of();
+        for (final String name : names) {
+            this.count(name, false);
+        }
         if (!names.isEmpty()) {
             FailedLogins.unlocked("admin", names.size());
             EcsLogger.info(FailedLogins.LOG)
@@ -336,7 +383,27 @@ public final class FailedLogins {
     }
 
     /**
-     * Change the in-memory set for one name.
+     * Note in memory whether a name has failed logins on record.
+     *
+     * @param name User name
+     * @param failing Whether it has
+     */
+    private void count(final String name, final boolean failing) {
+        new FailedLoginStore.Counted(name).name().ifPresent(
+            counted -> {
+                synchronized (this.countedLock) {
+                    if (failing) {
+                        this.countedNow.add(counted);
+                    } else {
+                        this.countedNow.remove(counted);
+                    }
+                }
+            }
+        );
+    }
+
+    /**
+     * Note in memory whether a name is locked.
      *
      * @param name User name
      * @param locked Whether the name is locked now

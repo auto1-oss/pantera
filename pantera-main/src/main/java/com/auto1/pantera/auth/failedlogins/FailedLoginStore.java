@@ -38,6 +38,11 @@ public interface FailedLoginStore {
     int MAX_NAME = 255;
 
     /**
+     * Most names {@link #counted()} returns.
+     */
+    int MAX_COUNTED = 10_000;
+
+    /**
      * State of a name.
      *
      * @param name User name
@@ -87,6 +92,14 @@ public interface FailedLoginStore {
      * @return The names that were locked
      */
     List<String> unlockAll();
+
+    /**
+     * Names that have failed logins on record, locked or not: the most
+     * recent ones, at most {@link #MAX_COUNTED}.
+     *
+     * @return Names in lower case, most recent failure first
+     */
+    List<String> counted();
 
     /**
      * A state with the time of the store that holds it.

@@ -244,6 +244,21 @@ public final class AuthHandler {
         // declared (trust_forwarded_headers), and the attempt is counted
         // before the credential check so concurrent guesses cannot race past.
         final String client = clientIp(ctx);
+        // A locked user is told so, however often the form is tried: the
+        // form's own limit below must not take the place of the one
+        // answer that says what is wrong and who can help. No provider is
+        // asked and the try is not counted against the form's limit.
+        if (this.failedLogins != null && name != null && this.failedLogins.passwordLocked(name)) {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                    .recordLoginRefused("account_locked");
+            }
+            ApiResponse.sendError(
+                ctx, AuthHandler.FORBIDDEN, "ACCOUNT_LOCKED",
+                "Account locked. Ask an administrator to unlock it."
+            );
+            return;
+        }
         final java.util.OptionalLong retry = this.loginThrottle.admit(name, client);
         if (retry.isPresent()) {
             ctx.response().putHeader("Retry-After", Long.toString(retry.getAsLong()));
