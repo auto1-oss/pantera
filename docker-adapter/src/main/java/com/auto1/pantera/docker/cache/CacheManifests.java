@@ -94,6 +94,11 @@ public final class CacheManifests implements Manifests {
     private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
 
     /**
+     * Whether a manifest of the origin is stored in the cache.
+     */
+    private final boolean store;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -139,6 +144,26 @@ public final class CacheManifests implements Manifests {
         Optional<Queue<ArtifactEvent>> events, String registryName,
         Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
         ConcurrentMap<String, CompletableFuture<Void>> inflight) {
+        this(name, origin, cache, events, registryName, inspector, upstreamUrl, inflight, true);
+    }
+
+    /**
+     * @param name Repository name.
+     * @param origin Origin repository.
+     * @param cache Cache repository.
+     * @param events Artifact metadata events
+     * @param registryName Pantera repository name
+     * @param inspector Cooldown inspector
+     * @param upstreamUrl Upstream URL for metrics
+     * @param inflight Cache copies in flight, shared per proxy repository
+     * @param store Whether a manifest of the origin is stored in the cache;
+     *  false for a request that must leave the repository as it found it
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    CacheManifests(String name, Repo origin, Repo cache,
+        Optional<Queue<ArtifactEvent>> events, String registryName,
+        Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
+        ConcurrentMap<String, CompletableFuture<Void>> inflight, boolean store) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
@@ -147,6 +172,7 @@ public final class CacheManifests implements Manifests {
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
         this.inflight = inflight;
+        this.store = store;
     }
 
     @Override
@@ -197,7 +223,11 @@ public final class CacheManifests implements Manifests {
                             Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_LIST_SCHEMA2.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_OCI_INDEX.equals(manifest.mediaType())) {
-                            this.copy(ref, manifest, requestOwner, requestTraceId, requestClientIp);
+                            if (this.store) {
+                                this.copy(
+                                    ref, manifest, requestOwner, requestTraceId, requestClientIp
+                                );
+                            }
                             result = CompletableFuture.completedFuture(original);
                         } else {
                             EcsLogger.warn("com.auto1.pantera.docker")
