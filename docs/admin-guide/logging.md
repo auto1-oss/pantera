@@ -213,7 +213,7 @@ Every access record (logger `http.access`, `event.action: http_request`) with a 
 | `circuit_open` | The circuit breaker of the upstream, or of every remaining group member, is open. |
 | `cooldown_active` | Cooldown blocks the artifact. |
 | `skipped_by_routing_rule` | A group answered 404 and asked no member: every member is limited by [routing rules](../configuration-reference.md#routing-rules) to other paths (v2.2.15+). When at least one member was asked, the record carries that member's reason instead. |
-| `login_delayed` | Logins of that user are delayed after failed logins (429 with `Retry-After`). No provider was asked. See [Failed Logins](failed-logins.md) (v2.2.15+). |
+| `login_delayed` | Logins of that user are delayed after failed logins (403 with `Retry-After`). No provider was asked. See [Failed Logins](failed-logins.md) (v2.2.15+). |
 | `account_locked` | The user is locked after failed logins (403). No provider was asked. |
 | `identity_provider_unavailable` | The login could not be checked: the identity provider cannot be reached, limits the rate or fails (503). It is not a failed login of the user. |
 | `directory_account_locked`, `password_expired`, `sign_in_not_completed` | The identity provider did not reject the password as wrong, but the sign-in did not complete: the directory account is locked, its password expired, or a later step failed (401). Not counted as a failed login. |

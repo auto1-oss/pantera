@@ -70,9 +70,9 @@ public final class AuthHandler {
     private static final int FORBIDDEN = 403;
 
     /**
-     * Status of a sign-in refused because logins are delayed.
+     * Reason of a login that is refused during a login delay.
      */
-    private static final int TOO_MANY = 429;
+    private static final String DELAYED = "login_delayed";
 
     /**
      * Status of a sign-in that could not be checked.
@@ -335,17 +335,22 @@ public final class AuthHandler {
         final int status = refusal
             .map(why -> why.status().code())
             .orElse(AuthHandler.UNAUTHORIZED);
-        if (status == AuthHandler.FORBIDDEN) {
-            ApiResponse.sendError(
-                ctx, status, "ACCOUNT_LOCKED",
-                "Account locked. Ask an administrator to unlock it."
-            );
-        } else if (status == AuthHandler.TOO_MANY) {
+        // A delay and a lock are both answered 403, as in Artifactory: the
+        // code, and the Retry-After of a delay, tell them apart.
+        final boolean delayed = refusal
+            .map(why -> AuthHandler.DELAYED.equals(why.reason()))
+            .orElse(false);
+        if (delayed) {
             final long seconds = refusal.get().retryAfter().orElse(1L);
             ctx.response().putHeader("Retry-After", Long.toString(seconds));
             ApiResponse.sendError(
                 ctx, status, "LOGIN_DELAYED",
                 String.format("Too many failed logins. Try again in %d seconds.", seconds)
+            );
+        } else if (status == AuthHandler.FORBIDDEN) {
+            ApiResponse.sendError(
+                ctx, status, "ACCOUNT_LOCKED",
+                "Account locked. Ask an administrator to unlock it."
             );
         } else if (status == AuthHandler.UNAVAILABLE) {
             ApiResponse.sendError(

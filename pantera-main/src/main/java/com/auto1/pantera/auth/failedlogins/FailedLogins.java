@@ -425,7 +425,7 @@ public final class FailedLogins {
             );
         } else {
             refusal = new AuthRefusal(
-                "login_delayed", RsStatus.TOO_MANY_REQUESTS, admission.seconds(),
+                "login_delayed", RsStatus.FORBIDDEN, admission.seconds(),
                 String.format(
                     "Too many failed logins. Try again in %d seconds.", admission.seconds()
                 )

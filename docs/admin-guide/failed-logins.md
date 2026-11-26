@@ -55,8 +55,10 @@ Logins of one user are checked one at a time on a node. Guesses sent at once the
 
 | State | Answer | Reason on the access record |
 |-------|--------|-----------------------------|
-| Logins delayed | `429` with `Retry-After` and "Too many failed logins. Try again in N seconds." | `login_delayed` |
+| Logins delayed | `403` with `Retry-After` and "Too many failed logins. Try again in N seconds." | `login_delayed` |
 | User locked | `403` with "Account locked" | `account_locked` |
+
+Both answers are `403`, as in JFrog Artifactory. A client tells them apart by the `Retry-After` header, which only a delay carries, and by the text; the sign-in form and the management API also carry the codes `LOGIN_DELAYED` and `ACCOUNT_LOCKED`.
 
 With *A lock blocks every credential* on, a locked user can do nothing in Pantera: password logins, API keys (as a password or as a Bearer token), open UI sessions and a sign-in through an identity provider's button are all refused. The sign-in form and the management API answer `403` with the code `ACCOUNT_LOCKED`.
 

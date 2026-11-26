@@ -139,12 +139,13 @@ final class AuthHandlerRefusalTest {
     }
 
     @Test
-    void delayedLoginIsAnswered429WithTheWait() throws Exception {
+    void delayedLoginIsAnswered403WithTheWait() throws Exception {
+        // The same status as a lock: the code tells the two apart.
         this.refusal.set(
-            new AuthRefusal("login_delayed", RsStatus.TOO_MANY_REQUESTS, 9L, "wait")
+            new AuthRefusal("login_delayed", RsStatus.FORBIDDEN, 9L, "wait")
         );
         final HttpResponse<Buffer> resp = this.signIn();
-        MatcherAssert.assertThat("status", resp.statusCode(), new IsEqual<>(429));
+        MatcherAssert.assertThat("status", resp.statusCode(), new IsEqual<>(403));
         MatcherAssert.assertThat(
             "the wait is in the header", resp.getHeader("Retry-After"), new IsEqual<>("9")
         );
