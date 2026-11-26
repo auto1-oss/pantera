@@ -32,6 +32,7 @@ import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -428,6 +429,15 @@ public final class ProxyDownloadSlice implements Slice {
             if (present) {
                 return this.serveCacheHit(distKey, ctx, packageName, version, headers);
             }
+            if (RequestTrace.instance().traced(headers)) {
+                // A Troubleshoot replay stores nothing, so it neither leads
+                // the fill of the cache nor waits for one: it asks the
+                // upstream for itself, behind no gate.
+                return this.leaderFetch(
+                    line, headers, ctx, packageName, version, distKey, dist,
+                    new CompletableFuture<>()
+                );
+            }
             final boolean[] isLeader = {false};
             final CompletableFuture<Void> leaderGate = new CompletableFuture<>();
             final CompletableFuture<Void> gate = this.singleFlight.load(
@@ -569,6 +579,20 @@ public final class ProxyDownloadSlice implements Slice {
                     "com.auto1.pantera.composer", this.rname, distKey.string(), headers
                 ).answered(response.status().code(), response.headers());
                 return response.body().asBytesFuture().thenApply(ignored -> miss);
+            }
+            if (RequestTrace.instance().traced(headers)) {
+                // A Troubleshoot replay asks what a client would get: the
+                // upstream's archive is handed on as it comes. It is not
+                // stored, so no event for the search index is written:
+                // an index row for this proxy would change which member
+                // a group asks from then on.
+                leaderGate.complete(null);
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .header("Content-Type", "application/zip")
+                        .body(response.body())
+                        .build()
+                );
             }
             return this.streamThrough(
                 headers, ctx, packageName, version, distKey, dist, response, leaderGate
