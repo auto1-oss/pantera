@@ -556,6 +556,8 @@ Supported `repo.type` values: `file`, `file-proxy`, `file-group`, `maven`, `mave
 
 **Response (400):** Invalid body, including a `repo.type` that is not supported (the message lists the supported types), or a `repo.immutable` that is not a JSON boolean (`immutable must be a boolean`; the string `"false"` is refused too).
 
+For a group, `repo.routing` is checked (v2.2.15+): `Invalid routing rules: rule 2: 'jboss' is not a member of the group; rule 3: pattern is not a valid regular expression: ...`. Rules are numbered from 1 in the order sent. A rule is refused when it is not an object, names no `member`, names a repository that is not in `repo.members`, names a member that is a group, has neither `prefix` nor `pattern` or both, has a `pattern` that is not a valid regular expression, or repeats an earlier rule. Nothing is saved when one rule is refused. See [Routing rules](configuration-reference.md#routing-rules).
+
 The body replaces the repository's whole configuration: when updating a repository that has `"immutable": false`, send the key again, or the repository becomes immutable.
 
 **Response (409):** Creating a repository under the former name of a renamed repository that still serves it (`keep_old_name_days` of the rename).
@@ -895,6 +897,68 @@ For non-group repositories:
 ```bash
 curl http://localhost:8086/api/v1/repositories/maven-group/members \
   -H "Authorization: Bearer eyJhbGciOi..."
+```
+
+---
+
+### POST /api/v1/repositories/:name/routing/test
+
+Check the [routing rules](configuration-reference.md#routing-rules) of a group and say which repositories it would ask for a path (v2.2.15+). No repository is asked and nothing is saved, so it also answers for members and rules that are not saved yet.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_repository_permissions:read`
+
+**Request Body:**
+
+```json
+{
+  "path": "org/jboss/logging/jboss-logging/3.5.0.Final/jboss-logging-3.5.0.Final.pom",
+  "members": ["libs-release-local", "thirdparty", "jboss"],
+  "routing": [
+    { "member": "jboss", "prefix": "org/jboss/" }
+  ]
+}
+```
+
+| Field     | Type   | Required | Description |
+|-----------|--------|----------|-------------|
+| `path`    | string | No       | Path inside the repository, as in the URL after the group's name. A leading slash is ignored. Left out: the rules are checked and the repositories listed, without a decision |
+| `members` | array  | No       | Members to test with. Left out: the saved members. Required for a group that is not saved yet |
+| `routing` | array  | No       | Rules to test with. Left out: the saved rules |
+
+**Response (200):** the repositories in the order the group asks them. The repositories of a nested group stand in the place of that group, each repository once.
+
+```json
+{
+  "path": "org/jboss/logging/jboss-logging/3.5.0.Final/jboss-logging-3.5.0.Final.pom",
+  "members": [
+    { "member": "libs-release-local", "through": "", "asked": true, "rule": 0, "why": "no rules: asked for every path" },
+    { "member": "maven-central", "through": "thirdparty", "asked": false, "rule": 0, "why": "no rule of the group 'thirdparty' matches: skipped" },
+    { "member": "jboss", "through": "", "asked": true, "rule": 1, "why": "rule 1 matches" }
+  ],
+  "inherited": [
+    { "group": "thirdparty", "member": "maven-central", "pattern": "(?!org/jboss/).*" }
+  ]
+}
+```
+
+| Field       | Description |
+|-------------|-------------|
+| `through`   | The nested group the repository is a member of; empty for a direct member |
+| `asked`     | `false`: the repository is skipped for this path and counts as "not found". Only with a `path` |
+| `rule`      | Number of the rule of this group that matched, counted from 1 over the `routing` list; `0` when none of them did. Only with a `path` |
+| `why`       | The decision in words. Only with a `path` |
+| `inherited` | The rules of the nested groups, each with the group that holds it. They are changed in that group |
+
+**Response (400):** a `path` that is not a string, a group that is not saved and no `members` in the body, or rules that would be refused on save (same message as `PUT /api/v1/repositories/:name`).
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/repositories/libs-release/routing/test \
+  -H "Authorization: Bearer eyJhbGciOi..." \
+  -H "Content-Type: application/json" \
+  -d '{"path": "com/acme/app/1.0/app-1.0.pom"}'
 ```
 
 ---

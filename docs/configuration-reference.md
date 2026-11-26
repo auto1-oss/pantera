@@ -1165,7 +1165,7 @@ everything.
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `member` | string | Yes | Name of a repository that is a direct member of the group |
+| `member` | string | Yes | Name of a repository that is a direct member of the group. Not a nested group and not a repository of one: see the notes |
 | `prefix` | string | One of `prefix` / `pattern` | The path starts with this text, e.g. `org/jboss/` |
 | `pattern` | string | One of `prefix` / `pattern` | Java regular expression that must match the whole path |
 
@@ -1208,6 +1208,27 @@ Notes:
   rule without `member`, or with neither `prefix` nor `pattern`, or with an
   invalid regular expression, keeps the group from loading; the error is
   logged.
+- **Nested groups.** A group asks the repositories of a nested group
+  itself, in the place of that group, and the nested group's rules come
+  along: they limit its repositories in every group that contains it. Keep
+  the rules for a nested group's repositories in that nested group. A rule
+  of the outer group that names the nested group, or one of its
+  repositories, holds for only a part of the requests (files or metadata,
+  not both) and is refused on save.
+- Saved through the UI or the REST API, rules are checked first (v2.2.15+):
+  a rule that cannot be read, names a repository that is not a direct
+  member, names a group, has both `prefix` and `pattern`, or repeats an
+  earlier rule is refused with `400` and the number of the rule. Take a
+  member's rules out when you take the member out of the group. A YAML file
+  is not checked this way.
+- A member that was skipped by its rules is named in the Troubleshoot trace
+  with the reason `skipped_by_routing_rule`. The access record of a `404`
+  carries that reason only when no member was asked at all.
+
+To see which members a group would ask for a path, use the **Routing rules**
+card of the group's page (**Test a path**), or
+[`POST /api/v1/repositories/:name/routing/test`](rest-api-reference.md#post-apiv1repositoriesnameroutingtest).
+It works on rules that are not saved yet and sends no request to a member.
 - Rules apply to every request through the group, `maven-metadata.xml`
   included, and to every group type.
 - A nested group keeps its own rules. To limit a repository inside a nested

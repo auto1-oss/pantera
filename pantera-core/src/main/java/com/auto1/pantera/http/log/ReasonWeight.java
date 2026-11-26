@@ -60,6 +60,10 @@ public final class ReasonWeight {
             weight = 0;
         } else if (this.reason.startsWith(ReasonWeight.UPSTREAM)) {
             weight = ReasonWeight.upstream(this.reason.substring(ReasonWeight.UPSTREAM.length()));
+        } else if ("skipped_by_routing_rule".equals(this.reason)) {
+            // A member that was not asked explains a "not found" less than
+            // any member that was: it only says where nobody looked.
+            weight = 5;
         } else if ("negative_cache".equals(this.reason)) {
             weight = 30;
         } else if ("cooldown_active".equals(this.reason)) {
