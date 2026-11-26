@@ -4425,6 +4425,11 @@ the caller's credentials (it answers what an authorized admin client would
 get). The replay is traced: every repository on its way records what it
 answered and why. Then each layer is checked.
 
+A Maven or Gradle proxy on the way that does not hold the file asks its
+upstream but stores nothing (2.2.15): it answers `200` with a short text
+instead of the file, and writes no search-index row. Proxies of other
+formats store a file the replay makes them fetch.
+
 **Query Parameters:** `url` (required) -- a full client URL (host, optional
 global prefix and `api/` segment) or a repository-relative path such as
 `/npm_group/lodash`, `/pypi_group/simple/requests/`,

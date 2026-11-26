@@ -361,6 +361,8 @@ The Troubleshoot page (`/admin/troubleshoot`) explains why a request fails or re
 
 The request is replayed once. The negative cache is read before the replay: a "not found" the replay itself caches (as any client request for a missing file would) is not reported as a finding and is removed again, so running the check does not change what the next client gets and gives the same answer every time.
 
+A Maven or Gradle proxy that does not hold the file asks its upstream, as it would for a client, but does not store what the upstream has (v2.2.15+): the response is `200` with a note instead of the file, and the file is not added to the search index. Before 2.2.15 the check cached the file, and a group then asked that proxy first for the artifact. Proxies of other formats still store a file the check makes them fetch.
+
 The **Package** mode takes a repository type and package name and opens the cooldown inspector. Deep link: `/admin/troubleshoot?url=<url>`.
 
 ---
