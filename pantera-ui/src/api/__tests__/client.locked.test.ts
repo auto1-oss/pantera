@@ -14,6 +14,10 @@ const LOCKED = {
   status: 403,
   data: { error: 'ACCOUNT_LOCKED', message: 'Account locked. Ask an administrator to unlock it.', status: 403 },
 }
+const DELAYED = {
+  status: 403,
+  data: { error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 7 seconds.', status: 403 },
+}
 const FORBIDDEN = {
   status: 403,
   data: { error: 'FORBIDDEN', message: 'Access denied', status: 403 },
@@ -101,6 +105,25 @@ describe('API client: a user locked while signed in', () => {
     expect(window.location.href, 'the page must stay').toBe(HOME)
     expect(signOutNotice(), 'no notice for the sign-in page').toBe('')
   })
+
+  // Delayed logins are answered 403 as a lock is; only the code tells them apart.
+  it.each(['/repositories', '/auth/token', '/auth/callback'])(
+    'does not take a delayed login at %s for a locked account',
+    async (url) => {
+      signedIn()
+      const client = await clientAnswering(() => DELAYED)
+
+      await expect(client.post(url, {})).rejects.toMatchObject({
+        response: { status: 403, data: { error: 'LOGIN_DELAYED' } },
+      })
+
+      expect(localStorage.getItem('access_token'), 'the session must be kept').toBe('access-1')
+      expect(localStorage.getItem('refresh_token'), 'the refresh token must be kept').toBe('refresh-1')
+      expect(window.location.href, 'the page must stay').toBe(HOME)
+      expect(signOutNotice(), 'no notice for the sign-in page').toBe('')
+      expect(sent, 'no refresh may be tried').toEqual([`POST ${url}`])
+    },
+  )
 
   it('treats a 403 whose body is not the API error object as an ordinary 403', async () => {
     signedIn()
