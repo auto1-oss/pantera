@@ -1109,8 +1109,10 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA1, () -> sha1Inflight);
+        final java.util.concurrent.atomic.AtomicReference<Dated> known =
+            new java.util.concurrent.atomic.AtomicReference<>();
         return this.fetchPrimaryBody(line, inboundHeaders).toCompletableFuture().thenCompose(body ->
-            this.cooldownAtHeaders(inboundHeaders, path, body.headers()).thenCompose(blockResp -> {
+            this.cooldownAtHeaders(inboundHeaders, path, body.headers(), known).thenCompose(blockResp -> {
                 if (blockResp.isPresent()) {
                     // Block decided at header time. Drain the upstream body so
                     // the connection is released, complete the leader gate so
@@ -1189,7 +1191,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 // earlier async hop).
                 com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(inboundHeaders);
                 this.enqueueEventForWriter(
-                    key, body.headers(), artifact.body().size().orElse(0L),
+                    key, CachedProxySlice.dated(body.headers(), known.get()),
+                    artifact.body().size().orElse(0L),
                     new com.auto1.pantera.http.headers.Login(inboundHeaders).getValue()
                 );
                 this.auditPrimaryAccess(
@@ -1240,19 +1243,22 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      *
      * @param request Cooldown request of the artifact
      * @param upstreamHeaders Headers of the upstream's response
-     * @return The date, empty when nobody knows it
+     * @return The date, and whether it may be kept as the artifact's date
      */
-    private CompletableFuture<Optional<java.time.Instant>> releaseDate(
+    private CompletableFuture<Dated> releaseDate(
         final com.auto1.pantera.cooldown.api.CooldownRequest request,
         final Headers upstreamHeaders
     ) {
         final Optional<java.time.Instant> reported =
             BaseCachedProxySlice.extractLastModified(upstreamHeaders)
                 .map(java.time.Instant::ofEpochMilli);
-        final CompletableFuture<Optional<java.time.Instant>> res;
-        if (this.inspector() == null || this.upstreamIsCentral()
-            || !this.cooldownService.applies(request)) {
-            res = CompletableFuture.completedFuture(reported);
+        final CompletableFuture<Dated> res;
+        if (this.inspector() == null || this.upstreamIsCentral()) {
+            res = CompletableFuture.completedFuture(new Dated(reported, true));
+        } else if (!this.cooldownService.applies(request)) {
+            // Nobody asks Maven Central where cooldown is off: what the
+            // upstream reports is used for nothing, and is not kept.
+            res = CompletableFuture.completedFuture(new Dated(reported, false));
         } else {
             CompletableFuture<Optional<java.time.Instant>> lookup;
             try {
@@ -1262,17 +1268,60 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             }
             res = lookup.handle(
                 (found, err) -> {
-                    final Optional<java.time.Instant> date;
-                    if (err == null && found != null && found.isPresent()) {
-                        date = found;
+                    final Dated dated;
+                    if (err != null || found == null) {
+                        // The fallback decides this request; it is not kept
+                        // as the artifact's date, which would stay for good.
+                        dated = new Dated(reported, false);
+                    } else if (found.isPresent()) {
+                        dated = new Dated(found, true);
                     } else {
-                        date = reported;
+                        dated = new Dated(reported, true);
                     }
-                    return date;
+                    return dated;
                 }
             );
         }
         return res;
+    }
+
+    /**
+     * The upstream's headers as the artifact's event may see them. The
+     * event's {@code Last-Modified} becomes the release date in the search
+     * index and, for good, in the publish-date table: it is the date
+     * cooldown decided with, and absent when that date was only a guess.
+     *
+     * @param upstream Headers of the upstream's response
+     * @param known The date cooldown decided with, null for a file that
+     *  cooldown does not date
+     * @return Headers for the event
+     */
+    private static Headers dated(final Headers upstream, final Dated known) {
+        final Headers res;
+        if (known == null) {
+            res = upstream;
+        } else {
+            res = new Headers();
+            for (final com.auto1.pantera.http.headers.Header header : upstream) {
+                if (!"Last-Modified".equalsIgnoreCase(header.getKey())) {
+                    res.add(header);
+                }
+            }
+            if (known.keep() && known.date().isPresent()) {
+                res.add(new LastModified(known.date().get()));
+            }
+        }
+        return res;
+    }
+
+    /**
+     * A release date and what may be done with it.
+     *
+     * @param date The date, empty when nobody knows it
+     * @param keep Whether it may be kept as the artifact's date
+     * @since 2.2.15
+     */
+    private record Dated(Optional<java.time.Instant> date, boolean keep) {
     }
 
     /**
@@ -1318,6 +1367,29 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final String path,
         final Headers upstreamHeaders
     ) {
+        return this.cooldownAtHeaders(
+            inboundHeaders, path, upstreamHeaders,
+            new java.util.concurrent.atomic.AtomicReference<>()
+        );
+    }
+
+    /**
+     * Header-time cooldown gate that also hands back the date it decided
+     * with.
+     *
+     * @param inboundHeaders Headers of the client's request
+     * @param path Request path
+     * @param upstreamHeaders Headers of the upstream's response
+     * @param known Receives the date and whether it may be kept; stays
+     *  empty for a file cooldown does not date
+     * @return A 403 when the version is blocked, empty otherwise
+     */
+    private CompletableFuture<Optional<Response>> cooldownAtHeaders(
+        final Headers inboundHeaders,
+        final String path,
+        final Headers upstreamHeaders,
+        final java.util.concurrent.atomic.AtomicReference<Dated> known
+    ) {
         if (this.cooldownService == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -1328,8 +1400,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         }
         return this.releaseDate(request.get(), upstreamHeaders)
             .thenCompose(
-                publishDate -> this.cooldownService
-                    .evaluateWithKnownDate(request.get(), publishDate)
+                dated -> {
+                    known.set(dated);
+                    return this.cooldownService
+                        .evaluateWithKnownDate(request.get(), dated.date());
+                }
             )
             .thenApply(result -> {
                 if (result.blocked()) {

@@ -139,6 +139,90 @@ final class CachedProxySliceReleaseDateTest {
         MatcherAssert.assertThat(recorded.lookups.get(), new IsEqual<>(0));
     }
 
+    @Test
+    void dateKeptForTheArtifactIsTheOneCooldownDecidedWith() throws Exception {
+        // What is stored with the artifact becomes its date for good (the
+        // publish-date table never changes a row): it must be the release
+        // date, not the day the upstream cached the file.
+        MatcherAssert.assertThat(
+            CachedProxySliceReleaseDateTest.storedDate(
+                "https://groovy.jfrog.io/artifactory/plugins-release",
+                new Recorded(Optional.of(CachedProxySliceReleaseDateTest.RELEASED))
+            ),
+            new IsEqual<>(Optional.of(CachedProxySliceReleaseDateTest.RELEASED.toEpochMilli()))
+        );
+    }
+
+    @Test
+    void upstreamDateIsKeptOnlyWhenCentralWasAskedAndDoesNotHaveTheArtifact() throws Exception {
+        final String other = "https://groovy.jfrog.io/artifactory/plugins-release";
+        final long reported = Instant.parse("2026-11-26T09:00:00Z").toEpochMilli();
+        MatcherAssert.assertThat(
+            "Central does not have it: the upstream's date is the fallback",
+            CachedProxySliceReleaseDateTest.storedDate(other, new Recorded(Optional.empty())),
+            new IsEqual<>(Optional.of(reported))
+        );
+        MatcherAssert.assertThat(
+            "the lookup failed: nobody knows, and a guess is not kept",
+            CachedProxySliceReleaseDateTest.storedDate(other, new Recorded(null)),
+            new IsEqual<>(Optional.empty())
+        );
+        final Recorded off = new Recorded(Optional.of(CachedProxySliceReleaseDateTest.RELEASED));
+        off.applies = false;
+        MatcherAssert.assertThat(
+            "cooldown does not apply, so Central was not asked: no date is kept",
+            CachedProxySliceReleaseDateTest.storedDate(other, off),
+            new IsEqual<>(Optional.empty())
+        );
+        MatcherAssert.assertThat(
+            "Maven Central's own date is kept as before",
+            CachedProxySliceReleaseDateTest.storedDate(
+                "https://repo1.maven.org/maven2", new Recorded(Optional.empty())
+            ),
+            new IsEqual<>(Optional.of(reported))
+        );
+    }
+
+    /**
+     * Fetch the artifact through a proxy of an upstream that reports
+     * today as its date, and return the release date of the event the
+     * proxy wrote for the search index and the publish-date table.
+     */
+    private static Optional<Long> storedDate(final String upstream, final Recorded recorded)
+        throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final java.util.Queue<com.auto1.pantera.scheduling.ProxyArtifactEvent> events =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+        final CachedProxySlice slice = new CachedProxySlice(
+            (line, headers, body) -> {
+                final com.auto1.pantera.http.Response res;
+                if (line.uri().getPath().equals(CachedProxySliceReleaseDateTest.PATH)) {
+                    res = ResponseBuilder.ok()
+                        .headers(CachedProxySliceReleaseDateTest.CACHED_TODAY)
+                        .body("jar bytes".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                        .build();
+                } else {
+                    res = ResponseBuilder.notFound().build();
+                }
+                return CompletableFuture.completedFuture(res);
+            },
+            new FromStorageCache(storage), Optional.of(events), "plugins", upstream,
+            "maven-proxy", recorded, recorded, Optional.of(storage)
+        );
+        slice.response(
+            new com.auto1.pantera.http.rq.RequestLine(
+                com.auto1.pantera.http.rq.RqMethod.GET, CachedProxySliceReleaseDateTest.PATH
+            ),
+            Headers.EMPTY, com.auto1.pantera.asto.Content.EMPTY
+        ).get(60, TimeUnit.SECONDS).body().asBytesFuture().get(60, TimeUnit.SECONDS);
+        // The event follows the commit: wait for it, do not time it.
+        for (int idx = 0; idx < 400 && events.isEmpty(); idx += 1) {
+            TimeUnit.MILLISECONDS.sleep(25L);
+        }
+        MatcherAssert.assertThat("an event was written", events.size(), new IsEqual<>(1));
+        return events.peek().releaseMillis();
+    }
+
     /**
      * A proxy slice with a cooldown service that records the date it is
      * given, and a date lookup that records what it is asked.
