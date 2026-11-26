@@ -17,7 +17,7 @@ Pantera is a multi-module Maven project for a binary artifact registry. Core Jav
 
 ## Coding Style & Naming Conventions
 
-Use Java 21 and UTF-8. Java code uses 4-space indentation, descriptive PascalCase class names, and packages under `com.auto1.pantera`. Follow established suffixes such as `*Slice` for HTTP handlers and `*Storage` for storage implementations. PMD rules are defined in `build-tools/src/main/resources/pmd-ruleset.xml`; avoid public static helpers except `main`, keep complexity low, and make secondary constructors delegate. Every Java source file must include the project license header.
+Use Java 21 and UTF-8. Java code uses 4-space indentation, descriptive PascalCase class names, and packages under `com.auto1.pantera`. Follow established suffixes such as `*Slice` for HTTP handlers and `*Storage` for storage implementations. PMD rules are defined in `build-tools/src/main/resources/pmd-ruleset.xml`, and any violation fails the build; the most common ones are unused parameters, fields or local variables and assignments whose value is never read. Every Java source file must include the project license header.
 
 ## Testing Guidelines
 
