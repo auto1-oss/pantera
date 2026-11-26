@@ -1120,6 +1120,16 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     );
                     return CompletableFuture.completedFuture(blockResp.get());
                 }
+                if (com.auto1.pantera.http.log.RequestTrace.instance().traced(inboundHeaders)) {
+                    // A Troubleshoot replay asks what a client would get.
+                    // The upstream has the file and nothing blocks it: say
+                    // so, and leave the proxy as it was. Storing the file
+                    // would add it to the search index and change which
+                    // member a group asks from then on.
+                    drainUpstreamBody(body.publisher());
+                    singleFlightGate.complete(null);
+                    return CompletableFuture.completedFuture(BaseCachedProxySlice.notStored());
+                }
                 return this.cacheWriter.streamThroughAndCommit(
                     key, upstreamUri, body.size(), body.publisher(),
                     sidecars, null, ctx

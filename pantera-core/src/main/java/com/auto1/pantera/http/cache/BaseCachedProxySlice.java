@@ -39,6 +39,7 @@ import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestReasons;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.misc.ConfigDefaults;
@@ -701,6 +702,21 @@ public abstract class BaseCachedProxySlice implements Slice {
     }
 
     /**
+     * The answer to a Troubleshoot replay for a file the upstream has and
+     * the proxy does not hold: the status a client would get, without the
+     * body. The replay ({@link RequestTrace}) must leave the proxy as it
+     * found it, so the file is neither stored nor announced to the search
+     * index.
+     *
+     * @return Response
+     */
+    protected static Response notStored() {
+        return ResponseBuilder.ok()
+            .textBody("The upstream has this file. A diagnostic request does not store it.")
+            .build();
+    }
+
+    /**
      * @return Upstream URL
      */
     protected final String upstreamUrl() {
@@ -1335,6 +1351,12 @@ public abstract class BaseCachedProxySlice implements Slice {
                     return this.handleNonSuccess(resp, duration, key, line, headers);
                 }
                 this.recordProxyMetric("success", duration);
+                if (RequestTrace.instance().traced(headers)) {
+                    // A Troubleshoot replay: the upstream has the file. It
+                    // is answered, not stored, and no event is written.
+                    return resp.body().asBytesFuture()
+                        .thenApply(ignored -> BaseCachedProxySlice.notStored());
+                }
                 // The cache-write signal is passed through: a failed write
                 // used to be mapped to SUCCESS, so the follow-up cache read
                 // missed and the client got a 404 for an artifact the
