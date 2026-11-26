@@ -160,6 +160,8 @@ final class ReasonText {
             case "negative_cache" -> text = "answered from its negative cache: an earlier "
                 + "\"not found\" is still remembered, and the upstream was not asked";
             case "not_found" -> text = "does not have this path";
+            case "skipped_by_routing_rule" ->
+                text = "was not asked: a routing rule of the group limits it to other paths";
             case "connection_refused" -> text = "its upstream refused the connection";
             case "connection_closed" ->
                 text = "its upstream closed the connection before answering";

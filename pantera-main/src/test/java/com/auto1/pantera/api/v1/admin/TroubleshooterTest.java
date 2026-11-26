@@ -198,6 +198,30 @@ final class TroubleshooterTest {
     }
 
     @Test
+    void namesAMemberThatARoutingRuleKeptFromBeingAsked() throws Exception {
+        // The step of a skipped member comes from the group, which knows
+        // the member's name only: its type is taken from the repositories.
+        final FakeFetch fetch = new FakeFetch().traced(
+            "npm_group", "/lodash/-/lodash-9.9.9.tgz", 404,
+            new RequestTrace.Step("npm_proxy", "", 404, "skipped_by_routing_rule", 0L),
+            new RequestTrace.Step("npm_group", "npm-group", 404, "skipped_by_routing_rule", 1L)
+        );
+        final JsonObject step = this.troubleshooter(
+            fetch, new NegativeCache(new NegativeCacheConfig()), CooldownLookup.NONE
+        ).explain("/npm_group/lodash/-/lodash-9.9.9.tgz", "Bearer t").get(10, TimeUnit.SECONDS)
+            .getJsonArray("trace").getJsonObject(0);
+        MatcherAssert.assertThat(
+            "the step says the member was not asked, and why",
+            step.getString("explanation"),
+            new IsEqual<>("was not asked: a routing rule of the group limits it to other paths")
+        );
+        MatcherAssert.assertThat(
+            "and carries the type of the repository",
+            step.getString("type"), new IsEqual<>("npm-proxy")
+        );
+    }
+
+    @Test
     void saysWhichMemberServedTheRequest() throws Exception {
         final FakeFetch fetch = new FakeFetch().traced(
             "npm_group", "/lodash/-/lodash-4.17.21.tgz", 200,

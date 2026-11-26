@@ -228,7 +228,11 @@ public final class Troubleshooter {
             final Optional<RepoTopology.RepoInfo> info = this.diag.topology().repo(step.repository());
             final JsonObject entry = new JsonObject()
                 .put("repository", step.repository())
-                .put("type", step.type())
+                .put(
+                    "type",
+                    Optional.ofNullable(step.type()).filter(type -> !type.isEmpty())
+                        .or(() -> info.map(RepoTopology.RepoInfo::type)).orElse("")
+                )
                 .put("mode", info.map(RepoTopology.RepoInfo::mode).orElse(null))
                 .put("status", step.status())
                 .put("reason", step.reason())
