@@ -269,6 +269,21 @@ public final class MicrometerMetrics {
     // ========== Sign-in Metrics ==========
 
     /**
+     * A password check sent to an external identity provider.
+     * @param provider Provider type: {@code okta}, {@code keycloak},
+     *  {@code github}
+     * @param outcome {@code accepted}, {@code rejected}, {@code refused} or
+     *  {@code unavailable}
+     */
+    public void recordProviderCheck(final String provider, final String outcome) {
+        Counter.builder("pantera.auth.provider.checks")
+            .description("Password checks sent to an external identity provider")
+            .tags("provider", provider, "outcome", outcome)
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
      * A login that was refused without being checked.
      * @param reason Why: {@code login_delayed}, {@code account_locked} or
      *  {@code sign_in_busy}
