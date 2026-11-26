@@ -16,8 +16,10 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.AuthWorkerPool;
+import com.auto1.pantera.http.auth.PasswordCheck;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.Tokens;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -147,16 +149,18 @@ public final class OAuthLoginSlice implements Slice {
         final Content body
     ) {
         return new LoginBodyCapSlice(
-            (rql, rqh, bounded) -> bounded.asStringFuture().thenCompose(this::answer)
+            (rql, rqh, bounded) -> bounded.asStringFuture()
+                .thenCompose(text -> this.answer(text, rqh))
         ).response(line, headers, body);
     }
 
     /**
      * Answer a login body that fits the cap.
      * @param text Body
+     * @param headers Headers of the request
      * @return Completion with the response
      */
-    private CompletableFuture<Response> answer(final String text) {
+    private CompletableFuture<Response> answer(final String text, final Headers headers) {
         final Optional<JsonObject> json = OAuthLoginSlice.parse(text);
         final String name = json.map(obj -> OAuthLoginSlice.string(obj, "name"))
             .orElse("");
@@ -171,7 +175,7 @@ public final class OAuthLoginSlice implements Slice {
             );
         } else {
             result = CompletableFuture.supplyAsync(
-                () -> this.login(name, password), AuthWorkerPool.AUTH_EXECUTOR
+                () -> this.login(name, password, headers), AuthWorkerPool.AUTH_EXECUTOR
             );
         }
         return result;
@@ -181,9 +185,10 @@ public final class OAuthLoginSlice implements Slice {
      * Validate the password and issue the token. Blocking.
      * @param name User name
      * @param password Password
+     * @param headers Headers of the request
      * @return Response
      */
-    private Response login(final String name, final String password) {
+    private Response login(final String name, final String password, final Headers headers) {
         if (OAuthLoginSlice.looksLikeJwt(password)) {
             // A bearer token supplied as the password would authenticate via
             // the jwt-password provider and be exchanged for a freshly minted
@@ -200,9 +205,17 @@ public final class OAuthLoginSlice implements Slice {
                 .jsonBody(OAuthLoginSlice.error("invalid credentials"))
                 .build();
         }
-        final Optional<AuthUser> user = this.auth.user(name, password);
+        // PasswordCheck runs the chain under the context of this login and
+        // hands back why the chain refused it, when it said so: a locked
+        // account and a delayed login are answered as such.
+        final PasswordCheck.Outcome outcome =
+            new PasswordCheck(this.auth, headers).now(name, password);
+        final Optional<AuthUser> user = outcome.user();
         final Response response;
-        if (user.isEmpty()) {
+        if (user.isEmpty() && outcome.refusal().isPresent()
+            && !outcome.refusal().get().message().isEmpty()) {
+            response = OAuthLoginSlice.refused(outcome.refusal().get());
+        } else if (user.isEmpty()) {
             EcsLogger.warn(OAuthLoginSlice.LOGGER)
                 .message("npm login failed: invalid credentials")
                 .eventCategory("authentication")
@@ -305,6 +318,19 @@ public final class OAuthLoginSlice implements Slice {
      * @param message Message
      * @return JSON object
      */
+    /**
+     * Answer a login the sign-in chain refused with a text of its own.
+     * @param refusal The refusal
+     * @return Response with the refusal's status, wait and text
+     */
+    private static Response refused(final AuthRefusal refusal) {
+        final ResponseBuilder builder = ResponseBuilder.from(refusal.status());
+        refusal.retryAfter().ifPresent(
+            seconds -> builder.header("Retry-After", Long.toString(seconds))
+        );
+        return builder.jsonBody(OAuthLoginSlice.error(refusal.message())).build();
+    }
+
     private static JsonObject error(final String message) {
         return Json.createObjectBuilder().add(OAuthLoginSlice.ERROR, message).build();
     }

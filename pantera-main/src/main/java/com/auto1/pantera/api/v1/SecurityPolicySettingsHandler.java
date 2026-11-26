@@ -18,6 +18,8 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.policy.EgressConfig;
 import com.auto1.pantera.settings.policy.EgressSettingsLoader;
+import com.auto1.pantera.settings.policy.FailedLoginsConfig;
+import com.auto1.pantera.settings.policy.FailedLoginsSettingsLoader;
 import com.auto1.pantera.settings.policy.LoginThrottleConfig;
 import com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader;
 import com.auto1.pantera.settings.policy.RequestLimitsConfig;
@@ -69,6 +71,16 @@ public final class SecurityPolicySettingsHandler {
     );
 
     /**
+     * Keys accepted by the failed-logins endpoint.
+     */
+    private static final Set<String> FAILED_LOGINS_KEYS = Set.of(
+        FailedLoginsSettingsLoader.KEY_DELAY_FROM, FailedLoginsSettingsLoader.KEY_FIRST_DELAY,
+        FailedLoginsSettingsLoader.KEY_MAX_DELAY, FailedLoginsSettingsLoader.KEY_LOCK_AFTER,
+        FailedLoginsSettingsLoader.KEY_UNLOCK_AFTER, FailedLoginsSettingsLoader.KEY_FORGET_AFTER,
+        FailedLoginsSettingsLoader.KEY_COUNT_KEYS, FailedLoginsSettingsLoader.KEY_LOCK_ALL
+    );
+
+    /**
      * Logger name.
      */
     private static final String LOGGER = "com.auto1.pantera.api.v1";
@@ -111,6 +123,7 @@ public final class SecurityPolicySettingsHandler {
         this.route(router, adminAuthz, "/api/v1/admin/request-limits-settings", requestLimits());
         this.route(router, adminAuthz, "/api/v1/admin/egress-settings", egress());
         this.route(router, adminAuthz, "/api/v1/admin/login-throttle-settings", loginThrottle());
+        this.route(router, adminAuthz, "/api/v1/admin/failed-logins-settings", failedLogins());
     }
 
     /**
@@ -186,6 +199,45 @@ public final class SecurityPolicySettingsHandler {
             ),
             () -> {
                 final LoginThrottleSettingsLoader loader = LoginThrottleSettingsLoader.installed();
+                if (loader != null) {
+                    loader.invalidate();
+                }
+            }
+        );
+    }
+
+    /**
+     * The policy of the login delay and the account lock ("Failed logins"
+     * card).
+     * @return Section
+     */
+    static Section failedLogins() {
+        return new Section(
+            "failed-logins", "failed_logins", FAILED_LOGINS_KEYS,
+            () -> {
+                final FailedLoginsConfig current = FailedLoginsSettingsLoader.activeSupplier().get();
+                return new JsonObject()
+                    .put(FailedLoginsSettingsLoader.KEY_DELAY_FROM, String.valueOf(current.delayFromFailure()))
+                    .put(FailedLoginsSettingsLoader.KEY_FIRST_DELAY, String.valueOf(current.firstDelaySeconds()))
+                    .put(FailedLoginsSettingsLoader.KEY_MAX_DELAY, String.valueOf(current.maxDelaySeconds()))
+                    .put(FailedLoginsSettingsLoader.KEY_LOCK_AFTER, String.valueOf(current.lockAfterFailures()))
+                    .put(FailedLoginsSettingsLoader.KEY_UNLOCK_AFTER, String.valueOf(current.unlockAfterMinutes()))
+                    .put(FailedLoginsSettingsLoader.KEY_FORGET_AFTER, String.valueOf(current.forgetAfterMinutes()))
+                    .put(FailedLoginsSettingsLoader.KEY_COUNT_KEYS, String.valueOf(current.countRejectedKeys()))
+                    .put(FailedLoginsSettingsLoader.KEY_LOCK_ALL, String.valueOf(current.lockAllCredentials()));
+            },
+            merged -> new FailedLoginsConfig(
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_DELAY_FROM),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_FIRST_DELAY),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_MAX_DELAY),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_LOCK_AFTER),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_UNLOCK_AFTER),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_FORGET_AFTER),
+                Section.parseBoolean(merged, FailedLoginsSettingsLoader.KEY_COUNT_KEYS),
+                Section.parseBoolean(merged, FailedLoginsSettingsLoader.KEY_LOCK_ALL)
+            ),
+            () -> {
+                final FailedLoginsSettingsLoader loader = FailedLoginsSettingsLoader.installed();
                 if (loader != null) {
                     loader.invalidate();
                 }

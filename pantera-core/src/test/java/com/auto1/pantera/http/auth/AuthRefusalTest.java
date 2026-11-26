@@ -43,6 +43,64 @@ final class AuthRefusalTest {
     }
 
     @Test
+    void notedRefusalCanBeReadWithoutTakingIt() {
+        new AuthRefusal("mfa_required").note();
+        MatcherAssert.assertThat(
+            "code inside the chain sees the refusal",
+            AuthRefusal.noted().map(AuthRefusal::reason),
+            new IsEqual<>(Optional.of("mfa_required"))
+        );
+        MatcherAssert.assertThat(
+            "and leaves it for the entry point",
+            AuthRefusal.take().map(AuthRefusal::reason),
+            new IsEqual<>(Optional.of("mfa_required"))
+        );
+    }
+
+    @Test
+    void checkTellsTheChainWhereTheLoginComesFrom() {
+        final java.util.concurrent.atomic.AtomicReference<LoginSource> seen =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        new PasswordCheck(
+            (name, pass) -> {
+                seen.set(LoginSource.current());
+                return Optional.empty();
+            },
+            com.auto1.pantera.http.Headers.from(
+                new com.auto1.pantera.http.headers.Header("User-Agent", "Apache-Maven/3.9.9")
+            ).add(
+                new com.auto1.pantera.http.headers.Header(
+                    com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "192.0.2.7"
+                )
+            )
+        ).now("alice", "secret");
+        MatcherAssert.assertThat(
+            "the chain sees the client address, the client program and the path",
+            seen.get(), new IsEqual<>(new LoginSource("192.0.2.7", "Apache-Maven/3.9.9", "repository"))
+        );
+        MatcherAssert.assertThat(
+            "nothing stays on the thread",
+            LoginSource.current(), new IsEqual<>(LoginSource.UNKNOWN)
+        );
+    }
+
+    @Test
+    void checkOfAnotherEntryPointNamesItsPath() {
+        final java.util.concurrent.atomic.AtomicReference<LoginSource> seen =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        new PasswordCheck(
+            (name, pass) -> {
+                seen.set(LoginSource.current());
+                return Optional.empty();
+            },
+            new LoginSource("198.51.100.3", "Mozilla/5.0", "ui")
+        ).now("alice", "secret");
+        MatcherAssert.assertThat(
+            seen.get(), new IsEqual<>(new LoginSource("198.51.100.3", "Mozilla/5.0", "ui"))
+        );
+    }
+
+    @Test
     void refusalWithoutStatusIsAPlainFailedLogin() {
         final AuthRefusal refusal = new AuthRefusal("mfa_required");
         MatcherAssert.assertThat(

@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.auth;
 
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.trace.TraceHeaders;
@@ -54,6 +55,19 @@ public final class OktaOidcClient {
      * Reason of a login refused because a second factor was asked for.
      */
     private static final String MFA_REASON = "mfa_required";
+
+    /**
+     * Reason of a login that Okta did not reject as a wrong password but
+     * that did not end in a sign-in either.
+     */
+    private static final String NOT_COMPLETED = "sign_in_not_completed";
+
+    /**
+     * Whether Okta said the credentials of the login being checked on this
+     * thread are wrong. Everything else that ends a login is no wrong
+     * password, and is refused with a reason of its own.
+     */
+    private final ThreadLocal<Boolean> rejected = ThreadLocal.withInitial(() -> Boolean.FALSE);
 
 
     private final HttpClient client;
@@ -144,6 +158,35 @@ public final class OktaOidcClient {
         final String mfaCode,
         final boolean interactive
     ) throws IOException, InterruptedException {
+        final OktaAuthResult res = this.attempt(username, password, mfaCode, interactive);
+        if (res == null && !this.rejected.get().booleanValue()
+            && AuthRefusal.noted().isEmpty()) {
+            // Okta accepted the password, or never judged it, and the
+            // sign-in ended somewhere after that: no wrong password.
+            new AuthRefusal(OktaOidcClient.NOT_COMPLETED).note();
+        }
+        return res;
+    }
+
+    /**
+     * One sign-in at Okta. Sets {@link #rejected} when Okta said the
+     * credentials are wrong.
+     *
+     * @param username User name
+     * @param password Password
+     * @param mfaCode Second-factor code the person typed, or null
+     * @param interactive Whether a person is signing in
+     * @return The identity, or null when the login is refused
+     * @throws IOException When Okta cannot be reached
+     * @throws InterruptedException When the calling thread is interrupted
+     */
+    private OktaAuthResult attempt(
+        final String username,
+        final String password,
+        final String mfaCode,
+        final boolean interactive
+    ) throws IOException, InterruptedException {
+        this.rejected.set(Boolean.FALSE);
         EcsLogger.info("com.auto1.pantera.auth")
             .message(String.format("Starting Okta authentication: issuer=%s, authnUrl=%s, authorizeUrl=%s", this.issuer, this.authnUrl, this.authorizeUrl))
             .eventCategory("authentication")
@@ -188,6 +231,13 @@ public final class OktaOidcClient {
                 .field("http.response.status_code", authnStatus)
                 .field("log.source", "application")
                 .log();
+            if (authnCredFailure) {
+                this.rejected.set(Boolean.TRUE);
+            } else {
+                // Okta did not say the password is wrong: it is rate
+                // limiting or failing. Not a failed login of this user.
+                OktaOidcClient.unavailable().note();
+            }
             return null;
         }
         final JsonObject body = json(response.body());
@@ -200,6 +250,10 @@ public final class OktaOidcClient {
             return null;
         } else if ("MFA_REQUIRED".equals(status) || "MFA_CHALLENGE".equals(status)) {
             sessionToken = handleMfa(body, mfaCode, username);
+        } else if ("LOCKED_OUT".equals(status)) {
+            new AuthRefusal("directory_account_locked").note();
+        } else if ("PASSWORD_EXPIRED".equals(status)) {
+            new AuthRefusal("password_expired").note();
         }
         if (sessionToken == null || sessionToken.isEmpty()) {
             EcsLogger.error("com.auto1.pantera.auth")
@@ -258,6 +312,20 @@ public final class OktaOidcClient {
             .field("log.source", "application")
             .log();
         return parseIdToken(tokens.idToken, tokens.accessToken, username);
+    }
+
+    /**
+     * The refusal of a login that could not be checked because Okta cannot
+     * be reached, limits the rate or fails.
+     *
+     * @return Refusal answered 503: the client is told to come back, not
+     *  that its password is wrong
+     */
+    static AuthRefusal unavailable() {
+        return new AuthRefusal(
+            "identity_provider_unavailable", RsStatus.SERVICE_UNAVAILABLE, 0L,
+            "Sign-in is temporarily unavailable"
+        );
     }
 
     /**

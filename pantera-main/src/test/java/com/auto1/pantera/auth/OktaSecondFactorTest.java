@@ -104,8 +104,10 @@ final class OktaSecondFactorTest {
                 okta.count(FakeOkta.PUSH), new IsEqual<>(1L)
             );
             MatcherAssert.assertThat(
-                "a form sign-in is not refused as a repository login",
-                AuthRefusal.take().isPresent(), new IsEqual<>(false)
+                "the push was not approved: the sign-in did not complete, but it"
+                    + " is not refused as a repository login",
+                AuthRefusal.take().map(AuthRefusal::reason),
+                new IsEqual<>(Optional.of("sign_in_not_completed"))
             );
         }
     }
@@ -145,8 +147,9 @@ final class OktaSecondFactorTest {
                 new IsEqual<>(List.of(0L, 0L))
             );
             MatcherAssert.assertThat(
-                "no second factor is reported",
-                AuthRefusal.take().isPresent(), new IsEqual<>(false)
+                "the fake refuses the session exchange; no second factor is reported",
+                AuthRefusal.take().map(AuthRefusal::reason),
+                new IsEqual<>(Optional.of("sign_in_not_completed"))
             );
         }
     }

@@ -44,6 +44,7 @@ public final class AuthFromOkta implements Authentication {
             }
         } catch (final InterruptedException interrupted) {
             Thread.currentThread().interrupt();
+            OktaOidcClient.unavailable().note();
             EcsLogger.error("com.auto1.pantera.auth")
                 .message("Okta authentication interrupted")
                 .eventCategory("authentication")
@@ -54,6 +55,8 @@ public final class AuthFromOkta implements Authentication {
                 .field("log.source", "application")
                 .log();
         } catch (final IOException err) {
+            // Okta cannot be reached: not a failed login of this user.
+            OktaOidcClient.unavailable().note();
             EcsLogger.error("com.auto1.pantera.auth")
                 .message("Okta authentication failed")
                 .eventCategory("authentication")

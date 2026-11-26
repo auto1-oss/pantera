@@ -60,6 +60,63 @@ final class SecurityPolicySettingsHandlerTest {
     }
 
     @Test
+    void failedLoginsWhitelistCoversTheEightKeys() {
+        MatcherAssert.assertThat(
+            SecurityPolicySettingsHandlerTest.keys("FAILED_LOGINS_KEYS"),
+            new IsEqual<>(
+                Set.of(
+                    "failed_logins_delay_from_failure", "failed_logins_first_delay_seconds",
+                    "failed_logins_max_delay_seconds", "failed_logins_lock_after",
+                    "failed_logins_unlock_after_minutes", "failed_logins_forget_after_minutes",
+                    "failed_logins_count_rejected_keys", "failed_logins_lock_all_credentials"
+                )
+            )
+        );
+    }
+
+    @Test
+    void failedLoginsUpdatesAreValidatedAgainstTheMergedPolicy() {
+        final SecurityPolicySettingsHandler.Section section =
+            SecurityPolicySettingsHandler.failedLogins();
+        section.validate(
+            new JsonObject().put("failed_logins_lock_after", "10")
+                .put("failed_logins_unlock_after_minutes", 30)
+                .put("failed_logins_count_rejected_keys", true)
+                .put("failed_logins_lock_all_credentials", "false")
+        );
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("failed_logins_lock_after", "101")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("failed_logins_lock_after", "three")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("failed_logins_unlock_after_minutes", "-1")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("failed_logins_count_rejected_keys", "maybe")));
+        Assertions.assertThrows(
+            IllegalArgumentException.class,
+            (Executable) () -> section.validate(
+                new JsonObject().put("failed_logins_first_delay_seconds", "30")
+                    .put("failed_logins_max_delay_seconds", "10")
+            ),
+            "a longest delay below the first delay is refused as a pair"
+        );
+    }
+
+    @Test
+    void failedLoginsCurrentValuesAreStringsForEveryKey() {
+        final JsonObject current = SecurityPolicySettingsHandler.failedLogins().current();
+        MatcherAssert.assertThat(
+            "every key is reported",
+            current.fieldNames(),
+            new IsEqual<>(SecurityPolicySettingsHandlerTest.keys("FAILED_LOGINS_KEYS"))
+        );
+        MatcherAssert.assertThat(
+            "as a string, like the other sections",
+            current.getValue("failed_logins_lock_after"), new IsEqual<>("3")
+        );
+    }
+
+    @Test
     void partialUpdatesAreValidatedAgainstTheMergedConfig() {
         final SecurityPolicySettingsHandler.Section limits =
             SecurityPolicySettingsHandler.requestLimits();

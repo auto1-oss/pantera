@@ -311,13 +311,30 @@ public final class VertxMain {
         // admin UI has their sessions and API tokens rejected on the
         // next request, even if the token itself hasn't expired. In
         // non-DB modes we fall back to the always-enabled default.
-        final com.auto1.pantera.auth.UserEnabledCheck enabledCheck;
+        final com.auto1.pantera.auth.UserEnabledCheck enabled;
         if (settings.authz().policy()
             instanceof com.auto1.pantera.security.policy.CachedDbPolicy cachedPolicy) {
-            enabledCheck = cachedPolicy::isEnabled;
+            enabled = cachedPolicy::isEnabled;
         } else {
-            enabledCheck = com.auto1.pantera.auth.UserEnabledCheck.ALWAYS_ENABLED;
+            enabled = com.auto1.pantera.auth.UserEnabledCheck.ALWAYS_ENABLED;
         }
+        // The same gate refuses the tokens of a user locked after failed
+        // logins: an API key, a session and a refresh token alike. The lock
+        // is answered from memory (FailedLogins.locked).
+        final java.util.Optional<com.auto1.pantera.auth.failedlogins.FailedLogins> failedLogins =
+            settings.failedLogins();
+        final com.auto1.pantera.auth.UserEnabledCheck enabledCheck =
+            new com.auto1.pantera.auth.UserEnabledCheck() {
+                @Override
+                public boolean isEnabled(final String username) {
+                    return enabled.isEnabled(username);
+                }
+
+                @Override
+                public boolean isLocked(final String username) {
+                    return failedLogins.map(logins -> logins.locked(username)).orElse(false);
+                }
+            };
         // Revocation blocklist — previously never wired: revocation
         // endpoints persisted to the DB but in-flight access tokens kept
         // validating until natural expiry. Valkey-backed when the cluster
@@ -423,6 +440,11 @@ public final class VertxMain {
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
         com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        // Policy of the login delay and the account lock ("Failed logins"
+        // card): read by the sign-in chain on every decision.
+        com.auto1.pantera.settings.policy.FailedLoginsSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
         // WS8 fixwave-c (2.3.0): install the client-base URL derivation
