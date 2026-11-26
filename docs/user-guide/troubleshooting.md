@@ -47,6 +47,14 @@ If this returns your user info, the token is valid. If it returns 401, generate 
 
 ---
 
+### 403 "Account locked"
+
+Your account was locked after several failed logins. Nothing works until an administrator unlocks it, or until the automatic unlock time has passed if your installation has one. Before you ask: find the tool that still sends an old password or API key (an IDE, a build agent, a saved `settings.xml` or `.npmrc`) and correct it, or the account is locked again right after the unlock.
+
+### 429 "Too many failed logins"
+
+Logins for your user are delayed for a few seconds after failed logins. The answer says how long (`Retry-After`). Correct the credential; repeating the request does not help.
+
 ## Upload Refused Because the Artifact Exists
 
 A local repository with the **Immutable artifacts** setting on (the default) never overwrites a stored artifact. The refusal depends on the format: `409 Conflict` for most formats, `400 File already exists` for PyPI, `422` for Hex, and for Conan a `404` from `upload_urls` naming the stored file. Publish a new version, or delete the stored artifact first (needs `delete`). An administrator can turn the setting off for the repository. See [Overwrite rules](getting-started.md#overwrite-rules-immutable).

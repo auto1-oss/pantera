@@ -117,6 +117,17 @@ Pantera 2.2.0 introduced a per-host upstream circuit breaker and a per-repo conc
 
 **Alerting hooks:** The v2.2.0 release ships Prometheus recording-rule alerts (`pantera-main/docker-compose/prometheus/rules/`) and four corresponding runbooks under `docs/runbooks/` — `upstream-circuit-breaker-open.md`, `bulkhead-overflow.md`, `upstream-429-sustained.md`, `low-conditional-get-hit-rate.md`. See [Runbooks](runbooks.md).
 
+### Sign-in Metrics (v2.2.15+)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `pantera_auth_provider_checks_total` | Counter | `provider` (`okta`, `keycloak`, `github`), `outcome` (`accepted`, `rejected`, `refused`, `unavailable`) | Passwords that left Pantera for an external identity provider. `rejected` is a failed login of a user at the identity provider; a sudden rise means a client repeats a wrong password. |
+| `pantera_auth_login_refused_total` | Counter | `reason` (`login_delayed`, `account_locked`, `sign_in_busy`) | Logins the login delay or the account lock refused before any provider was asked. |
+| `pantera_auth_account_locks_total` | Counter | -- | Users locked after failed logins. |
+| `pantera_auth_account_unlocks_total` | Counter | `cause` (`admin`, `automatic`, `lock_off`) | Account locks that ended. |
+
+The **Pantera - Sign-in** dashboard (`pantera-sign-in.json`) charts them. See [Failed Logins](failed-logins.md).
+
 ---
 
 ## Grafana Dashboards

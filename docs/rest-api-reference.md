@@ -3358,6 +3358,132 @@ Partial updates are accepted; omitted keys keep their current values. The merged
 
 ---
 
+### GET /api/v1/admin/failed-logins-settings
+
+Retrieve the policy of the login delay and the account lock (2.2.15). See [Failed Logins](admin-guide/failed-logins.md).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):**
+
+```json
+{
+  "failed_logins_delay_from_failure": "2",
+  "failed_logins_first_delay_seconds": "1",
+  "failed_logins_max_delay_seconds": "60",
+  "failed_logins_lock_after": "3",
+  "failed_logins_unlock_after_minutes": "0",
+  "failed_logins_forget_after_minutes": "0",
+  "failed_logins_count_rejected_keys": "false",
+  "failed_logins_lock_all_credentials": "true"
+}
+```
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/failed-logins-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/failed-logins-settings
+
+Partial updates are accepted; omitted keys keep their current values. The merged policy is validated: a value outside its range, or a longest delay below the first delay, answers `400` and writes nothing. The change applies to the next login on every node. Setting `failed_logins_lock_after` to `0` unlocks every locked user within 15 seconds.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:** any subset of the fields above, values as strings.
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid failed-logins setting: failed_logins_lock_after must be between 0 and 100"
+}
+```
+
+---
+
+### GET /api/v1/locked-users
+
+List the user names locked after failed logins, oldest lock first (2.2.15). A locked name need not be a Pantera user.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:read`
+
+**Response (200):**
+
+```json
+{
+  "items": [
+    {
+      "name": "alice@example.com",
+      "locked": true,
+      "failures": 3,
+      "locked_at": "2026-01-01T10:00:04.099Z",
+      "last_failure_at": "2026-01-01T10:00:04.099Z",
+      "client_ip": "192.0.2.7",
+      "user_agent": "Apache-Maven/3.9.9",
+      "path": "repository",
+      "credential": "password"
+    }
+  ],
+  "total": 1
+}
+```
+
+`path` is `repository`, `ui` or `api`; `credential` is `password` or `api_key`.
+
+---
+
+### GET /api/v1/users/:name/failed-logins
+
+The failed logins counted for one user name: the count, whether the name is locked, and where the last failed login came from. A name without failed logins answers `{"name": "...", "failures": 0, "locked": false}`.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:read`
+
+---
+
+### POST /api/v1/users/:name/unlock
+
+Remove the lock and the count of one user name.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:enable`
+
+**Response (200):**
+
+```json
+{ "name": "alice@example.com", "unlocked": true }
+```
+
+`unlocked` is `false` when the name was not locked.
+
+---
+
+### POST /api/v1/users/unlock-all
+
+Remove every lock.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:enable`
+
+**Response (200):**
+
+```json
+{ "unlocked": ["alice@example.com", "bob"], "count": 2 }
+```
+
+---
+
 ### POST /api/v1/admin/revoke-user/:username
 
 Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is propagated to all cluster nodes via Valkey pub/sub (sub-second propagation when Valkey is available; DB polling fallback otherwise).
