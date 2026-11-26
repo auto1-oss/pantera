@@ -14,7 +14,6 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
-import com.auto1.pantera.asto.cache.FromRemoteCache;
 import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.composer.AstoRepository;
@@ -60,13 +59,12 @@ final class CachedProxySliceConditionalGetTest {
      * on the original fetch) gets a bodiless {@code 304} straight off the
      * warm cache — no upstream call at all.
      *
-     * <p>Uses a real {@link FromRemoteCache} (not {@link Cache#NOP}): only
-     * a real cache actually persists the merged/rewritten packument under
-     * the plain {@code name} storage key that {@code checkCacheFirst}
-     * probes on a subsequent request — with {@code Cache.NOP} every
-     * request unconditionally re-enters {@code fetchThroughCache}, which
-     * would defeat the point of this test (proving a warm-cache hit takes
-     * no second upstream call). Backed by a {@link FileStorage}, which
+     * <p>Wired as production wires a php-proxy, with a
+     * {@link ComposerStorageCache} (not {@link Cache#NOP}): the slice stores
+     * the merged/rewritten packument under {@code <name>.json}, the key
+     * {@code checkCacheFirst} probes on a subsequent request, so a
+     * warm-cache hit takes no second upstream call. Backed by a
+     * {@link FileStorage}, which
      * reports {@code updated-at}, so the just-written entry is fresh;
      * {@link InMemoryStorage} reports no timestamp, which
      * {@code CacheTimeControl} treats as stale and revalidates in the
@@ -80,21 +78,19 @@ final class CachedProxySliceConditionalGetTest {
         final Storage storage = new FileStorage(dir);
         final ConditionalUpstream upstream = new ConditionalUpstream();
         final CachedProxySlice slice = new CachedProxySlice(
-            upstream, new AstoRepository(storage), new FromRemoteCache(storage),
+            upstream, new AstoRepository(storage), new ComposerStorageCache(new AstoRepository(storage)),
             Optional.empty(), "composer-proxy-test", "http://localhost:8080"
         );
         // Warm the cache — one unconditional upstream fetch captures
-        // Last-Modified into lastModifiedStore and (via FromRemoteCache's
-        // background tee) persists the merged packument under the plain
-        // "vendor/package" storage key.
+        // Last-Modified into lastModifiedStore and persists the merged
+        // packument under "vendor/package.json".
         final Response first = slice.response(
             new RequestLine(RqMethod.GET, PACKAGE_PATH), Headers.EMPTY, Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.OK, first.status(), "initial fetch succeeds");
         Assertions.assertEquals(1, upstream.calls(), "one upstream call to warm the cache");
-        // FromRemoteCache's storage save is a fire-and-forget background
-        // tee — wait for it to land before probing for a warm-cache hit.
-        awaitPersisted(storage, new Key.From(PACKAGE_NAME));
+        // Wait for the save to land before probing for a warm-cache hit.
+        awaitPersisted(storage, new Key.From(PACKAGE_NAME + ".json"));
 
         // A client conditional GET carrying the exact captured Last-Modified
         // must be served straight from the warm cache as a 304 — no
@@ -137,13 +133,13 @@ final class CachedProxySliceConditionalGetTest {
         final Storage storage = new FileStorage(dir);
         final ConditionalUpstream upstream = new ConditionalUpstream();
         final CachedProxySlice slice = new CachedProxySlice(
-            upstream, new AstoRepository(storage), new FromRemoteCache(storage),
+            upstream, new AstoRepository(storage), new ComposerStorageCache(new AstoRepository(storage)),
             Optional.empty(), "composer-proxy-test", "http://localhost:8080"
         );
         slice.response(
             new RequestLine(RqMethod.GET, PACKAGE_PATH), Headers.EMPTY, Content.EMPTY
         ).join();
-        awaitPersisted(storage, new Key.From(PACKAGE_NAME));
+        awaitPersisted(storage, new Key.From(PACKAGE_NAME + ".json"));
 
         final Response conditional = slice.response(
             new RequestLine(RqMethod.GET, PACKAGE_PATH),
@@ -162,9 +158,8 @@ final class CachedProxySliceConditionalGetTest {
 
     /**
      * Poll until {@code key} is durably present in {@code storage}.
-     * {@link FromRemoteCache} tees bytes to the caller while saving a copy
-     * in the background, so the write is not guaranteed durable the
-     * instant the caller's future completes — poll for the eventual state
+     * The write is not guaranteed durable the instant the caller's future
+     * completes — poll for the eventual state
      * rather than asserting instantly, per the project's testing doctrine.
      */
     private static void awaitPersisted(final Storage storage, final Key key) throws Exception {
