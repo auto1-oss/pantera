@@ -132,8 +132,14 @@ export function repoTypeSeverity(raw: string): string {
   return 'secondary'
 }
 
+/** An option of a select. The lists are arrays, not readonly tuples: PrimeVue types `options` as a mutable array. */
+interface SelectOption<V> {
+  readonly label: string
+  readonly value: V
+}
+
 /** Filter dropdown options. */
-export const REPO_TYPE_FILTERS = [
+export const REPO_TYPE_FILTERS: SelectOption<string | null>[] = [
   { label: 'All Types', value: null },
   { label: 'Maven',    value: 'maven' },
   { label: 'Docker',   value: 'docker' },
@@ -151,15 +157,15 @@ export const REPO_TYPE_FILTERS = [
   { label: 'Hex',      value: 'hexpm' },
   { label: 'PHP',      value: 'php' },
   { label: 'File',     value: 'file' },
-] as const
+]
 
 /** Mode filter options for the management page. */
-export const REPO_MODE_FILTERS = [
+export const REPO_MODE_FILTERS: SelectOption<'hosted' | 'proxy' | 'group' | null>[] = [
   { label: 'All modes', value: null },
   { label: 'Hosted', value: 'hosted' },
   { label: 'Proxy',  value: 'proxy' },
   { label: 'Group',  value: 'group' },
-] as const
+]
 
 /** Mode label from the API field, falling back to the type suffix. */
 export function repoModeLabel(mode: 'hosted' | 'proxy' | 'group' | undefined, raw: string): string {
@@ -191,7 +197,7 @@ export const REPO_TYPE_DESCRIPTIONS: Record<string, string> = {
 }
 
 /** Create form options. */
-export const REPO_TYPE_CREATE_OPTIONS = [
+export const REPO_TYPE_CREATE_OPTIONS: SelectOption<string>[] = [
   { label: 'Maven (Local)',    value: 'maven' },
   { label: 'Maven (Proxy)',    value: 'maven-proxy' },
   { label: 'Maven (Group)',    value: 'maven-group' },
@@ -224,4 +230,4 @@ export const REPO_TYPE_CREATE_OPTIONS = [
   { label: 'File (Local)',     value: 'file' },
   { label: 'File (Proxy)',     value: 'file-proxy' },
   { label: 'File (Group)',     value: 'file-group' },
-] as const
+]

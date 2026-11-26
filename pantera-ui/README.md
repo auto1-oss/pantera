@@ -39,7 +39,7 @@ The dev server proxies `/api` requests to `http://localhost:8086` (configurable 
 npm run build
 ```
 
-Output is written to `dist/`. The build runs `vue-tsc --noEmit` for type checking before `vite build`.
+Output is written to `dist/`. The build runs `npm run type-check` before `vite build`: `vue-tsc` over the application (`tsconfig.app.json`) and over the Vite config (`tsconfig.node.json`). An error in either fails the build.
 
 ## Docker
 

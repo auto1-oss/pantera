@@ -88,7 +88,7 @@ watch(formValid, v => emit('valid', v), { immediate: true })
         class="w-full"
         autocomplete="current-password"
         :disabled="disabled"
-        @update:model-value="(v: string) => emit('update:oldPassword', v)"
+        @update:model-value="(v: string | undefined) => emit('update:oldPassword', v ?? '')"
       />
     </div>
 
@@ -102,7 +102,7 @@ watch(formValid, v => emit('valid', v), { immediate: true })
         class="w-full"
         autocomplete="new-password"
         :disabled="disabled"
-        @update:model-value="(v: string) => emit('update:password', v)"
+        @update:model-value="(v: string | undefined) => emit('update:password', v ?? '')"
       />
     </div>
 

@@ -20,6 +20,11 @@ describe('configStore', () => {
       grafanaUrl: 'http://grafana:3000',
       appTitle: 'Test',
       defaultPageSize: 50,
+      apmEnabled: false,
+      apmServerUrl: '',
+      apmServiceName: 'pantera-ui',
+      apmEnvironment: 'test',
+      registryUrl: '',
     })
     expect(store.apiBaseUrl).toBe('/custom/api')
     expect(store.appTitle).toBe('Test')

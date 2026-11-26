@@ -33,6 +33,10 @@ const notify = useNotificationStore()
 
 const mode = ref<Mode>('url')
 const url = ref('')
+// Placeholders that show a URL are constants, not text in the template:
+// vue-tsc 3.3 takes `//` in an attribute of a component for the start of a
+// comment and generates broken code for the rest of the template.
+const URL_PLACEHOLDER = 'https://registry.example.com/npm-group/lodash/-/lodash-4.17.21.tgz'
 const pkgRepoType = ref<string>('npm')
 // Bound to the AutoComplete: a string while typing, the suggestion object for
 // an instant after one is picked (pkgText() reads either).
@@ -232,7 +236,7 @@ onMounted(() => {
               <InputText
                 id="troubleshoot-url"
                 v-model="url"
-                placeholder="https://registry.example.com/npm-group/lodash/-/lodash-4.17.21.tgz"
+                :placeholder="URL_PLACEHOLDER"
                 class="w-full font-mono"
                 @keyup.enter="submit"
               />
