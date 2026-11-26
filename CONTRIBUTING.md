@@ -191,12 +191,12 @@ VALKEY_HOST=localhost mvn test -pl pantera-core
 Code style is enforced by `maven-pmd-plugin` using the project ruleset at
 `build-tools/src/main/resources/pmd-ruleset.xml`. The build fails on any PMD violation.
 
-Key PMD rules include:
+The ruleset uses PMD's own rule categories; the rules it leaves out are listed
+in the file with the reason for each. Violations that come up most often:
 
-- Cyclomatic complexity limit per method: 15.
-- Cognitive complexity limit: 17.
-- Public static methods are prohibited (except `main`).
-- Only one constructor should perform field initialization; others must delegate.
+- Unused parameters, private fields or local variables, and assignments whose
+  value is never read.
+- A `ResultSet` that is read without checking the result of `next()`.
 
 ### License header
 

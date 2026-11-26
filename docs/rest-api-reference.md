@@ -97,6 +97,19 @@ Authenticate with username and password. Returns an RS256-signed access token an
 }
 ```
 
+**Response (403):** the login was not checked (2.2.15). `error` says why:
+
+| `error` | Meaning |
+|---------|---------|
+| `LOGIN_DELAYED` | Logins of this user are delayed after failed logins. `Retry-After` gives the seconds to wait. |
+| `ACCOUNT_LOCKED` | The user is locked after failed logins until an administrator unlocks it, or until the automatic unlock time has passed. |
+
+See [Failed Logins](admin-guide/failed-logins.md).
+
+**Response (429):** `TOO_MANY_REQUESTS` with `Retry-After`: the sign-in form's own limit (Login Throttling) refused the attempt.
+
+**Response (503):** `SERVICE_UNAVAILABLE`: the identity provider could not check the login (2.2.15). It is not a failed login of the user.
+
 **curl example:**
 
 ```bash
@@ -4425,10 +4438,11 @@ the caller's credentials (it answers what an authorized admin client would
 get). The replay is traced: every repository on its way records what it
 answered and why. Then each layer is checked.
 
-A Maven or Gradle proxy on the way that does not hold the file asks its
-upstream but stores nothing (2.2.15): it answers `200` with a short text
-instead of the file, and writes no search-index row. Proxies of other
-formats store a file the replay makes them fetch.
+A proxy on the way that does not hold the file asks its upstream but
+stores nothing (2.2.15): no file, no metadata document, no search-index
+row, and no background refresh is started. A Maven or Gradle proxy answers
+`200` with a short text in place of the file; a proxy of another format
+(npm, PyPI, Go, Composer, Docker, file) hands on what the upstream sent.
 
 **Query Parameters:** `url` (required) -- a full client URL (host, optional
 global prefix and `api/` segment) or a repository-relative path such as
