@@ -98,6 +98,11 @@ public final class YamlSettings implements Settings {
     private static final long LOCK_REFRESH_SECONDS = 15L;
 
     /**
+     * Seconds between two writes of the sign-in failures report.
+     */
+    private static final long REPORT_FLUSH_SECONDS = 60L;
+
+    /**
      * Types of the providers that send a password to an identity provider
      * outside Pantera.
      */
@@ -638,8 +643,21 @@ public final class YamlSettings implements Settings {
             .eventAction("settings_close")
             .field("log.source", "application")
             .log();
-        // Stops reading the locked users before the database closes.
+        // Stops reading the locked users before the database closes, and
+        // writes the sign-in failures noted since the last minute.
         this.lockWatch.shutdownNow();
+        this.logins.report().ifPresent(
+            report -> {
+                report.flush();
+                EcsLogger.info("com.auto1.pantera.settings")
+                    .message("Sign-in failures report written at shutdown")
+                    .eventCategory("configuration")
+                    .eventAction("sign_in_report_flush")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+            }
+        );
         // Close ordering is critical — dependencies flow downward:
         // 1. Tracked storages (may use DataSource / Valkey indirectly)
         // 2. Artifact index (uses DataSource via its executor)
@@ -1049,6 +1067,15 @@ public final class YamlSettings implements Settings {
             reload, YamlSettings.LOCK_REFRESH_SECONDS, YamlSettings.LOCK_REFRESH_SECONDS,
             java.util.concurrent.TimeUnit.SECONDS
         );
+        // The sign-in failures noted in memory are written once a minute:
+        // a client that repeats a failing request costs one row a minute.
+        // flush() records its own failure and keeps what it could not write.
+        logins.report().ifPresent(
+            report -> watch.scheduleWithFixedDelay(
+                report::flush, YamlSettings.REPORT_FLUSH_SECONDS,
+                YamlSettings.REPORT_FLUSH_SECONDS, java.util.concurrent.TimeUnit.SECONDS
+            )
+        );
         return watch;
     }
 
@@ -1120,7 +1147,8 @@ public final class YamlSettings implements Settings {
         // A locked user can use no credential, a key included.
         return new LockedOut(
             new ApiKeyOnlyAuth(
-                new CountedKeys(keys, logins), new GuardedPasswords(passwords, logins)
+                new CountedKeys(keys, logins, logins.report().orElse(null)),
+                new GuardedPasswords(passwords, logins)
             ),
             logins
         );
@@ -1179,6 +1207,20 @@ public final class YamlSettings implements Settings {
         }
         final FailedLogins logins = new FailedLogins(
             failures, FailedLoginsSettingsLoader.activeSupplier()
+        );
+        // The sign-in failures report: who fails to sign in, with what and
+        // from where. Noted in memory, written once a minute.
+        final com.auto1.pantera.auth.signin.SignInFailureStore reported;
+        if (dataSource == null) {
+            reported = new com.auto1.pantera.auth.signin.InMemorySignInFailureStore();
+        } else {
+            reported = new com.auto1.pantera.auth.signin.DbSignInFailureStore(dataSource);
+        }
+        logins.reportTo(
+            new com.auto1.pantera.auth.signin.SignInFailures(
+                reported,
+                com.auto1.pantera.settings.policy.SignInReportSettingsLoader.activeSupplier()
+            )
         );
         res = YamlSettings.withProviders(res, settings, dataSource, enabledCache, logins);
         // Final enabled-state gate on the whole chain. Rejects any

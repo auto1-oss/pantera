@@ -51,6 +51,12 @@ If this returns your user info, the token is valid. If it returns 401, generate 
 
 Your account was locked after several failed logins. Nothing works until an administrator unlocks it, or until the automatic unlock time has passed if your installation has one. Before you ask: find the tool that still sends an old password or API key (an IDE, a build agent, a saved `settings.xml` or `.npmrc`) and correct it, or the account is locked again right after the unlock.
 
+### 401 "API key expired", "API key revoked", "API key not accepted", "API key not valid here"
+
+The API key your tool sent was rejected, and the answer says why. Create a new key on your profile page and put it into the tool. "Not valid here" means the key belongs to another Pantera installation, for example a test environment. "Not accepted" means the key is valid but your account is disabled, or the tool sends it with another user name.
+
+Your profile page lists your **rejected API keys** with the client address and program that still send them, so you can find the tool.
+
 ### 429 "Too many failed logins"
 
 Logins for your user are delayed for a few seconds after failed logins. The answer says how long (`Retry-After`). Correct the credential; repeating the request does not help.

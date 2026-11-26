@@ -163,7 +163,7 @@ public final class GuardedPasswords implements Authentication {
             if (admission.kind() == Admission.Kind.OPEN) {
                 res = this.asked(counted, username, password, digest);
             } else {
-                this.logins.refuse(admission);
+                this.logins.refuse(admission, username);
             }
         }
         return res;

@@ -270,6 +270,60 @@ final class FailedLoginsTest {
         MatcherAssert.assertThat(node.pending("alice"), new IsEqual<>(false));
     }
 
+    @Test
+    void failedPasswordLoginsRefusalsAndUnlocksGoToTheReport() {
+        final com.auto1.pantera.auth.signin.SignInFailures report =
+            new com.auto1.pantera.auth.signin.SignInFailures(
+                new com.auto1.pantera.auth.signin.InMemorySignInFailureStore(),
+                com.auto1.pantera.settings.policy.SignInReportConfig::defaults
+            );
+        final FailedLogins node = this.node();
+        node.reportTo(report);
+        final LoginOrigin maven =
+            new LoginOrigin("192.0.2.7", "Apache-Maven/3.9.9", "repository", "password");
+        node.failed("Alice", maven);
+        node.failed("alice", maven);
+        node.failed("alice", new LoginOrigin("192.0.2.7", "IntelliJ", "repository", "api_key"));
+        // The refusal is noted where the login is checked: there the
+        // thread knows where the login came from.
+        new com.auto1.pantera.http.auth.PasswordCheck(
+            (name, pass) -> {
+                node.refuse(Admission.LOCKED, name);
+                return java.util.Optional.empty();
+            },
+            new com.auto1.pantera.http.auth.LoginSource(
+                "192.0.2.7", "Apache-Maven/3.9.9", "repository"
+            )
+        ).now("alice", "any");
+        node.unlock("alice", "admin");
+        final com.auto1.pantera.auth.signin.SignInFailure line = report.list(
+            new com.auto1.pantera.auth.signin.SignInFailureStore.Query(
+                com.auto1.pantera.auth.signin.SignInFailure.PASSWORD, "alice", true, "", 10, 0
+            )
+        ).items().get(0);
+        MatcherAssert.assertThat(
+            "the two failed password logins are counted, the rejected key is not one",
+            line.hits(), new IsEqual<>(2L)
+        );
+        MatcherAssert.assertThat(
+            "the login refused during the lock is counted apart",
+            line.refused(), new IsEqual<>(1L)
+        );
+        MatcherAssert.assertThat(
+            "with the address the failures came from",
+            line.clientIp(), new IsEqual<>("192.0.2.7")
+        );
+        MatcherAssert.assertThat(
+            "and the unlock names the administrator",
+            report.list(
+                new com.auto1.pantera.auth.signin.SignInFailureStore.Query(
+                    com.auto1.pantera.auth.signin.SignInFailure.UNLOCK, "alice", true, "", 10, 0
+                )
+            ).items().get(0).actor(),
+            new IsEqual<>("admin")
+        );
+    }
+
     private FailedLogins node() {
         return new FailedLogins(this.store, this.policy::get);
     }

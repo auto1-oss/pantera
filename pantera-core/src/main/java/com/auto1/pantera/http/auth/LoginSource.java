@@ -10,6 +10,9 @@
  */
 package com.auto1.pantera.http.auth;
 
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
+
 /**
  * Where the login being checked on this thread comes from: the client
  * address, the client program and the sign-in path.
@@ -47,6 +50,20 @@ public record LoginSource(String clientIp, String userAgent, String path) {
         clientIp = clientIp == null ? "" : clientIp; // NOPMD UnusedAssignment - compact canonical constructor: the assignment sets the record component
         userAgent = userAgent == null ? "" : userAgent; // NOPMD UnusedAssignment - compact canonical constructor: the assignment sets the record component
         path = path == null ? "" : path; // NOPMD UnusedAssignment - compact canonical constructor: the assignment sets the record component
+    }
+
+    /**
+     * Source of a login that comes with a repository request.
+     *
+     * @param request Headers of the request, as the server entry point
+     *  stamped them
+     */
+    public LoginSource(final Headers request) {
+        this(
+            LoginSource.first(request, EcsLoggingSlice.CTX_CLIENT_IP_HEADER),
+            LoginSource.first(request, "User-Agent"),
+            LoginSource.REPOSITORY
+        );
     }
 
     /**
@@ -89,5 +106,9 @@ public record LoginSource(String clientIp, String userAgent, String path) {
      */
     static void unbind() {
         LoginSource.CURRENT.remove();
+    }
+
+    private static String first(final Headers headers, final String name) {
+        return headers.find(name).stream().findFirst().map(hdr -> hdr.getValue()).orElse("");
     }
 }

@@ -68,7 +68,7 @@ public final class BearerAuthScheme implements AuthScheme {
                             AuthScheme.result(AuthUser.ANONYMOUS, this.challenge())
                         );
                     }
-                    return this.outcome(header)
+                    return this.outcome(header, headers)
                         .thenApply(outcome -> AuthScheme.result(outcome, this.challenge()));
                 }
             ).orElseGet(
@@ -82,12 +82,17 @@ public final class BearerAuthScheme implements AuthScheme {
      * Checks the token of an authorization header.
      *
      * @param atz Authorization header
+     * @param request Headers of the request
      * @return The user, or the refusal the token check noted
      */
-    private CompletionStage<PasswordCheck.Outcome> outcome(final Authorization atz) {
+    private CompletionStage<PasswordCheck.Outcome> outcome(
+        final Authorization atz, final Headers request
+    ) {
         final CompletionStage<PasswordCheck.Outcome> res;
         if (BearerAuthScheme.NAME.equals(atz.scheme())) {
-            res = this.auth.check(new Authorization.Bearer(atz.credentials()).token());
+            res = this.auth.check(
+                new Authorization.Bearer(atz.credentials()).token(), request
+            );
         } else {
             res = CompletableFuture.completedFuture(
                 new PasswordCheck.Outcome(Optional.empty(), Optional.empty())

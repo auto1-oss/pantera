@@ -62,7 +62,7 @@ public final class SecurityPolicySettingsSync {
     /**
      * Tell peers a section was written.
      * @param section Section name ({@code request_limits}, {@code egress}, {@code login_throttle}, {@code failed_logins},
-     *  {@code password_sign_in})
+     *  {@code password_sign_in}, {@code sign_in_report})
      */
     public void broadcast(final String section) {
         if (this.bus != null) {
@@ -89,6 +89,12 @@ public final class SecurityPolicySettingsSync {
             final FailedLoginsSettingsLoader failed = FailedLoginsSettingsLoader.installed();
             if (failed != null) {
                 failed.invalidate();
+            }
+        }
+        if (all || "sign_in_report".equals(section)) {
+            final SignInReportSettingsLoader reports = SignInReportSettingsLoader.installed();
+            if (reports != null) {
+                reports.invalidate();
             }
         }
         if (all || "password_sign_in".equals(section)) {

@@ -418,7 +418,11 @@ public final class VertxMain {
         );
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
             rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, authSettingsDao,
-            revocationBlocklist, enabledCheck
+            revocationBlocklist, enabledCheck,
+            // Rejected API keys go to the sign-in failures report.
+            settings.failedLogins()
+                .flatMap(com.auto1.pantera.auth.failedlogins.FailedLogins::report)
+                .orElse(null)
         );
         // Install the circuit-breaker settings loader BEFORE constructing
         // RepositorySlices so the default-constructor activeSupplier()
@@ -473,6 +477,10 @@ public final class VertxMain {
         // Policy of the login delay and the account lock ("Failed logins"
         // card): read by the sign-in chain on every decision.
         com.auto1.pantera.settings.policy.FailedLoginsSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        // Policy of the sign-in failures report (on or off, retention).
+        com.auto1.pantera.settings.policy.SignInReportSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
         // Where each identity provider takes passwords ("Password

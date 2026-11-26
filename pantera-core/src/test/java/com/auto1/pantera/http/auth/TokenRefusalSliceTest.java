@@ -92,6 +92,41 @@ final class TokenRefusalSliceTest {
         );
     }
 
+    @ParameterizedTest
+    @EnumSource(Kind.class)
+    void tokenCheckIsToldWhereTheRequestCameFrom(final Kind kind) {
+        // What the check reports about a rejected token names the client
+        // program and address: they are in the headers of the request.
+        final java.util.concurrent.atomic.AtomicReference<Headers> seen =
+            new java.util.concurrent.atomic.AtomicReference<>(Headers.EMPTY);
+        kind.slice(
+            new TokenAuthentication() {
+                @Override
+                public CompletionStage<Optional<AuthUser>> user(final String token) {
+                    return CompletableFuture.completedFuture(Optional.empty());
+                }
+
+                @Override
+                public CompletionStage<PasswordCheck.Outcome> check(
+                    final String token, final Headers request
+                ) {
+                    seen.set(request);
+                    return CompletableFuture.completedFuture(
+                        new PasswordCheck.Outcome(Optional.empty(), Optional.empty())
+                    );
+                }
+            }
+        ).response(
+            new RequestLine("GET", "/any"),
+            Headers.from(new Authorization.Bearer("any-token"))
+                .add(new Header("User-Agent", "Apache-Maven/3.9.9")),
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            seen.get().values("User-Agent"), new IsEqual<>(List.of("Apache-Maven/3.9.9"))
+        );
+    }
+
     private static Answer ask(final Kind kind, final TokenAuthentication tokens) {
         final String slot = RequestReasons.instance().open();
         final Response response = kind.slice(tokens).response(

@@ -10,8 +10,10 @@
  */
 package com.auto1.pantera.auth.failedlogins;
 
+import com.auto1.pantera.auth.signin.SignInFailures;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.auth.AuthRefusal;
+import com.auto1.pantera.http.auth.LoginSource;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.metrics.MicrometerMetrics;
 import com.auto1.pantera.settings.policy.FailedLoginsConfig;
@@ -54,6 +56,11 @@ public final class FailedLogins {
     private static final String LOCKED = "account_locked";
 
     /**
+     * Credential of a login that was made with a password.
+     */
+    private static final String PASSWORD = "password";
+
+    /**
      * Where the counts live.
      */
     private final FailedLoginStore store;
@@ -82,6 +89,11 @@ public final class FailedLogins {
     private final Object countedLock = new Object();
 
     /**
+     * The sign-in failures report, or null when none is kept.
+     */
+    private volatile SignInFailures report;
+
+    /**
      * Ctor.
      *
      * @param store Where the counts live
@@ -92,6 +104,25 @@ public final class FailedLogins {
         this.config = config;
         this.lockedNow = Set.of();
         this.countedNow = ConcurrentHashMap.newKeySet();
+    }
+
+    /**
+     * Send failed and refused password logins and unlocks to the sign-in
+     * failures report.
+     *
+     * @param to The report
+     */
+    public void reportTo(final SignInFailures to) {
+        this.report = to;
+    }
+
+    /**
+     * The sign-in failures report this sends to.
+     *
+     * @return The report; empty when none is kept
+     */
+    public Optional<SignInFailures> report() {
+        return Optional.ofNullable(this.report);
     }
 
     /**
@@ -156,6 +187,13 @@ public final class FailedLogins {
         final LoginState state = seen.state();
         if (state.failures() > 0) {
             this.count(name, true);
+        }
+        final SignInFailures noted = this.report;
+        if (noted != null && FailedLogins.PASSWORD.equals(origin.credential())) {
+            // A rejected key is reported as a key, by what rejected it.
+            noted.failedPassword(
+                name, new LoginSource(origin.clientIp(), origin.userAgent(), origin.path())
+            );
         }
         if (state.locked() && state.lockedAt().equals(state.lastFailure())) {
             this.mark(name, true);
@@ -313,6 +351,7 @@ public final class FailedLogins {
         this.count(name, false);
         if (was.locked()) {
             FailedLogins.unlocked("admin", 1);
+            this.unlockedBy(name, actor);
             EcsLogger.info(FailedLogins.LOG)
                 .message("User unlocked by " + actor)
                 .eventCategory("authentication")
@@ -336,6 +375,7 @@ public final class FailedLogins {
         this.lockedNow = Set.of();
         for (final String name : names) {
             this.count(name, false);
+            this.unlockedBy(name, actor);
         }
         if (!names.isEmpty()) {
             FailedLogins.unlocked("admin", names.size());
@@ -348,6 +388,27 @@ public final class FailedLogins {
                 .log();
         }
         return names;
+    }
+
+    /**
+     * Refuse a login without a check: note on the thread why, for the
+     * answer, and report it as refused.
+     *
+     * @param admission What applies to the login: delayed or locked
+     * @param name User name of the login
+     */
+    public void refuse(final Admission admission, final String name) {
+        this.refuse(admission);
+        final SignInFailures noted = this.report;
+        if (noted != null) {
+            final String reason;
+            if (admission.kind() == Admission.Kind.LOCKED) {
+                reason = FailedLogins.LOCKED;
+            } else {
+                reason = "login_delayed";
+            }
+            noted.refusedPassword(name, LoginSource.current(), reason);
+        }
     }
 
     /**
@@ -379,6 +440,13 @@ public final class FailedLogins {
     private static void unlocked(final String cause, final int count) {
         if (MicrometerMetrics.isInitialized()) {
             MicrometerMetrics.getInstance().recordAccountUnlock(cause, count);
+        }
+    }
+
+    private void unlockedBy(final String name, final String actor) {
+        final SignInFailures noted = this.report;
+        if (noted != null) {
+            noted.unlocked(name, actor);
         }
     }
 

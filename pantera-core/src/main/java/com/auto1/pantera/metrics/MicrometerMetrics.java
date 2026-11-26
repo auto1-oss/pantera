@@ -297,6 +297,29 @@ public final class MicrometerMetrics {
     }
 
     /**
+     * An API key that was rejected.
+     * @param reason Why: {@code api_key_expired}, {@code api_key_revoked},
+     *  {@code api_key_refused} or {@code api_key_unknown}
+     */
+    public void recordApiKeyRejected(final String reason) {
+        Counter.builder("pantera.auth.api_key.rejected")
+            .description("API keys rejected, by reason")
+            .tags("reason", reason)
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
+     * A login refused by the sign-in form's own limit.
+     */
+    public void recordFormLimitHit() {
+        Counter.builder("pantera.auth.form_limit.hits")
+            .description("Logins refused by the sign-in form's own limit")
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
      * A user was locked after failed logins.
      */
     public void recordAccountLock() {

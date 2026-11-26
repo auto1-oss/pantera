@@ -3742,6 +3742,175 @@ curl -X DELETE http://localhost:8086/api/v1/admin/pgp-keys/DEADBEEF12345678 \
 
 ---
 
+### GET /api/v1/sign-in-failures/api-keys
+
+Rejected API keys with their owner, the most recent first (2.2.15). One line per user, client address and key. See [Sign-in Failures Report](admin-guide/sign-in-failures.md).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:read`
+
+**Query Parameters** (the same for the three lists):
+
+| Parameter   | Default | Description |
+|-------------|---------|-------------|
+| `user`      | --      | Part of the user name, any case |
+| `client_ip` | --      | Part of the client address |
+| `page`      | `0`     | Page number, from 0 |
+| `size`      | `50`    | Lines per page, at most 200 |
+
+**Response (200):**
+
+```json
+{
+  "items": [
+    {
+      "user": "alice@example.com",
+      "client_ip": "192.0.2.7",
+      "user_agent": "Apache-Maven/3.9.9",
+      "path": "repository",
+      "verified": true,
+      "key_id": "a922f096-0c1b-4f0e-9d7a-2c5a3f1e8b11",
+      "key_name": "CI token",
+      "key_created_at": "2026-01-01T00:00:00Z",
+      "key_expires_at": "2026-02-01T00:00:00Z",
+      "reason": "api_key_expired",
+      "rejected": 48,
+      "first_rejected_at": "2026-02-02T16:12:00Z",
+      "last_rejected_at": "2026-02-02T19:29:00Z"
+    }
+  ],
+  "page": 0,
+  "size": 50,
+  "total": 1,
+  "hasMore": false
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `reason` | `api_key_expired`, `api_key_revoked`, `api_key_refused` (valid, but its owner is disabled or it came with another user name) or `api_key_unknown` (not signed by this installation) |
+| `verified` | `false` for `api_key_unknown`: the key proves no owner, and `user` is only the name the client sent |
+| `key_id` | Id of the key; empty for an unverified key |
+| `key_name`, `key_created_at`, `key_expires_at` | From the stored key; `null` for an unverified key or one that is no longer stored |
+| `rejected` | Requests rejected with this key from this address |
+| `path` | `repository` or `api` |
+
+---
+
+### GET /api/v1/sign-in-failures/passwords
+
+Failed password logins, one line per user and client address, with the user's state now (2.2.15).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:read`
+
+**Response (200):** paginated as above; an item:
+
+```json
+{
+  "user": "alice@example.com",
+  "client_ip": "192.0.2.7",
+  "user_agent": "Apache-Maven/3.9.9",
+  "path": "repository",
+  "failed": 3,
+  "refused": 12,
+  "last_reason": "account_locked",
+  "first_failure_at": "2026-02-02T16:12:00Z",
+  "last_failure_at": "2026-02-02T16:14:10Z",
+  "state": {
+    "failures": 3,
+    "locked": true,
+    "locked_at": "2026-02-02T16:12:09Z",
+    "delayed_seconds": 0,
+    "unlocked_at": null,
+    "unlocked_by": null
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `failed` | Logins that were checked and failed; these count towards the lock |
+| `refused` | Logins refused without a check, during a delay or a lock |
+| `last_reason` | `wrong_credentials`, `login_delayed` or `account_locked` |
+| `path` | `ui` (the sign-in form), `api` or `repository` |
+| `state` | The user's state now: failed logins on record, the lock and since when, seconds a login is still delayed, and the last unlock by an administrator |
+
+---
+
+### GET /api/v1/sign-in-failures/form-limit
+
+Logins refused by the sign-in form's own limit (2.2.15).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:read`
+
+**Response (200):** paginated as above; an item:
+
+```json
+{
+  "user": "alice@example.com",
+  "client_ip": "192.0.2.9",
+  "user_agent": "Mozilla/5.0",
+  "path": "ui",
+  "hits": 2,
+  "failures": 5,
+  "blocked_until": "2026-02-02T16:27:00Z",
+  "blocked": true,
+  "first_hit_at": "2026-02-02T16:12:40Z",
+  "last_hit_at": "2026-02-02T16:12:55Z"
+}
+```
+
+`hits` is the number of logins the limit refused, `failures` the failures counted in its window when it last refused, `blocked` whether the block is still on.
+
+---
+
+### GET /api/v1/auth/rejected-keys
+
+The caller's own rejected API keys (2.2.15): the items of `GET /api/v1/sign-in-failures/api-keys` for the signed-in user, with `page` and `size`.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** none: every signed-in user.
+
+---
+
+### GET /api/v1/admin/sign-in-report-settings
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):**
+
+```json
+{
+  "sign_in_report_enabled": "true",
+  "sign_in_report_retention_days": "90"
+}
+```
+
+---
+
+### PUT /api/v1/admin/sign-in-report-settings
+
+Partial updates are accepted. `sign_in_report_enabled` is `true` or `false`; `sign_in_report_retention_days` is 1 to 3650. The change applies on every node without a restart.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid sign-in-report setting: sign_in_report_retention_days must be between 1 and 3650"
+}
+```
+
+---
+
 ## 14. Dashboard
 
 Dashboard endpoints provide aggregated statistics for the Pantera UI. Responses are served from a 30-second in-memory cache.

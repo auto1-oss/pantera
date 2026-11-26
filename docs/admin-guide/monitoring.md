@@ -173,6 +173,8 @@ metrics. Both are tracked as follow-up work, not silently dropped.
 | `pantera_auth_login_refused_total` | Counter | `reason` (`login_delayed`, `account_locked`, `sign_in_busy`) | Logins the login delay or the account lock refused before any provider was asked. |
 | `pantera_auth_account_locks_total` | Counter | -- | Users locked after failed logins. |
 | `pantera_auth_account_unlocks_total` | Counter | `cause` (`admin`, `automatic`, `lock_off`) | Account locks that ended. |
+| `pantera_auth_api_key_rejected_total` | Counter | `reason` (`api_key_expired`, `api_key_revoked`, `api_key_refused`, `api_key_unknown`) | API keys that were rejected. Who sends them: the [Sign-in Failures Report](sign-in-failures.md). |
+| `pantera_auth_form_limit_hits_total` | Counter | -- | Logins refused by the sign-in form's own limit (Login Throttling). |
 
 The **Pantera - Sign-in** dashboard (`pantera-sign-in.json`) charts them. See [Failed Logins](failed-logins.md).
 

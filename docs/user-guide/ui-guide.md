@@ -218,6 +218,7 @@ The Profile page (`/profile`) shows your user information:
 - Username and authentication context
 - Email address
 - API token management (generate, list, revoke tokens)
+- Rejected API keys (v2.2.15+): keys of yours that a tool still sends although they are expired or revoked, with the client address and program, so you can find the tool and replace the key there. The section appears only when there is such a key.
 
 ---
 

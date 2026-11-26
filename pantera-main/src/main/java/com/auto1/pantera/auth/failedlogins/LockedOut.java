@@ -51,7 +51,7 @@ public final class LockedOut implements Authentication {
     public Optional<AuthUser> user(final String username, final String password) {
         final Optional<AuthUser> res;
         if (this.logins.locked(username)) {
-            this.logins.refuse(Admission.LOCKED);
+            this.logins.refuse(Admission.LOCKED, username);
             res = Optional.empty();
         } else {
             res = this.origin.user(username, password);
