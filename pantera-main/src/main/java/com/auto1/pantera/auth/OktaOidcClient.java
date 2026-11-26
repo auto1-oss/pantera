@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.auth;
 
+import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.trace.TraceHeaders;
 import java.io.IOException;
@@ -41,6 +42,19 @@ import javax.json.JsonReader;
  * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
  */
 public final class OktaOidcClient {
+
+    /**
+     * Prefix of the Okta transaction statuses that ask for a second factor
+     * ({@code MFA_REQUIRED}, {@code MFA_CHALLENGE}, {@code MFA_ENROLL},
+     * {@code MFA_ENROLL_ACTIVATE}).
+     */
+    private static final String MFA_PREFIX = "MFA_";
+
+    /**
+     * Reason of a login refused because a second factor was asked for.
+     */
+    private static final String MFA_REASON = "mfa_required";
+
 
     private final HttpClient client;
 
@@ -109,10 +123,26 @@ public final class OktaOidcClient {
         this.userinfoUrl = oidcBase + "/v1/userinfo";
     }
 
+    /**
+     * Check a user name and password with Okta and, when they are right,
+     * read the user's identity.
+     *
+     * @param username User name
+     * @param password Password
+     * @param mfaCode Second-factor code the person typed, or null
+     * @param interactive Whether a person is signing in. When Okta asks
+     *  for a second factor and nobody is there to answer it (a repository
+     *  login), the login is refused and no factor is verified: no push is
+     *  sent to the user's phone, and no code is sent to Okta
+     * @return The identity, or null when the login is refused
+     * @throws IOException When Okta cannot be reached
+     * @throws InterruptedException When the calling thread is interrupted
+     */
     public OktaAuthResult authenticate(
         final String username,
         final String password,
-        final String mfaCode
+        final String mfaCode,
+        final boolean interactive
     ) throws IOException, InterruptedException {
         EcsLogger.info("com.auto1.pantera.auth")
             .message(String.format("Starting Okta authentication: issuer=%s, authnUrl=%s, authorizeUrl=%s", this.issuer, this.authnUrl, this.authorizeUrl))
@@ -165,6 +195,9 @@ public final class OktaOidcClient {
         String sessionToken = null;
         if ("SUCCESS".equals(status)) {
             sessionToken = body.getString("sessionToken", null);
+        } else if (!interactive && status.startsWith(OktaOidcClient.MFA_PREFIX)) {
+            OktaOidcClient.refuseSecondFactor(username, status);
+            return null;
         } else if ("MFA_REQUIRED".equals(status) || "MFA_CHALLENGE".equals(status)) {
             sessionToken = handleMfa(body, mfaCode, username);
         }
@@ -225,6 +258,29 @@ public final class OktaOidcClient {
             .field("log.source", "application")
             .log();
         return parseIdToken(tokens.idToken, tokens.accessToken, username);
+    }
+
+    /**
+     * Refuse a login for which Okta asked for a second factor that nobody
+     * can give. The cause is noted for the answer and the access record.
+     *
+     * @param username User name
+     * @param status Okta's transaction status
+     */
+    private static void refuseSecondFactor(final String username, final String status) {
+        EcsLogger.warn("com.auto1.pantera.auth")
+            .message(
+                "Okta asked for a second factor (" + status + "): a repository login"
+                    + " cannot answer one, so the login is refused and no factor is verified"
+            )
+            .eventCategory("authentication")
+            .eventAction("login")
+            .eventOutcome("failure")
+            .field("event.reason", OktaOidcClient.MFA_REASON)
+            .field("user.name", username)
+            .field("log.source", "application")
+            .log();
+        new AuthRefusal(OktaOidcClient.MFA_REASON).note();
     }
 
     private String handleMfa(

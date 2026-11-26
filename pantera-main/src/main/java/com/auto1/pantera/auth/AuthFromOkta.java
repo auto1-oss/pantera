@@ -35,9 +35,8 @@ public final class AuthFromOkta implements Authentication {
     public Optional<AuthUser> user(final String username, final String password) {
         Optional<AuthUser> res = Optional.empty();
         try {
-            final String mfaCode = OktaAuthContext.mfaCode();
             final OktaOidcClient.OktaAuthResult okta = this.client.authenticate(
-                username, password, mfaCode
+                username, password, OktaAuthContext.mfaCode(), OktaAuthContext.interactive()
             );
             if (okta != null) {
                 this.provisioning.provision(okta.username(), okta.email(), okta.groups());

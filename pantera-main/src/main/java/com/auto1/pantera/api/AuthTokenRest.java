@@ -94,6 +94,10 @@ public final class AuthTokenRest extends BaseRest {
         // Offload to worker thread to avoid blocking the event loop (MFA push polling)
         routing.vertx().<Optional<AuthUser>>executeBlocking(
             () -> {
+                // A person is signing in: the Okta provider may start a
+                // push or verify the typed code. A repository request
+                // never marks its thread, and is refused instead.
+                OktaAuthContext.setInteractive(true);
                 OktaAuthContext.setMfaCode(mfa);
                 try {
                     return this.auth.user(name, pass);

@@ -6,6 +6,10 @@
 
 - **An API key is never passed to an identity provider.** With an Okta or Keycloak password provider configured, an API key that Pantera rejected (expired, revoked, or issued by another installation) went on to that provider as if it were the user's password, and a client that repeated the request added failed logins to the user's directory account. A credential that has the form of an API key is now checked as an API key only, in whatever order the providers are configured, and a rejected one is answered with `401`. ([@aydasraf](https://github.com/aydasraf))
 
+### 🔧 Bug fixes
+
+- **A repository login never starts an Okta Verify push.** When a build tool signed in with a directory password and Okta asked for a second factor, every request sent a push to the user's phone and held a sign-in thread for up to 30 seconds. Such a login is now refused with `401`, no factor is verified, and the application log and the access record say `mfa_required`. A sign-in through the form keeps the push and the code. ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.14
 
 ### ⚠️ Breaking changes

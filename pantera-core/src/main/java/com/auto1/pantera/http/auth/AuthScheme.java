@@ -106,6 +106,25 @@ public interface AuthScheme {
     }
 
     /**
+     * Create result from the outcome of a password check. A refused login
+     * keeps the refusal the sign-in chain noted, so the answer can carry
+     * its status and the access record its reason.
+     *
+     * @param outcome Outcome of the check
+     * @param challenge Challenge
+     * @return Result
+     */
+    static Result result(final PasswordCheck.Outcome outcome, final String challenge) {
+        final Result res;
+        if (outcome.user().isPresent()) {
+            res = AuthScheme.result(outcome.user(), challenge);
+        } else {
+            res = new Result(AuthStatus.FAILED, null, challenge, outcome.refusal());
+        }
+        return res;
+    }
+
+    /**
      * HTTP request authentication result.
      *
      * @since 0.17
@@ -118,11 +137,32 @@ public interface AuthScheme {
 
         private final String challenge;
 
+        /**
+         * Why the login was refused, when the chain said so.
+         */
+        private final Optional<AuthRefusal> why;
+
         private Result(final AuthStatus status, final AuthUser user, final String challenge) {
+            this(status, user, challenge, Optional.empty());
+        }
+
+        /**
+         * Primary ctor.
+         *
+         * @param status Result status
+         * @param user Authenticated user
+         * @param challenge Challenge
+         * @param refusal Why the login was refused, when the chain said so
+         */
+        private Result(
+            final AuthStatus status, final AuthUser user, final String challenge,
+            final Optional<AuthRefusal> refusal
+        ) {
             assert (status != AuthStatus.FAILED) == (user != null);
             this.status = status;
             this.user = user;
             this.challenge = challenge;
+            this.why = refusal;
         }
 
         /**
@@ -150,6 +190,17 @@ public interface AuthScheme {
          */
         public String challenge() {
             return this.challenge;
+        }
+
+        /**
+         * Why the login was refused, when the sign-in chain said more than
+         * "wrong credentials".
+         *
+         * @return The refusal, empty for an accepted login and for a
+         *  plain failed one
+         */
+        public Optional<AuthRefusal> refusal() {
+            return this.why;
         }
 
         @Override
