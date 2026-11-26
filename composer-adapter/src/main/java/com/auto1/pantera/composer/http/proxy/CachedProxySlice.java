@@ -26,7 +26,6 @@ import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.JsonPackages;
-import com.auto1.pantera.composer.Packages;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -311,8 +310,8 @@ final class CachedProxySlice implements Slice {
         final String name
     ) {
         // Check storage cache FIRST before any network calls. Metadata is
-        // written as <name>.json (ComposerStorageCache and fetchThroughCache),
-        // so the lookup and the freshness check must use that same key.
+        // written as <name>.json (fetchThroughCache), so the lookup and the
+        // freshness check must use that same key.
         final Key cachedKey = new Key.From(name + ".json");
         return new FromStorageCache(this.repo.storage()).load(
             cachedKey,
@@ -530,11 +529,14 @@ final class CachedProxySlice implements Slice {
         // the latter may become a 404.
         final UpstreamFailure failure = new UpstreamFailure();
         return this.load(
-            headers,
             new Key.From(name),  // Cache key keeps ~dev to prevent collision
             CachedProxySlice.recording(
                 failure,
-                () -> this.localPackages(headers).thenCompose(Packages::content)
+                // The upstream document is merged with an empty registry: a
+                // proxy holds no package of its own (it takes no upload), and
+                // the root Repository#packages() reads names none (every read
+                // regenerates it, with an empty "packages", by a storage write).
+                () -> new JsonPackages().content()
                     .thenCombine(
                         this.packageFromRemote(line, headers, failure),
                         (lcl, rmt) -> new MergePackage.WithRemote(packageName, lcl).merge(rmt)
@@ -576,9 +578,10 @@ final class CachedProxySlice implements Slice {
                 );
             }
             // Content is already pre-rewritten at write time.
-            // Persist the rewritten bytes under {name}.json so
-            // ProxyDownloadSlice can resolve original_url on subsequent
-            // archive requests. Per-version cooldown is handled by
+            // Persist the rewritten bytes under {name}.json, the one write of
+            // the lookup (load does not let the cache store it): a later
+            // request is served it, and ProxyDownloadSlice resolves
+            // original_url from it. Per-version cooldown is handled by
             // ComposerPackageMetadataHandler upstream of this slice.
             return pkgs.get().asBytesFuture().thenCompose(bytes -> {
                 if (RequestTrace.instance().traced(headers)) {
@@ -625,57 +628,35 @@ final class CachedProxySlice implements Slice {
     }
 
     /**
-     * Load a package document through the cache. For a Troubleshoot replay
-     * ({@link RequestTrace}) the cache is only read: what it holds is served
-     * as for a client, and what it lacks is fetched from the remote without
-     * being stored, so the replay leaves the proxy as it found it.
+     * Load a package document through the cache, which is only read: what
+     * it holds is served, and what it lacks is fetched from the remote
+     * without the cache storing it. {@link #fetchThroughCache} stores a
+     * fetched document itself, once, under the key later requests read
+     * ({@code <name>.json}), and not for a Troubleshoot replay
+     * ({@link RequestTrace}), which must leave the proxy as it found it. A
+     * cache handed the remote stores the document as well: the php-proxy's
+     * cache keeps it under that same key in the same storage, so a miss
+     * wrote it twice.
      *
-     * @param headers Request headers
      * @param key Cache key of the package
      * @param origin Remote the document is fetched from on a miss
      * @param control Freshness check of a cached document
      * @return The document, empty when neither the cache nor the remote has it
      */
     private CompletionStage<Optional<? extends Content>> load(
-        final Headers headers, final Key key, final Remote origin, final CacheControl control
+        final Key key, final Remote origin, final CacheControl control
     ) {
-        final CompletionStage<Optional<? extends Content>> res;
-        if (RequestTrace.instance().traced(headers)) {
-            res = this.cache.load(key, Remote.EMPTY, control).thenCompose(
-                held -> {
-                    final CompletionStage<Optional<? extends Content>> found;
-                    if (held.isPresent()) {
-                        found = CompletableFuture.completedFuture(held);
-                    } else {
-                        found = origin.get();
-                    }
-                    return found;
+        return this.cache.load(key, Remote.EMPTY, control).thenCompose(
+            held -> {
+                final CompletionStage<Optional<? extends Content>> found;
+                if (held.isPresent()) {
+                    found = CompletableFuture.completedFuture(held);
+                } else {
+                    found = origin.get();
                 }
-            );
-        } else {
-            res = this.cache.load(key, origin, control);
-        }
-        return res;
-    }
-
-    /**
-     * The repository's own packages, which the remote's are merged with.
-     * Reading them writes the root {@code packages.json} anew
-     * ({@link Repository#packages()}), and that root names no package. A
-     * Troubleshoot replay ({@link RequestTrace}) writes nothing: it merges
-     * with an empty registry, which is what the read would have given it.
-     *
-     * @param headers Request headers
-     * @return Packages of the repository
-     */
-    private CompletionStage<Packages> localPackages(final Headers headers) {
-        final CompletionStage<Packages> res;
-        if (RequestTrace.instance().traced(headers)) {
-            res = CompletableFuture.completedFuture(new JsonPackages());
-        } else {
-            res = this.repo.packages().thenApply(pckgs -> pckgs.orElse(new JsonPackages()));
-        }
-        return res;
+                return found;
+            }
+        );
     }
 
     /**
