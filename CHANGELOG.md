@@ -9,6 +9,7 @@
 ### 🔧 Bug fixes
 
 - **A repository login never starts an Okta Verify push.** When a build tool signed in with a directory password and Okta asked for a second factor, every request sent a push to the user's phone and held a sign-in thread for up to 30 seconds. Such a login is now refused with `401`, no factor is verified, and the application log and the access record say `mfa_required`. A sign-in through the form keeps the push and the code. ([@aydasraf](https://github.com/aydasraf))
+- **Sign-in log records name the user, client address and trace of their own request.** After a rejected API key, the password check started from a shared thread that still held the logging context of an earlier request, so the failed-login records of one user could carry another user's name, client address and trace id. The password check and the token check now run under the context of the login they check, and the thread gets back the context it had. ([@aydasraf](https://github.com/aydasraf))
 
 ## Version 2.2.14
 

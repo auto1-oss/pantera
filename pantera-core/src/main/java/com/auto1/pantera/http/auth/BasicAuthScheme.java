@@ -68,7 +68,9 @@ public final class BasicAuthScheme implements AuthScheme {
         // Offload auth to worker thread to prevent blocking event loop
         // This is critical for auth providers that make external calls (Okta, Keycloak, etc.)
         return CompletableFuture.supplyAsync(
-            () -> AuthScheme.result(this.outcome(authHeader.get()), BasicAuthScheme.CHALLENGE),
+            () -> AuthScheme.result(
+                this.outcome(authHeader.get(), headers), BasicAuthScheme.CHALLENGE
+            ),
             AuthWorkerPool.AUTH_EXECUTOR
         );
     }
@@ -77,9 +79,10 @@ public final class BasicAuthScheme implements AuthScheme {
      * Checks the credentials of an authorization header.
      *
      * @param header Authorization header's value
+     * @param request Headers of the request
      * @return Outcome of the check, with the refusal the chain noted
      */
-    private PasswordCheck.Outcome outcome(final String header) {
+    private PasswordCheck.Outcome outcome(final String header, final Headers request) {
         final Authorization atz = new Authorization(header);
         PasswordCheck.Outcome res =
             new PasswordCheck.Outcome(Optional.empty(), Optional.empty());
@@ -96,7 +99,8 @@ public final class BasicAuthScheme implements AuthScheme {
                 readable = false;
             }
             if (readable) {
-                res = new PasswordCheck(this.auth).now(basic.username(), basic.password());
+                res = new PasswordCheck(this.auth, request)
+                    .now(basic.username(), basic.password());
             }
         }
         return res;
