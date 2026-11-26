@@ -711,9 +711,7 @@ public abstract class BaseCachedProxySlice implements Slice {
      * @return Response
      */
     protected static Response notStored() {
-        return ResponseBuilder.ok()
-            .textBody("The upstream has this file. A diagnostic request does not store it.")
-            .build();
+        return new NotStored().response();
     }
 
     /**
