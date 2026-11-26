@@ -189,6 +189,84 @@ final class RepoLifecycleDaoTest {
     }
 
     @Test
+    void renameTakesTheRoutingRulesOfTheMemberAlong() {
+        // A rule that still named the old member would limit nobody: the
+        // renamed member would be asked for every path.
+        RepoLifecycleDaoTest.db.repo("central", "maven-proxy");
+        RepoLifecycleDaoTest.db.group("all", "libs", "central");
+        RepoLifecycleDaoTest.routing(
+            "all",
+            "[{\"member\":\"central\",\"pattern\":\"(?!com/acme/).*\"},"
+                + "{\"member\":\"libs\",\"prefix\":\"com/acme/\"},"
+                + "{\"member\":\"central\",\"prefix\":\"org/\"}]"
+        );
+        this.dao.rename("central", "maven-central", 0, "admin");
+        MatcherAssert.assertThat(
+            RepoLifecycleDaoTest.rules("all"),
+            new IsEqual<>(
+                "[{\"member\": \"maven-central\", \"pattern\": \"(?!com/acme/).*\"}, "
+                    + "{\"member\": \"libs\", \"prefix\": \"com/acme/\"}, "
+                    + "{\"member\": \"maven-central\", \"prefix\": \"org/\"}]"
+            )
+        );
+    }
+
+    @Test
+    void deleteTakesTheRulesOfTheMemberOutAndRestorePutsThemBack() {
+        RepoLifecycleDaoTest.db.repo("central", "maven-proxy");
+        RepoLifecycleDaoTest.db.group("all", "libs", "central");
+        RepoLifecycleDaoTest.routing(
+            "all",
+            "[{\"member\":\"central\",\"pattern\":\"(?!com/acme/).*\"},"
+                + "{\"member\":\"libs\",\"prefix\":\"com/acme/\"}]"
+        );
+        this.dao.delete("central", true, Duration.ofHours(1), "admin", null);
+        MatcherAssert.assertThat(
+            "a rule for a repository that is no longer a member would keep the group from"
+                + " being saved: it goes with the member",
+            RepoLifecycleDaoTest.rules("all"),
+            new IsEqual<>("[{\"member\": \"libs\", \"prefix\": \"com/acme/\"}]")
+        );
+        this.dao.restore("central", "central-again", "admin");
+        MatcherAssert.assertThat(
+            "the restored member is limited as before, under the name it came back with",
+            RepoLifecycleDaoTest.rules("all"),
+            new IsEqual<>(
+                "[{\"member\": \"libs\", \"prefix\": \"com/acme/\"}, "
+                    + "{\"member\": \"central-again\", \"pattern\": \"(?!com/acme/).*\"}]"
+            )
+        );
+    }
+
+    @Test
+    void deleteOfAMemberWithTheOnlyRulesLeavesAGroupWithoutRouting() {
+        RepoLifecycleDaoTest.db.repo("central", "maven-proxy");
+        RepoLifecycleDaoTest.db.group("all", "libs", "central");
+        RepoLifecycleDaoTest.routing("all", "[{\"member\":\"central\",\"prefix\":\"org/\"}]");
+        this.dao.delete("central", true, Duration.ofHours(1), "admin", null);
+        MatcherAssert.assertThat(
+            RepoLifecycleDaoTest.db.value(
+                "SELECT jsonb_exists(config -> 'repo', 'routing') FROM repositories WHERE name = 'all'"
+            ),
+            new IsEqual<>("f")
+        );
+    }
+
+    private static void routing(final String group, final String rules) {
+        RepoLifecycleDaoTest.db.exec(
+            "UPDATE repositories SET config = jsonb_set(config, '{repo,routing}', ?::jsonb)"
+                + " WHERE name = ?",
+            rules, group
+        );
+    }
+
+    private static String rules(final String group) {
+        return RepoLifecycleDaoTest.db.value(
+            "SELECT config -> 'repo' ->> 'routing' FROM repositories WHERE name = ?", group
+        );
+    }
+
+    @Test
     void renameOfMissingRepositoryIsRefused() {
         final RepoOpRejected rejected = Assertions.assertThrows(
             RepoOpRejected.class, () -> this.dao.rename("ghost", "other", 0, "admin")
