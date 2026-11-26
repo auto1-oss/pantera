@@ -181,7 +181,7 @@ public final class GoLatestHandler {
         final String module = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a @latest path: " + path)
         );
-        return this.baseLoader.load(path, module).thenCompose(outcome -> {
+        return this.baseLoader.load(path, module, headers).thenCompose(outcome -> {
             if (!outcome.isAvailable()) {
                 // Nothing cached anywhere and upstream failed / returned
                 // non-2xx — forward its status + body unchanged, no rewrite.
@@ -195,7 +195,7 @@ public final class GoLatestHandler {
                 }
                 return CompletableFuture.completedFuture(outcome.forward());
             }
-            return this.processUpstream(outcome.body(), module, user, ctx);
+            return this.processUpstream(outcome.body(), module, user, ctx, headers);
         });
     }
 
@@ -207,7 +207,8 @@ public final class GoLatestHandler {
         final byte[] upstreamBytes,
         final String module,
         final String user,
-        final AuditContext ctx
+        final AuditContext ctx,
+        final Headers headers
     ) {
         final GoLatestInfo info;
         try {
@@ -257,7 +258,7 @@ public final class GoLatestHandler {
                 .field("package.version", info.version())
                 .field("log.source", "application")
                 .log();
-            return this.resolveFallback(info, module, user, ctx);
+            return this.resolveFallback(info, module, user, ctx, headers);
         });
     }
 
@@ -270,10 +271,11 @@ public final class GoLatestHandler {
         final GoLatestInfo upstreamInfo,
         final String module,
         final String user,
-        final AuditContext ctx
+        final AuditContext ctx,
+        final Headers headers
     ) {
         final String listPath = "/" + module + "/@v/list";
-        return this.baseLoader.load(listPath, module)
+        return this.baseLoader.load(listPath, module, headers)
             .thenApply(outcome -> outcome.isAvailable()
                 // Shares the @v/list base cache + single-flight gate with
                 // GoListHandler: a warm list needs no extra upstream call

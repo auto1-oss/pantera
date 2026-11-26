@@ -22,6 +22,7 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -32,6 +33,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -138,8 +140,32 @@ public final class GoMetadataBaseLoader {
      *         failed / returned non-2xx)
      */
     public CompletableFuture<Outcome> load(final String path, final String module) {
+        return this.load(path, module, Headers.EMPTY);
+    }
+
+    /**
+     * Resolve the base document at {@code path} for a request. A
+     * Troubleshoot replay ({@link RequestTrace}) is served what the cache
+     * holds, as a client is; what the cache lacks it gets from the upstream
+     * without the document being stored, and it neither leads nor joins
+     * the single flight of a fill, so it leaves the proxy as it found it.
+     *
+     * @param path Request path, e.g. {@code /module/@v/list}
+     * @param module Module name (logging only)
+     * @param headers Headers of the request the document is resolved for
+     * @return Future outcome, as for {@link #load(String, String)}
+     */
+    public CompletableFuture<Outcome> load(
+        final String path, final String module, final Headers headers
+    ) {
         final Key key = new KeyFromPath(path);
-        return this.singleFlight.load(key, () -> this.fetch(path, module, key));
+        final CompletableFuture<Outcome> res;
+        if (RequestTrace.instance().traced(headers)) {
+            res = this.fetch(path, module, key, false);
+        } else {
+            res = this.singleFlight.load(key, () -> this.fetch(path, module, key, true));
+        }
+        return res;
     }
 
     /**
@@ -159,7 +185,7 @@ public final class GoMetadataBaseLoader {
      * genuinely single-flighted) upstream call only on a confirmed miss.</p>
      */
     private CompletableFuture<Outcome> fetch(
-        final String path, final String module, final Key key
+        final String path, final String module, final Key key, final boolean store
     ) {
         final CacheControl control = this.storage
             .<CacheControl>map(CacheTimeControl::new)
@@ -170,7 +196,7 @@ public final class GoMetadataBaseLoader {
                     return cached.get().asBytesFuture()
                         .thenApply(bytes -> Outcome.available(bytes, false));
                 }
-                return this.fetchFromUpstream(path, module, key, control);
+                return this.fetchFromUpstream(path, module, key, control, store);
             })
             .toCompletableFuture();
     }
@@ -178,10 +204,12 @@ public final class GoMetadataBaseLoader {
     /**
      * Confirmed miss (absent or TTL-expired) — perform the real upstream
      * fetch, cache it on success, and fall back to a stale copy (if any)
-     * on failure.
+     * on failure. With {@code store} false the upstream's document is
+     * handed on without being cached.
      */
     private CompletableFuture<Outcome> fetchFromUpstream(
-        final String path, final String module, final Key key, final CacheControl control
+        final String path, final String module, final Key key, final CacheControl control,
+        final boolean store
     ) {
         final RequestLine line = new RequestLine(RqMethod.GET, path);
         final AtomicReference<Outcome> forward = new AtomicReference<>(
@@ -213,7 +241,13 @@ public final class GoMetadataBaseLoader {
                     .log();
                 return Optional.empty();
             });
-        return this.cache.load(key, remote, control)
+        final CompletionStage<Optional<? extends Content>> loaded;
+        if (store) {
+            loaded = this.cache.load(key, remote, control);
+        } else {
+            loaded = remote.get();
+        }
+        return loaded
             .thenCompose(opt -> {
                 if (opt.isPresent()) {
                     return opt.get().asBytesFuture()

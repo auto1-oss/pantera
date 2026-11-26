@@ -193,7 +193,7 @@ public final class GoListHandler {
         final String module = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a @v/list path: " + path)
         );
-        return this.baseLoader.load(path, module).thenCompose(outcome -> {
+        return this.baseLoader.load(path, module, headers).thenCompose(outcome -> {
             if (!outcome.isAvailable()) {
                 // Nothing cached anywhere and upstream failed / returned
                 // non-2xx — forward its status + body unchanged, no filtering.

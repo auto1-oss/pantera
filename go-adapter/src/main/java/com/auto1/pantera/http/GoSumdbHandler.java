@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
@@ -25,6 +26,7 @@ import io.micrometer.core.instrument.Counter;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -247,7 +249,16 @@ final class GoSumdbHandler {
                     .warnUnlessExpected("Go sumdb fetch failed");
                 return Optional.empty();
             });
-        return this.cache.load(key, remote, CacheControl.Standard.ALWAYS)
+        final CompletionStage<Optional<? extends Content>> loaded;
+        if (RequestTrace.instance().traced(headers)) {
+            // A Troubleshoot replay asks the upstream as for a client. What
+            // it gets is handed on and not stored: the replay must leave
+            // the proxy as it found it.
+            loaded = remote.get();
+        } else {
+            loaded = this.cache.load(key, remote, CacheControl.Standard.ALWAYS);
+        }
+        return loaded
             .thenCompose(opt -> {
                 if (opt.isPresent()) {
                     return opt.get().asBytesFuture()
