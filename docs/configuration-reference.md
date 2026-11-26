@@ -1212,6 +1212,11 @@ Notes:
   earlier rule is refused with `400` and the number of the rule. Take a
   member's rules out when you take the member out of the group. A YAML file
   is not checked this way.
+- Rules follow their member (v2.2.15+): renaming a repository renames it in
+  the rules of its groups, deleting it takes its rules out of them, and
+  restoring it puts them back under the name it is restored with. On
+  2.2.14 a rename left the old name in the rules, which then limited
+  nobody: check the rules of a group whose member was renamed on 2.2.14.
 - A member that was skipped by its rules is named in the Troubleshoot trace
   with the reason `skipped_by_routing_rule`. The access record of a `404`
   carries that reason only when no member was asked at all.

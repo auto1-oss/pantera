@@ -74,6 +74,16 @@ public final class RepoLifecycleDao {
     private static final String MEMBERS = "members";
 
     /**
+     * Config key of a group's routing rules.
+     */
+    private static final String ROUTING = "routing";
+
+    /**
+     * Key of the member a routing rule is for.
+     */
+    private static final String MEMBER = "member";
+
+    /**
      * Database.
      */
     private final DataSource source;
@@ -192,8 +202,11 @@ public final class RepoLifecycleDao {
             final JsonArrayBuilder refs = Json.createArrayBuilder();
             for (final GroupRef ref : groups) {
                 RepoLifecycleDao.removeMember(conn, ref.group(), ref.config(), name);
+                // The member's routing rules leave the group with it and
+                // wait in the tombstone: a restore puts them back.
                 refs.add(
                     Json.createObjectBuilder().add("group", ref.group()).add("index", ref.index())
+                        .add("rules", RepoLifecycleDao.rulesOf(ref.config(), name))
                 );
             }
             extras.add("groups", refs);
@@ -633,7 +646,20 @@ public final class RepoLifecycleDao {
         for (final GroupRef ref : RepoLifecycleDao.groupsOf(conn, name)) {
             final List<String> members = RepoLifecycleDao.members(ref.config());
             members.set(ref.index(), target);
-            RepoLifecycleDao.saveMembers(conn, ref.group(), ref.config(), members);
+            // The routing rules of the member go with it: a rule that
+            // still named the old member would limit nobody.
+            final JsonArrayBuilder rules = Json.createArrayBuilder();
+            for (final JsonValue rule : RepoLifecycleDao.routing(ref.config())) {
+                if (RepoLifecycleDao.names(rule, name)) {
+                    rules.add(
+                        Json.createObjectBuilder(rule.asJsonObject())
+                            .add(RepoLifecycleDao.MEMBER, target)
+                    );
+                } else {
+                    rules.add(rule);
+                }
+            }
+            RepoLifecycleDao.saveGroup(conn, ref.group(), ref.config(), members, rules.build());
             res.add(ref.group());
         }
         return res;
@@ -652,7 +678,61 @@ public final class RepoLifecycleDao {
     ) throws SQLException {
         final List<String> members = RepoLifecycleDao.members(config);
         members.remove(member);
-        RepoLifecycleDao.saveMembers(conn, group, config, members);
+        final JsonArrayBuilder rules = Json.createArrayBuilder();
+        for (final JsonValue rule : RepoLifecycleDao.routing(config)) {
+            if (!RepoLifecycleDao.names(rule, member)) {
+                rules.add(rule);
+            }
+        }
+        RepoLifecycleDao.saveGroup(conn, group, config, members, rules.build());
+    }
+
+    /**
+     * Routing rules of a group config.
+     * @param config Repository config
+     * @return The rules, empty for a group without rules
+     */
+    private static JsonArray routing(final JsonObject config) {
+        final JsonObject repo = config.getJsonObject(RepoLifecycleDao.REPO);
+        final JsonArray res;
+        if (repo != null && repo.containsKey(RepoLifecycleDao.ROUTING)
+            && repo.get(RepoLifecycleDao.ROUTING).getValueType() == JsonValue.ValueType.ARRAY) {
+            res = repo.getJsonArray(RepoLifecycleDao.ROUTING);
+        } else {
+            res = JsonValue.EMPTY_JSON_ARRAY;
+        }
+        return res;
+    }
+
+    /**
+     * Whether a routing rule names a member.
+     * @param rule Rule
+     * @param member Member name
+     * @return True when the rule is one of that member
+     */
+    private static boolean names(final JsonValue rule, final String member) {
+        return rule.getValueType() == JsonValue.ValueType.OBJECT
+            && rule.asJsonObject().get(RepoLifecycleDao.MEMBER) instanceof JsonString str
+            && str.getString().equals(member);
+    }
+
+    /**
+     * The routing rules of one member, without the member's name: a
+     * restore may bring the member back under another one.
+     * @param config Group config
+     * @param member Member name
+     * @return Rules of the member in their order
+     */
+    private static JsonArray rulesOf(final JsonObject config, final String member) {
+        final JsonArrayBuilder rules = Json.createArrayBuilder();
+        for (final JsonValue rule : RepoLifecycleDao.routing(config)) {
+            if (RepoLifecycleDao.names(rule, member)) {
+                rules.add(
+                    Json.createObjectBuilder(rule.asJsonObject()).remove(RepoLifecycleDao.MEMBER)
+                );
+            }
+        }
+        return rules.build();
     }
 
     /**
@@ -686,10 +766,34 @@ public final class RepoLifecycleDao {
         final Connection conn, final String group, final JsonObject config,
         final List<String> members
     ) throws SQLException {
+        RepoLifecycleDao.saveGroup(conn, group, config, members, RepoLifecycleDao.routing(config));
+    }
+
+    /**
+     * Write a group's member list and routing rules.
+     * @param conn Connection
+     * @param group Group name
+     * @param config Group config
+     * @param members New member names
+     * @param rules New routing rules; when there are none the group keeps
+     *  no {@code routing} key
+     * @throws SQLException On error
+     */
+    private static void saveGroup(
+        final Connection conn, final String group, final JsonObject config,
+        final List<String> members, final JsonArray rules
+    ) throws SQLException {
         final JsonArrayBuilder list = Json.createArrayBuilder();
         members.forEach(list::add);
-        final JsonObject repo = Json.createObjectBuilder(config.getJsonObject(RepoLifecycleDao.REPO))
-            .add(RepoLifecycleDao.MEMBERS, list).build();
+        final JsonObjectBuilder changed =
+            Json.createObjectBuilder(config.getJsonObject(RepoLifecycleDao.REPO))
+                .add(RepoLifecycleDao.MEMBERS, list);
+        if (rules.isEmpty()) {
+            changed.remove(RepoLifecycleDao.ROUTING);
+        } else {
+            changed.add(RepoLifecycleDao.ROUTING, rules);
+        }
+        final JsonObject repo = changed.build();
         final JsonObject updated = Json.createObjectBuilder(config)
             .add(RepoLifecycleDao.REPO, repo).build();
         try (PreparedStatement stmt = conn.prepareStatement(
@@ -846,7 +950,10 @@ public final class RepoLifecycleDao {
             new RoleGrants().attach(conn, name, RepoLifecycleDao.array(extras, "role_grants"));
         for (final JsonValue item : RepoLifecycleDao.array(extras, "groups")) {
             final JsonObject ref = item.asJsonObject();
-            RepoLifecycleDao.rejoin(conn, ref.getString("group"), name, ref.getInt("index", -1));
+            RepoLifecycleDao.rejoin(
+                conn, ref.getString("group"), name, ref.getInt("index", -1),
+                RepoLifecycleDao.array(ref, "rules")
+            );
         }
         return roles;
     }
@@ -858,10 +965,12 @@ public final class RepoLifecycleDao {
      * @param group Group name
      * @param member Member name
      * @param index Old position
+     * @param kept Routing rules the member had in the group, without its name
      * @throws SQLException On error
      */
     private static void rejoin(
-        final Connection conn, final String group, final String member, final int index
+        final Connection conn, final String group, final String member, final int index,
+        final JsonArray kept
     ) throws SQLException {
         try (PreparedStatement stmt = conn.prepareStatement(
             "SELECT config FROM repositories WHERE name = ? FOR UPDATE"
@@ -879,7 +988,21 @@ public final class RepoLifecycleDao {
                         } else {
                             members.add(member);
                         }
-                        RepoLifecycleDao.saveMembers(conn, group, config, members);
+                        // Its routing rules come back with it, under the
+                        // name it is restored with: without them a proxy
+                        // that was limited would be asked for every path.
+                        final JsonArrayBuilder rules =
+                            Json.createArrayBuilder(RepoLifecycleDao.routing(config));
+                        for (final JsonValue rule : kept) {
+                            if (rule.getValueType() == JsonValue.ValueType.OBJECT) {
+                                rules.add(
+                                    Json.createObjectBuilder()
+                                        .add(RepoLifecycleDao.MEMBER, member)
+                                        .addAll(Json.createObjectBuilder(rule.asJsonObject()))
+                                );
+                            }
+                        }
+                        RepoLifecycleDao.saveGroup(conn, group, config, members, rules.build());
                     }
                 }
             }
