@@ -66,6 +66,18 @@ public record LoginSource(String clientIp, String userAgent, String path) {
     }
 
     /**
+     * Whether the login was typed into the sign-in form or sent to the
+     * sign-in endpoint, where a person can answer a second factor. A login
+     * that comes with a repository request, or from an unknown place, is
+     * not.
+     *
+     * @return True for the sign-in form and endpoint
+     */
+    public boolean form() {
+        return "ui".equals(this.path) || "api".equals(this.path);
+    }
+
+    /**
      * Bind this source to the thread.
      */
     void bind() {

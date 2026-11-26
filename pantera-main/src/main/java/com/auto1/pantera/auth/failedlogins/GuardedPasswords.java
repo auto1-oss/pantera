@@ -197,6 +197,13 @@ public final class GuardedPasswords implements Authentication {
             final MessageDigest sha = MessageDigest.getInstance("SHA-256");
             sha.update(counted.getBytes(StandardCharsets.UTF_8));
             sha.update((byte) 0);
+            // A provider may take passwords on the sign-in form only: an
+            // answer given to the form is not one for a repository request.
+            if (LoginSource.current().form()) {
+                sha.update((byte) 1);
+            } else {
+                sha.update((byte) 2);
+            }
             if (password != null) {
                 sha.update(password.getBytes(StandardCharsets.UTF_8));
             }

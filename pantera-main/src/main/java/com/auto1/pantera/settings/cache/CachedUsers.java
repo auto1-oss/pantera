@@ -84,6 +84,11 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
     private volatile java.util.function.Predicate<String> bypass = name -> false;
 
     /**
+     * Scope of the login being checked, part of its cache key.
+     */
+    private volatile java.util.function.Supplier<String> scope = () -> "";
+
+    /**
      * Ctor with default configuration.
      * Here an instance of cache is created. It is important that cache
      * is a local variable.
@@ -203,6 +208,18 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
      */
     public void bypassFor(final java.util.function.Predicate<String> users) {
         this.bypass = users;
+    }
+
+    /**
+     * Keep the remembered logins of different scopes apart: a login
+     * remembered in one scope does not answer in another. The scope is
+     * read for every login on the thread that checks it; an empty scope
+     * is the common one.
+     *
+     * @param scoped Scope of the login being checked
+     */
+    public void scopedBy(final java.util.function.Supplier<String> scoped) {
+        this.scope = scoped;
     }
 
     @Override
@@ -388,7 +405,14 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         // Hash credentials to prevent password exposure
         // Format: SHA-256(username:password)
         final String combined = String.format("%s:%s", user, pass);
-        return DigestUtils.sha256Hex(combined);
+        final String within = this.scope.get();
+        final String key;
+        if (within.isEmpty()) {
+            key = DigestUtils.sha256Hex(combined);
+        } else {
+            key = DigestUtils.sha256Hex(within + '\n' + combined);
+        }
+        return key;
     }
     
     /**

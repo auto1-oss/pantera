@@ -117,6 +117,47 @@ final class SecurityPolicySettingsHandlerTest {
     }
 
     @Test
+    void passwordSignInHasAModeForEveryProviderThatTakesPasswords() {
+        final JsonObject current = SecurityPolicySettingsHandler.passwordSignIn().current();
+        MatcherAssert.assertThat(
+            "one key per provider type",
+            current.fieldNames(),
+            new IsEqual<>(
+                Set.of(
+                    "password_sign_in_okta", "password_sign_in_keycloak",
+                    "password_sign_in_github"
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "the whitelist is the same set",
+            SecurityPolicySettingsHandlerTest.keys("PASSWORD_SIGN_IN_KEYS"),
+            new IsEqual<>(current.fieldNames())
+        );
+        MatcherAssert.assertThat(
+            "passwords are taken everywhere unless an administrator says otherwise",
+            current.getValue("password_sign_in_okta"), new IsEqual<>("all")
+        );
+    }
+
+    @Test
+    void passwordSignInAcceptsItsThreeModesOnly() {
+        final SecurityPolicySettingsHandler.Section section =
+            SecurityPolicySettingsHandler.passwordSignIn();
+        section.validate(
+            new JsonObject().put("password_sign_in_okta", "form")
+                .put("password_sign_in_keycloak", "off")
+                .put("password_sign_in_github", "all")
+        );
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("password_sign_in_okta", "ui")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("password_sign_in_okta", "")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("password_sign_in_okta", true)));
+    }
+
+    @Test
     void partialUpdatesAreValidatedAgainstTheMergedConfig() {
         final SecurityPolicySettingsHandler.Section limits =
             SecurityPolicySettingsHandler.requestLimits();
