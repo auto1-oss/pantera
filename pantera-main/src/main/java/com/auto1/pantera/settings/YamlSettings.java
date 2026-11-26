@@ -36,6 +36,7 @@ import com.auto1.pantera.cooldown.YamlCooldownSettings;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.auto1.pantera.db.ArtifactDbFactory;
 import com.auto1.pantera.db.DbConsumer;
+import com.auto1.pantera.http.auth.ApiKeyOnlyAuth;
 import com.auto1.pantera.http.auth.AuthLoader;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.client.HttpClientSettings;
@@ -82,6 +83,11 @@ import com.auto1.pantera.asto.factory.StoragesLoader;
  * @since 0.1
  */
 public final class YamlSettings implements Settings {
+
+    /**
+     * Type of the provider that checks API keys.
+     */
+    private static final String KEY_PROVIDER = "jwt-password";
 
     /**
      * Yaml node credentials.
@@ -953,6 +959,71 @@ public final class YamlSettings implements Settings {
     }
 
     /**
+     * Add the YAML-configured providers (SSO, env, ...) behind the primary
+     * one, and keep API keys apart from passwords: a credential with the
+     * form of an API key is answered by the {@code jwt-password} provider
+     * alone, in whatever order the providers are listed. A rejected key is
+     * therefore never handed to a provider that would present it to an
+     * external identity provider as a wrong password.
+     * @param primary Primary authenticator
+     * @param settings Settings ({@code meta}) YAML
+     * @param dataSource Database (nullable)
+     * @param enabledCache Enabled provider types (nullable without a database)
+     * @return The chain
+     */
+    private static Authentication withProviders(
+        final Authentication primary,
+        final YamlMapping settings,
+        final DataSource dataSource,
+        final com.auto1.pantera.auth.DbGatedAuth.EnabledTypesCache enabledCache
+    ) {
+        Authentication passwords = primary;
+        Authentication keys = null;
+        final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
+        if (creds != null && !creds.isEmpty()) {
+            final AuthLoader loader = new AuthLoader();
+            for (final YamlNode node : creds.values()) {
+                final String type = node.asMapping().string(YamlSettings.NODE_TYPE);
+                // Skip "local" file-based auth when DB is primary
+                if (dataSource != null && "local".equals(type)) {
+                    continue;
+                }
+                try {
+                    final Authentication auth = YamlSettings.newProvider(
+                        loader, type, settings, dataSource
+                    );
+                    // Wrap in DbGatedAuth so disable/delete via the UI
+                    // actually takes effect on the running chain.
+                    final Authentication gated = enabledCache != null && type != null
+                        ? new com.auto1.pantera.auth.DbGatedAuth(
+                            auth, type, enabledCache)
+                        : auth;
+                    if (YamlSettings.KEY_PROVIDER.equals(type)) {
+                        // Joined, for its record of the provider that matched.
+                        keys = new Authentication.Joined(gated);
+                    } else {
+                        passwords = new Authentication.Joined(passwords, gated);
+                    }
+                } catch (final Exception ex) {
+                    // B4: YAML node `settings` may carry client_secret /
+                    // jwt private-key paths / IdP credentials. Drop the
+                    // throwable bundle and emit only sanitized message +
+                    // exception class so the secret-bearing scope never
+                    // reaches the log document.
+                    YamlSettings.logProviderNotLoaded(type, ex);
+                }
+            }
+        }
+        final Authentication chain;
+        if (keys == null) {
+            chain = new ApiKeyOnlyAuth(passwords);
+        } else {
+            chain = new ApiKeyOnlyAuth(keys, passwords);
+        }
+        return chain;
+    }
+
+    /**
      * Initialise authentication. When a database is available, {@link AuthFromDb}
      * is used as the primary authenticator. File-based and other providers from
      * the YAML credentials section are added as fallbacks.
@@ -994,37 +1065,7 @@ public final class YamlSettings implements Settings {
             dataSource != null
                 ? new com.auto1.pantera.auth.DbGatedAuth.EnabledTypesCache(dataSource)
                 : null;
-        // Add YAML-configured providers as fallbacks (SSO, env, etc.)
-        final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
-        if (creds != null && !creds.isEmpty()) {
-            final AuthLoader loader = new AuthLoader();
-            for (final YamlNode node : creds.values()) {
-                final String type = node.asMapping().string(YamlSettings.NODE_TYPE);
-                // Skip "local" file-based auth when DB is primary
-                if (dataSource != null && "local".equals(type)) {
-                    continue;
-                }
-                try {
-                    final Authentication auth = YamlSettings.newProvider(
-                        loader, type, settings, dataSource
-                    );
-                    // Wrap in DbGatedAuth so disable/delete via the UI
-                    // actually takes effect on the running chain.
-                    final Authentication gated = enabledCache != null && type != null
-                        ? new com.auto1.pantera.auth.DbGatedAuth(
-                            auth, type, enabledCache)
-                        : auth;
-                    res = new Authentication.Joined(res, gated);
-                } catch (final Exception ex) {
-                    // B4: YAML node `settings` may carry client_secret /
-                    // jwt private-key paths / IdP credentials. Drop the
-                    // throwable bundle and emit only sanitized message +
-                    // exception class so the secret-bearing scope never
-                    // reaches the log document.
-                    YamlSettings.logProviderNotLoaded(type, ex);
-                }
-            }
-        }
+        res = YamlSettings.withProviders(res, settings, dataSource, enabledCache);
         // Final enabled-state gate on the whole chain. Rejects any
         // successful authentication whose local user row is disabled.
         // This closes the hole where a user disabled in Pantera is

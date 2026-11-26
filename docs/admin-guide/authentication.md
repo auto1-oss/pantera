@@ -73,6 +73,16 @@ Recommended ordering for production:
 3. **env** -- Static admin credential for emergency or DB-less access.
 4. **pantera** -- Native user database fallback.
 
+### API keys are checked apart from passwords
+
+A credential that has the form of an API key is checked by the `jwt-password` provider only, wherever that provider stands in the list. The form is that of a JWT: three parts separated by dots, the first one starting with `eyJ`.
+
+- A key that is expired, revoked or signed by another installation is answered with `401`. It is never passed to another provider, so Keycloak, Okta and the directory behind them never see it as a wrong password.
+- Without a `jwt-password` entry, a credential of that form is rejected.
+- Every other credential is a password: it is checked by the remaining providers in the listed order, and never by `jwt-password`.
+
+This holds for repository requests (the password of HTTP Basic authentication) and for the sign-in form. Before 2.2.15 a rejected key went on to the providers listed after `jwt-password`, and with an Okta or Keycloak provider every repeat of the request was a failed login for that user at the identity provider.
+
 ---
 
 ## Environment Variables Provider (type: env)
