@@ -170,6 +170,27 @@ export interface User {
   created_at?: string
 }
 
+/**
+ * Failed logins counted for one user name: an item of `GET /locked-users`
+ * and the answer of `GET /users/:name/failed-logins`. The name is in lower
+ * case and need not belong to a Pantera user. The origin fields describe
+ * the last failed login; a name without failures carries only `name`,
+ * `failures: 0` and `locked: false`.
+ */
+export interface FailedLogins {
+  name: string
+  locked: boolean
+  failures: number
+  locked_at?: string | null
+  last_failure_at?: string | null
+  client_ip?: string | null
+  user_agent?: string | null
+  /** Where the login came in: the sign-in form, the API, a repository client. */
+  path?: string | null
+  /** What was presented: a password or an API key. */
+  credential?: string | null
+}
+
 // Role
 export interface Role {
   name: string

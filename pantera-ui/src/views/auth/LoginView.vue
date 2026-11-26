@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { formatAuthError } from '@/utils/authError'
+import { formatAuthError, forgetSignOutReason, signOutNotice } from '@/utils/authError'
 import InputText from 'primevue/inputtext'
 import Password from 'primevue/password'
 import Button from 'primevue/button'
@@ -27,9 +27,15 @@ const ssoProviders = computed(() =>
 )
 
 onMounted(async () => {
+  // A session the API client ended because the account was locked: say so.
+  // The message stays until the person starts a new sign-in.
+  const notice = signOutNotice()
+  errorMsg.value = notice
   await auth.fetchProviders()
   const issuer = route.query.iss
-  if (typeof issuer === 'string' && issuer !== '') {
+  // With that notice no sign-in is started for the visitor: every
+  // credential of a locked account is refused, the provider's included.
+  if (!notice && typeof issuer === 'string' && issuer !== '') {
     await startAtIssuer(issuer)
   }
 })
@@ -57,15 +63,17 @@ async function startAtIssuer(issuer: string) {
 
 function clearError() {
   errorMsg.value = ''
+  forgetSignOutReason()
 }
 
 async function handleLogin() {
-  errorMsg.value = ''
+  clearError()
   try {
     await auth.login(username.value, password.value)
     router.push('/')
   } catch (e: unknown) {
-    // Always a single generic message — never echo backend strings or
+    // One of a fixed set of messages: a generic one, or that the account
+    // is locked, logins are delayed, or sign-in is unavailable. Never
     // axios diagnostics. See utils/authError.ts for the rationale.
     errorMsg.value = formatAuthError(e).message
   }
@@ -73,7 +81,7 @@ async function handleLogin() {
 
 async function handleSsoRedirect(providerType: string) {
   ssoLoading.value = providerType
-  errorMsg.value = ''
+  clearError()
   try {
     await auth.ssoRedirect(providerType)
   } catch (e: unknown) {
