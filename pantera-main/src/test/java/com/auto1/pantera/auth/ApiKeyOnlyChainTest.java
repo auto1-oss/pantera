@@ -241,6 +241,27 @@ final class ApiKeyOnlyChainTest {
     }
 
     @Test
+    void checksOfAnExternalProviderAreCounted() throws Exception {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry fresh =
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        com.auto1.pantera.metrics.MicrometerMetrics.initialize(fresh);
+        final java.util.function.DoubleSupplier rejected = () -> {
+            final io.micrometer.core.instrument.Counter counter =
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().getRegistry()
+                    .find("pantera.auth.provider.checks")
+                    .tag("provider", "keycloak").tag("outcome", "unavailable").counter();
+            return counter == null ? 0.0 : counter.count();
+        };
+        final double before = rejected.getAsDouble();
+        this.chain("keycloak\n      url: http://127.0.0.1:9\n      realm: any\n      client-id: any\n      client-password: abc123")
+            .user("alice", "some password");
+        MatcherAssert.assertThat(
+            "the chain built from the settings counts a check sent to Keycloak",
+            rejected.getAsDouble() - before, new IsEqual<>(1.0)
+        );
+    }
+
+    @Test
     void keyIsRejectedWhenNoKeyProviderIsConfigured() throws Exception {
         final String key = ApiKeyOnlyChainTest.key(
             ApiKeyOnlyChainTest.own, "alice", System.currentTimeMillis() / 1000L + 600L

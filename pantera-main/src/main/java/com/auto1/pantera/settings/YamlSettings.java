@@ -99,6 +99,13 @@ public final class YamlSettings implements Settings {
     private static final long LOCK_REFRESH_SECONDS = 15L;
 
     /**
+     * Types of the providers that send a password to an identity provider
+     * outside Pantera.
+     */
+    private static final java.util.Set<String> EXTERNAL =
+        java.util.Set.of("okta", "keycloak", "github");
+
+    /**
      * Type of the provider that checks API keys.
      */
     private static final String KEY_PROVIDER = "jwt-password";
@@ -904,12 +911,17 @@ public final class YamlSettings implements Settings {
         final AuthLoader loader, final String type,
         final YamlMapping settings, final DataSource dataSource
     ) {
-        final Authentication auth;
+        Authentication auth;
         if (dataSource != null && "okta".equals(type)) {
             auth = new com.auto1.pantera.auth.AuthFromOktaFactory()
                 .getAuthentication(settings, dataSource);
         } else {
             auth = loader.newObject(type, settings);
+        }
+        if (YamlSettings.EXTERNAL.contains(type)) {
+            // These hand the password to an identity provider outside
+            // Pantera: every such check is counted.
+            auth = new com.auto1.pantera.auth.CountedProvider(auth, type);
         }
         return auth;
     }
