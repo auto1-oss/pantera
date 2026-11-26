@@ -717,6 +717,13 @@ public abstract class BaseCachedProxySlice implements Slice {
     }
 
     /**
+     * @return The lookup of release dates, null when cooldown is not wired
+     */
+    protected final CooldownInspector inspector() {
+        return this.cooldownInspector;
+    }
+
+    /**
      * @return Upstream URL
      */
     protected final String upstreamUrl() {

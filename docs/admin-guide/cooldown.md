@@ -15,6 +15,17 @@ The cooldown system provides supply chain security by blocking freshly-published
 
 Cooldown decisions use artifact metadata (publish date, version) extracted from upstream registry responses. The metadata is cached in the `cooldown-metadata` cache tier for efficient re-evaluation without repeated upstream requests.
 
+### Where the release date of a Maven artifact comes from
+
+A Maven or Gradle proxy dates an artifact when it first fetches it:
+
+- **The upstream is Maven Central** (`repo1.maven.org`, `repo.maven.apache.org`): the `Last-Modified` of the upstream's response is the day the artifact was released.
+- **Any other upstream** (v2.2.15+): the date is looked up at Maven Central, once per version, and kept in the publish-date table. When Maven Central does not have the artifact, or the lookup fails, the upstream's own `Last-Modified` is used.
+
+The second rule exists because an upstream that is itself a caching repository (Artifactory, Nexus) reports the day *it* cached a file. Up to 2.2.14 cooldown took that for the release date and blocked releases that were months old.
+
+A version that was blocked by such a date before the upgrade stays blocked until its block ends or an administrator unblocks it (**Cooldown → Blocked**, or **Unblock all** for the repository). An artifact that only the other upstream has is still dated by that upstream; if it reports cache dates, exempt the artifact or switch cooldown off for that repository.
+
 ---
 
 ## Adapter Coverage Matrix

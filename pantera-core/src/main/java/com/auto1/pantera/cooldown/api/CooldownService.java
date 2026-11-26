@@ -30,6 +30,19 @@ public interface CooldownService {
     CompletableFuture<CooldownResult> evaluate(CooldownRequest request, CooldownInspector inspector);
 
     /**
+     * Whether cooldown applies to a request at all: it is switched on for
+     * the repository and the artifact is not exempt. A caller that has to
+     * fetch something only to evaluate (a release date from another
+     * place) asks this first and saves the fetch.
+     *
+     * @param request Request
+     * @return True when an evaluation can block; true when unknown
+     */
+    default boolean applies(final CooldownRequest request) {
+        return true;
+    }
+
+    /**
      * Evaluate request with a known release date. Skips the inspector
      * release_date fetch entirely (no network I/O). Used by the metadata
      * filter path where the release date is already in the parsed packument.
