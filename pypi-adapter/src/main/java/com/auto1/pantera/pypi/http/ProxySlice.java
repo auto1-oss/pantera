@@ -372,8 +372,13 @@ final class ProxySlice implements Slice {
         // (PypiJsonBaseLoader), instead of hitting pypi.org unconditionally
         // on every /pypi/<pkg>/json request. PypiJsonBaseLoader namespaces
         // its keys so they never collide with the index cache entries.
+        // The loader first asks its cache what it holds, with no remote to
+        // fall back to. The proxy's own cache (StreamThroughCache) answers
+        // that question with a failure when it holds nothing, so the
+        // documents are cached by a FromStorageCache over the same storage.
         this.jsonHandler = new PypiJsonHandler(
-            jsonApiUpstream, this.cache, this.asyncStorage, cooldown, rtype, rname
+            jsonApiUpstream, new FromStorageCache(backend), this.asyncStorage,
+            cooldown, rtype, rname
         );
         // Admin "refresh package": revalidate a project's cached simple
         // index through the same refresh path stale-while-revalidate uses.
