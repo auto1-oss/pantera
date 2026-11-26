@@ -152,7 +152,13 @@ public final class NpmProxySlice implements Slice {
                     new RtRule.ByPath(ppath.pattern())
                 ),
                 new LoggingSlice(
-                    new DownloadPackageSlice(npm, ppath, baseUrl, cooldownMetadata, repoType, repoName)
+                    new ReplaySlice(
+                        new DownloadPackageSlice(npm, ppath, baseUrl, cooldownMetadata, repoType, repoName),
+                        npm,
+                        replay -> new DownloadPackageSlice(
+                            replay, ppath, baseUrl, cooldownMetadata, repoType, repoName
+                        )
+                    )
                 )
             ),
             new RtRulePath(
@@ -169,7 +175,15 @@ public final class NpmProxySlice implements Slice {
                     new RtRule.ByPath(apath.pattern())
                 ),
                 new LoggingSlice(
-                    new DownloadAssetSlice(npm, apath, packages, repoName, repoType, cooldown, inspector)
+                    new ReplaySlice(
+                        new DownloadAssetSlice(npm, apath, packages, repoName, repoType, cooldown, inspector),
+                        npm,
+                        // A replay stores no tarball, so it has no queue to
+                        // announce one to the search index with.
+                        replay -> new DownloadAssetSlice(
+                            replay, apath, Optional.empty(), repoName, repoType, cooldown, inspector
+                        )
+                    )
                 )
             ),
             // Pass-through for npm security audit endpoints to upstream registry

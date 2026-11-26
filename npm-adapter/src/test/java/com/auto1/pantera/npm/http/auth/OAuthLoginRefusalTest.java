@@ -63,16 +63,16 @@ final class OAuthLoginRefusalTest {
     }
 
     @Test
-    void delayedLoginIsAnswered429WithTheWait() {
+    void delayedLoginIsAnswered403WithTheWait() {
         final Response response = OAuthLoginRefusalTest.login(
             new AuthRefusal(
-                "login_delayed", RsStatus.TOO_MANY_REQUESTS, 9L,
+                "login_delayed", RsStatus.FORBIDDEN, 9L,
                 "Too many failed logins. Try again in 9 seconds."
             ),
             null
         );
         MatcherAssert.assertThat(
-            "status", response.status(), new IsEqual<>(RsStatus.TOO_MANY_REQUESTS)
+            "status", response.status(), new IsEqual<>(RsStatus.FORBIDDEN)
         );
         MatcherAssert.assertThat(
             "the wait", response.headers().values("Retry-After"), new IsEqual<>(List.of("9"))
