@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, type ComponentMountingOptions } from '@vue/test-utils'
 import ArtifactTreeTable from '../ArtifactTreeTable.vue'
 import PrimeVue from 'primevue/config'
 import Aura from '@primeuix/themes/aura'
@@ -7,7 +7,7 @@ import type { TreeEntry } from '@/types'
 
 const items: TreeEntry[] = []
 
-function mountTable(overrides: Partial<Parameters<typeof mount>[1]> = {}) {
+function mountTable(overrides: ComponentMountingOptions<typeof ArtifactTreeTable> = {}) {
   return mount(ArtifactTreeTable, {
     props: {
       items,

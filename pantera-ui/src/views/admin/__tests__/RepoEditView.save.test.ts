@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import type { ComponentPublicInstance } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import PrimeVue from 'primevue/config'
 import Aura from '@primeuix/themes/aura'
@@ -40,7 +41,7 @@ vi.mock('@/components/admin/RepoConfigForm.vue', () => ({
     emits: ['update:config', 'valid-change'],
     // Like the real form: it emits the (normalised) initial config as soon
     // as it mounts, which the page must not count as an edit.
-    mounted() {
+    mounted(this: ComponentPublicInstance) {
       this.$emit('update:config', { repo: { type: 'maven-proxy', anonymous_read: false, anonymous_write: false } })
       this.$emit('valid-change', true)
     },

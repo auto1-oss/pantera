@@ -62,6 +62,10 @@ const typeOptions = computed(() => optionsFrom(seenTypes.value, 'All types', typ
 
 // --- URL check ---
 const probeUrl = ref('')
+// Placeholders that show a URL are constants, not text in the template:
+// vue-tsc 3.3 takes `//` in an attribute of a component for the start of a
+// comment and generates broken code for the rest of the template.
+const PROBE_URL_PLACEHOLDER = 'https://registry.example.com/npm-group/lodash  or  /maven-group/com/example/foo/1.0/foo-1.0.jar'
 const probeResult = ref<NegCacheProbeResponse | null>(null)
 const probedUrl = ref('')
 const probeLoading = ref(false)
@@ -347,7 +351,7 @@ onMounted(() => {
               <InputText
                 id="negcache-probe-url"
                 v-model="probeUrl"
-                placeholder="https://registry.example.com/npm-group/lodash  or  /maven-group/com/example/foo/1.0/foo-1.0.jar"
+                :placeholder="PROBE_URL_PLACEHOLDER"
                 class="w-full font-mono"
                 @keyup.enter="doProbe"
               />

@@ -27,6 +27,7 @@ async function mountWithResult(item: SearchResult) {
     page: 0,
     size: 20,
     total: 1,
+    hasMore: false,
   })
   const wrapper = mount(SearchView, {
     global: {
@@ -53,7 +54,7 @@ describe('SearchView', () => {
   it('renders search input', () => {
     vi.mocked(searchApi).mockResolvedValue({
       items: [{ repo_type: 'maven', repo_name: 'central', artifact_path: 'com/example/foo', size: 512 }],
-      page: 0, size: 20, total: 1,
+      page: 0, size: 20, total: 1, hasMore: false,
     })
     const wrapper = mount(SearchView, {
       global: {

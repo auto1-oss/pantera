@@ -371,9 +371,9 @@ function formatRemaining(blockedUntil: string): string {
   return `${mins}m`
 }
 
-function onSort(event: { sortField: string; sortOrder: number }) {
-  sortField.value = event.sortField
-  sortOrder.value = event.sortOrder
+function onSort(event: { sortField: string | ((item: unknown) => string) | undefined; sortOrder: number | null | undefined }) {
+  sortField.value = typeof event.sortField === 'string' ? event.sortField : null
+  sortOrder.value = event.sortOrder ?? -1
   blockedPage.value = 0
   loadBlocked()
 }

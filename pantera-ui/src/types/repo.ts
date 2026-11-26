@@ -59,6 +59,11 @@ export interface RepoConfig {
   [key: string]: unknown
 }
 
-export interface RepoConfigEnvelope {
+/**
+ * The document of `GET` / `PUT /repositories/:name`. A type alias, not an
+ * interface: the API layer hands the document over as
+ * `Record<string, unknown>`, and only an alias is compatible with that.
+ */
+export type RepoConfigEnvelope = {
   repo: RepoConfig
 }

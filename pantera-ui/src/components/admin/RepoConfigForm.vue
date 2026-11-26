@@ -44,6 +44,13 @@ const emit = defineEmits<{
 
 const notify = useNotificationStore()
 
+// Placeholders that show a URL are constants, not text in the template:
+// vue-tsc 3.3 takes `//` in an attribute of a component for the start of a
+// comment and generates broken code for the rest of the template.
+const BASE_URL_PLACEHOLDER = 'e.g. https://packages.example.com/api/npm/npm-local'
+const S3_ENDPOINT_PLACEHOLDER = 'https://s3.amazonaws.com'
+const REMOTE_URL_PLACEHOLDER = 'https://repo1.maven.org/maven2'
+
 // ---------------------------------------------------------------------------
 // Form fields
 // ---------------------------------------------------------------------------
@@ -678,7 +685,7 @@ defineExpose({
               </div>
               <div>
                 <label class="block text-xs text-gray-500 mb-1">Endpoint (optional)</label>
-                <InputText v-model="s3Endpoint" placeholder="https://s3.amazonaws.com" class="w-full" />
+                <InputText v-model="s3Endpoint" :placeholder="S3_ENDPOINT_PLACEHOLDER" class="w-full" />
               </div>
               <div class="flex gap-2">
                 <Button
@@ -714,7 +721,7 @@ defineExpose({
         <InputText
           v-model="clientBaseUrl"
           class="w-full"
-          placeholder="e.g. https://packages.example.com/api/npm/npm-local"
+          :placeholder="BASE_URL_PLACEHOLDER"
         />
         <p v-if="baseUrlInvalid" class="text-xs text-red-400">
           Must be an absolute <code>http://</code> or <code>https://</code> URL.
@@ -773,7 +780,7 @@ defineExpose({
             <label class="block text-xs text-gray-500 mb-1">URL</label>
             <InputText
               v-model="remote.url"
-              placeholder="https://repo1.maven.org/maven2"
+              :placeholder="REMOTE_URL_PLACEHOLDER"
               class="w-full"
             />
           </div>
@@ -960,7 +967,7 @@ defineExpose({
               <label class="block text-sm font-medium mb-1">Remote URL</label>
               <InputText
                 v-model="newMemberRemoteUrl"
-                placeholder="https://repo1.maven.org/maven2"
+                :placeholder="REMOTE_URL_PLACEHOLDER"
                 class="w-full"
               />
             </div>

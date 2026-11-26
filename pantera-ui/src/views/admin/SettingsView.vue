@@ -238,6 +238,10 @@ const canOpenSignInFailures = computed(() => auth.hasAction('api_user_permission
 const trustForwardedHeaders = ref(false)
 const clientBaseHostAllowlist = ref('')
 const clientBaseUrl = ref('')
+// Placeholders that show a URL are constants, not text in the template:
+// vue-tsc 3.3 takes `//` in an attribute of a component for the start of a
+// comment and generates broken code for the rest of the template.
+const CLIENT_BASE_URL_PLACEHOLDER = 'e.g. https://reg.example.com or https://reg.example.com/artifactory'
 const clientBaseScheme = ref('auto')
 const CLIENT_BASE_SCHEMES = [
   { label: 'auto — derive from the request', value: 'auto' },
@@ -276,9 +280,11 @@ function searchProxyTypes(event: { query: string }) {
   }
 }
 
-// External links
+// External links (the placeholders are constants for the reason given at CLIENT_BASE_URL_PLACEHOLDER)
 const grafanaUrl = ref('')
 const registryUrl = ref('')
+const GRAFANA_URL_PLACEHOLDER = 'https://grafana.example.com'
+const REGISTRY_URL_PLACEHOLDER = 'https://pantera.example.com'
 
 // Runtime tunables (per-repo bulkhead). Loaded into the same view so
 // admins have one place for everything that lives in the settings DB.
@@ -1574,7 +1580,7 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
               <InputText
                 v-model="clientBaseUrl"
                 class="w-full"
-                placeholder="e.g. https://reg.example.com or https://reg.example.com/artifactory"
+                :placeholder="CLIENT_BASE_URL_PLACEHOLDER"
               />
               <div
                 v-if="clientBaseUrl.trim() && !isValidHttpUrl(clientBaseUrl)"
@@ -2143,7 +2149,7 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
                     :model-value="rt.minimum_allowed_age"
                     class="w-24 text-sm"
                     placeholder="7d"
-                    @update:model-value="(v: string) => updateRepoTypeAge(rt.name, v)"
+                    @update:model-value="(v: string | undefined) => updateRepoTypeAge(rt.name, v ?? '')"
                   />
                   <Button
                     icon="pi pi-trash"
@@ -2378,11 +2384,11 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
           <div class="space-y-3">
             <div>
               <label class="text-sm text-gray-500 block mb-1">Grafana URL</label>
-              <InputText v-model="grafanaUrl" class="w-full" placeholder="https://grafana.example.com" />
+              <InputText v-model="grafanaUrl" class="w-full" :placeholder="GRAFANA_URL_PLACEHOLDER" />
             </div>
             <div>
               <label class="text-sm text-gray-500 block mb-1">Registry URL</label>
-              <InputText v-model="registryUrl" class="w-full" placeholder="https://pantera.example.com" />
+              <InputText v-model="registryUrl" class="w-full" :placeholder="REGISTRY_URL_PLACEHOLDER" />
               <p class="text-xs text-gray-400 mt-1">
                 Address clients use to reach the registry (not the UI). Set Me Up appends the first global
                 path prefix unless this URL already ends with it.

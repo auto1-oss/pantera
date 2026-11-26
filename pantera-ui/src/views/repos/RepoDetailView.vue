@@ -42,7 +42,7 @@ function parsePypiCoords(entryPath: string): { pkg: string; version: string } | 
   return { pkg: parts[0], version: parts[1] }
 }
 
-function openYankDialog(entry: TreeEntry, event: Event) {
+function openYankDialog(entry: { path: string }, event: Event) {
   event.stopPropagation()
   const coords = parsePypiCoords(entry.path)
   if (!coords) return
@@ -66,7 +66,7 @@ async function confirmYank() {
   }
 }
 
-async function handleUnyank(entry: TreeEntry, event: Event) {
+async function handleUnyank(entry: { path: string }, event: Event) {
   event.stopPropagation()
   const coords = parsePypiCoords(entry.path)
   if (!coords) return
