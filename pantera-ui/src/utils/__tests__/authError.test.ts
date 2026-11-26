@@ -38,8 +38,8 @@ describe('formatAuthError', () => {
 
   it('takes the seconds of a login delay from Retry-After', () => {
     const err = refused(
-      429,
-      { error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 99 seconds.', status: 429 },
+      403,
+      { error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 99 seconds.', status: 403 },
       { 'retry-after': '7' },
     )
     expect(formatAuthError(err)).toEqual({
@@ -48,8 +48,8 @@ describe('formatAuthError', () => {
   })
 
   it('reads Retry-After from axios headers, whatever the case of its name', () => {
-    const axiosHeaders = refused(429, { error: 'LOGIN_DELAYED' }, new AxiosHeaders({ 'Retry-After': '12' }))
-    const plainHeaders = refused(429, { error: 'LOGIN_DELAYED' }, { 'Retry-After': 30 })
+    const axiosHeaders = refused(403, { error: 'LOGIN_DELAYED' }, new AxiosHeaders({ 'Retry-After': '12' }))
+    const plainHeaders = refused(403, { error: 'LOGIN_DELAYED' }, { 'Retry-After': 30 })
     expect(formatAuthError(axiosHeaders).message, 'AxiosHeaders')
       .toBe('Too many failed logins. Try again in 12 seconds.')
     expect(formatAuthError(plainHeaders).message, 'a plain object with a numeric value')
@@ -57,13 +57,13 @@ describe('formatAuthError', () => {
   })
 
   it('says "1 second" for a delay of one second', () => {
-    const err = refused(429, { error: 'LOGIN_DELAYED' }, { 'retry-after': '1' })
+    const err = refused(403, { error: 'LOGIN_DELAYED' }, { 'retry-after': '1' })
     expect(formatAuthError(err).message).toBe('Too many failed logins. Try again in 1 second.')
   })
 
   it('falls back to the server message when Retry-After is missing', () => {
-    const err = refused(429, {
-      error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 4 seconds.', status: 429,
+    const err = refused(403, {
+      error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 4 seconds.', status: 403,
     })
     expect(formatAuthError(err)).toEqual({
       kind: 'delayed', message: 'Too many failed logins. Try again in 4 seconds.',
@@ -74,7 +74,7 @@ describe('formatAuthError', () => {
     'falls back to the server message when Retry-After is %j',
     (value) => {
       const err = refused(
-        429,
+        403,
         { error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 4 seconds.' },
         { 'retry-after': value },
       )
@@ -83,8 +83,8 @@ describe('formatAuthError', () => {
   )
 
   it('names no number when neither the header nor a message says one', () => {
-    const noBody = refused(429, { error: 'LOGIN_DELAYED' })
-    const noHeaders = refused(429, { error: 'LOGIN_DELAYED', message: '  ' }, undefined)
+    const noBody = refused(403, { error: 'LOGIN_DELAYED' })
+    const noHeaders = refused(403, { error: 'LOGIN_DELAYED', message: '  ' }, undefined)
     expect(formatAuthError(noBody).message, 'without a message')
       .toBe('Too many failed logins. Try again later.')
     expect(formatAuthError(noHeaders).message, 'without headers and with a blank message')
@@ -132,11 +132,23 @@ describe('formatAuthError', () => {
     }
   })
 
-  it('does not take a code from the wrong status', () => {
+  it('tells a delay and a lock apart by the code: both are answered 403', () => {
+    const delayed = refused(
+      403,
+      { error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 5 seconds.', status: 403 },
+      { 'retry-after': '5' },
+    )
+    // A lock carries no Retry-After; one that a proxy added must not turn it into a delay.
+    const locked = refused(403, { error: 'ACCOUNT_LOCKED', status: 403 }, { 'retry-after': '5' })
+    expect(formatAuthError(delayed), 'LOGIN_DELAYED').toEqual({
+      kind: 'delayed', message: 'Too many failed logins. Try again in 5 seconds.',
+    })
+    expect(formatAuthError(locked), 'ACCOUNT_LOCKED').toEqual({ kind: 'locked', message: ACCOUNT_LOCKED_MESSAGE })
+  })
+
+  it('does not take the locked code from another status', () => {
     const lockedAs401 = refused(401, { error: 'ACCOUNT_LOCKED' })
-    const delayedAs403 = refused(403, { error: 'LOGIN_DELAYED' }, { 'retry-after': '5' })
-    expect(formatAuthError(lockedAs401).message, 'ACCOUNT_LOCKED on 401').toBe(GENERIC)
-    expect(formatAuthError(delayedAs403).message, 'LOGIN_DELAYED on 403').toBe(GENERIC)
+    expect(formatAuthError(lockedAs401).message).toBe(GENERIC)
   })
 
   it('reports a network failure as unavailable', () => {

@@ -17,8 +17,11 @@
  * know what to do, and none says whether the user exists or the password
  * was right (2.2.15):
  *  - 403 `ACCOUNT_LOCKED`: the account is locked after failed logins;
- *  - 429 `LOGIN_DELAYED`: logins are delayed, for the seconds in `Retry-After`;
+ *  - 403 `LOGIN_DELAYED`: logins are delayed, for the seconds in `Retry-After`;
  *  - 503: sign-in cannot be checked right now, in the server's own words.
+ * A lock and a delay are both answered 403; the code tells them apart. The
+ * older limit of the sign-in form, 429 `TOO_MANY_REQUESTS`, is not one of
+ * the three and keeps the generic message.
  * Only the delay and the 503 may show the server's message, and only as
  * described at {@link delayedMessage} and {@link serverMessage}.
  *
@@ -34,7 +37,7 @@ export type AuthErrorKind =
   | 'unavailable' // 5xx, network — backend down, IdP unreachable
   | 'state' // OAuth state mismatch — possible CSRF or stale tab
   | 'locked' // 403 ACCOUNT_LOCKED — locked after failed logins, an administrator unlocks
-  | 'delayed' // 429 LOGIN_DELAYED — logins of this user are refused for some seconds
+  | 'delayed' // 403 LOGIN_DELAYED — logins of this user are refused for some seconds
 
 export interface NormalizedAuthError {
   kind: AuthErrorKind
@@ -135,7 +138,8 @@ export function formatAuthError(err: unknown): NormalizedAuthError {
     if (status === 403 && code === 'ACCOUNT_LOCKED') {
       return { kind: 'locked', message: MESSAGES.locked }
     }
-    if (status === 429 && code === 'LOGIN_DELAYED') {
+    // Known by its code alone: the server answers a delay 403, as it does a lock.
+    if (code === 'LOGIN_DELAYED') {
       return { kind: 'delayed', message: delayedMessage(err) }
     }
     if (status === 503) {

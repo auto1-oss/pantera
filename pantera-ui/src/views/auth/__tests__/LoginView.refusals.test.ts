@@ -93,8 +93,8 @@ describe('LoginView: refused sign-ins', () => {
 
   it('says how long logins are delayed, from Retry-After', async () => {
     vi.mocked(authApi.login).mockRejectedValue(refused(
-      429,
-      { error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 99 seconds.', status: 429 },
+      403,
+      { error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 99 seconds.', status: 403 },
       { 'retry-after': '7' },
     ))
     const w = await mountLogin()
@@ -104,9 +104,24 @@ describe('LoginView: refused sign-ins', () => {
     expect(shownError(w)).toBe('Too many failed logins. Try again in 7 seconds.')
   })
 
+  it('does not take a delayed login for a locked account', async () => {
+    vi.mocked(authApi.login).mockRejectedValue(refused(
+      403,
+      { error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 7 seconds.', status: 403 },
+      { 'retry-after': '7' },
+    ))
+    const w = await mountLogin()
+
+    await signIn(w)
+
+    expect(w.text(), 'no word of a lock').not.toContain('locked')
+    expect(signOutNotice(), 'no notice is left for a later visit').toBe('')
+    expect(window.location.href, 'the page must stay').toBe(HOME)
+  })
+
   it('shows the server message of a delay when Retry-After is missing', async () => {
-    vi.mocked(authApi.login).mockRejectedValue(refused(429, {
-      error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 4 seconds.', status: 429,
+    vi.mocked(authApi.login).mockRejectedValue(refused(403, {
+      error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 4 seconds.', status: 403,
     }))
     const w = await mountLogin()
 
