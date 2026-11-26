@@ -114,6 +114,13 @@ final class CachedProxySlice implements Slice {
     );
 
     /**
+     * The latest signed tree head of a checksum database proxied under
+     * {@code /sumdb/<name>/}. It changes with every module the database
+     * records, unlike its lookups and tiles, so it is never kept.
+     */
+    private static final Pattern TREE_HEAD = Pattern.compile("^/sumdb/[^/]+/latest$");
+
+    /**
      * Origin slice.
      */
     private final Slice client;
@@ -260,7 +267,10 @@ final class CachedProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .field("log.source", "application")
                 .log();
-            return this.handleRootPath(line, headers);
+            return this.passThrough(line, headers);
+        }
+        if (CachedProxySlice.TREE_HEAD.matcher(path).matches()) {
+            return this.passThrough(line, headers);
         }
         // Cooldown-aware @latest rewrite: intercepts before generic
         // fetchThroughCache so "go get <module>" (no pseudo-version) is
@@ -607,6 +617,10 @@ final class CachedProxySlice implements Slice {
                             new CompletableFuture<>();
                         this.client.response(line, Headers.EMPTY, Content.EMPTY)
                             .thenApply(resp -> {
+                                // Kept before the content is handed on: the
+                                // answer to the client is built as soon as the
+                                // content arrives, on this thread.
+                                rshdr.set(resp.headers());
                                 final CompletableFuture<Void> term = new CompletableFuture<>();
                                 if (resp.status().success()) {
                                     final Flowable<ByteBuffer> res =
@@ -624,7 +638,6 @@ final class CachedProxySlice implements Slice {
                                         term.complete(null);
                                     });
                                 }
-                                rshdr.set(resp.headers());
                                 return term;
                             })
                             .exceptionally(err -> {
@@ -931,7 +944,15 @@ final class CachedProxySlice implements Slice {
         return res;
     }
 
-    private CompletableFuture<Response> handleRootPath(
+    /**
+     * Ask the upstream for what is never kept (the root, the latest tree
+     * head of a checksum database) and answer with what it sent.
+     *
+     * @param line Request line
+     * @param request Headers of the client request
+     * @return The upstream's answer, or the answer for a miss or a failure
+     */
+    private CompletableFuture<Response> passThrough(
         final RequestLine line, final Headers request
     ) {
         final UpstreamMiss miss = new UpstreamMiss(
@@ -951,7 +972,7 @@ final class CachedProxySlice implements Slice {
                     ignored -> miss.answered(resp.status().code(), resp.headers())
                 );
             })
-            .exceptionally(err -> miss.failed(err, "Go upstream root request failed"));
+            .exceptionally(err -> miss.failed(err, "Go upstream request failed"));
     }
 
     // ===== T-P08: stream-through primary path =====
