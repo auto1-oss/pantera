@@ -206,7 +206,7 @@ public final class CombinedAuthzSlice implements Slice {
                     if (BasicAuthScheme.NAME.equals(scheme)) {
                         return this.authenticateBasic(auth, headers);
                     } else if (BearerAuthScheme.NAME.equals(scheme)) {
-                        return this.authenticateBearer(auth);
+                        return this.authenticateBearer(auth, headers);
                     } else {
                         return CompletableFuture.completedFuture(
                             AuthScheme.result(
@@ -340,10 +340,14 @@ public final class CombinedAuthzSlice implements Slice {
      * Authenticate using Bearer token authentication.
      *
      * @param auth Authorization header.
+     * @param request Headers of the request
      * @return Authentication result.
      */
-    private CompletionStage<AuthScheme.Result> authenticateBearer(final Authorization auth) {
-        return this.tokenAuth.check(new Authorization.Bearer(auth.credentials()).token())
+    private CompletionStage<AuthScheme.Result> authenticateBearer(
+        final Authorization auth, final Headers request
+    ) {
+        return this.tokenAuth
+            .check(new Authorization.Bearer(auth.credentials()).token(), request)
             .thenApply(
                 outcome -> AuthScheme.result(
                     outcome,

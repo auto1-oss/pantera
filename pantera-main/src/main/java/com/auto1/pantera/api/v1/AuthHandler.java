@@ -260,16 +260,24 @@ public final class AuthHandler {
             return;
         }
         final java.util.OptionalLong retry = this.loginThrottle.admit(name, client);
+        final com.auto1.pantera.http.auth.LoginSource source =
+            new com.auto1.pantera.http.auth.LoginSource(
+                client, ctx.request().getHeader("User-Agent"), AuthHandler.signInPath(ctx)
+            );
         if (retry.isPresent()) {
+            // The form's own limit refused the login: the sign-in failures
+            // report keeps who, from where, and until when.
+            if (this.failedLogins != null) {
+                final int counted = this.loginThrottle.failures(name, client);
+                this.failedLogins.report().ifPresent(
+                    report -> report.formLimit(name, source, counted, retry.getAsLong())
+                );
+            }
             ctx.response().putHeader("Retry-After", Long.toString(retry.getAsLong()));
             ApiResponse.sendError(ctx, 429, "TOO_MANY_REQUESTS",
                 "Too many sign-in attempts. Please wait and try again.");
             return;
         }
-        final com.auto1.pantera.http.auth.LoginSource source =
-            new com.auto1.pantera.http.auth.LoginSource(
-                client, ctx.request().getHeader("User-Agent"), AuthHandler.signInPath(ctx)
-            );
         CompletableFuture.supplyAsync(
             (java.util.function.Supplier<com.auto1.pantera.http.auth.PasswordCheck.Outcome>) () -> {
                 // A person is signing in: the Okta provider may start a

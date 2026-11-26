@@ -158,6 +158,39 @@ final class SecurityPolicySettingsHandlerTest {
     }
 
     @Test
+    void signInReportIsOnAndKeepsNinetyDaysUnlessSetOtherwise() {
+        final JsonObject current = SecurityPolicySettingsHandler.signInReport().current();
+        MatcherAssert.assertThat(
+            current,
+            new IsEqual<>(
+                new JsonObject().put("sign_in_report_enabled", "true")
+                    .put("sign_in_report_retention_days", "90")
+            )
+        );
+        MatcherAssert.assertThat(
+            "the whitelist is the same set",
+            SecurityPolicySettingsHandlerTest.keys("SIGN_IN_REPORT_KEYS"),
+            new IsEqual<>(current.fieldNames())
+        );
+    }
+
+    @Test
+    void signInReportRefusesARetentionOutsideItsRange() {
+        final SecurityPolicySettingsHandler.Section section =
+            SecurityPolicySettingsHandler.signInReport();
+        section.validate(
+            new JsonObject().put("sign_in_report_enabled", false)
+                .put("sign_in_report_retention_days", "365")
+        );
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("sign_in_report_retention_days", "0")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("sign_in_report_retention_days", "3651")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("sign_in_report_enabled", "yes")));
+    }
+
+    @Test
     void partialUpdatesAreValidatedAgainstTheMergedConfig() {
         final SecurityPolicySettingsHandler.Section limits =
             SecurityPolicySettingsHandler.requestLimits();

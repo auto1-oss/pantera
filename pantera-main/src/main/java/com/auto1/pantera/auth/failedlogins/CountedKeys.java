@@ -10,6 +10,9 @@
  */
 package com.auto1.pantera.auth.failedlogins;
 
+import com.auto1.pantera.auth.signin.RejectedKey;
+import com.auto1.pantera.auth.signin.SignInFailures;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
@@ -40,28 +43,69 @@ public final class CountedKeys implements Authentication {
     private final FailedLogins logins;
 
     /**
+     * Sign-in failures report, null when none is kept.
+     */
+    private final SignInFailures report;
+
+    /**
      * Ctor.
      *
      * @param origin API key provider
      * @param logins Failed logins
      */
     public CountedKeys(final Authentication origin, final FailedLogins logins) {
+        this(origin, logins, null);
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param origin API key provider
+     * @param logins Failed logins
+     * @param report Sign-in failures report, null when none is kept
+     */
+    public CountedKeys(
+        final Authentication origin, final FailedLogins logins, final SignInFailures report
+    ) {
         this.origin = origin;
         this.logins = logins;
+        this.report = report;
     }
 
     @Override
     public Optional<AuthUser> user(final String username, final String password) {
         final Optional<AuthUser> res = this.origin.user(username, password);
-        if (res.isEmpty() && AuthRefusal.noted().isEmpty()
-            && this.logins.policy().countRejectedKeys()) {
+        // A key that was refused with a reason of its own (its user is
+        // locked) is not a rejected key: that reason stands.
+        if (res.isEmpty() && AuthRefusal.noted().isEmpty()) {
             final LoginSource source = LoginSource.current();
-            final Admission after = this.logins.failed(
-                username,
-                new LoginOrigin(source.clientIp(), source.userAgent(), source.path(), "api_key")
-            );
-            if (after.kind() == Admission.Kind.LOCKED) {
-                this.logins.refuse(after);
+            final Optional<RejectedKey> known;
+            if (this.report == null) {
+                known = Optional.empty();
+            } else {
+                known = this.report.rejected(password, username, source);
+            }
+            boolean locked = false;
+            if (this.logins.policy().countRejectedKeys()) {
+                final Admission after = this.logins.failed(
+                    username,
+                    new LoginOrigin(
+                        source.clientIp(), source.userAgent(), source.path(), "api_key"
+                    )
+                );
+                if (after.kind() == Admission.Kind.LOCKED) {
+                    this.logins.refuse(after);
+                    locked = true;
+                }
+            }
+            if (!locked) {
+                // The client is told why: an expired key is replaced, a
+                // password is not what is wrong.
+                known.ifPresent(
+                    key -> new AuthRefusal(
+                        key.reason(), RsStatus.UNAUTHORIZED, 0L, key.message()
+                    ).note()
+                );
             }
         }
         return res;

@@ -308,6 +308,8 @@ Since 2.2.9 the security limits introduced in that release are DB-backed admin s
 | `failed_logins_count_rejected_keys` | boolean | `false` | Whether a rejected API key counts as a failed login. |
 | `failed_logins_lock_all_credentials` | boolean | `true` | Whether a lock blocks every credential of the user (password, API keys, sessions, an identity provider's button) or password sign-in only. |
 | `password_sign_in_okta`, `password_sign_in_keycloak`, `password_sign_in_github` | `all`, `form` or `off` | `all` | Where the provider of that type checks a user name and password: the sign-in form and repository requests, the sign-in form and `POST /api/v1/auth/token` only, or nowhere. See [Password sign-in](admin-guide/authentication.md#password-sign-in-where-a-provider-takes-passwords) (v2.2.15+). |
+| `sign_in_report_enabled` | boolean | `true` | Whether sign-in failures (rejected API keys, failed password logins, hits of the sign-in form's limit) are noted and stored. See [Sign-in Failures Report](admin-guide/sign-in-failures.md) (v2.2.15+). |
+| `sign_in_report_retention_days` | integer (1-3650) | `90` | Days after its last event that a line of the report is kept. |
 
 A `PUT` with an unknown key, or a value the setting refuses (a body cap below 1 MiB, a relative storage root, a malformed host, a zero threshold), answers `400` and writes nothing.
 
@@ -1827,6 +1829,7 @@ Group response-body drain concurrency is sized automatically per repository by t
 | `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS` | `900` | **Fallback tier only** -- the DB-backed `login_throttle_window_seconds` admin setting is primary. Window, in seconds, in which login failures are counted (2.2.9). |
 | `PANTERA_FAILED_LOGINS_DELAY_FROM_FAILURE`, `PANTERA_FAILED_LOGINS_FIRST_DELAY_SECONDS`, `PANTERA_FAILED_LOGINS_MAX_DELAY_SECONDS`, `PANTERA_FAILED_LOGINS_LOCK_AFTER`, `PANTERA_FAILED_LOGINS_UNLOCK_AFTER_MINUTES`, `PANTERA_FAILED_LOGINS_FORGET_AFTER_MINUTES`, `PANTERA_FAILED_LOGINS_COUNT_REJECTED_KEYS`, `PANTERA_FAILED_LOGINS_LOCK_ALL_CREDENTIALS` | `2`, `1`, `60`, `3`, `0`, `0`, `false`, `true` | **Fallback tier only** -- the DB-backed `failed_logins_*` admin settings are primary (see [Failed Logins](admin-guide/failed-logins.md)). |
 | `PANTERA_PASSWORD_SIGN_IN_OKTA`, `PANTERA_PASSWORD_SIGN_IN_KEYCLOAK`, `PANTERA_PASSWORD_SIGN_IN_GITHUB` | `all` | **Fallback tier only** -- the DB-backed `password_sign_in_<type>` admin settings are primary. Where that provider checks passwords: `all`, `form` or `off` (2.2.15). |
+| `PANTERA_SIGN_IN_REPORT_ENABLED`, `PANTERA_SIGN_IN_REPORT_RETENTION_DAYS` | `true`, `90` | **Fallback tier only** -- the DB-backed `sign_in_report_*` admin settings are primary. Whether sign-in failures are recorded, and for how many days a line is kept (2.2.15). |
 
 ### 7.8 Miscellaneous
 

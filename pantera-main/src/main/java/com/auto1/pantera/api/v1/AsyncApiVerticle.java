@@ -518,6 +518,16 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                             "Account locked. Ask an administrator to unlock it."
                         );
                     } else {
+                        // An API key that was rejected goes to the sign-in
+                        // failures report; a session that ran out does not.
+                        unifiedAuth.rejected(
+                            rawToken,
+                            new com.auto1.pantera.http.auth.LoginSource(
+                                ctx.request().remoteAddress() == null
+                                    ? "" : ctx.request().remoteAddress().host(),
+                                ctx.request().getHeader("User-Agent"), "api"
+                            )
+                        );
                         ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid or expired token");
                     }
                 })
@@ -586,6 +596,15 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         // depend on a users store.
         this.settings.failedLogins().ifPresent(
             logins -> new LockedUsersHandler(logins, this.security.policy()).register(router)
+        );
+        // Sign-in failures report: rejected API keys, failed password
+        // logins, hits of the sign-in form's own limit.
+        this.settings.failedLogins().ifPresent(
+            logins -> logins.report().ifPresent(
+                report -> new SignInFailuresHandler(
+                    report, logins, this::keyNames, this.security.policy()
+                ).register(router)
+            )
         );
         if (roles != null) {
             new RoleHandler(
@@ -833,5 +852,29 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 return merged;
             }
         );
+    }
+
+    /**
+     * Names and dates of API keys, for the sign-in failures report.
+     * Blocking.
+     * @param ids Key ids
+     * @return Name and dates by key id; empty without a database
+     */
+    private java.util.Map<String, SignInFailuresHandler.KeyName> keyNames(
+        final java.util.Collection<String> ids
+    ) {
+        final java.util.Map<String, SignInFailuresHandler.KeyName> names =
+            new java.util.HashMap<>();
+        if (this.dataSource != null) {
+            new UserTokenDao(this.dataSource).byIds(ids).forEach(
+                (id, info) -> names.put(
+                    id,
+                    new SignInFailuresHandler.KeyName(
+                        info.label(), info.createdAt(), info.expiresAt()
+                    )
+                )
+            );
+        }
+        return names;
     }
 }

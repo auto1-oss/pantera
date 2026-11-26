@@ -133,6 +133,25 @@ public final class LoginThrottle {
     }
 
     /**
+     * Failures counted for a user from a client address in the running
+     * window. Reads only: it starts no window and counts nothing.
+     *
+     * @param username User name
+     * @param client Client address
+     * @return The count, 0 when no window is running
+     */
+    public synchronized int failures(final String username, final String client) {
+        final Attempt pair = this.attempts.getIfPresent(LoginThrottle.pairKey(username, client));
+        final int count;
+        if (pair == null) {
+            count = 0;
+        } else {
+            count = pair.count;
+        }
+        return count;
+    }
+
+    /**
      * A successful login: clear the pair's counter and give back the
      * username-wide unit this attempt consumed.
      *

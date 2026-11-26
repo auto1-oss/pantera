@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.http.auth;
 
+import com.auto1.pantera.http.Headers;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 
@@ -40,5 +41,20 @@ public interface TokenAuthentication {
         return this.user(token).thenApply(
             user -> new PasswordCheck.Outcome(user, Optional.empty())
         );
+    }
+
+    /**
+     * Check a token that came with a request. The headers tell an
+     * implementation where the request came from, for what it reports
+     * about a rejected token.
+     *
+     * @param token Token
+     * @param request Headers of the request
+     * @return The user, or the refusal the check noted
+     */
+    default CompletionStage<PasswordCheck.Outcome> check(
+        final String token, final Headers request
+    ) {
+        return this.check(token);
     }
 }

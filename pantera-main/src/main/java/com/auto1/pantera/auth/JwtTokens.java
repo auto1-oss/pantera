@@ -12,6 +12,8 @@ package com.auto1.pantera.auth;
 
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
+import com.auto1.pantera.auth.signin.KeyInspector;
+import com.auto1.pantera.auth.signin.SignInFailures;
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
@@ -69,6 +71,11 @@ public final class JwtTokens implements Tokens {
     private final UserEnabledCheck enabledCheck;
 
     /**
+     * Sign-in failures report, null when none is kept.
+     */
+    private final SignInFailures report;
+
+    /**
      * Lifetime of an API token issued to a password login from a
      * package-manager client: the same 30-day default the token API uses.
      */
@@ -121,6 +128,41 @@ public final class JwtTokens implements Tokens {
         final RevocationBlocklist blocklist,
         final UserEnabledCheck enabledCheck
     ) {
+        this(privateKey, publicKey, tokenDao, settingsDao, blocklist, enabledCheck, null);
+    }
+
+    /**
+     * Ctor.
+     * @param privateKey RSA private key for signing
+     * @param publicKey RSA public key for verification
+     * @param tokenDao Token DAO (nullable)
+     * @param settingsDao Settings DAO for token TTLs (nullable)
+     * @param blocklist Revocation blocklist (nullable)
+     * @param enabledCheck Per-request enabled-state gate (nullable)
+     * @param report Sign-in failures report (nullable): it is told what is
+     *  known of a rejected API key, which needs the public key
+     */
+    public JwtTokens(
+        final RSAPrivateKey privateKey,
+        final RSAPublicKey publicKey,
+        final UserTokenDao tokenDao,
+        final AuthSettingsDao settingsDao,
+        final RevocationBlocklist blocklist,
+        final UserEnabledCheck enabledCheck,
+        final SignInFailures report
+    ) {
+        this.report = report;
+        if (report != null) {
+            final java.util.function.BiPredicate<String, String> stored;
+            if (tokenDao == null) {
+                stored = null;
+            } else {
+                stored = (jti, owner) -> tokenDao.isValidForUser(
+                    java.util.UUID.fromString(jti), owner
+                );
+            }
+            report.inspectKeysWith(new KeyInspector(publicKey, stored));
+        }
         this.algorithm = Algorithm.RSA256(publicKey, privateKey);
         this.publicKey = publicKey;
         this.privateKey = privateKey;
@@ -138,7 +180,7 @@ public final class JwtTokens implements Tokens {
     @Override
     public TokenAuthentication auth() {
         return new UnifiedJwtAuthHandler(
-            this.publicKey, this.tokenDao, this.blocklist, this.enabledCheck
+            this.publicKey, this.tokenDao, this.blocklist, this.enabledCheck, this.report
         );
     }
 

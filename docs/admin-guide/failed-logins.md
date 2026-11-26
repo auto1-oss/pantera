@@ -37,7 +37,7 @@ Each key also has an environment variable, `PANTERA_<KEY IN UPPER CASE>`, that i
 - The name is counted in lower case and without surrounding spaces. `Alice@example.com` and `alice@example.com` are one account at a directory, and one count here.
 - The **client address is not part of the count**. A limit per user and address would give an attacker a new allowance from every address.
 - A name **without a Pantera user** is counted too: a login that is checked with an identity provider is a failed login of the directory account behind it.
-- A **rejected API key** counts only when *Count rejected API keys* is on. Before you turn it on, clear the stale keys your users' tools still send: with the lock at 3, an IDE that holds an old key locks its owner with its first three requests, and again after every unlock.
+- A **rejected API key** counts only when *Count rejected API keys* is on. The [Sign-in Failures Report](sign-in-failures.md) lists the rejected keys with their owners whether they count or not. Before you turn it on, clear the stale keys your users' tools still send: with the lock at 3, an IDE that holds an old key locks its owner with its first three requests, and again after every unlock.
 - A successful password login forgets the failures. A request with a valid API key does not: a running build would otherwise keep clearing the count of an attack on its user.
 - While a name has failures on record, its logins are not answered from the credential cache: each is checked, so that the right password does forget the failures. A node learns of a failure counted on another node within 15 seconds.
 
@@ -117,6 +117,7 @@ The **Pantera - Sign-in** dashboard charts them. Every lock and unlock is also a
 
 ## Related Pages
 
+- [Sign-in Failures Report](sign-in-failures.md) -- who fails to sign in, with what, and from where.
 - [Authentication](authentication.md)
 - [Logging](logging.md)
 - [Monitoring](monitoring.md)

@@ -22,6 +22,8 @@ import com.auto1.pantera.settings.policy.FailedLoginsConfig;
 import com.auto1.pantera.settings.policy.FailedLoginsSettingsLoader;
 import com.auto1.pantera.settings.policy.PasswordSignInConfig;
 import com.auto1.pantera.settings.policy.PasswordSignInSettingsLoader;
+import com.auto1.pantera.settings.policy.SignInReportConfig;
+import com.auto1.pantera.settings.policy.SignInReportSettingsLoader;
 import com.auto1.pantera.settings.policy.LoginThrottleConfig;
 import com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader;
 import com.auto1.pantera.settings.policy.RequestLimitsConfig;
@@ -83,6 +85,13 @@ public final class SecurityPolicySettingsHandler {
     );
 
     /**
+     * Keys accepted by the sign-in report endpoint.
+     */
+    private static final Set<String> SIGN_IN_REPORT_KEYS = Set.of(
+        SignInReportSettingsLoader.KEY_ENABLED, SignInReportSettingsLoader.KEY_RETENTION
+    );
+
+    /**
      * Keys accepted by the password sign-in endpoint: one per provider
      * type that hands a password to an identity provider.
      */
@@ -138,6 +147,9 @@ public final class SecurityPolicySettingsHandler {
         this.route(router, adminAuthz, "/api/v1/admin/failed-logins-settings", failedLogins());
         this.route(
             router, adminAuthz, "/api/v1/admin/password-sign-in-settings", passwordSignIn()
+        );
+        this.route(
+            router, adminAuthz, "/api/v1/admin/sign-in-report-settings", signInReport()
         );
     }
 
@@ -289,6 +301,37 @@ public final class SecurityPolicySettingsHandler {
             () -> {
                 final PasswordSignInSettingsLoader loader =
                     PasswordSignInSettingsLoader.installed();
+                if (loader != null) {
+                    loader.invalidate();
+                }
+            }
+        );
+    }
+
+    /**
+     * The policy of the sign-in failures report: whether failures are
+     * noted, and how long a line is kept.
+     * @return Section
+     */
+    static Section signInReport() {
+        return new Section(
+            "sign-in-report", "sign_in_report", SIGN_IN_REPORT_KEYS,
+            () -> {
+                final SignInReportConfig current =
+                    SignInReportSettingsLoader.activeSupplier().get();
+                return new JsonObject()
+                    .put(SignInReportSettingsLoader.KEY_ENABLED, String.valueOf(current.enabled()))
+                    .put(
+                        SignInReportSettingsLoader.KEY_RETENTION,
+                        String.valueOf(current.retentionDays())
+                    );
+            },
+            merged -> new SignInReportConfig(
+                Section.parseBoolean(merged, SignInReportSettingsLoader.KEY_ENABLED),
+                Section.parseInt(merged, SignInReportSettingsLoader.KEY_RETENTION)
+            ),
+            () -> {
+                final SignInReportSettingsLoader loader = SignInReportSettingsLoader.installed();
                 if (loader != null) {
                     loader.invalidate();
                 }

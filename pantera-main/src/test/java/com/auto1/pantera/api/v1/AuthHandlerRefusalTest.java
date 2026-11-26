@@ -267,6 +267,58 @@ final class AuthHandlerRefusalTest {
     }
 
     @Test
+    void hitOfTheFormLimitGoesToTheReport(final Vertx vertx) throws Exception {
+        final com.auto1.pantera.auth.signin.SignInFailures report =
+            new com.auto1.pantera.auth.signin.SignInFailures(
+                new com.auto1.pantera.auth.signin.InMemorySignInFailureStore(),
+                com.auto1.pantera.settings.policy.SignInReportConfig::defaults
+            );
+        this.logins.reportTo(report);
+        final KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
+        gen.initialize(2048);
+        final KeyPair pair = gen.generateKeyPair();
+        final Router router = Router.router(vertx);
+        router.route().handler(BodyHandler.create());
+        new AuthHandler(
+            new JwtTokens(
+                (RSAPrivateKey) pair.getPrivate(), (RSAPublicKey) pair.getPublic(),
+                null, null, null
+            ),
+            (name, pass) -> Optional.empty(),
+            null, Policy.FREE, null, null, null,
+            new LoginThrottle(2, Duration.ofMinutes(15), System::nanoTime),
+            this.logins
+        ).register(router);
+        final HttpServer limited = vertx.createHttpServer().requestHandler(router)
+            .listen(0, "127.0.0.1")
+            .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+        try {
+            for (int idx = 0; idx < 4; idx += 1) {
+                this.client.post(limited.actualPort(), "127.0.0.1", "/api/v1/auth/token")
+                    .putHeader("User-Agent", "Mozilla/5.0")
+                    .sendJsonObject(new JsonObject().put("name", "carol").put("pass", "secret"))
+                    .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+            }
+            final com.auto1.pantera.auth.signin.SignInFailure line = report.list(
+                new com.auto1.pantera.auth.signin.SignInFailureStore.Query(
+                    com.auto1.pantera.auth.signin.SignInFailure.FORM_LIMIT, "carol", true, "",
+                    10, 0
+                )
+            ).items().get(0);
+            MatcherAssert.assertThat(
+                "the two refused tries, the failures that led to the block, and the client",
+                java.util.List.of(
+                    String.valueOf(line.hits()), String.valueOf(line.failures()),
+                    line.userAgent(), String.valueOf(line.blockedUntil() != null)
+                ),
+                new IsEqual<>(java.util.List.of("2", "2", "Mozilla/5.0", "true"))
+            );
+        } finally {
+            limited.close().toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void okaButtonSignsInAUserWhoIsNotLocked() {
         MatcherAssert.assertThat(
             this.handler.ssoSession("alice", "okta").accessToken().isEmpty(),

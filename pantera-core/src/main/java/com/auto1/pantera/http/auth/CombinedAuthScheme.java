@@ -91,7 +91,7 @@ public final class CombinedAuthScheme implements AuthScheme {
                     if (BasicAuthScheme.NAME.equals(auth.scheme())) {
                         return this.authenticateBasic(auth, headers);
                     } else if (BearerAuthScheme.NAME.equals(auth.scheme())) {
-                        return this.authenticateBearer(auth);
+                        return this.authenticateBearer(auth, headers);
                     }
                     return CompletableFuture.completedFuture(
                         AuthScheme.result(AuthUser.ANONYMOUS, CombinedAuthScheme.CHALLENGE)
@@ -202,10 +202,14 @@ public final class CombinedAuthScheme implements AuthScheme {
      * Authenticate using Bearer token authentication.
      *
      * @param auth Authorization header
+     * @param request Headers of the request
      * @return Authentication result
      */
-    private CompletionStage<AuthScheme.Result> authenticateBearer(final Authorization auth) {
-        return this.tokenAuth.check(new Authorization.Bearer(auth.credentials()).token())
+    private CompletionStage<AuthScheme.Result> authenticateBearer(
+        final Authorization auth, final Headers request
+    ) {
+        return this.tokenAuth
+            .check(new Authorization.Bearer(auth.credentials()).token(), request)
             .thenApply(outcome -> AuthScheme.result(outcome, CombinedAuthScheme.CHALLENGE));
     }
 }
