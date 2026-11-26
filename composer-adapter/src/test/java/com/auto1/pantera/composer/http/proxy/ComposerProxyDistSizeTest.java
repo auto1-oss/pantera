@@ -70,8 +70,11 @@ final class ComposerProxyDistSizeTest {
                 new Content.From(Flowable.just(ByteBuffer.wrap(ZIP)))
             ).build()
         );
-        final AuditCapture capture = AuditCapture.install();
-        try {
+        // LogCapture attaches to the logger instance the code logs through.
+        // A capture that registered its own logger configuration saw nothing
+        // when an earlier test of this module had already captured the audit
+        // logger: log4j keeps the configuration that is there.
+        try (LogCapture capture = LogCapture.of("artifact.audit")) {
             final Response resp = new ProxyDownloadSlice(
                 upstream, null, URI.create("https://upstream.example"), Optional.empty(),
                 "php_proxy", "php-proxy", storage, NoopCooldownService.INSTANCE, new NoDates()
@@ -82,14 +85,12 @@ final class ComposerProxyDistSizeTest {
             resp.body().asBytesFuture().get(10, TimeUnit.SECONDS);
             Object size = null;
             while (size == null) {
-                size = capture.accessSize();
+                size = ComposerProxyDistSizeTest.accessSize(capture);
                 Thread.sleep(5);
             }
             MatcherAssert.assertThat(
                 String.valueOf(size), new IsEqual<>(String.valueOf(ZIP.length))
             );
-        } finally {
-            capture.remove();
         }
     }
 
@@ -113,68 +114,19 @@ final class ComposerProxyDistSizeTest {
     }
 
     /**
-     * Captures {@code artifact.audit} records.
+     * Size of the dist in the record of its successful download.
+     * @param capture Captured audit records
+     * @return {@code package.size}, or null while the record is not written
      */
-    private static final class AuditCapture
-        extends org.apache.logging.log4j.core.appender.AbstractAppender {
-
-        private static final String NAME = "ComposerDistSizeAuditCapture";
-
-        private final List<org.apache.logging.log4j.core.LogEvent> events =
-            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
-
-        private AuditCapture() {
-            super(NAME, null, null, true,
-                org.apache.logging.log4j.core.config.Property.EMPTY_ARRAY);
-        }
-
-        static AuditCapture install() {
-            final AuditCapture capture = new AuditCapture();
-            capture.start();
-            final org.apache.logging.log4j.core.LoggerContext lc =
-                (org.apache.logging.log4j.core.LoggerContext)
-                    org.apache.logging.log4j.LogManager.getContext(false);
-            final org.apache.logging.log4j.core.config.Configuration cfg = lc.getConfiguration();
-            // This module has no log4j2 test config (root level ERROR), so
-            // give the audit logger its own INFO config for the capture.
-            final org.apache.logging.log4j.core.config.LoggerConfig audit =
-                new org.apache.logging.log4j.core.config.LoggerConfig(
-                    "artifact.audit", org.apache.logging.log4j.Level.INFO, false
-                );
-            audit.addAppender(capture, null, null);
-            cfg.addLogger("artifact.audit", audit);
-            lc.updateLoggers();
-            return capture;
-        }
-
-        void remove() {
-            final org.apache.logging.log4j.core.LoggerContext lc =
-                (org.apache.logging.log4j.core.LoggerContext)
-                    org.apache.logging.log4j.LogManager.getContext(false);
-            final org.apache.logging.log4j.core.config.Configuration cfg = lc.getConfiguration();
-            cfg.removeLogger("artifact.audit");
-            this.stop();
-            lc.updateLoggers();
-        }
-
-        Object accessSize() {
-            synchronized (this.events) {
-                for (final org.apache.logging.log4j.core.LogEvent event : this.events) {
-                    if (event.getMessage()
-                        instanceof org.apache.logging.log4j.message.MapMessage<?, ?> map
-                        && "artifact_access".equals(String.valueOf(map.getData().get("event.action")))
-                        && "success".equals(String.valueOf(map.getData().get("event.outcome")))) {
-                        return map.getData().get("package.size");
-                    }
-                }
+    private static Object accessSize(final LogCapture capture) {
+        Object size = null;
+        for (final java.util.Map<String, Object> event : capture.action("artifact_access")) {
+            if ("success".equals(String.valueOf(event.get("event.outcome")))) {
+                size = event.get("package.size");
+                break;
             }
-            return null;
         }
-
-        @Override
-        public void append(final org.apache.logging.log4j.core.LogEvent event) {
-            this.events.add(event.toImmutable());
-        }
+        return size;
     }
 
     /**
