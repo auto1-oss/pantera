@@ -29,6 +29,24 @@ final class SecurityPolicySettingsSyncTest {
     @AfterEach
     void tearDown() {
         LoginThrottleSettingsLoader.uninstall();
+        PasswordSignInSettingsLoader.uninstall();
+    }
+
+    @Test
+    void passwordSignInChangedOnAPeerIsReloadedHere() {
+        final Map<String, String> rows = new HashMap<>(Map.of("password_sign_in_okta", "all"));
+        PasswordSignInSettingsLoader.install(FakeAuthSettings.withRows(rows), name -> null);
+        final SecurityPolicySettingsSync sync = SecurityPolicySettingsSync.attach(Optional.empty());
+        MatcherAssert.assertThat(
+            "initial value cached",
+            PasswordSignInSettingsLoader.activeSupplier().get().mode("okta"), new IsEqual<>("all")
+        );
+        rows.put("password_sign_in_okta", "off");
+        sync.receive("password_sign_in");
+        MatcherAssert.assertThat(
+            "the peer's change applies on this node",
+            PasswordSignInSettingsLoader.activeSupplier().get().mode("okta"), new IsEqual<>("off")
+        );
     }
 
     @Test

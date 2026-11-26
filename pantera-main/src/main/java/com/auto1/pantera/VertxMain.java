@@ -447,6 +447,11 @@ public final class VertxMain {
         com.auto1.pantera.settings.policy.FailedLoginsSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
+        // Where each identity provider takes passwords ("Password
+        // sign-in" on the provider cards): read on every login.
+        com.auto1.pantera.settings.policy.PasswordSignInSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
         // WS8 fixwave-c (2.3.0): install the client-base URL derivation
         // settings (trust_forwarded_headers, client_base_host_allowlist)
         // consumed by pantera-core's ClientBaseUrl. install(...) also feeds

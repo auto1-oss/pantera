@@ -61,7 +61,8 @@ public final class SecurityPolicySettingsSync {
 
     /**
      * Tell peers a section was written.
-     * @param section Section name ({@code request_limits}, {@code egress}, {@code login_throttle}, {@code failed_logins})
+     * @param section Section name ({@code request_limits}, {@code egress}, {@code login_throttle}, {@code failed_logins},
+     *  {@code password_sign_in})
      */
     public void broadcast(final String section) {
         if (this.bus != null) {
@@ -88,6 +89,12 @@ public final class SecurityPolicySettingsSync {
             final FailedLoginsSettingsLoader failed = FailedLoginsSettingsLoader.installed();
             if (failed != null) {
                 failed.invalidate();
+            }
+        }
+        if (all || "password_sign_in".equals(section)) {
+            final PasswordSignInSettingsLoader passwords = PasswordSignInSettingsLoader.installed();
+            if (passwords != null) {
+                passwords.invalidate();
             }
         }
         EcsLogger.info(LOGGER)

@@ -3475,6 +3475,59 @@ Partial updates are accepted; omitted keys keep their current values. The merged
 
 ---
 
+### GET /api/v1/admin/password-sign-in-settings
+
+Where each identity provider checks a user name and password (2.2.15). See [Password sign-in](admin-guide/authentication.md#password-sign-in-where-a-provider-takes-passwords).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):**
+
+```json
+{
+  "password_sign_in_okta": "all",
+  "password_sign_in_keycloak": "all",
+  "password_sign_in_github": "all"
+}
+```
+
+| Value  | The provider checks a password |
+|--------|--------------------------------|
+| `all`  | on the sign-in form, on `POST /api/v1/auth/token` and with repository requests |
+| `form` | on the sign-in form and `POST /api/v1/auth/token` only |
+| `off`  | nowhere |
+
+A provider type is listed whether it is configured or not.
+
+---
+
+### PUT /api/v1/admin/password-sign-in-settings
+
+Partial updates are accepted; omitted keys keep their current values. The change applies to the next login on every node.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:** any subset of the fields above.
+
+```json
+{ "password_sign_in_okta": "form" }
+```
+
+**Response (204):** No content.
+
+**Response (400):** an unknown key, or a value that is not `all`, `form` or `off`.
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid password-sign-in setting: 'ui' is not a password sign-in mode (all, form, off)"
+}
+```
+
+---
+
 ### GET /api/v1/locked-users
 
 List the user names locked after failed logins, oldest lock first (2.2.15). A locked name need not be a Pantera user.

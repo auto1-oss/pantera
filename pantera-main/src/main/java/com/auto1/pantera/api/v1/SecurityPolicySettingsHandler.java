@@ -20,6 +20,8 @@ import com.auto1.pantera.settings.policy.EgressConfig;
 import com.auto1.pantera.settings.policy.EgressSettingsLoader;
 import com.auto1.pantera.settings.policy.FailedLoginsConfig;
 import com.auto1.pantera.settings.policy.FailedLoginsSettingsLoader;
+import com.auto1.pantera.settings.policy.PasswordSignInConfig;
+import com.auto1.pantera.settings.policy.PasswordSignInSettingsLoader;
 import com.auto1.pantera.settings.policy.LoginThrottleConfig;
 import com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader;
 import com.auto1.pantera.settings.policy.RequestLimitsConfig;
@@ -81,6 +83,16 @@ public final class SecurityPolicySettingsHandler {
     );
 
     /**
+     * Keys accepted by the password sign-in endpoint: one per provider
+     * type that hands a password to an identity provider.
+     */
+    private static final Set<String> PASSWORD_SIGN_IN_KEYS = Set.of(
+        PasswordSignInSettingsLoader.KEY_PREFIX + "okta",
+        PasswordSignInSettingsLoader.KEY_PREFIX + "keycloak",
+        PasswordSignInSettingsLoader.KEY_PREFIX + "github"
+    );
+
+    /**
      * Logger name.
      */
     private static final String LOGGER = "com.auto1.pantera.api.v1";
@@ -124,6 +136,9 @@ public final class SecurityPolicySettingsHandler {
         this.route(router, adminAuthz, "/api/v1/admin/egress-settings", egress());
         this.route(router, adminAuthz, "/api/v1/admin/login-throttle-settings", loginThrottle());
         this.route(router, adminAuthz, "/api/v1/admin/failed-logins-settings", failedLogins());
+        this.route(
+            router, adminAuthz, "/api/v1/admin/password-sign-in-settings", passwordSignIn()
+        );
     }
 
     /**
@@ -245,6 +260,42 @@ public final class SecurityPolicySettingsHandler {
         );
     }
 
+    /**
+     * Where each identity provider takes passwords ("Password sign-in" on
+     * the provider cards): everywhere, on the sign-in form only, nowhere.
+     * @return Section
+     */
+    static Section passwordSignIn() {
+        return new Section(
+            "password-sign-in", "password_sign_in", PASSWORD_SIGN_IN_KEYS,
+            () -> {
+                final PasswordSignInConfig current =
+                    PasswordSignInSettingsLoader.activeSupplier().get();
+                final JsonObject values = new JsonObject();
+                for (final String type : PasswordSignInConfig.TYPES) {
+                    values.put(PasswordSignInSettingsLoader.KEY_PREFIX + type, current.mode(type));
+                }
+                return values;
+            },
+            merged -> {
+                final java.util.Map<String, String> modes = new java.util.HashMap<>();
+                for (final String type : PasswordSignInConfig.TYPES) {
+                    modes.put(
+                        type, merged.getString(PasswordSignInSettingsLoader.KEY_PREFIX + type)
+                    );
+                }
+                new PasswordSignInConfig(modes);
+            },
+            () -> {
+                final PasswordSignInSettingsLoader loader =
+                    PasswordSignInSettingsLoader.installed();
+                if (loader != null) {
+                    loader.invalidate();
+                }
+            }
+        );
+    }
+
     private void route(
         final Router router, final AuthzHandler authz, final String path, final Section section
     ) {
@@ -308,8 +359,8 @@ public final class SecurityPolicySettingsHandler {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 EcsLogger.info(LOGGER)
-                    .message("Admin updated " + section.name() + " settings (keys="
-                        + String.join(",", body.fieldNames()) + ")")
+                    .message("Admin updated " + section.name() + " settings ("
+                        + SecurityPolicySettingsHandler.written(body) + ")")
                     .eventCategory("configuration")
                     .eventAction(section.eventPrefix() + "_settings_update")
                     .eventOutcome("success")
@@ -318,6 +369,27 @@ public final class SecurityPolicySettingsHandler {
                 ctx.response().setStatusCode(204).end();
             }
         });
+    }
+
+    /**
+     * What an update wrote, for its record: every key with its new value.
+     * None of these settings is a secret; a long value is cut.
+     * @param body The update
+     * @return {@code key=value} pairs
+     */
+    private static String written(final JsonObject body) {
+        final StringBuilder text = new StringBuilder(64);
+        for (final String key : new java.util.TreeSet<>(body.fieldNames())) {
+            String value = String.valueOf(body.getValue(key)).trim();
+            if (value.length() > 120) {
+                value = value.substring(0, 120) + "...";
+            }
+            if (text.length() > 0) {
+                text.append(", ");
+            }
+            text.append(key).append('=').append(value);
+        }
+        return text.toString();
     }
 
     /**

@@ -922,6 +922,12 @@ public final class YamlSettings implements Settings {
             // These hand the password to an identity provider outside
             // Pantera: every such check is counted.
             auth = new com.auto1.pantera.auth.CountedProvider(auth, type);
+            // And an administrator decides where: on the sign-in form and
+            // repository requests, on the form only, or nowhere.
+            auth = new com.auto1.pantera.auth.PasswordSignInGate(
+                auth, type,
+                com.auto1.pantera.settings.policy.PasswordSignInSettingsLoader.activeSupplier()
+            );
         }
         return auth;
     }
@@ -1169,6 +1175,13 @@ public final class YamlSettings implements Settings {
         // A login the cache remembers must not pass for a locked user: the
         // cache steps aside and the chain refuses it.
         users.bypassFor(logins::passwordLocked);
+        // Nor may a login remembered from the sign-in form answer a
+        // repository request while a provider takes passwords on the
+        // form only, or one remembered before that setting changed.
+        users.scopedBy(
+            () -> com.auto1.pantera.settings.policy.PasswordSignInSettingsLoader.activeSupplier()
+                .get().scope(com.auto1.pantera.http.auth.LoginSource.current())
+        );
         return new AuthChain(users, cachedEnabledFilter, logins);
     }
 

@@ -331,6 +331,25 @@ final class GuardedPasswordsTest {
     }
 
     @Test
+    void loginAcceptedOnTheFormIsCheckedAgainForARepositoryRequest() {
+        // The providers behind the guard may take a password on the
+        // sign-in form only: an answer given there is not handed to a
+        // repository request that follows it.
+        new PasswordCheck(this.guard, new LoginSource("10.0.0.1", "Mozilla/5.0", "ui"))
+            .now("jane", GuardedPasswordsTest.RIGHT);
+        new PasswordCheck(
+            this.guard, new LoginSource("10.0.0.1", "Apache-Maven/3.9", LoginSource.REPOSITORY)
+        ).now("jane", GuardedPasswordsTest.RIGHT);
+        new PasswordCheck(
+            this.guard, new LoginSource("10.0.0.1", "Apache-Maven/3.9", LoginSource.REPOSITORY)
+        ).now("jane", GuardedPasswordsTest.RIGHT);
+        MatcherAssert.assertThat(
+            "once for the form, once for the repository requests",
+            this.provider.calls.get(), new IsEqual<>(2)
+        );
+    }
+
+    @Test
     void failureRecordsWhereItCameFrom() {
         this.policy.set(new FailedLoginsConfig(0, 1, 60, 1, 0, 0, false));
         new PasswordCheck(

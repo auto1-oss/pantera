@@ -94,8 +94,28 @@ The `keycloak`, `okta` and `github` providers send the credential to a service o
 | A credential with the form of an API key, valid or not | No. |
 | A Bearer token | No. |
 | A password of a local user who has a password in Pantera | No: the local check decides, also when it fails. |
+| A password, where the provider's **Password sign-in** setting does not allow it | No. See below. |
 
-`pantera_auth_provider_checks_total` counts every such check by `provider` and `outcome` (`accepted`, `rejected`, `refused`, `unavailable`), and the **Pantera - Sign-in** dashboard charts it. Watch `rejected` after an upgrade or a configuration change: before 2.2.15 nothing showed that Pantera had started to send credentials to an identity provider.
+### Password sign-in: where a provider takes passwords
+
+An administrator decides for each of these providers where it checks a user name and password (v2.2.15+): **Settings → Auth Providers**, **Password sign-in** on the provider's card, or `PUT /api/v1/admin/password-sign-in-settings`.
+
+| Mode | Setting value | The provider checks a password |
+|------|---------------|--------------------------------|
+| Sign-in form and repositories | `all` (default) | on the sign-in form, on `POST /api/v1/auth/token`, and with repository requests (`mvn`, `npm`, `docker login`, `curl -u`). |
+| Sign-in form only | `form` | on the sign-in form and `POST /api/v1/auth/token`. A repository request with a directory password is answered `401` and the provider is not asked; clients use an API key. |
+| Off | `off` | nowhere. |
+
+The setting applies to the next login on every node, without a restart. It does not touch the provider's sign-in button (the browser redirect), which sends no password through Pantera, and not API keys.
+
+What to expect:
+
+- A login the provider would have accepted, where the setting keeps it from the provider, is a failed login like any other: it is counted for the [login delay and the account lock](failed-logins.md). A build tool that keeps sending a directory password after a change to `form` locks its user after the configured number of failures. Hand out API keys first.
+- A login accepted on the sign-in form is not handed to a repository request, and a login remembered under one mode is not served under another.
+- With `form`, a second factor still works: only the sign-in form can ask for one.
+- Each skipped check is a `DEBUG` record `password_sign_in_skipped`; a change of the setting is an `INFO` record `password_sign_in_settings_update` that names the new value.
+
+`pantera_auth_provider_checks_total` counts every check that is sent by `provider` and `outcome` (`accepted`, `rejected`, `refused`, `unavailable`), and the **Pantera - Sign-in** dashboard charts it. Watch `rejected` after an upgrade or a configuration change: before 2.2.15 nothing showed that Pantera had started to send credentials to an identity provider.
 
 ---
 
