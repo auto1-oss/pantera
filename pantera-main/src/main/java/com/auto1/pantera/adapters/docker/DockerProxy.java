@@ -22,6 +22,7 @@ import com.auto1.pantera.docker.proxy.ProxyDocker;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.publishdate.DbPublishDateRegistry;
 import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.http.auth.AuthScheme;
 import com.auto1.pantera.http.auth.CombinedAuthScheme;
 import com.auto1.pantera.http.DockerRoutingSlice;
 import com.auto1.pantera.http.Headers;
@@ -39,7 +40,9 @@ import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.repo.RepoConfig;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestTrace;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -207,11 +210,57 @@ public final class DockerProxy implements Slice {
                 )
             )
         );
-        final Docker proxies = new MultiReadDocker(
-            cfg.remotes().stream().map(r -> proxy(client, cfg, events, r, inspector))
+        final List<Docker> remotes = cfg.remotes().stream()
+            .map(r -> proxy(client, cfg, events, r, inspector))
+            .toList();
+        final AuthScheme scheme = new CombinedAuthScheme(auth, tokens);
+        final CooldownImageName names = new CooldownImageName(cfg.name(), official);
+        final Slice serving = serving(
+            cfg, policy, scheme, events, cooldown, inspector, names, view(cfg, remotes)
+        );
+        // A Troubleshoot replay (RequestTrace) asks what a client would
+        // get and must leave the repository as it found it. It is answered
+        // by a second view of the same repository: the same cache storage
+        // and the same upstream clients, read in the same order, but
+        // nothing is stored, no artifact event is queued and the release
+        // dates cooldown is evaluated with stay on an inspector of that one
+        // request. The registry API carries no request headers down to the
+        // cache layer, so the view is chosen here, where they are known.
+        final Docker unstored = view(
+            cfg,
+            remotes.stream()
+                .map(remote -> remote instanceof CacheDocker cached ? cached.readOnly() : remote)
                 .toList()
         );
-        Docker docker = cfg.storageOpt()
+        Slice slice = (line, headers, body) -> {
+            final Slice target;
+            if (RequestTrace.instance().traced(headers)) {
+                target = serving(
+                    cfg, policy, scheme, Optional.empty(), cooldown,
+                    inspector.overlay(), names, unstored
+                );
+            } else {
+                target = serving;
+            }
+            return target.response(line, headers, body);
+        };
+        if (cfg.port().isEmpty()) {
+            slice = new DockerRoutingSlice.Reverted(slice);
+        }
+        return slice;
+    }
+
+    /**
+     * The repository as the registry API reads it: its cache storage first,
+     * then its remotes.
+     *
+     * @param cfg Repository configuration
+     * @param remotes One Docker per remote
+     * @return Docker addressed by the repository-prefixed image name
+     */
+    private static Docker view(final RepoConfig cfg, final List<Docker> remotes) {
+        final Docker proxies = new MultiReadDocker(remotes);
+        final Docker docker = cfg.storageOpt()
             .<Docker>map(
                 storage -> {
                     final AstoDocker local = new AstoDocker(
@@ -228,27 +277,46 @@ public final class DockerProxy implements Slice {
                 }
             )
             .orElse(proxies);
-        docker = new TrimmedDocker(docker, cfg.name());
+        return new TrimmedDocker(docker, cfg.name());
+    }
+
+    /**
+     * The registry API over one view of the repository, behind the cooldown
+     * evaluation.
+     *
+     * @param cfg Repository configuration
+     * @param policy Access policy
+     * @param scheme Authentication scheme
+     * @param events Artifact events queue
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector the release dates are recorded on
+     * @param names Canonical cooldown artifact naming
+     * @param docker View of the repository
+     * @return Slice
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private static Slice serving(
+        final RepoConfig cfg,
+        final Policy<?> policy,
+        final AuthScheme scheme,
+        final Optional<Queue<ArtifactEvent>> events,
+        final CooldownService cooldown,
+        final DockerProxyCooldownInspector inspector,
+        final CooldownImageName names,
+        final Docker docker
+    ) {
         // writable=false: push routes answer 405 UNSUPPORTED before any
         // repository lookup, so a refused push never fetches, caches or
         // publishes the upstream manifest, and upload bodies are drained.
-        Slice slice = new DockerSlice(
-            docker, policy, new CombinedAuthScheme(auth, tokens), events,
-            SyncArtifactIndexer.NOOP, false
-        );
-        slice = new DockerProxyCooldownSlice(
-            slice,
+        return new DockerProxyCooldownSlice(
+            new DockerSlice(docker, policy, scheme, events, SyncArtifactIndexer.NOOP, false),
             cfg.name(),
             cfg.type(),
             cooldown,
             inspector,
             docker,
-            new CooldownImageName(cfg.name(), official)
+            names
         );
-        if (cfg.port().isEmpty()) {
-            slice = new DockerRoutingSlice.Reverted(slice);
-        }
-        return slice;
     }
 
     /**

@@ -49,6 +49,11 @@ public final class CacheLayers implements Layers {
     private final String upstreamUrl;
 
     /**
+     * Whether a blob of the origin is stored in the cache while it is read.
+     */
+    private final boolean store;
+
+    /**
      * Ctor.
      *
      * @param origin Origin layers.
@@ -67,10 +72,29 @@ public final class CacheLayers implements Layers {
      * @param upstreamUrl Upstream URL for metrics.
      */
     public CacheLayers(final Layers origin, final Layers cache, final String repoName, final String upstreamUrl) {
+        this(origin, cache, repoName, upstreamUrl, true);
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param origin Origin layers.
+     * @param cache Cache layers.
+     * @param repoName Repository name for metrics.
+     * @param upstreamUrl Upstream URL for metrics.
+     * @param store Whether a blob of the origin is stored in the cache while
+     *  it is read; false for a request that must leave the repository as it
+     *  found it
+     */
+    CacheLayers(
+        final Layers origin, final Layers cache, final String repoName,
+        final String upstreamUrl, final boolean store
+    ) {
         this.origin = origin;
         this.cache = cache;
         this.repoName = repoName;
         this.upstreamUrl = upstreamUrl;
+        this.store = store;
     }
 
     @Override
@@ -106,9 +130,7 @@ public final class CacheLayers implements Layers {
                                 final long duration = System.currentTimeMillis() - startTime;
                                 if (blob.isPresent()) {
                                     this.recordProxyMetric("success", duration);
-                                    return Optional.<Blob>of(
-                                        new CachingBlob(blob.get(), this.cache, this.repoName)
-                                    );
+                                    return Optional.of(this.served(blob.get()));
                                 } else {
                                     this.recordProxyMetric("not_found", duration);
                                     return blob;
@@ -131,9 +153,7 @@ public final class CacheLayers implements Layers {
                             final long duration = System.currentTimeMillis() - startTime;
                             if (blob.isPresent()) {
                                 this.recordProxyMetric("success", duration);
-                                return Optional.<Blob>of(
-                                    new CachingBlob(blob.get(), this.cache, this.repoName)
-                                );
+                                return Optional.of(this.served(blob.get()));
                             } else {
                                 this.recordProxyMetric("not_found", duration);
                                 return blob;
@@ -159,6 +179,23 @@ public final class CacheLayers implements Layers {
                 return result;
             }
         ).thenCompose(Function.identity());
+    }
+
+    /**
+     * The origin's blob as it is handed to the caller: stored in the cache
+     * while it is read, or the origin's own when nothing may be stored.
+     *
+     * @param blob Blob of the origin
+     * @return Blob to serve
+     */
+    private Blob served(final Blob blob) {
+        final Blob res;
+        if (this.store) {
+            res = new CachingBlob(blob, this.cache, this.repoName);
+        } else {
+            res = blob;
+        }
+        return res;
     }
 
     /**

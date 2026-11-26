@@ -68,6 +68,11 @@ public final class CacheRepo implements Repo {
     private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
 
     /**
+     * Whether what the origin returns is stored in the cache.
+     */
+    private final boolean store;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -113,6 +118,26 @@ public final class CacheRepo implements Repo {
                      Optional<Queue<ArtifactEvent>> events, String registryName,
                      Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
                      ConcurrentMap<String, CompletableFuture<Void>> inflight) {
+        this(name, origin, cache, events, registryName, inspector, upstreamUrl, inflight, true);
+    }
+
+    /**
+     * @param name Repository name
+     * @param origin Origin repository
+     * @param cache Cache repository
+     * @param events Artifact events
+     * @param registryName Pantera repository name
+     * @param inspector Cooldown inspector
+     * @param upstreamUrl Upstream URL for metrics
+     * @param inflight Manifest cache copies in flight, shared per proxy repository
+     * @param store Whether what the origin returns is stored in the cache;
+     *  false for a request that must leave the repository as it found it
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    CacheRepo(String name, Repo origin, Repo cache,
+              Optional<Queue<ArtifactEvent>> events, String registryName,
+              Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
+              ConcurrentMap<String, CompletableFuture<Void>> inflight, boolean store) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
@@ -121,11 +146,15 @@ public final class CacheRepo implements Repo {
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
         this.inflight = inflight;
+        this.store = store;
     }
 
     @Override
     public Layers layers() {
-        return new CacheLayers(this.origin.layers(), this.cache.layers(), this.repoName, this.upstreamUrl);
+        return new CacheLayers(
+            this.origin.layers(), this.cache.layers(), this.repoName, this.upstreamUrl,
+            this.store
+        );
     }
 
     @Override
@@ -138,7 +167,8 @@ public final class CacheRepo implements Repo {
             this.repoName,
             this.inspector,
             this.upstreamUrl,
-            this.inflight
+            this.inflight,
+            this.store
         );
     }
 

@@ -56,6 +56,11 @@ public final class CacheDocker implements Docker {
     private final String upstreamUrl;
 
     /**
+     * Whether what the origin returns is stored in the cache.
+     */
+    private final boolean store;
+
+    /**
      * Manifest cache copies in flight for this proxy repository: concurrent
      * first pulls of one tag store and publish it once.
      */
@@ -88,11 +93,31 @@ public final class CacheDocker implements Docker {
                        Optional<DockerProxyCooldownInspector> inspector,
                        String upstreamUrl
     ) {
+        this(origin, cache, events, inspector, upstreamUrl, true);
+    }
+
+    /**
+     * @param origin Origin repository.
+     * @param cache Cache repository.
+     * @param events Artifact metadata events queue
+     * @param inspector Cooldown inspector
+     * @param upstreamUrl Upstream URL for metrics
+     * @param store Whether what the origin returns is stored in the cache
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CacheDocker(Docker origin,
+                        Docker cache,
+                        Optional<Queue<ArtifactEvent>> events,
+                        Optional<DockerProxyCooldownInspector> inspector,
+                        String upstreamUrl,
+                        boolean store
+    ) {
         this.origin = origin;
         this.cache = cache;
         this.events = events;
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
+        this.store = store;
         this.inflight = new ConcurrentHashMap<>();
     }
 
@@ -111,12 +136,30 @@ public final class CacheDocker implements Docker {
             registryName(),
             this.inspector,
             this.upstreamUrl,
-            this.inflight
+            this.inflight,
+            this.store
         );
     }
 
     @Override
     public CompletableFuture<Catalog> catalog(Pagination pagination) {
         return new JoinedCatalogSource(pagination, this.origin, this.cache).catalog();
+    }
+
+    /**
+     * The same repository for a request that must leave it as it found it:
+     * a Troubleshoot replay ({@code RequestTrace}) asks what a client would
+     * get. This view reads the cache and the origin in the same order and
+     * returns the same manifest or blob, but stores nothing in the cache,
+     * queues no artifact event and records no release date. The body of a
+     * blob the cache does not hold is the origin's own.
+     *
+     * @return Read-only view of this repository
+     */
+    public Docker readOnly() {
+        return new CacheDocker(
+            this.origin, this.cache, Optional.empty(), Optional.empty(),
+            this.upstreamUrl, false
+        );
     }
 }
