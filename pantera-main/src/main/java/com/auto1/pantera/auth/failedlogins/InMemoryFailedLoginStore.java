@@ -125,6 +125,29 @@ public final class InMemoryFailedLoginStore implements FailedLoginStore {
     }
 
     @Override
+    public List<String> counted() {
+        final List<Map.Entry<String, Entry>> failed = new ArrayList<>(this.entries.size());
+        for (final Map.Entry<String, Entry> one : this.entries.entrySet()) {
+            if (one.getValue().state().failures() > 0) {
+                failed.add(one);
+            }
+        }
+        failed.sort(
+            Comparator.comparing(
+                (Map.Entry<String, Entry> one) -> one.getValue().state().lastFailure()
+            ).reversed().thenComparing(Map.Entry::getKey)
+        );
+        final List<String> res = new ArrayList<>(failed.size());
+        for (final Map.Entry<String, Entry> one : failed) {
+            if (res.size() == FailedLoginStore.MAX_COUNTED) {
+                break;
+            }
+            res.add(one.getKey());
+        }
+        return res;
+    }
+
+    @Override
     public List<String> unlockAll() {
         final List<String> res = new ArrayList<>(this.entries.size());
         for (final LockedName one : this.locked()) {

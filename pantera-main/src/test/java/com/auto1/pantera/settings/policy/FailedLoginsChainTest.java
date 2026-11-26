@@ -106,6 +106,25 @@ final class FailedLoginsChainTest {
     }
 
     @Test
+    void rememberedLoginEndsTheCountLikeAnyOtherSuccess() throws Exception {
+        // Two typos, the right password, two typos, the right password:
+        // nobody is locked, because every success starts the count again.
+        // The right password is one the credential cache remembers.
+        final Authentication chain = this.settings().authz().authentication();
+        new PasswordCheck(chain).now("alice", RecordingAuthFactory.PASSWORD);
+        for (int round = 0; round < 2; round += 1) {
+            new PasswordCheck(chain).now("alice", "typo-a" + round);
+            new PasswordCheck(chain).now("alice", "typo-b" + round);
+            MatcherAssert.assertThat(
+                "round " + round + ": the right password signs in",
+                new PasswordCheck(chain).now("alice", RecordingAuthFactory.PASSWORD)
+                    .user().isPresent(),
+                new IsEqual<>(true)
+            );
+        }
+    }
+
+    @Test
     void lockLimitedToPasswordsStillRefusesARememberedPassword() throws Exception {
         FailedLoginsChainTest.policy(Map.of("failed_logins_lock_all_credentials", "false"));
         final Authentication chain = this.settings().authz().authentication();

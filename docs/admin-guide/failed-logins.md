@@ -39,6 +39,7 @@ Each key also has an environment variable, `PANTERA_<KEY IN UPPER CASE>`, that i
 - A name **without a Pantera user** is counted too: a login that is checked with an identity provider is a failed login of the directory account behind it.
 - A **rejected API key** counts only when *Count rejected API keys* is on. Before you turn it on, clear the stale keys your users' tools still send: with the lock at 3, an IDE that holds an old key locks its owner with its first three requests, and again after every unlock.
 - A successful password login forgets the failures. A request with a valid API key does not: a running build would otherwise keep clearing the count of an attack on its user.
+- While a name has failures on record, its logins are not answered from the credential cache: each is checked, so that the right password does forget the failures. A node learns of a failure counted on another node within 15 seconds.
 
 **Not counted:**
 
@@ -61,13 +62,15 @@ With *A lock blocks every credential* on, a locked user can do nothing in Panter
 
 With it off, only the user's password sign-in is locked; API keys, sessions and the provider's button keep working.
 
+A user who is signed in to the UI when the lock comes is signed out with the next request, and the sign-in page says that the account is locked.
+
 **Think about service accounts.** Anyone who can reach Pantera and knows a user name can lock it with wrong passwords, and with every credential blocked that also stops the builds that use the account's API key. Choose an automatic unlock time, or limit the lock to passwords, if that is not acceptable for your installation.
 
 ---
 
 ## Unlocking
 
-- **UI:** *Users* shows a **Locked** tag and an **Unlock** action per user, and **Unlock all**. The *Failed logins* card lists locked names that have no Pantera user.
+- **UI:** *Users* shows a **Locked** tag and an **Unlock** action per user, a **Locked only** filter and **Unlock all**. A user's page has a **Failed logins** panel with the count, the lock and where the last failed login came from, and **Unlock** (or **Clear failed logins** for a user who is not locked). The *Failed logins* card in System Settings lists every locked name, also those that have no Pantera user. The **Locked only** filter reads the user list in pages and covers the first 2,000 users; the card's list has no such limit.
 - **API:** `POST /api/v1/users/:name/unlock` and `POST /api/v1/users/unlock-all`. `GET /api/v1/locked-users` lists the locked names with the client address, client program and sign-in path of their last failed login. Unlocking needs the permission to enable or disable a user.
 - **Without a login,** for the case that every administrator is locked: remove the row in the database. Every node picks the change up within 15 seconds; no restart is needed.
 
@@ -94,6 +97,8 @@ Without a database the counts are kept in memory, per node, and do not survive a
 ## The Sign-in Form's Own Limit
 
 The sign-in form keeps its older limit beside this policy (**System Settings → Login Throttling**): 5 failures per user and client address in 15 minutes, answered `429`. A failed login on the form counts for both. With the lock at 3 a user is locked before that limit is reached; it matters when you raise the lock limit above it or switch the lock off.
+
+A locked user is answered `403` "Account locked" on the form however often they try: the lock is checked before this limit, and those tries are not counted against it.
 
 ---
 

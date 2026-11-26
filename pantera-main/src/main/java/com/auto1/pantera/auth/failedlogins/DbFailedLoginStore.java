@@ -99,6 +99,15 @@ public final class DbFailedLoginStore implements FailedLoginStore {
     );
 
     /**
+     * Names with failed logins on record, most recent failure first.
+     */
+    private static final String COUNTED = String.join(
+        " ",
+        "SELECT username FROM login_failures WHERE failures > 0",
+        "ORDER BY last_failure_at DESC NULLS LAST, username LIMIT ?"
+    );
+
+    /**
      * Removes the rows of all locked names.
      */
     private static final String UNLOCK_ALL =
@@ -203,6 +212,23 @@ public final class DbFailedLoginStore implements FailedLoginStore {
             }
         } catch (final SQLException err) {
             throw new IllegalStateException("Failed to list the locked users", err);
+        }
+        return names;
+    }
+
+    @Override
+    public List<String> counted() {
+        final List<String> names = new ArrayList<>(16);
+        try (Connection conn = this.source.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(DbFailedLoginStore.COUNTED)) {
+            stmt.setInt(1, FailedLoginStore.MAX_COUNTED);
+            try (ResultSet res = stmt.executeQuery()) {
+                while (res.next()) {
+                    names.add(res.getString(1));
+                }
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to list the names with failed logins", err);
         }
         return names;
     }
