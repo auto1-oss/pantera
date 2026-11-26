@@ -204,7 +204,7 @@ public final class CombinedAuthzSlice implements Slice {
                         );
                     }
                     if (BasicAuthScheme.NAME.equals(scheme)) {
-                        return this.authenticateBasic(auth);
+                        return this.authenticateBasic(auth, headers);
                     } else if (BearerAuthScheme.NAME.equals(scheme)) {
                         return this.authenticateBearer(auth);
                     } else {
@@ -236,7 +236,9 @@ public final class CombinedAuthzSlice implements Slice {
      * @param auth Authorization header.
      * @return Authentication result.
      */
-    private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
+    private CompletionStage<AuthScheme.Result> authenticateBasic(
+        final Authorization auth, final Headers request
+    ) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
         try {
             basic.username();
@@ -314,7 +316,7 @@ public final class CombinedAuthzSlice implements Slice {
                                 new PasswordCheck.Outcome(bound, Optional.empty())
                             );
                         }
-                        return new PasswordCheck(this.basicAuth)
+                        return new PasswordCheck(this.basicAuth, request)
                             .run(basic.username(), basic.password());
                     }
                 );
@@ -322,7 +324,7 @@ public final class CombinedAuthzSlice implements Slice {
             // Offload to worker thread to prevent blocking event loop
             // This is critical for auth providers that make external calls
             // (Okta, Keycloak, etc.)
-            resolved = new PasswordCheck(this.basicAuth)
+            resolved = new PasswordCheck(this.basicAuth, request)
                 .run(basic.username(), basic.password());
         }
         return resolved.thenApply(

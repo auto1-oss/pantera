@@ -89,7 +89,7 @@ public final class CombinedAuthScheme implements AuthScheme {
                         );
                     }
                     if (BasicAuthScheme.NAME.equals(auth.scheme())) {
-                        return this.authenticateBasic(auth);
+                        return this.authenticateBasic(auth, headers);
                     } else if (BearerAuthScheme.NAME.equals(auth.scheme())) {
                         return this.authenticateBearer(auth);
                     }
@@ -117,9 +117,12 @@ public final class CombinedAuthScheme implements AuthScheme {
      * provider.
      *
      * @param auth Authorization header
+     * @param request Headers of the request
      * @return Authentication result
      */
-    private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
+    private CompletionStage<AuthScheme.Result> authenticateBasic(
+        final Authorization auth, final Headers request
+    ) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
         try {
             basic.username();
@@ -180,14 +183,14 @@ public final class CombinedAuthScheme implements AuthScheme {
                         ? CompletableFuture.completedFuture(
                             new PasswordCheck.Outcome(user, Optional.empty())
                         )
-                        : new PasswordCheck(this.basicAuth)
+                        : new PasswordCheck(this.basicAuth, request)
                             .run(basic.username(), basic.password())
                 );
         } else {
             // Offload the (potentially blocking, DB/IdP-backed) password
             // check off the calling thread — mirrors BasicAuthScheme. The
             // /v2/ Docker ping runs this on a Vert.x event-loop thread.
-            resolved = new PasswordCheck(this.basicAuth)
+            resolved = new PasswordCheck(this.basicAuth, request)
                 .run(basic.username(), basic.password());
         }
         return resolved.thenApply(

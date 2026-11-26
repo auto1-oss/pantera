@@ -20,12 +20,15 @@ import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 import java.security.interfaces.RSAPublicKey;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ForkJoinPool;
+import org.slf4j.MDC;
 
 /**
  * Unified JWT authentication handler for both HTTP ports.
@@ -143,8 +146,11 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
      * @return Future with the validated token, or empty
      */
     public CompletionStage<Optional<ValidatedToken>> validatedAsync(final String token) {
+        // The shared pool's threads keep whatever context earlier work left
+        // on them: the check runs under the caller's, so its records carry
+        // the trace and the client address of this request.
         return CompletableFuture.supplyAsync(
-            () -> this.validate(token),
+            TraceContextExecutor.wrapSupplier(() -> this.validate(token)),
             ForkJoinPool.commonPool()
         );
     }
@@ -189,6 +195,28 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
      * @return Validated token if acceptable, empty otherwise
      */
     private Optional<ValidatedToken> validate(final String token) {
+        // The owner of a token is known only once it is verified. A user
+        // name the thread's context still holds belongs to another request,
+        // and the logger prefers the context to the name a record states:
+        // without this a rejected token is recorded under that other user.
+        final String prior = MDC.get(EcsMdc.USER_NAME);
+        MDC.remove(EcsMdc.USER_NAME);
+        try {
+            return this.verified(token);
+        } finally {
+            if (prior != null) {
+                MDC.put(EcsMdc.USER_NAME, prior);
+            }
+        }
+    }
+
+    /**
+     * Verify a token: signature, expiry, required claims, and the
+     * type-specific revocation and database checks.
+     * @param token JWT string
+     * @return Validated token if acceptable, empty otherwise
+     */
+    private Optional<ValidatedToken> verified(final String token) {
         final DecodedJWT decoded;
         try {
             decoded = this.verifier.verify(token);

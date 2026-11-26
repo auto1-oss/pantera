@@ -10,8 +10,14 @@
  */
 package com.auto1.pantera.http.auth;
 
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import org.slf4j.MDC;
 
 /**
  * One check of a user name and password against a sign-in chain, with the
@@ -19,7 +25,9 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>Every entry point that checks a password goes through this class, so a
  * refusal is read on the thread the chain ran on, belongs to this login
- * alone, and never stays on a pooled thread for the next request.</p>
+ * alone, and never stays on a pooled thread for the next request. For the
+ * same reason the chain runs under the logging context of its own login,
+ * and the thread gets back the context it had.</p>
  *
  * @since 2.2.15
  */
@@ -31,12 +39,28 @@ public final class PasswordCheck {
     private final Authentication auth;
 
     /**
+     * Headers of the request that carries the login.
+     */
+    private final Headers request;
+
+    /**
      * Ctor.
      *
      * @param auth Sign-in chain
      */
     public PasswordCheck(final Authentication auth) {
+        this(auth, Headers.EMPTY);
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param auth Sign-in chain
+     * @param request Headers of the request that carries the login
+     */
+    public PasswordCheck(final Authentication auth, final Headers request) {
         this.auth = auth;
+        this.request = request;
     }
 
     /**
@@ -61,6 +85,54 @@ public final class PasswordCheck {
      * @return Outcome
      */
     public Outcome now(final String username, final String password) {
+        final Map<String, String> prior = MDC.getCopyOfContextMap();
+        try {
+            this.bind(username);
+            return this.checked(username, password);
+        } finally {
+            if (prior == null) {
+                MDC.clear();
+            } else {
+                MDC.setContextMap(prior);
+            }
+        }
+    }
+
+    /**
+     * Put the logging context of this login on the thread: the user name
+     * being checked, and the client address and trace of its request.
+     *
+     * <p>The thread is pooled, and the context it was started with is the
+     * one of the thread that submitted the check. After a token check that
+     * ended on a shared thread, that is whatever an earlier request left
+     * there. The logger prefers the thread's context to the fields a
+     * record names, so without this the chain's records would carry
+     * another request's user, address and trace.</p>
+     *
+     * @param username User name being checked
+     */
+    private void bind(final String username) {
+        if (!this.request.find(EcsLoggingSlice.CTX_TRACE_ID_HEADER).isEmpty()) {
+            // A request of the standard pipeline says everything about
+            // itself: nothing of the submitting thread's context is kept.
+            MDC.clear();
+            RequestContextHeaders.bindToMdc(this.request);
+        }
+        if (username == null || username.isEmpty()) {
+            MDC.remove(EcsMdc.USER_NAME);
+        } else {
+            MDC.put(EcsMdc.USER_NAME, username);
+        }
+    }
+
+    /**
+     * Ask the chain and collect the refusal it noted.
+     *
+     * @param username User name
+     * @param password Password
+     * @return Outcome
+     */
+    private Outcome checked(final String username, final String password) {
         // Whatever earlier work left on this pooled thread is not about
         // this login.
         AuthRefusal.take();
