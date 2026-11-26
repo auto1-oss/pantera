@@ -231,13 +231,18 @@ Admin panels appear in the sidebar under **Administration** only if you have the
 | Repository Management | `api_repository_permissions:write` | Create, edit, delete repositories |
 | Repository Jobs | `api_repository_permissions:delete` | Restore deleted repositories, follow and retry background purge jobs, purge unowned storage directories |
 | User Management | `api_user_permissions:write` | Create, edit, enable/disable users |
+| Sign-in failures | `api_user_permissions:read` | Who fails to sign in, with what, and from where: rejected API keys, failed password logins, hits of the sign-in form's limit (v2.2.15+) |
 | Roles & Permissions | `api_role_permissions:write` | Manage RBAC roles |
 | Storage Configuration | `api_storage_alias_permissions:create` | Manage storage aliases |
 | System Settings | Admin role | Configure server settings, auth providers |
 | Negative Cache | Admin role | Find and clear cached "not found" answers |
 | Troubleshoot | Admin role | Explain why a URL fails or serves stale metadata |
 
-If you do not see the Administration section, you have read-only access. Contact your administrator for elevated permissions.
+If you do not see the Administration section, your account has none of these permissions. Contact your administrator for elevated permissions.
+
+A group repository's edit page has a **Routing rules** card (v2.2.15+): the rules that limit a member to the paths it can have, a check of every rule by the server before saving, and **Test a path**, which shows the repositories the group would ask for a path, with the unsaved rules. Rules that come from a nested group are listed read-only. See [Routing rules](../configuration-reference.md#routing-rules).
+
+The cards of the Okta, Keycloak and GitHub providers under **Auth Providers** have a **Password sign-in** control (v2.2.15+): where that provider checks a user name and password. See [Password sign-in](../admin-guide/authentication.md#password-sign-in-where-a-provider-takes-passwords).
 
 ### Managing Repositories (/admin/repositories)
 

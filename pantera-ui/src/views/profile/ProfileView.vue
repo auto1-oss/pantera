@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useNotificationStore } from '@/stores/notifications'
 import { listTokens, revokeToken, type ApiToken } from '@/api/auth'
+import { listMyRejectedKeys, type RejectedApiKey } from '@/api/signInFailures'
 import { changePassword } from '@/api/users'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Card from 'primevue/card'
@@ -11,6 +12,8 @@ import Button from 'primevue/button'
 import Tag from 'primevue/tag'
 import Message from 'primevue/message'
 import PasswordComplexityForm from '@/components/auth/PasswordComplexityForm.vue'
+import { localDateTime } from '@/utils/relativeTime'
+import { rejectedKeyReason, shortKeyId } from '@/utils/signInFailures'
 
 const auth = useAuthStore()
 const theme = useThemeStore()
@@ -30,9 +33,28 @@ const permissionEntries = computed(() =>
 const tokens = ref<ApiToken[]>([])
 const tokensLoading = ref(false)
 
+// API keys of this user that Pantera rejected: a tool still sends them.
+// The section is extra information, shown only when there is such a key;
+// a failed load shows nothing and leaves the rest of the page alone.
+const rejectedKeys = ref<RejectedApiKey[]>([])
+
 onMounted(() => {
   loadTokens()
+  loadRejectedKeys()
 })
+
+async function loadRejectedKeys() {
+  try {
+    rejectedKeys.value = await listMyRejectedKeys()
+  } catch {
+    rejectedKeys.value = []
+  }
+}
+
+/** A key this Pantera did not issue has neither a name nor an id. */
+function rejectedKeyLabel(key: RejectedApiKey): string {
+  return key.key_name || shortKeyId(key.key_id) || 'Unknown key'
+}
 
 async function loadTokens() {
   tokensLoading.value = true
@@ -202,6 +224,53 @@ async function submitPasswordChange() {
                 size="small"
                 @click="handleRevoke(t.id)"
               />
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <Card v-if="rejectedKeys.length > 0" class="shadow-sm" data-testid="rejected-keys">
+        <template #title>Rejected API keys</template>
+        <template #subtitle>
+          <p class="text-xs text-gray-500 mt-1">
+            A tool still sends this key. Replace it there.
+          </p>
+        </template>
+        <template #content>
+          <div class="space-y-2">
+            <div
+              v-for="(key, index) in rejectedKeys"
+              :key="index"
+              class="p-3 bg-gray-50 dark:bg-gray-700 rounded"
+              data-testid="rejected-key"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <div
+                  class="text-sm font-medium text-gray-800 dark:text-gray-200 break-all"
+                  :title="key.key_id"
+                  data-testid="rejected-key-name"
+                >
+                  {{ rejectedKeyLabel(key) }}
+                </div>
+                <Tag
+                  :value="rejectedKeyReason(key.reason)"
+                  severity="warn"
+                  :title="key.reason"
+                  data-testid="rejected-key-reason"
+                />
+              </div>
+              <div class="text-xs text-gray-400 mt-1 flex flex-wrap gap-x-4 gap-y-0.5">
+                <span data-testid="rejected-key-count">
+                  Rejected {{ key.rejected }} {{ key.rejected === 1 ? 'time' : 'times' }}
+                </span>
+                <span data-testid="rejected-key-last">
+                  Last time: <span :title="key.last_rejected_at ?? ''">{{ localDateTime(key.last_rejected_at) }}</span>
+                </span>
+                <span data-testid="rejected-key-address">Client address: {{ key.client_ip || '—' }}</span>
+                <span class="break-all" data-testid="rejected-key-program">
+                  Client program: {{ key.user_agent || '—' }}
+                </span>
+              </div>
             </div>
           </div>
         </template>
