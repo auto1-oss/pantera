@@ -27,6 +27,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.BaseCachedProxySlice;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.client.auth.AuthClientSlice;
@@ -59,6 +60,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * swap one stream-through primitive for another with no TTFB win — the
  * universal-tee gap (G7) is therefore <em>already closed</em> at the
  * cache abstraction layer.</p>
+ *
+ * <p>A Troubleshoot replay ({@link RequestTrace}) is answered as a client
+ * is and leaves the proxy as it found it: a file the upstream has is
+ * handed on without being stored, and no artifact event is written.</p>
  */
 public final class FileProxySlice implements Slice {
 
@@ -397,6 +402,14 @@ public final class FileProxySlice implements Slice {
                         "com.auto1.pantera.files", this.rname, artifact, headers
                     );
                 final AtomicReference<Response> missed = new AtomicReference<>();
+                // A Troubleshoot replay asks what a client would get and must
+                // leave the proxy as it found it. The cache stores what its
+                // remote gives it, so for a replay it is told that the remote
+                // gave nothing: it reads its storage as for a client and has
+                // nothing to write. The upstream's body is kept here and
+                // handed to the caller as it is.
+                final boolean replay = RequestTrace.instance().traced(headers);
+                final AtomicReference<Content> unstored = new AtomicReference<>();
                 return this.cache.load(key,
                 new Remote.WithErrorHandling(
                     () -> {
@@ -417,9 +430,14 @@ public final class FileProxySlice implements Slice {
                                             .doOnError(term::completeExceptionally)
                                             .doOnTerminate(() -> term.complete(null));
 
-                                        promise.complete(Optional.of(new Content.From(body)));
+                                        if (replay) {
+                                            unstored.set(new Content.From(body));
+                                            promise.complete(Optional.empty());
+                                        } else {
+                                            promise.complete(Optional.of(new Content.From(body)));
+                                        }
 
-                                        if (this.events.isPresent()) {
+                                        if (this.events.isPresent() && !replay) {
                                             final String finalArtifact = key.string();
                                             term.thenRun(() -> {
                                                 final long size = totalSize.get();
@@ -481,6 +499,22 @@ public final class FileProxySlice implements Slice {
                 CacheControl.Standard.ALWAYS
             ).toCompletableFuture()
             .handle((content, throwable) -> {
+                    final Content direct = unstored.get();
+                    if (direct != null) {
+                        // The upstream had the file: the replay gets its
+                        // body, as a client does. A cache that asks the
+                        // upstream before its storage has answered "nothing"
+                        // with the copy it holds, if it holds one. That copy
+                        // is read to its end and dropped: a body nobody
+                        // subscribes to keeps what it holds.
+                        if (throwable == null) {
+                            content.ifPresent(FileProxySlice::discard);
+                        }
+                        return ResponseBuilder.ok()
+                            .headers(rshdr.get())
+                            .body(direct)
+                            .build();
+                    }
                     if (throwable == null && content.isPresent()) {
                         // A cache hit completes without contacting the upstream, so no
                         // upstream headers were captured: serve with the body's own.
@@ -502,6 +536,18 @@ public final class FileProxySlice implements Slice {
                 }
             );
             });
+    }
+
+    /**
+     * Read a body to its end and drop it, without holding it in memory.
+     *
+     * @param body Body nobody will read
+     */
+    private static void discard(final Content body) {
+        Flowable.fromPublisher(body).subscribe(
+            buf -> { },
+            err -> { }
+        );
     }
 
     /**
