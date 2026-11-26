@@ -4,7 +4,8 @@ import { listStorages, putStorage } from '@/api/settings'
 import { useNotificationStore } from '@/stores/notifications'
 import { REPO_TYPE_CREATE_OPTIONS } from '@/utils/repoTypes'
 import { isoToShortDuration, shortToIsoDuration } from '@/utils/duration'
-import type { RepoConfigEnvelope } from '@/types/repo'
+import { ruleMember, rulesOf } from '@/utils/routingRules'
+import type { RepoConfigEnvelope, RoutingRule } from '@/types/repo'
 import type { StorageAlias } from '@/types'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
@@ -16,6 +17,7 @@ import Tag from 'primevue/tag'
 import Dialog from 'primevue/dialog'
 import { listRepos } from '@/api/repos'
 import type { RepoListItem } from '@/types'
+import RepoRoutingRules from './RepoRoutingRules.vue'
 
 const props = defineProps<{
   /** Current config value (v-model:config) */
@@ -27,6 +29,12 @@ const props = defineProps<{
   /** When true the Cooldown card is not rendered: the parent edits the window
    *  through v-model:cooldown-enabled / v-model:cooldown-window instead. */
   hideCooldown?: boolean
+  /** Name of the repository, for the routing test of a group. Empty while a
+   *  new repository has no usable name yet. */
+  repoName?: string
+  /** The server's message of the last refused save. The Routing rules card
+   *  shows the rule problems in it on their rows. */
+  saveError?: string
 }>()
 
 const emit = defineEmits<{
@@ -116,8 +124,43 @@ function addMember() {
   groupMembers.value.push('')
 }
 
+// Routing rules of a group (`repo.routing`), in their order. `routing` is
+// not an owned key: until the admin changes the rules, buildConfig() sends
+// the stored value back verbatim through preservedKeys, like every key this
+// form does not model. Only a changed list replaces it.
+const routingRules = ref<RoutingRule[]>([])
+const loadedRouting = ref('[]')
+const routingChanged = computed(() => JSON.stringify(routingRules.value) !== loadedRouting.value)
+
+// What the save sends as `members`: the routing test gets the same list.
+const memberNames = computed(() =>
+  groupMembers.value.map(m => (typeof m === 'string' ? m.trim() : '')).filter(Boolean),
+)
+
+// A member that is removed while rules name it: the server refuses a rule
+// without its member, so the rules go with it, after a confirmation.
+const memberRemoval = ref({ idx: -1, name: '', rules: 0 })
+const memberRemovalVisible = ref(false)
+
 function removeMember(idx: number) {
+  const entry: unknown = groupMembers.value[idx]
+  const name = typeof entry === 'string' ? entry.trim() : ''
+  const rules = routingRules.value.filter(rule => ruleMember(rule) === name).length
+  // Listed a second time, the member stays in the group and keeps its rules.
+  const listedOnce = memberNames.value.filter(m => m === name).length === 1
+  if (name && rules > 0 && listedOnce) {
+    memberRemoval.value = { idx, name, rules }
+    memberRemovalVisible.value = true
+    return
+  }
   groupMembers.value.splice(idx, 1)
+}
+
+function confirmMemberRemoval() {
+  const { idx, name } = memberRemoval.value
+  memberRemovalVisible.value = false
+  groupMembers.value.splice(idx, 1)
+  routingRules.value = routingRules.value.filter(rule => ruleMember(rule) !== name)
 }
 
 function moveMemberUp(idx: number) {
@@ -324,6 +367,7 @@ watch(repoType, () => {
   if (!props.readOnlyType) {
     remotes.value = [{ url: '', username: '', password: '' }]
     groupMembers.value = []
+    routingRules.value = []
   }
   fetchCompatibleRepos()
 })
@@ -416,6 +460,11 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
   }
   groupMembers.value = members
 
+  // Routing rules: shown from the stored list; the stored value itself stays
+  // in preservedKeys.
+  routingRules.value = [...rulesOf(repo.routing)]
+  loadedRouting.value = JSON.stringify(routingRules.value)
+
   // Cooldown
   cooldownEnabled.value = !!repo.cooldown
   cooldownWindow.value = isoToShortDuration(repo.cooldown?.duration ?? 'P30D')
@@ -497,6 +546,15 @@ function buildConfig(): RepoConfigEnvelope {
     repo.members = members
   }
 
+  // Changed rules replace the stored ones; an empty list removes the key.
+  if (isGroup.value && routingChanged.value) {
+    if (routingRules.value.length > 0) {
+      repo.routing = [...routingRules.value]
+    } else {
+      delete repo.routing
+    }
+  }
+
   if (cooldownEnabled.value && cooldownDuration.value) {
     repo.cooldown = { duration: cooldownDuration.value }
   }
@@ -542,6 +600,7 @@ watch(
 )
 watch(remotes, () => { emitConfig() }, { deep: true })
 watch(groupMembers, () => { emitConfig() }, { deep: true })
+watch(routingRules, () => { emitConfig() })
 
 // Exposed so tests and parent views can read the resolved per-repo policy
 // flags without round-tripping through emitted config payloads.
@@ -938,8 +997,50 @@ defineExpose({
           />
         </template>
       </Dialog>
+
+      <Dialog
+        v-model:visible="memberRemovalVisible"
+        header="Remove member"
+        modal
+        :style="{ width: '30rem' }"
+      >
+        <div class="space-y-2 text-sm" data-testid="member-remove-dialog">
+          <p>
+            Remove <strong class="font-mono">{{ memberRemoval.name }}</strong> from the group?
+          </p>
+          <p class="text-gray-500">
+            {{ memberRemoval.rules }} routing {{ memberRemoval.rules === 1 ? 'rule names' : 'rules name' }}
+            this member. {{ memberRemoval.rules === 1 ? 'It is' : 'They are' }} removed with it:
+            a rule cannot name a repository that is not a member.
+          </p>
+        </div>
+        <template #footer>
+          <Button
+            label="Cancel"
+            severity="secondary"
+            text
+            data-testid="member-remove-cancel"
+            @click="memberRemovalVisible = false"
+          />
+          <Button
+            :label="memberRemoval.rules === 1 ? 'Remove member and 1 rule' : `Remove member and ${memberRemoval.rules} rules`"
+            severity="danger"
+            data-testid="member-remove-confirm"
+            @click="confirmMemberRemoval"
+          />
+        </template>
+      </Dialog>
     </template>
   </Card>
+
+  <!-- Group: Routing rules -->
+  <RepoRoutingRules
+    v-if="isGroup"
+    v-model:rules="routingRules"
+    :repo-name="repoName ?? ''"
+    :members="memberNames"
+    :save-error="saveError ?? ''"
+  />
 
   <!-- Cooldown (proxy only) -->
   <Card v-if="isProxy && !hideCooldown" class="shadow-sm">

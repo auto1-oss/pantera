@@ -18,6 +18,7 @@ import Textarea from 'primevue/textarea'
 import Message from 'primevue/message'
 import type { TreeEntry, ArtifactDetail } from '@/types'
 import { techForRepoType } from '@/utils/techSetup'
+import { ruleKindLabel, ruleMember, ruleValue, rulesOf } from '@/utils/routingRules'
 
 const SetMeUpDrawer = defineAsyncComponent(() => import('@/components/setup/SetMeUpDrawer.vue'))
 
@@ -99,6 +100,10 @@ const groupMembers = computed(() => {
   const members = repo?.members as string[] | undefined
   return members ?? (repo?.remotes as string[] | undefined) ?? []
 })
+/** Routing rules of a group, shown read-only; they are edited on the admin page. */
+const routingRules = computed(() =>
+  rulesOf((repoConfig.value?.repo as Record<string, unknown> | undefined)?.routing),
+)
 const treeItems = ref<TreeEntry[]>([])
 const currentPath = ref('/')
 const treeLoading = ref(false)
@@ -363,6 +368,41 @@ function formatSize(bytes?: number): string {
                 <span class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200">{{ member }}</span>
                 <i class="pi pi-chevron-right text-gray-300" />
               </router-link>
+            </div>
+          </template>
+        </Card>
+
+        <Card v-if="routingRules.length > 0" class="shadow-sm" data-testid="repo-routing-rules">
+          <template #title>Routing rules</template>
+          <template #subtitle>
+            A member named by a rule is asked only for the paths its rules match. A member without
+            rules is asked for every path.
+          </template>
+          <template #content>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="text-left text-xs font-medium text-gray-500">
+                    <th class="py-1.5 pr-3 font-medium">#</th>
+                    <th class="py-1.5 pr-3 font-medium">Member</th>
+                    <th class="py-1.5 pr-3 font-medium">Kind</th>
+                    <th class="py-1.5 font-medium">Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="(rule, idx) in routingRules"
+                    :key="idx"
+                    class="border-t border-gray-100 align-top dark:border-gray-700"
+                    data-testid="repo-routing-rule"
+                  >
+                    <td class="py-2 pr-3 tabular-nums text-gray-400">{{ idx + 1 }}</td>
+                    <td class="py-2 pr-3 font-mono break-all">{{ ruleMember(rule) || '—' }}</td>
+                    <td class="py-2 pr-3 whitespace-nowrap">{{ ruleKindLabel(rule) }}</td>
+                    <td class="py-2 font-mono break-all">{{ ruleValue(rule) || '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </template>
         </Card>

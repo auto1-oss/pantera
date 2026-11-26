@@ -11,6 +11,18 @@ export interface RepoCooldown {
   duration?: string
 }
 
+/**
+ * A routing rule of a group (`repo.routing`): the member is asked only for
+ * the paths its rules match. Exactly one of `prefix` (the path starts with
+ * the text) and `pattern` (a Java regular expression that must match the
+ * whole path) is set; the path has no leading slash.
+ */
+export interface RoutingRule {
+  member: string
+  prefix?: string
+  pattern?: string
+}
+
 export interface RepoConfig {
   type: string
   /**
@@ -25,6 +37,8 @@ export interface RepoConfig {
   remotes?: RepoRemote[]
   /** Group members — array of repo name strings */
   members?: string[]
+  /** Routing rules of a group, in their order; missing ⇒ every member is asked for every path. */
+  routing?: RoutingRule[]
   cooldown?: RepoCooldown
   /** Allow unauthenticated reads. Default true for proxy/group, false for hosted. */
   anonymous_read?: boolean
