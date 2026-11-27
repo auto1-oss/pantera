@@ -80,6 +80,11 @@ public final class FailedLogins {
     private static final String PASSWORD = "password";
 
     /**
+     * Credential of a login that was made with an API key.
+     */
+    private static final String KEY = "api_key";
+
+    /**
      * Where the counts live.
      */
     private final FailedLoginStore store;
@@ -233,6 +238,40 @@ public final class FailedLogins {
                 .log();
         }
         return state.admission(seen.now(), policy);
+    }
+
+    /**
+     * An API key of a name was rejected, whether it came as a password or
+     * as a Bearer token. A name that is locked out of every credential is
+     * refused as locked and not counted. Otherwise the key counts as a
+     * failed login when the policy says so, until the name is locked: a
+     * tool that repeats a stale key must not write the count on every
+     * request. A key is never delayed, since no identity provider is asked
+     * for it; the failure that locks the name is refused as locked.
+     *
+     * @param name User name: the key's owner, or the name it was sent with
+     * @param source Where the request came from
+     * @return True when the key is refused as a lock, which is noted on the
+     *  thread; false when the key's own reason stands
+     */
+    public boolean keyRejected(final String name, final LoginSource source) {
+        boolean locked = false;
+        if (this.locked(name)) {
+            this.refuse(Admission.LOCKED);
+            locked = true;
+        } else if (this.config.get().countRejectedKeys() && !this.passwordLocked(name)) {
+            final Admission after = this.failed(
+                name,
+                new LoginOrigin(
+                    source.clientIp(), source.userAgent(), source.path(), FailedLogins.KEY
+                )
+            );
+            if (after.kind() == Admission.Kind.LOCKED) {
+                this.refuse(after);
+                locked = true;
+            }
+        }
+        return locked;
     }
 
     /**

@@ -132,12 +132,12 @@ final class RejectedBearerKeyTest {
 
     @Test
     void rejectedKeyOnTheApiIsReportedByItsCaller() {
-        final Optional<com.auto1.pantera.auth.signin.RejectedKey> key = this.handler.rejected(
+        final Optional<AuthRefusal> refusal = this.handler.rejected(
             this.token("alice", "api", -60L), new LoginSource("192.0.2.9", "curl/8.7", "api")
         );
         MatcherAssert.assertThat(
-            "what is known of the key",
-            key.map(com.auto1.pantera.auth.signin.RejectedKey::reason),
+            "the client is told the key's reason",
+            refusal.map(AuthRefusal::reason),
             new IsEqual<>(Optional.of("api_key_expired"))
         );
         MatcherAssert.assertThat(

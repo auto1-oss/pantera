@@ -139,6 +139,21 @@ final class LockedOutTest {
     }
 
     @Test
+    void rejectedKeyOfANameLockedForPasswordsOnlyIsNotCountedAgain() {
+        this.policy.set(new FailedLoginsConfig(0, 1, 60, 3, 0, 0, true, false));
+        final Authentication keys = new LockedOut(
+            new CountedKeys(this.chain(false), this.logins), this.logins
+        );
+        for (int idx = 0; idx < 6; idx += 1) {
+            new PasswordCheck(keys).now("alice", "stale key");
+        }
+        MatcherAssert.assertThat(
+            "a tool that repeats the key does not write the count again after the lock",
+            this.logins.state("alice").failures(), new IsEqual<>(3)
+        );
+    }
+
+    @Test
     void acceptedKeyDoesNotForgetFailedLogins() {
         this.policy.set(new FailedLoginsConfig(0, 1, 60, 3, 0, 0, true));
         this.logins.failed("alice", LoginOrigin.UNKNOWN);

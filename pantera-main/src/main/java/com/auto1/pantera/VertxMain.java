@@ -419,10 +419,12 @@ public final class VertxMain {
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
             rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, authSettingsDao,
             revocationBlocklist, enabledCheck,
-            // Rejected API keys go to the sign-in failures report.
+            // Rejected API keys go to the sign-in failures report, and count
+            // as failed logins of their owners when the policy says so.
             settings.failedLogins()
                 .flatMap(com.auto1.pantera.auth.failedlogins.FailedLogins::report)
-                .orElse(null)
+                .orElse(null),
+            settings.failedLogins().orElse(null)
         );
         // Install the circuit-breaker settings loader BEFORE constructing
         // RepositorySlices so the default-constructor activeSupplier()
