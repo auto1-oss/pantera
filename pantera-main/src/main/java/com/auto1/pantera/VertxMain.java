@@ -460,6 +460,29 @@ public final class VertxMain {
         com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
+        // Tag refresh age of docker-proxy repositories (docker_tag_refresh_seconds):
+        // same lifecycle, installed unconditionally so a DB-less boot still
+        // resolves PANTERA_DOCKER_TAG_REFRESH_SECONDS. The install reads the
+        // value here, on the boot thread, so a docker request never waits for
+        // the database.
+        com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        if (sharedDs.isPresent()) {
+            // auth_settings sends no change notification: each node re-reads
+            // the age every 30 s, so a change saved on one node reaches the
+            // others within that time. Off the event loop.
+            this.vertx.getDelegate().setPeriodic(
+                java.time.Duration.ofSeconds(30).toMillis(),
+                id -> java.util.concurrent.CompletableFuture.runAsync(
+                    () -> java.util.Optional.ofNullable(
+                        com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.installed()
+                    ).ifPresent(
+                        com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader::refresh
+                    )
+                )
+            );
+        }
         // 2.2.9 security policy settings (request-body cap + fs storage
         // roots, outbound egress policy, login throttling): DB row -> env
         // -> default per key, admin-editable at runtime. Installed

@@ -159,6 +159,10 @@ public final class AdminAuthHandler {
             .handler(adminAuthz).handler(this::getUpstreamBreakerSettings);
         router.put("/api/v1/admin/upstream-breaker-settings")
             .handler(adminAuthz).handler(this::updateUpstreamBreakerSettings);
+        router.get("/api/v1/admin/docker-settings")
+            .handler(adminAuthz).handler(this::getDockerSettings);
+        router.put("/api/v1/admin/docker-settings")
+            .handler(adminAuthz).handler(this::updateDockerSettings);
         router.get("/api/v1/admin/client-base-url-settings")
             .handler(adminAuthz).handler(this::getClientBaseUrlSettings);
         router.put("/api/v1/admin/client-base-url-settings")
@@ -578,6 +582,114 @@ public final class AdminAuthHandler {
                 ctx.response().setStatusCode(204).end();
             }
         });
+    }
+
+    /**
+     * Field of the docker-settings endpoint: the tag refresh age of
+     * docker-proxy repositories, stored as {@code docker_tag_refresh_seconds}.
+     */
+    private static final String DOCKER_TAG_REFRESH = "tag_refresh_seconds";
+
+    /**
+     * Whitelist of the docker-settings endpoint.
+     */
+    private static final java.util.Set<String> DOCKER_KEYS = java.util.Set.of(DOCKER_TAG_REFRESH);
+
+    /**
+     * GET /api/v1/admin/docker-settings — the tag refresh age in force
+     * (DB row, else env var, else default), as an integer of seconds.
+     */
+    private void getDockerSettings(final RoutingContext ctx) {
+        CompletableFuture.supplyAsync(
+            () -> new JsonObject().put(
+                DOCKER_TAG_REFRESH,
+                com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.activeSupplier()
+                    .get().toSeconds()
+            ),
+            HandlerExecutor.get()
+        ).whenComplete((settings, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(settings.encode());
+            }
+        });
+    }
+
+    /**
+     * PUT /api/v1/admin/docker-settings — {@code tag_refresh_seconds} must be
+     * a JSON integer in {@code 0..31536000}; any other key is refused. The
+     * value is written to {@code docker_tag_refresh_seconds} and the loader
+     * reloaded, so the next docker request of this node uses it.
+     */
+    private void updateDockerSettings(final RoutingContext ctx) {
+        final JsonObject body = ctx.body().asJsonObject();
+        if (body == null || body.isEmpty()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Request body is required");
+            return;
+        }
+        if (AdminAuthHandler.refusesNull(ctx, body)) {
+            return;
+        }
+        for (final String key : body.fieldNames()) {
+            if (!DOCKER_KEYS.contains(key)) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Unknown docker setting: " + key);
+                return;
+            }
+        }
+        final java.util.OptionalLong seconds =
+            AdminAuthHandler.tagRefreshSeconds(body.getValue(DOCKER_TAG_REFRESH));
+        if (seconds.isEmpty()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Invalid docker setting: " + DOCKER_TAG_REFRESH + " must be an integer from 0 to "
+                    + com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.MAX_SECONDS);
+            return;
+        }
+        CompletableFuture.runAsync(() -> {
+            this.settingsDao.put(
+                com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.KEY,
+                String.valueOf(seconds.getAsLong())
+            );
+            final com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader loader =
+                com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.installed();
+            if (loader != null) {
+                loader.invalidate();
+            }
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
+            } else {
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message("Admin updated docker settings (" + DOCKER_TAG_REFRESH + "="
+                        + seconds.getAsLong() + ")")
+                    .eventCategory("configuration")
+                    .eventAction("docker_settings_update")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+                ctx.response().setStatusCode(204).end();
+            }
+        });
+    }
+
+    /**
+     * A tag refresh age as the docker-settings endpoint accepts it.
+     * @param value JSON value of the field
+     * @return Seconds when the value is a JSON integer in range, else empty
+     */
+    private static java.util.OptionalLong tagRefreshSeconds(final Object value) {
+        java.util.OptionalLong res = java.util.OptionalLong.empty();
+        if (value instanceof Integer || value instanceof Long) {
+            final long seconds = ((Number) value).longValue();
+            if (seconds >= 0
+                && seconds <= com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.MAX_SECONDS) {
+                res = java.util.OptionalLong.of(seconds);
+            }
+        }
+        return res;
     }
 
     /**

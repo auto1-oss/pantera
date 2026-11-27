@@ -43,6 +43,8 @@ vi.mock('@/api/auth', () => ({
   updateCircuitBreakerSettings: vi.fn().mockResolvedValue(undefined),
   getUpstreamBreakerSettings: () => Promise.resolve({}),
   updateUpstreamBreakerSettings: vi.fn().mockResolvedValue(undefined),
+  getDockerSettings: () => Promise.resolve({ tag_refresh_seconds: 3600 }),
+  updateDockerSettings: vi.fn().mockResolvedValue(undefined),
   getClientBaseUrlSettings: () => Promise.resolve({}),
   getRequestLimitsSettings: () => Promise.resolve({}),
   updateRequestLimitsSettings: vi.fn().mockResolvedValue(undefined),

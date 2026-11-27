@@ -8,6 +8,7 @@ import {
   getAuthSettings, updateAuthSettings,
   getCircuitBreakerSettings, updateCircuitBreakerSettings,
   getUpstreamBreakerSettings, updateUpstreamBreakerSettings,
+  getDockerSettings, updateDockerSettings,
   getClientBaseUrlSettings, updateClientBaseUrlSettings,
   getRequestLimitsSettings, updateRequestLimitsSettings,
   getEgressSettings, updateEgressSettings,
@@ -50,7 +51,7 @@ const saving = ref<string | null>(null)
  * immediately vs require a restart. The id keys into {@link SECTION_META}.
  */
 type SectionId =
-  | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker' | 'upstream_breaker'
+  | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker' | 'upstream_breaker' | 'docker_proxy'
   | 'cooldown' | 'http_client' | 'bulkhead' | 'http_server'
   | 'external_links' | 'client_base_url'
   | 'request_limits' | 'egress' | 'login_throttle' | 'failed_logins' | 'sign_in_report'
@@ -102,6 +103,10 @@ const SECTION_META: Record<SectionId, SectionMeta> = {
   },
   upstream_breaker: {
     label: 'Upstream HTTP Circuit Breaker',
+    hotReload: true,
+  },
+  docker_proxy: {
+    label: 'Docker Proxy Tags',
     hotReload: true,
   },
   request_limits: {
@@ -187,6 +192,11 @@ const ubMinCalls = ref(10)
 const ubWindowSeconds = ref(30)
 const ubSeedBackoffSeconds = ref(2)
 const ubMaxBackoffSeconds = ref(3600)
+
+// Docker proxy tags: how long a docker-proxy serves a cached image tag
+// before it asks the upstream with a HEAD whether the tag moved. Seconds;
+// an emptied number field holds null.
+const dockerTagRefreshSeconds = ref<number | null>(3600)
 
 // Security policy settings (2.2.9) — DB-backed, env vars are the fallback
 // tier only. Request & storage limits: the body cap is stored in bytes on
@@ -416,6 +426,9 @@ onMounted(async () => {
         ubSeedBackoffSeconds.value = parseInt(s.upstream_breaker_seed_backoff_seconds ?? '2')
         ubMaxBackoffSeconds.value = parseInt(s.upstream_breaker_max_backoff_seconds ?? '3600')
       }),
+      getDockerSettings().then(s => {
+        dockerTagRefreshSeconds.value = s.tag_refresh_seconds ?? 3600
+      }),
       getClientBaseUrlSettings().then(s => {
         trustForwardedHeaders.value = s.trust_forwarded_headers === 'true'
         clientBaseHostAllowlist.value = s.client_base_host_allowlist ?? ''
@@ -624,6 +637,46 @@ async function saveUpstreamBreakerSettings(): Promise<boolean> {
     return true
   } catch (err) {
     notify.error('Failed to save upstream HTTP breaker settings', apiErrorMessage(err, 'Request failed'))
+    return false
+  } finally {
+    saving.value = null
+  }
+}
+
+/** Ages the server accepts for the docker tag refresh (`DockerTagRefreshSettingsLoader`). */
+const DOCKER_TAG_REFRESH = { label: 'Re-check a cached tag after (seconds)', min: 0, max: 31_536_000 }
+
+/**
+ * What keeps the Docker Proxy Tags card from being saved, or null. Shown in
+ * the card while editing and checked again by the save; the server
+ * validates the same range and answers 400.
+ */
+const dockerProxyProblem = computed<string | null>(() => {
+  const range = DOCKER_TAG_REFRESH
+  const seconds: number | null = dockerTagRefreshSeconds.value
+  if (seconds === null || !Number.isInteger(seconds) || seconds < range.min || seconds > range.max) {
+    return `${range.label} must be a whole number from ${range.min} to ${range.max}`
+  }
+  return null
+})
+
+/**
+ * Save the docker tag refresh age. Applies to the next docker request of the
+ * node that serves the save, without a restart.
+ */
+async function saveDockerSettings(): Promise<boolean> {
+  const problem = dockerProxyProblem.value
+  if (problem) {
+    notify.error(problem)
+    return false
+  }
+  saving.value = 'docker-proxy'
+  try {
+    await updateDockerSettings({ tag_refresh_seconds: dockerTagRefreshSeconds.value as number })
+    notify.success('Docker proxy tag settings saved')
+    return true
+  } catch (err) {
+    notify.error('Failed to save docker proxy tag settings', apiErrorMessage(err, 'Request failed'))
     return false
   } finally {
     saving.value = null
@@ -1035,6 +1088,7 @@ const TRACKED = {
   ubWindowSeconds,
   ubSeedBackoffSeconds,
   ubMaxBackoffSeconds,
+  dockerTagRefreshSeconds,
   trustForwardedHeaders,
   clientBaseHostAllowlist,
   clientBaseUrl,
@@ -1101,6 +1155,7 @@ const SECTION_FIELDS: Record<Exclude<SectionId, 'bulkhead'>, BaselineKey[]> = {
     'ubRatePct', 'ubMinCalls', 'ubWindowSeconds',
     'ubSeedBackoffSeconds', 'ubMaxBackoffSeconds',
   ],
+  docker_proxy: ['dockerTagRefreshSeconds'],
   client_base_url: [
     'trustForwardedHeaders', 'clientBaseHostAllowlist', 'clientBaseUrl', 'clientBaseScheme',
   ],
@@ -1152,6 +1207,7 @@ const isDirtyJwt = sectionDirty('jwt')
 const isDirtyAuth = sectionDirty('auth')
 const isDirtyCircuitBreaker = sectionDirty('circuit_breaker')
 const isDirtyUpstreamBreaker = sectionDirty('upstream_breaker')
+const isDirtyDockerProxy = sectionDirty('docker_proxy')
 const isDirtyClientBaseUrl = sectionDirty('client_base_url')
 const isDirtyRequestLimits = sectionDirty('request_limits')
 const isDirtyEgress = sectionDirty('egress')
@@ -1176,6 +1232,7 @@ const DIRTY_PER_SECTION: Record<SectionId, { value: boolean }> = {
   auth: isDirtyAuth,
   circuit_breaker: isDirtyCircuitBreaker,
   upstream_breaker: isDirtyUpstreamBreaker,
+  docker_proxy: isDirtyDockerProxy,
   client_base_url: isDirtyClientBaseUrl,
   request_limits: isDirtyRequestLimits,
   egress: isDirtyEgress,
@@ -1208,6 +1265,7 @@ function saveSectionById(id: SectionId): Promise<boolean> {
     case 'auth': return saveAuthSettings()
     case 'circuit_breaker': return saveCircuitBreakerSettings()
     case 'upstream_breaker': return saveUpstreamBreakerSettings()
+    case 'docker_proxy': return saveDockerSettings()
     case 'client_base_url': return saveClientBaseUrlSettings()
     case 'request_limits': return saveRequestLimitsSettings()
     case 'egress': return saveEgressSettings()
@@ -1554,6 +1612,60 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
               Settings take effect on the next recorded outcome for every upstream
               endpoint — no restart needed. While an endpoint is blocked, outbound
               requests to it fail fast until a HEAD probe succeeds.
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Docker Proxy Tags: how long a cached image tag is served before it is re-checked -->
+      <Card class="shadow-sm" data-testid="docker-proxy-card">
+        <template #title>
+          <SectionHeader id="docker_proxy" :dirty="isDirtyDockerProxy" />
+        </template>
+        <template #subtitle>
+          A docker-proxy repository serves a cached tag (e.g. <code>latest</code>,
+          <code>20</code>) for this long, then asks the upstream with a HEAD whether
+          the tag moved. Same digest: the cached image is served. New digest: the new
+          image is fetched and stored, unless cooldown blocks it; then the cached image
+          stays in service. A digest reference is never re-checked.
+        </template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label for="dockerTagRefreshSeconds" class="text-sm text-gray-500 block mb-1">
+                  Re-check a cached tag after (seconds)
+                </label>
+                <InputNumber
+                  v-model="dockerTagRefreshSeconds"
+                  input-id="dockerTagRefreshSeconds"
+                  :min="0"
+                  :max="31536000"
+                  suffix=" s"
+                  class="w-full"
+                />
+                <span class="text-xs text-gray-400">
+                  Default: 3600 (1 hour). From 0 to 31536000 (a year). 0 re-checks on
+                  every request. A repository can override it with its own
+                  "Tag refresh (seconds)".
+                </span>
+              </div>
+            </div>
+            <div
+              v-if="dockerProxyProblem"
+              class="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded p-2"
+              data-testid="docker-proxy-problem"
+            >
+              <i class="pi pi-times-circle mr-1" />
+              {{ dockerProxyProblem }}.
+            </div>
+            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+              <i class="pi pi-info-circle mr-1" />
+              Applies to the next request of the node that saves it, no restart needed;
+              other nodes of a cluster read it at their next start. The age of a cached
+              tag is counted per node in memory, so after a restart each tag is
+              re-checked once on its first request. An unreachable upstream keeps the
+              cached image in service.
             </div>
           </div>
         </template>

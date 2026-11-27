@@ -61,6 +61,11 @@ public final class RepositoryHandler {
     private static final String REPO = "repo";
 
     /**
+     * Key of a docker-proxy repository's own tag refresh age, in seconds.
+     */
+    private static final String TAG_REFRESH = "tag_refresh_seconds";
+
+    /**
      * Local-path extraction only (no roots): which storage blocks address
      * the local filesystem.
      */
@@ -605,6 +610,17 @@ public final class RepositoryHandler {
                 return;
             }
         }
+        if (repo.containsKey(RepositoryHandler.TAG_REFRESH)
+            && !RepositoryHandler.validTagRefresh(repo.get(RepositoryHandler.TAG_REFRESH))) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                String.format(
+                    "%s must be an integer from 0 to %d",
+                    RepositoryHandler.TAG_REFRESH,
+                    com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.MAX_SECONDS
+                )
+            );
+            return;
+        }
         final Optional<String> urlError = RepositoryHandler.urlError(repo);
         if (urlError.isPresent()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", urlError.get());
@@ -825,6 +841,26 @@ public final class RepositoryHandler {
         return name != null && !name.isBlank() && name.length() <= 200
             && name.matches("[A-Za-z0-9][A-Za-z0-9._/-]*")
             && !name.contains("..") && !name.endsWith("/");
+    }
+
+    /**
+     * Whether a {@code tag_refresh_seconds} value can be saved: a JSON
+     * integer from 0 to 31536000 (a year). Anything else would be ignored
+     * by the proxy at runtime, so it is refused here, where it was typed.
+     * @param value JSON value of the key
+     * @return True for an integer in range
+     */
+    private static boolean validTagRefresh(final JsonValue value) {
+        boolean valid = false;
+        if (value instanceof javax.json.JsonNumber number && number.isIntegral()) {
+            final java.math.BigDecimal seconds = number.bigDecimalValue();
+            valid = seconds.signum() >= 0 && seconds.compareTo(
+                java.math.BigDecimal.valueOf(
+                    com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.MAX_SECONDS
+                )
+            ) <= 0;
+        }
+        return valid;
     }
 
     /**

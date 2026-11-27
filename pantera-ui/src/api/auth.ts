@@ -1,5 +1,5 @@
 import { getApiClient } from './client'
-import type { AuthProvidersResponse, PgpKey, TokenResponse, UserInfo } from '@/types'
+import type { AuthProvidersResponse, DockerSettings, PgpKey, TokenResponse, UserInfo } from '@/types'
 
 export async function getProviders(): Promise<AuthProvidersResponse> {
   const { data } = await getApiClient().get<AuthProvidersResponse>('/auth/providers')
@@ -169,6 +169,17 @@ export async function updateUpstreamBreakerSettings(
   settings: Partial<UpstreamBreakerSettings>,
 ): Promise<void> {
   await getApiClient().put('/admin/upstream-breaker-settings', settings)
+}
+
+// --- Docker proxy tag refresh ---
+
+export async function getDockerSettings(): Promise<DockerSettings> {
+  const { data } = await getApiClient().get<DockerSettings>('/admin/docker-settings')
+  return data
+}
+
+export async function updateDockerSettings(settings: DockerSettings): Promise<void> {
+  await getApiClient().put('/admin/docker-settings', settings)
 }
 
 // --- Security policy settings (2.2.9): request limits, egress, login throttle ---

@@ -342,6 +342,17 @@ export interface Settings {
   }
 }
 
+/**
+ * GET/PUT /admin/docker-settings. `tag_refresh_seconds` is how long a
+ * docker-proxy serves a cached image tag before it asks the upstream with a
+ * HEAD whether the tag moved: an integer from 0 (every request) to 31536000
+ * (a year), default 3600. A number, not a string like the other settings
+ * endpoints. A repository overrides it with its own `tag_refresh_seconds`.
+ */
+export interface DockerSettings {
+  tag_refresh_seconds: number
+}
+
 // Health
 export interface HealthResponse {
   status: string

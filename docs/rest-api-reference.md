@@ -562,12 +562,13 @@ Create a new repository or update an existing one. If the repository exists, the
 | `repo.type`    | string | Yes      | Repository type (e.g. `maven`, `npm`, `docker-proxy`)  |
 | `repo.storage` | string | Yes      | Storage alias name (e.g. `default`)                    |
 | `repo.immutable` | boolean | No     | Local repositories except `docker`: when `true` (the default when the key is absent) a stored artifact is never overwritten; `false` lets users with `write` overwrite. See [Immutable artifacts](configuration-reference.md#immutable-artifacts) |
+| `repo.tag_refresh_seconds` | integer | No | `docker-proxy` only: seconds a cached image tag is served before the upstream is asked for its digest again, `0` (every request) to `31536000`. Absent: the global `docker_tag_refresh_seconds` applies (see [`/admin/docker-settings`](#get-apiv1admindocker-settings)) |
 
 Supported `repo.type` values: `file`, `file-proxy`, `file-group`, `maven`, `maven-proxy`, `maven-group`, `gradle`, `gradle-proxy`, `gradle-group`, `npm`, `npm-proxy`, `npm-group`, `pypi`, `pypi-proxy`, `pypi-group`, `docker`, `docker-proxy`, `docker-group`, `go`, `go-proxy`, `go-group`, `php`, `php-proxy`, `php-group`, `gem`, `gem-group`, `helm`, `rpm`, `nuget`, `deb`, `conda`, `conan`, `hexpm`.
 
 **Response (200):** Empty body on success.
 
-**Response (400):** Invalid body, including a `repo.type` that is not supported (the message lists the supported types), or a `repo.immutable` that is not a JSON boolean (`immutable must be a boolean`; the string `"false"` is refused too).
+**Response (400):** Invalid body, including a `repo.type` that is not supported (the message lists the supported types), a `repo.immutable` that is not a JSON boolean (`immutable must be a boolean`; the string `"false"` is refused too), or a `repo.tag_refresh_seconds` that is not a JSON integer from 0 to 31536000 (`tag_refresh_seconds must be an integer from 0 to 31536000`; a string such as `"600"` is refused too).
 
 For a group, `repo.routing` is checked (v2.2.15+): `Invalid routing rules: rule 2: 'jboss' is not a member of the group; rule 3: pattern is not a valid regular expression: ...`. Rules are numbered from 1 in the order sent. A rule is refused when it is not an object, names no `member`, names a repository that is not in `repo.members`, names a member that is a group, has neither `prefix` nor `pattern` or both, has a `pattern` that is not a valid regular expression, or repeats an earlier rule. Nothing is saved when one rule is refused. See [Routing rules](configuration-reference.md#routing-rules).
 
@@ -3273,6 +3274,72 @@ curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"client_base_url": "https://reg.example.com/artifactory"}'
+```
+
+---
+
+### GET /api/v1/admin/docker-settings
+
+Retrieve the tag refresh age of `docker-proxy` repositories: how long a cached image tag (e.g. `latest`) is served before Pantera asks the upstream with a `HEAD` whether the tag still names the same digest. The value in force: the `docker_tag_refresh_seconds` row, else `PANTERA_DOCKER_TAG_REFRESH_SECONDS`, else `3600`. See [Docker proxy tag refresh](configuration-reference.md#docker-proxy-tag-refresh-auth_settings-table).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):** the value is a JSON integer, not a string.
+
+```json
+{
+  "tag_refresh_seconds": 3600
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tag_refresh_seconds` | integer (0-31536000) | Seconds a cached tag is served before it is checked against the upstream; `0` checks on every request. A repository's own `tag_refresh_seconds` overrides it. |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/docker-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/docker-settings
+
+Set the tag refresh age. The body carries `tag_refresh_seconds` as a JSON integer from `0` to `31536000`; a string, a fraction, a value out of range, a `null`, an empty body or any other key answers `400` and writes nothing. The value is written to the `docker_tag_refresh_seconds` row of `auth_settings` and applies to the next request of the node that served the `PUT`, without a restart, and within 30 seconds on every other node of a cluster (each re-reads the row every 30 seconds). Every successful update is logged (`event.category=configuration`, `event.action=docker_settings_update`).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:**
+
+```json
+{
+  "tag_refresh_seconds": 600
+}
+```
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid docker setting: tag_refresh_seconds must be an integer from 0 to 31536000",
+  "status": 400
+}
+```
+
+**curl example:**
+
+```bash
+curl -X PUT http://localhost:8086/api/v1/admin/docker-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"tag_refresh_seconds": 600}'
 ```
 
 ---

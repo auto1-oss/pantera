@@ -319,6 +319,14 @@ A `PUT` with an unknown key, or a value the setting refuses (a body cap below 1 
 
 **Deliberately env-only (boot-time) settings.** A few 2.2.9 knobs stay environment variables because they are needed before the database is reachable, or because storing them in the settings table would defeat their purpose: `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` (consumed once, on the first database-backed start, before any admin exists), `PANTERA_DOWNLOAD_TOKEN_SECRET` (a signing secret; the table holds only the generated key when the variable is unset), `PANTERA_METRICS_BIND` (a listener bind address, fixed when the socket is opened at boot), and the dev-compose-only `KEYCLOAK_CLIENT_SECRET` / `PANTERA_DEV_SSO_USER_PASSWORD` (secrets injected into third-party containers, never Pantera settings).
 
+#### Docker proxy tag refresh (auth_settings table)
+
+How long a `docker-proxy` repository serves a cached image **tag** (e.g. `latest`, `20`) before it checks the tag against the upstream again. Editable in the admin UI (System Settings → *Docker Proxy Tags*) or through `GET`/`PUT /api/v1/admin/docker-settings` (see the [REST API reference](rest-api-reference.md#get-apiv1admindocker-settings)). Resolves **DB row → `PANTERA_DOCKER_TAG_REFRESH_SECONDS` → `3600`**; migration V152 seeds the row with `3600`, so on a deployment with a database the environment variable applies only while that row is absent (a database-less boot reads it directly). A `PUT` applies to the next request of the node that served it, without a restart; every other node of a cluster re-reads the row every 30 seconds. A repository overrides the value with its own [`tag_refresh_seconds`](#23-proxy-repository).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `docker_tag_refresh_seconds` | integer (0-31536000) | `3600` | Seconds a cached tag is served from the cache, counted per node from the moment that node last fetched or checked the tag. When a cached tag is older, Pantera asks the upstream for the tag's digest with a `HEAD` request (Docker Hub does not count a `HEAD` against its pull limit): the same digest serves the cached manifest; a new digest fetches and stores the new manifest -- when cooldown allows it; while cooldown blocks the new image, clients keep getting the cached one; an unreachable upstream serves the cached manifest. `0` checks the tag on every request. A digest reference (`@sha256:...`) is never checked again: it cannot change. The age is held in memory, so after a restart each tag is checked once on its first request. A `PUT` with any other key, or a value that is not a JSON integer in range, answers `400` and writes nothing. |
+
 ---
 
 ### 1.5 meta.metrics
@@ -1021,6 +1029,7 @@ A proxy repository caches artifacts from one or more remote upstream servers.
 | `remotes` | list | Yes | -- | Ordered list of upstream servers |
 | `url` | string | No | -- | Client-facing base URL for this repository -- same optionality and derivation as [2.2](#22-local-repository); proxy adapters that support the derivation (including `npm-proxy`) never hard-require it |
 | `path` | string | No | -- | URL path segment override |
+| `tag_refresh_seconds` | int | No | global `docker_tag_refresh_seconds` (`3600`) | `docker-proxy` only. Seconds this repository serves a cached image tag before it asks the upstream for the tag's digest again; `0` checks on every request. An integer from `0` to `31536000`; the repository API and UI refuse any other value with `400`, and a value in a YAML file that is not one is ignored with a `WARN` (`event.action=repository_config_invalid`), so the global setting applies. Leave it out to use the global setting -- see [Docker proxy tag refresh](#docker-proxy-tag-refresh-auth_settings-table) for what the check does. |
 
 Each entry in `remotes`:
 
@@ -1054,6 +1063,9 @@ repo:
     - url: https://docker.elastic.co
     - url: https://gcr.io
     - url: https://k8s.gcr.io
+  # Optional: check a cached tag against the upstream after 10 minutes
+  # instead of the global docker_tag_refresh_seconds (default 3600).
+  tag_refresh_seconds: 600
 ```
 
 ```yaml
@@ -2000,6 +2012,7 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 |----------|---------|-------------|
 | `PANTERA_DEDUP_MAX_AGE_MS` | `300000` | Maximum age of in-flight dedup entries (ms) -- 5 minutes |
 | `PANTERA_DOCKER_CACHE_EXPIRY_HOURS` | `24` | Docker proxy cache entry lifetime (hours) |
+| `PANTERA_DOCKER_TAG_REFRESH_SECONDS` | `3600` | **Fallback tier only** -- the DB-backed `docker_tag_refresh_seconds` admin setting (see [Docker proxy tag refresh](#docker-proxy-tag-refresh-auth_settings-table)) is primary, and migration V152 seeds its row, so with a database this variable applies only while the row is absent. Seconds a `docker-proxy` serves a cached image tag before it checks the tag against the upstream, `0`-`31536000`; another value is ignored. |
 | `PANTERA_BODY_BUFFER_THRESHOLD` | `1048576` | Request body size threshold (bytes). Below this: buffered in memory. Above: streamed from disk. |
 | `PANTERA_MAX_REQUEST_BODY_BYTES` | `10737418240` (10 GiB) | **Fallback tier only** -- the DB-backed `max_request_body_bytes` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Hard cap on a single request body (bytes), metered on actual bytes for declared and chunked framing alike; exceeding it answers `413`. Applies regardless of per-repository `content-length-max`. |
 

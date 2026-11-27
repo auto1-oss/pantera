@@ -79,6 +79,14 @@ docker pull pantera-host:8080/docker-proxy/grafana/grafana:latest
 
 The first pull fetches from upstream and caches locally. Subsequent pulls are served from cache.
 
+**When a moved tag reaches you.** A tag such as `latest` or `20` can be moved upstream to a new image. The proxy serves a cached tag from its cache until the tag is older than the tag refresh age on the Pantera node that answers (default one hour; the administrator sets it globally and per repository). After that, the next pull makes Pantera ask the upstream for the tag's digest with a `HEAD` request, which Docker Hub does not count against its pull limit:
+
+- Same digest: the cached image is served.
+- New digest: the new image is fetched and stored, and you get it. If cooldown blocks the new image, you keep getting the cached one.
+- Upstream unreachable: the cached image is served.
+
+A pull by digest (`image@sha256:...`) is never checked again: a digest cannot change. The age is counted per node in memory, so after a restart each tag is checked once on its first pull. To get a moved tag at once, pull it by digest, or ask the administrator to lower the tag refresh age.
+
 ### Through a Group Repository
 
 If a Docker group is configured, all pulls go through one URL:
@@ -325,6 +333,7 @@ calls are unaffected either way.
 | `name unknown` (404 `NAME_UNKNOWN`) on a tags list | The repository holds no tags for that image name | Check the image path (`<repo>/<image>`, include `library/` for official images) |
 | `size invalid` (413 `SIZE_INVALID`) during push | A layer exceeds the server's request-body limit | Ask the admin to raise the limit |
 | `manifest unknown` | Image not cached in proxy yet | Verify the image path matches upstream (include `library/` for official images) |
+| A pull through the proxy returns the old image after a tag (e.g. `latest`) moved upstream | The cached tag is younger than the tag refresh age (default one hour) on the node that answered | Wait for the age to pass, pull by digest, or ask the admin to lower `tag_refresh_seconds` for the repository |
 | Push fails with `500 Internal Server Error` | Large layer upload timeout | Ask admin to increase `proxy_timeout` and check Nginx `client_max_body_size` |
 | Pull is slow for first request | Image being fetched from upstream for the first time | This is expected; subsequent pulls will be fast from cache |
 | `EOF` during push | Connection reset, often from proxy/LB | Increase timeouts in Nginx (`proxy_read_timeout 300s`) and set `client_max_body_size 0` |
@@ -377,6 +386,10 @@ repo:
     - url: https://docker.elastic.co
     - url: https://gcr.io
     - url: https://k8s.gcr.io
+  # Optional: seconds a cached tag is served before it is checked against the
+  # upstream (0 = every pull). Absent: the global docker_tag_refresh_seconds
+  # setting applies (System Settings -> Docker Proxy Tags, default 3600).
+  tag_refresh_seconds: 600
 ```
 
 **Group repository:**
