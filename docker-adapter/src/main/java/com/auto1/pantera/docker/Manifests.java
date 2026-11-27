@@ -76,6 +76,18 @@ public interface Manifests {
     }
 
     /**
+     * Digest of the manifest a reference names now. A source that can tell
+     * it without sending the manifest (a registry answers a {@code HEAD})
+     * overrides this; the default reads the manifest.
+     *
+     * @param ref Manifest reference
+     * @return Digest, empty if the manifest is absent
+     */
+    default CompletableFuture<Optional<Digest>> digest(final ManifestReference ref) {
+        return this.get(ref).thenApply(found -> found.map(Manifest::digest));
+    }
+
+    /**
      * List manifest tags.
      *
      * @param pagination  Pagination parameters.
