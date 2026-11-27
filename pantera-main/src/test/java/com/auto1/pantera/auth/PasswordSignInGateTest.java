@@ -166,11 +166,15 @@ final class PasswordSignInGateTest {
             new IsEqual<>(false)
         );
         MatcherAssert.assertThat(
-            "the form login again is served from the memory",
+            "the form login again is accepted",
             this.login(cached, PasswordSignInGateTest.FORM).isPresent(),
             new IsEqual<>(true)
         );
-        MatcherAssert.assertThat("the provider was asked once", this.asked.get(), new IsEqual<>(1));
+        MatcherAssert.assertThat(
+            "the provider was asked for each form login: a person signs in there, and a"
+                + " remembered login would skip the second factor",
+            this.asked.get(), new IsEqual<>(2)
+        );
     }
 
     @Test

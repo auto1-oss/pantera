@@ -12,8 +12,11 @@ package com.auto1.pantera.settings.cache;
 
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.LoginSource;
+import com.auto1.pantera.http.auth.PasswordCheck;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
@@ -215,6 +218,28 @@ final class CachedUsersTest {
             this.auth.cnt.get(),
             new IsEqual<>(4)
         );
+    }
+
+    @Test
+    void signInOnTheFormIsNeitherAnsweredFromMemoryNorRemembered() {
+        // A person signs in on the form, where the identity provider asks
+        // for a second factor: a remembered login would skip it.
+        final LoginSource form = new LoginSource("10.0.0.1", "Mozilla/5.0", "ui");
+        new PasswordCheck(this.users, form).now("jane", "any");
+        new PasswordCheck(this.users, form).now("jane", "any");
+        MatcherAssert.assertThat(
+            "the provider is asked each time, and nothing is remembered",
+            List.of(this.auth.cnt.get(), (int) this.cache.estimatedSize()),
+            new IsEqual<>(List.of(2, 0))
+        );
+    }
+
+    @Test
+    void repositoryRequestsAreStillAnsweredFromMemory() {
+        final LoginSource maven = new LoginSource("10.0.0.1", "Apache-Maven/3.9", "repository");
+        new PasswordCheck(this.users, maven).now("jane", "any");
+        new PasswordCheck(this.users, maven).now("jane", "any");
+        MatcherAssert.assertThat(this.auth.cnt.get(), new IsEqual<>(1));
     }
 
     /**

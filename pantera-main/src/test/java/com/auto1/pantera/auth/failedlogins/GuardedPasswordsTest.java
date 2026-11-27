@@ -428,6 +428,21 @@ final class GuardedPasswordsTest {
         }
     }
 
+    @Test
+    void signInOnTheFormIsNeverAnsweredFromMemory() {
+        // A person signs in on the form, where the identity provider asks
+        // for a second factor: a remembered answer would skip it.
+        final LoginSource form = new LoginSource("10.0.0.1", "Mozilla/5.0", "ui");
+        new PasswordCheck(this.guard, form).now("jane", GuardedPasswordsTest.RIGHT);
+        new PasswordCheck(this.guard, form).now("jane", GuardedPasswordsTest.RIGHT);
+        new PasswordCheck(this.guard, new LoginSource("10.0.0.1", "curl/8", "api"))
+            .now("jane", GuardedPasswordsTest.RIGHT);
+        MatcherAssert.assertThat(
+            "the provider is asked for every sign-in on the form and the sign-in endpoint",
+            this.provider.calls.get(), new IsEqual<>(3)
+        );
+    }
+
     private PasswordCheck.Outcome login(final String name, final String pass) {
         return new PasswordCheck(this.guard).now(name, pass);
     }
