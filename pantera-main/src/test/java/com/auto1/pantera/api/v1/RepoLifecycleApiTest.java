@@ -408,6 +408,30 @@ final class RepoLifecycleApiTest extends AsyncApiTestBase {
         );
     }
 
+    @Test
+    void unownedDirectoryOfAStorageSpelledTwoWaysIsReportedOnce(final Vertx vertx)
+        throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        this.create(client, "plain");
+        MatcherAssert.assertThat(
+            "a repository whose storage path ends with a slash is created",
+            this.send(
+                client, HttpMethod.PUT, "/api/v1/repositories/slashed",
+                RepoLifecycleApiTest.fileRepo(this.root.toString() + "/")
+            ).statusCode(),
+            new IsEqual<>(200)
+        );
+        this.file("left-behind", "old.bin");
+        final JsonArray orphans = this.send(
+            client, HttpMethod.GET, "/api/v1/repository-orphans", null
+        ).bodyAsJsonObject().getJsonArray("items");
+        MatcherAssert.assertThat(
+            "one directory, one row: both repositories use the same storage",
+            orphans.stream().map(o -> ((JsonObject) o).getString("directory")).toList(),
+            new IsEqual<>(List.of("left-behind"))
+        );
+    }
+
     /**
      * Create a file repository on the shared storage root.
      * @param client HTTP client

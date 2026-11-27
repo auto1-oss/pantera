@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
@@ -24,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -157,7 +159,7 @@ public final class OrphanScan {
                 while (rows.next()) {
                     owned.add(rows.getString(2));
                     OrphanScan.storageOf(rows.getString(1), OrphanScan.json(rows.getString(3)), aliases)
-                        .ifPresent(cfg -> configs.put(OrphanScan.id(cfg), cfg));
+                        .ifPresent(cfg -> configs.putIfAbsent(OrphanScan.id(cfg), cfg));
                 }
             }
             try (PreparedStatement stmt = conn.prepareStatement(
@@ -168,7 +170,7 @@ public final class OrphanScan {
                     owned.add(rows.getString(1));
                     if (rows.getString(2) != null) {
                         final JsonObject cfg = OrphanScan.json(rows.getString(2));
-                        configs.put(OrphanScan.id(cfg), cfg);
+                        configs.putIfAbsent(OrphanScan.id(cfg), cfg);
                     }
                 }
             }
@@ -233,14 +235,17 @@ public final class OrphanScan {
     }
 
     /**
-     * Stable id of a storage config.
+     * Stable id of a storage: of the place it keeps its objects, so the
+     * configs of two repositories that write one storage differently
+     * ({@code /data} and {@code /data/}, other credentials or timeouts) are
+     * scanned, and their directories reported, once.
      * @param config Storage config
-     * @return Short hash of the config
+     * @return Short hash of the storage's location
      */
     private static String id(final JsonObject config) {
         try {
             final byte[] hash = MessageDigest.getInstance("SHA-256")
-                .digest(config.toString().getBytes(StandardCharsets.UTF_8));
+                .digest(OrphanScan.location(config).getBytes(StandardCharsets.UTF_8));
             final StringBuilder hex = new StringBuilder(16);
             for (int idx = 0; idx < 8; idx += 1) {
                 hex.append(String.format("%02x", hash[idx]));
@@ -249,6 +254,50 @@ public final class OrphanScan {
         } catch (final NoSuchAlgorithmException ex) {
             throw new IllegalStateException(ex);
         }
+    }
+
+    /**
+     * Where a storage keeps its objects, one text for every spelling of it:
+     * the normalized directory of a file storage, the endpoint and bucket of
+     * an S3 storage. Another type is known by its whole config.
+     * @param config Storage config
+     * @return Location
+     */
+    private static String location(final JsonObject config) {
+        final String type = config.getString("type", "");
+        final String path = OrphanScan.text(config, "path");
+        final String bucket = OrphanScan.text(config, "bucket");
+        final String res;
+        if (path != null && ("fs".equals(type) || "vertx-file".equals(type))) {
+            res = "file:" + Paths.get(path).toAbsolutePath().normalize();
+        } else if (bucket != null && type.startsWith("s3")) {
+            String endpoint = Optional.ofNullable(OrphanScan.text(config, "endpoint"))
+                .orElse("").toLowerCase(Locale.ROOT);
+            while (endpoint.endsWith("/")) {
+                endpoint = endpoint.substring(0, endpoint.length() - 1);
+            }
+            res = String.join("\n", "s3", endpoint, bucket);
+        } else {
+            res = config.toString();
+        }
+        return res;
+    }
+
+    /**
+     * A string field of a config.
+     * @param config Config
+     * @param field Field name
+     * @return Its value, null when absent or not a string
+     */
+    private static String text(final JsonObject config, final String field) {
+        final String res;
+        if (config.containsKey(field)
+            && config.get(field).getValueType() == JsonValue.ValueType.STRING) {
+            res = config.getString(field);
+        } else {
+            res = null;
+        }
+        return res;
     }
 
     /**
