@@ -50,8 +50,6 @@ vi.mock('@/api/auth', () => ({
   updateRequestLimitsSettings: vi.fn().mockResolvedValue(undefined),
   getEgressSettings: () => Promise.resolve({}),
   updateEgressSettings: (...args: unknown[]) => updateEgressMock(...args),
-  getLoginThrottleSettings: () => Promise.resolve({}),
-  updateLoginThrottleSettings: vi.fn().mockResolvedValue(undefined),
   updateClientBaseUrlSettings: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -213,29 +211,36 @@ describe('SettingsView — unified save bar', () => {
     expect(wrapper.find('[data-testid="save-bar-chip-circuit_breaker"]').exists()).toBe(false)
   })
 
-  it('tracks the three 2.2.9 security policy cards as their own hot-reload sections', async () => {
+  it('tracks the two 2.2.9 security policy cards as their own hot-reload sections', async () => {
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.text()).toContain('Request & Storage Limits')
     expect(wrapper.text()).toContain('Outbound Egress Policy')
-    expect(wrapper.text()).toContain('Login Throttling')
     const vm = wrapper.vm as unknown as {
       maxRequestBodyMiB: number
       egressBlockPrivate: boolean
-      loginThrottleMaxFailures: number
     }
     vm.maxRequestBodyMiB = 512
     await flushPromises()
     expect(wrapper.find('[data-testid="save-bar-chip-request_limits"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="save-bar-chip-egress"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="save-bar-chip-login_throttle"]').exists()).toBe(false)
     vm.egressBlockPrivate = true
-    vm.loginThrottleMaxFailures = 3
     await flushPromises()
     expect(wrapper.find('[data-testid="save-bar-chip-egress"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="save-bar-chip-login_throttle"]').exists()).toBe(true)
-    // All three apply on save without a restart: no restart pill.
+    // Both apply on save without a restart: no restart pill.
     expect(wrapper.find('[data-testid="section-pill-egress"]').text()).not.toContain('Restart')
+  })
+
+  // The sign-in form's own limit (2.2.9) stood between these two cards; its
+  // endpoint and its API functions are gone. Its sole remaining job, pausing
+  // sign-ins whose second factor is not confirmed, is on the Failed logins card.
+  it('has no card of the old per-address sign-in limit: Failed logins follows the egress policy', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const titles = wrapper.findAll('.p-card-title').map(t => t.text())
+    expect(titles[titles.indexOf('Outbound Egress Policy') + 1], 'the next card').toBe('Failed logins')
+    expect(wrapper.text(), 'no field of the old limit').not.toContain('Failures before lockout')
+    expect(wrapper.text(), 'no word of its environment variables').not.toContain('PANTERA_LOGIN_')
   })
 
   it('tracks the client-facing base URL settings as their own section', async () => {

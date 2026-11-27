@@ -141,10 +141,33 @@ describe('LoginView: refused sign-ins', () => {
     expect(shownError(w)).toBe('Sign-in is temporarily unavailable. Please try again.')
   })
 
-  it('keeps the generic message for the older limit of the form', async () => {
+  it('says that password sign-in is paused, in the words of the server', async () => {
+    vi.mocked(authApi.login).mockRejectedValue(refused(
+      403,
+      {
+        error: 'SIGN_IN_PAUSED',
+        message: 'Too many sign-ins without a confirmed second factor. Try again in 15 minutes.',
+        status: 403,
+      },
+      { 'retry-after': '900' },
+    ))
+    const w = await mountLogin()
+
+    await signIn(w)
+
+    expect(shownError(w), 'the pause').toBe(
+      'Too many sign-ins without a confirmed second factor. Try again in 15 minutes.',
+    )
+    expect(w.text(), 'no word of a lock').not.toContain('locked')
+    expect(signOutNotice(), 'no notice is left for a later visit').toBe('')
+    expect(window.location.href, 'the page must stay').toBe(HOME)
+    expect(localStorage.getItem('access_token'), 'nobody is signed in').toBeNull()
+  })
+
+  it('keeps the generic message for a 429', async () => {
     vi.mocked(authApi.login).mockRejectedValue(refused(
       429,
-      { error: 'TOO_MANY_REQUESTS', message: 'Too many sign-in attempts. Please wait and try again.', status: 429 },
+      { error: 'TOO_MANY_REQUESTS', message: 'Too many requests. Please wait and try again.', status: 429 },
       { 'retry-after': '857' },
     ))
     const w = await mountLogin()

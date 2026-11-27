@@ -18,6 +18,14 @@ const DELAYED = {
   status: 403,
   data: { error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 7 seconds.', status: 403 },
 }
+const PAUSED = {
+  status: 403,
+  data: {
+    error: 'SIGN_IN_PAUSED',
+    message: 'Too many sign-ins without a confirmed second factor. Try again in 15 minutes.',
+    status: 403,
+  },
+}
 const FORBIDDEN = {
   status: 403,
   data: { error: 'FORBIDDEN', message: 'Access denied', status: 403 },
@@ -106,15 +114,22 @@ describe('API client: a user locked while signed in', () => {
     expect(signOutNotice(), 'no notice for the sign-in page').toBe('')
   })
 
-  // Delayed logins are answered 403 as a lock is; only the code tells them apart.
-  it.each(['/repositories', '/auth/token', '/auth/callback'])(
-    'does not take a delayed login at %s for a locked account',
-    async (url) => {
+  // Delayed logins and paused sign-ins are answered 403 as a lock is; only the code tells them apart.
+  it.each([
+    ['a delayed login', DELAYED, '/repositories'],
+    ['a delayed login', DELAYED, '/auth/token'],
+    ['a delayed login', DELAYED, '/auth/callback'],
+    ['a paused sign-in', PAUSED, '/repositories'],
+    ['a paused sign-in', PAUSED, '/auth/token'],
+    ['a paused sign-in', PAUSED, '/auth/callback'],
+  ] as const)(
+    'does not take %s at %s for a locked account',
+    async (_name, answer, url) => {
       signedIn()
-      const client = await clientAnswering(() => DELAYED)
+      const client = await clientAnswering(() => answer)
 
       await expect(client.post(url, {})).rejects.toMatchObject({
-        response: { status: 403, data: { error: 'LOGIN_DELAYED' } },
+        response: { status: 403, data: { error: answer.data.error } },
       })
 
       expect(localStorage.getItem('access_token'), 'the session must be kept').toBe('access-1')

@@ -17,6 +17,11 @@ const PASSWORD_FAILURE_REASONS: Record<string, string> = {
   account_locked: 'Account locked',
 }
 
+const SECOND_FACTOR_REASONS: Record<string, string> = {
+  second_factor_failed: 'Second factor not confirmed',
+  sign_in_paused: 'Refused during a pause',
+}
+
 /** Why an API key was rejected. */
 export function rejectedKeyReason(token: string): string {
   return REJECTED_KEY_REASONS[token] ?? (token || '—')
@@ -25,6 +30,11 @@ export function rejectedKeyReason(token: string): string {
 /** Why the last password login of a line failed or was refused. */
 export function passwordFailureReason(token: string): string {
   return PASSWORD_FAILURE_REASONS[token] ?? (token || '—')
+}
+
+/** Why the last sign-in of a second-factor line failed or was refused. */
+export function secondFactorReason(token: string): string {
+  return SECOND_FACTOR_REASONS[token] ?? (token || '—')
 }
 
 /** Number of characters of a key id that are shown. */

@@ -7,18 +7,18 @@ import { useAuthStore } from '@/stores/auth'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import SignInRejectedKeys from '@/components/admin/SignInRejectedKeys.vue'
 import SignInFailedPasswords from '@/components/admin/SignInFailedPasswords.vue'
-import SignInFormLimit from '@/components/admin/SignInFormLimit.vue'
+import SignInSecondFactor from '@/components/admin/SignInSecondFactor.vue'
 
 // The sign-in failures report (2.2.15): who fails to sign in, with what,
 // and from where. Three lists, each behind the permission to read users.
 // The open tab is kept in the address (?tab=passwords) so a list can be
 // linked to.
-type TabId = 'api-keys' | 'passwords' | 'form-limit'
+type TabId = 'api-keys' | 'passwords' | 'second-factor'
 
 const TABS: ReadonlyArray<{ id: TabId; label: string; icon: string }> = [
   { id: 'api-keys', label: 'Rejected API keys', icon: 'pi pi-key' },
   { id: 'passwords', label: 'Failed password logins', icon: 'pi pi-lock' },
-  { id: 'form-limit', label: 'Sign-in form limit', icon: 'pi pi-stopwatch' },
+  { id: 'second-factor', label: 'Second factor', icon: 'pi pi-mobile' },
 ]
 const FIRST_TAB: TabId = 'api-keys'
 
@@ -34,7 +34,7 @@ const activeTab = ref<TabId>(tabOf(route.query.tab))
 // A list is loaded when its tab is first opened and then kept, with its
 // filters and its page, while the other tabs are looked at.
 const opened = reactive<Record<TabId, boolean>>({
-  'api-keys': false, passwords: false, 'form-limit': false,
+  'api-keys': false, passwords: false, 'second-factor': false,
 })
 opened[activeTab.value] = true
 
@@ -145,14 +145,14 @@ onMounted(async () => {
         <SignInFailedPasswords />
       </div>
       <div
-        v-if="opened['form-limit']"
-        v-show="activeTab === 'form-limit'"
-        id="sign-in-panel-form-limit"
+        v-if="opened['second-factor']"
+        v-show="activeTab === 'second-factor'"
+        id="sign-in-panel-second-factor"
         role="tabpanel"
-        aria-labelledby="sign-in-tab-form-limit"
-        data-testid="sign-in-panel-form-limit"
+        aria-labelledby="sign-in-tab-second-factor"
+        data-testid="sign-in-panel-second-factor"
       >
-        <SignInFormLimit />
+        <SignInSecondFactor />
       </div>
     </div>
   </AppLayout>

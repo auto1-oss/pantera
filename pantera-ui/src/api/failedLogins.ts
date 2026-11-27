@@ -2,13 +2,22 @@ import { getApiClient } from './client'
 import type { FailedLogins } from '@/types'
 
 /**
- * GET/PUT /admin/failed-logins-settings: the login delay and the account
- * lock (2.2.15). All values are strings, like every other settings
- * endpoint; the two `*_seconds` keys bound the delay, `failed_logins_lock_after`
- * is the number of failed logins that locks a user (0 = no lock).
+ * GET/PUT /admin/failed-logins-settings (2.2.15): what Pantera does about
+ * failed sign-ins, counted per user name on every node and for every way
+ * of signing in. All values are strings, like every other settings
+ * endpoint; a value out of range is answered 400.
  *
- * NOT the same limit as `LoginThrottleSettings` (`./auth`): that one belongs
- * to the sign-in form and counts per user and client address.
+ * A wrong password and an unconfirmed second factor are counted apart:
+ *  - a wrong password counts towards the delay and the lock: the two
+ *    `*_seconds` keys bound the delay, `failed_logins_lock_after` is the
+ *    number of failed logins that locks a user (0 = no lock);
+ *  - a second factor that was not confirmed (the password was right)
+ *    counts towards a pause of password sign-in and never locks:
+ *    `failed_logins_second_factor_limit` is the number of such sign-ins
+ *    that starts the pause (0 to 100, 0 = never pause), and
+ *    `failed_logins_second_factor_pause_minutes` how long it lasts (1 to
+ *    1440). Unconfirmed sign-ins count only while each comes within that
+ *    time of the previous one.
  */
 export interface FailedLoginsSettings {
   failed_logins_delay_from_failure: string
@@ -19,6 +28,8 @@ export interface FailedLoginsSettings {
   failed_logins_forget_after_minutes: string
   failed_logins_count_rejected_keys: string
   failed_logins_lock_all_credentials: string
+  failed_logins_second_factor_limit: string
+  failed_logins_second_factor_pause_minutes: string
 }
 
 export async function getFailedLoginsSettings(): Promise<FailedLoginsSettings> {

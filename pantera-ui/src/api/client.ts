@@ -65,8 +65,10 @@ function isSignInCall(url: string): boolean {
  * True for the answer the API gives a user who was locked after failed
  * logins: 403 with the code `ACCOUNT_LOCKED`. The session or key is
  * still valid, so this is not a 401, and no other 403 carries the code.
- * A delayed login is answered 403 as well, with the code `LOGIN_DELAYED`:
- * it ends no session and is left to the caller.
+ * A delayed login (`LOGIN_DELAYED`) and a paused password sign-in
+ * (`SIGN_IN_PAUSED`, after too many sign-ins whose second factor was not
+ * confirmed) are answered 403 as well, with `Retry-After`: they are
+ * temporary, end no session and are left to the caller.
  */
 function isAccountLocked(error: { response?: { status?: number; data?: unknown } }): boolean {
   const data = error.response?.data

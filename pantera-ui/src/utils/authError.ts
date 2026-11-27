@@ -13,17 +13,20 @@
  * starts leaking detail, the UI will still display one of the fixed
  * messages below.
  *
- * Three refusals are told to the person, because without them nobody can
+ * Four refusals are told to the person, because without them nobody can
  * know what to do, and none says whether the user exists or the password
  * was right (2.2.15):
  *  - 403 `ACCOUNT_LOCKED`: the account is locked after failed logins;
  *  - 403 `LOGIN_DELAYED`: logins are delayed, for the seconds in `Retry-After`;
+ *  - 403 `SIGN_IN_PAUSED`: password sign-in is paused after too many
+ *    sign-ins whose second factor was not confirmed, for the seconds in
+ *    `Retry-After`. It is answered during the pause without a check;
  *  - 503: sign-in cannot be checked right now, in the server's own words.
- * A lock and a delay are both answered 403; the code tells them apart. The
- * older limit of the sign-in form, 429 `TOO_MANY_REQUESTS`, is not one of
- * the three and keeps the generic message.
- * Only the delay and the 503 may show the server's message, and only as
- * described at {@link delayedMessage} and {@link serverMessage}.
+ * The three 403s are told apart by their code alone. A 429 is not one of
+ * the four and keeps the generic message.
+ * Only the delay, the pause and the 503 may show the server's message, and
+ * only as described at {@link delayedMessage}, {@link pausedMessage} and
+ * {@link serverMessage}.
  *
  * Detail (status code, raw message) goes to console.warn for the
  * developer console only — never into the DOM.
@@ -38,6 +41,7 @@ export type AuthErrorKind =
   | 'state' // OAuth state mismatch — possible CSRF or stale tab
   | 'locked' // 403 ACCOUNT_LOCKED — locked after failed logins, an administrator unlocks
   | 'delayed' // 403 LOGIN_DELAYED — logins of this user are refused for some seconds
+  | 'paused' // 403 SIGN_IN_PAUSED — password sign-in paused after unconfirmed second factors
 
 export interface NormalizedAuthError {
   kind: AuthErrorKind
@@ -55,6 +59,7 @@ const MESSAGES: Record<AuthErrorKind, string> = {
   state: 'Your sign-in session expired or is invalid. Please start again.',
   locked: ACCOUNT_LOCKED_MESSAGE,
   delayed: 'Too many failed logins. Try again later.',
+  paused: 'Too many sign-ins without a confirmed second factor. Try again later.',
 }
 
 /**
@@ -138,9 +143,12 @@ export function formatAuthError(err: unknown): NormalizedAuthError {
     if (status === 403 && code === 'ACCOUNT_LOCKED') {
       return { kind: 'locked', message: MESSAGES.locked }
     }
-    // Known by its code alone: the server answers a delay 403, as it does a lock.
+    // Known by their code alone: the server answers a delay and a pause 403, as it does a lock.
     if (code === 'LOGIN_DELAYED') {
       return { kind: 'delayed', message: delayedMessage(err) }
+    }
+    if (code === 'SIGN_IN_PAUSED') {
+      return { kind: 'paused', message: pausedMessage(err) }
     }
     if (status === 503) {
       return { kind: 'unavailable', message: serverMessage(err) ?? MESSAGES.unavailable }
@@ -170,10 +178,10 @@ function errorCode(err: AxiosError): string | undefined {
 }
 
 /**
- * The `message` of the API's error body. Shown for two answers only: the
- * login delay when its seconds cannot be read from the header, and a 503
- * of the sign-in. The server words both for the person and puts no
- * exception text in them.
+ * The `message` of the API's error body. Shown for three answers only: the
+ * login delay when its seconds cannot be read from the header, the pause
+ * of password sign-in, and a 503 of the sign-in. The server words them for
+ * the person and puts no exception text in them.
  */
 function serverMessage(err: AxiosError): string | undefined {
   const data = err.response?.data
@@ -215,6 +223,23 @@ function delayedMessage(err: AxiosError): string {
     return `Too many failed logins. Try again in ${seconds} second${seconds === 1 ? '' : 's'}.`
   }
   return serverMessage(err) ?? MESSAGES.delayed
+}
+
+/**
+ * The server's message of a pause, which names the minutes as the server
+ * rounds them; without one "Try again in N minutes" from `Retry-After`,
+ * rounded up; else no number.
+ */
+function pausedMessage(err: AxiosError): string {
+  const message = serverMessage(err)
+  if (message !== undefined) return message
+  const seconds = retryAfterSeconds(err)
+  if (seconds !== null) {
+    const minutes = Math.ceil(seconds / 60)
+    return 'Too many sign-ins without a confirmed second factor. '
+      + `Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`
+  }
+  return MESSAGES.paused
 }
 
 function logDetail(tag: string, err: unknown): void {

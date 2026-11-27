@@ -13,7 +13,6 @@ const updateFailedLoginsSettingsMock = vi.fn()
 const listLockedUsersMock = vi.fn()
 const unlockUserMock = vi.fn()
 const unlockAllUsersMock = vi.fn()
-const updateLoginThrottleMock = vi.fn()
 
 vi.mock('@/api/failedLogins', () => ({
   getFailedLoginsSettings: (...a: unknown[]) => getFailedLoginsSettingsMock(...a),
@@ -61,10 +60,6 @@ vi.mock('@/api/auth', () => ({
   updateRequestLimitsSettings: vi.fn().mockResolvedValue(undefined),
   getEgressSettings: () => Promise.resolve({}),
   updateEgressSettings: vi.fn().mockResolvedValue(undefined),
-  getLoginThrottleSettings: () => Promise.resolve({
-    login_throttle_max_failures: '5', login_throttle_window_seconds: '900',
-  }),
-  updateLoginThrottleSettings: (...a: unknown[]) => updateLoginThrottleMock(...a),
 }))
 
 vi.mock('@/composables/useRuntimeSettings', async () => {
@@ -106,6 +101,8 @@ const SERVER_SETTINGS = {
   failed_logins_forget_after_minutes: '60',
   failed_logins_count_rejected_keys: 'true',
   failed_logins_lock_all_credentials: 'false',
+  failed_logins_second_factor_limit: '7',
+  failed_logins_second_factor_pause_minutes: '30',
 }
 
 const ALICE: FailedLogins = {
@@ -129,7 +126,8 @@ interface FailedLoginsVm {
   failedLoginsForgetAfterMinutes: number | null
   failedLoginsCountRejectedKeys: boolean
   failedLoginsLockAllCredentials: boolean
-  loginThrottleMaxFailures: number
+  failedLoginsSecondFactorLimit: number | null
+  failedLoginsSecondFactorPauseMinutes: number | null
   saveAll: () => Promise<void>
 }
 
@@ -180,7 +178,6 @@ beforeEach(() => {
   listLockedUsersMock.mockReset().mockResolvedValue([])
   unlockUserMock.mockReset().mockResolvedValue(true)
   unlockAllUsersMock.mockReset().mockResolvedValue([])
-  updateLoginThrottleMock.mockReset().mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -190,7 +187,7 @@ afterEach(() => {
 })
 
 describe('SettingsView: Failed logins card, the policy', () => {
-  it('loads the eight values of the server into the card', async () => {
+  it('loads the ten values of the server into the card', async () => {
     const w = await mountView()
     const vm = vmOf(w)
 
@@ -203,8 +200,11 @@ describe('SettingsView: Failed logins card, the policy', () => {
       forget: vm.failedLoginsForgetAfterMinutes,
       keys: vm.failedLoginsCountRejectedKeys,
       all: vm.failedLoginsLockAllCredentials,
+      secondFactorLimit: vm.failedLoginsSecondFactorLimit,
+      pause: vm.failedLoginsSecondFactorPauseMinutes,
     }, 'numbers and switches from the strings of the server').toEqual({
       from: 4, first: 2, max: 120, lock: 5, unlock: 30, forget: 60, keys: true, all: false,
+      secondFactorLimit: 7, pause: 30,
     })
     expect(
       w.find('[data-testid="settings-save-bar"]').exists(),
@@ -226,6 +226,8 @@ describe('SettingsView: Failed logins card, the policy', () => {
       'Forget failures after (minutes)',
       'Count rejected API keys',
       'A lock blocks every credential',
+      'Pause after unconfirmed sign-ins',
+      'Pause (minutes)',
     ]) {
       expect(text, `label "${label}"`).toContain(label)
     }
@@ -235,30 +237,85 @@ describe('SettingsView: Failed logins card, the policy', () => {
       '0 = only an administrator unlocks',
       '0 = never',
       'On = password, API keys, sessions and the provider button; off = password sign-in only.',
+      'Default: 5. From this unconfirmed sign-in on, password sign-in of the user is paused and no push is sent. 0 = never pause.',
+      'Default: 15. Unconfirmed sign-ins count while each comes within this time of the previous one. A successful sign-in ends the count.',
     ]) {
       expect(text, `help "${help}"`).toContain(help)
     }
   })
 
-  it('cannot be confused with the Login Throttling card', async () => {
+  it('says what it counts, for every way of signing in', async () => {
     const w = await mountView()
 
-    expect(w.text(), 'the older card keeps its name').toContain('Login Throttling')
-    expect(w.text(), 'the older card says what it is and which limit comes first').toContain(
-      'This is the sign-in form\'s own limit: with the default values the lock of the "Failed logins" card below comes first.',
+    expect(card(w).find('.p-card-subtitle').text().replace(/\s+/g, ' ')).toBe(
+      'Failed sign-ins are counted per user name, on every node, for every way of signing in: '
+      + 'the sign-in form, the token API and repository clients. A wrong password and an '
+      + 'unconfirmed second factor are counted apart. Stored in the database; the '
+      + 'PANTERA_FAILED_LOGINS_* environment variables are only the fallback.',
     )
-    expect(card(w).text(), 'the new card points at the older one')
-      .toContain('Not the "Login Throttling" card above')
   })
 
-  it('becomes dirty on its own, apart from Login Throttling', async () => {
+  it('tells at a glance what is a wrong password and what is an unconfirmed second factor', async () => {
+    const w = await mountView()
+    const counted = card(w).find('[data-testid="failed-logins-counted"]')
+    const words = (el: { text: () => string }) => el.text().replace(/\s+/g, ' ')
+
+    expect(counted.text(), 'the title').toContain('What is counted')
+    expect(
+      counted.findAll('dt').map(dt => words(dt)),
+      'the three kinds, in this order',
+    ).toEqual(['Wrong password', 'Second factor not confirmed', 'Not counted'])
+    expect(counted.findAll('dd').map(dd => words(dd)), 'what each one is and does').toEqual([
+      'Counts toward the delay and the lock.',
+      'The password was right; the push was denied or not answered, or the code was wrong. '
+        + 'Counts toward the pause; never a wrong password, never locks.',
+      'The identity provider cannot be reached, the account is locked or its password expired '
+        + 'at the provider, a repository client was asked for a second factor it cannot give.',
+    ])
+  })
+
+  it('groups the settings under wrong password, second factor and lock scope, in that order', async () => {
+    const w = await mountView()
+    const c = card(w)
+    const headings = c.findAll('h4').map(h => h.text())
+    const section = (id: string) => c.find(`[data-testid="failed-logins-${id}"]`)
+
+    expect(headings, 'the sub-headings').toEqual(['Wrong password', 'Second factor not confirmed', 'Lock scope'])
+    for (const label of [
+      'Delay logins from failed login number', 'Lock after failed logins', 'First delay (seconds)',
+      'Longest delay (seconds)', 'Unlock automatically after (minutes)', 'Forget failures after (minutes)',
+      'Count rejected API keys',
+    ]) {
+      expect(section('wrong-password').text(), `"${label}" is about a wrong password`).toContain(label)
+    }
+    expect(section('second-factor').text(), 'the limit of the pause').toContain('Pause after unconfirmed sign-ins')
+    expect(section('second-factor').text(), 'the length of the pause').toContain('Pause (minutes)')
+    expect(section('second-factor').text(), 'nothing of the lock').not.toContain('Lock after')
+    expect(section('lock-scope').text(), 'the scope of a lock').toContain('A lock blocks every credential')
+    const order = ['counted', 'wrong-password', 'second-factor', 'lock-scope']
+      .map(id => section(id).element)
+    for (let i = 1; i < order.length; i++) {
+      expect(
+        order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `${i}: in order`,
+      ).toBeTruthy()
+    }
+    const lockedUsers = c.find('[data-testid="locked-users-refresh"]').element
+    expect(
+      section('lock-scope').element.compareDocumentPosition(lockedUsers) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'the locked users stay at the end of the card',
+    ).toBeTruthy()
+  })
+
+  it('becomes dirty on its own', async () => {
     const w = await mountView()
 
     vmOf(w).failedLoginsLockAfter = 10
     await flushPromises()
 
     expect(w.find('[data-testid="save-bar-chip-failed_logins"]').exists(), 'the card is dirty').toBe(true)
-    expect(w.find('[data-testid="save-bar-chip-login_throttle"]').exists(), 'Login Throttling is not').toBe(false)
+    expect(w.find('[data-testid="save-bar-chip-egress"]').exists(), 'the card before it is not').toBe(false)
+    expect(w.find('[data-testid="save-bar-chip-sign_in_report"]').exists(), 'the card after it is not').toBe(false)
     expect(
       w.find('[data-testid="section-pill-failed_logins"]').text(),
       'the change applies without a restart',
@@ -267,6 +324,22 @@ describe('SettingsView: Failed logins card, the policy', () => {
     vmOf(w).failedLoginsLockAfter = 5
     await flushPromises()
     expect(w.find('[data-testid="settings-save-bar"]').exists(), 'clean again at the loaded value').toBe(false)
+  })
+
+  it.each([
+    ['failedLoginsSecondFactorLimit', 0, 7],
+    ['failedLoginsSecondFactorPauseMinutes', 60, 30],
+  ] as const)('becomes dirty when %s changes, and clean again at the loaded value', async (field, edited, loaded) => {
+    const w = await mountView()
+    const vm = vmOf(w) as unknown as Record<string, number | null>
+
+    vm[field] = edited
+    await flushPromises()
+    expect(w.find('[data-testid="save-bar-chip-failed_logins"]').exists(), 'dirty').toBe(true)
+
+    vm[field] = loaded
+    await flushPromises()
+    expect(w.find('[data-testid="settings-save-bar"]').exists(), 'clean').toBe(false)
   })
 
   it('becomes dirty when a switch is flipped', async () => {
@@ -278,7 +351,7 @@ describe('SettingsView: Failed logins card, the policy', () => {
     expect(w.find('[data-testid="save-bar-chip-failed_logins"]').exists()).toBe(true)
   })
 
-  it('saves all eight values as strings', async () => {
+  it('saves all ten values as strings', async () => {
     const w = await mountView()
     const vm = vmOf(w)
     vm.failedLoginsDelayFromFailure = 0
@@ -289,6 +362,8 @@ describe('SettingsView: Failed logins card, the policy', () => {
     vm.failedLoginsForgetAfterMinutes = 43200
     vm.failedLoginsCountRejectedKeys = false
     vm.failedLoginsLockAllCredentials = true
+    vm.failedLoginsSecondFactorLimit = 0
+    vm.failedLoginsSecondFactorPauseMinutes = 1440
     await flushPromises()
 
     await vm.saveAll()
@@ -304,8 +379,9 @@ describe('SettingsView: Failed logins card, the policy', () => {
       failed_logins_forget_after_minutes: '43200',
       failed_logins_count_rejected_keys: 'false',
       failed_logins_lock_all_credentials: 'true',
+      failed_logins_second_factor_limit: '0',
+      failed_logins_second_factor_pause_minutes: '1440',
     })
-    expect(updateLoginThrottleMock, 'Login Throttling is not saved with it').not.toHaveBeenCalled()
     expect(
       w.find('[data-testid="settings-save-bar"]').exists(),
       'the saved values are the new baseline',
@@ -363,6 +439,13 @@ describe('SettingsView: Failed logins card, the policy', () => {
     ['failedLoginsLockAfter', null, 'Lock after failed logins must be a whole number from 0 to 100'],
     ['failedLoginsUnlockAfterMinutes', 1441, 'Unlock automatically after (minutes) must be a whole number from 0 to 1440'],
     ['failedLoginsForgetAfterMinutes', 43201, 'Forget failures after (minutes) must be a whole number from 0 to 43200'],
+    ['failedLoginsSecondFactorLimit', 101, 'Pause after unconfirmed sign-ins must be a whole number from 0 to 100'],
+    ['failedLoginsSecondFactorLimit', -1, 'Pause after unconfirmed sign-ins must be a whole number from 0 to 100'],
+    ['failedLoginsSecondFactorLimit', 2.5, 'Pause after unconfirmed sign-ins must be a whole number from 0 to 100'],
+    ['failedLoginsSecondFactorLimit', null, 'Pause after unconfirmed sign-ins must be a whole number from 0 to 100'],
+    ['failedLoginsSecondFactorPauseMinutes', 0, 'Pause (minutes) must be a whole number from 1 to 1440'],
+    ['failedLoginsSecondFactorPauseMinutes', 1441, 'Pause (minutes) must be a whole number from 1 to 1440'],
+    ['failedLoginsSecondFactorPauseMinutes', null, 'Pause (minutes) must be a whole number from 1 to 1440'],
   ] as const)('does not save %s = %s', async (field, value, problem) => {
     const w = await mountView()
     const vm = vmOf(w)
@@ -384,6 +467,10 @@ describe('SettingsView: Failed logins card, the policy', () => {
     ['failedLoginsLockAfter', 100],
     ['failedLoginsUnlockAfterMinutes', 0],
     ['failedLoginsForgetAfterMinutes', 43200],
+    ['failedLoginsSecondFactorLimit', 0],
+    ['failedLoginsSecondFactorLimit', 100],
+    ['failedLoginsSecondFactorPauseMinutes', 1],
+    ['failedLoginsSecondFactorPauseMinutes', 1440],
   ] as const)('saves the bound %s = %s', async (field, value) => {
     const w = await mountView()
     const vm = vmOf(w)
@@ -403,6 +490,8 @@ describe('SettingsView: Failed logins card, the policy', () => {
     vm.failedLoginsMaxDelaySeconds = 1
     vm.failedLoginsCountRejectedKeys = false
     vm.failedLoginsLockAllCredentials = true
+    vm.failedLoginsSecondFactorLimit = 0
+    vm.failedLoginsSecondFactorPauseMinutes = 1
     await flushPromises()
 
     await w.find('[data-testid="settings-discard"]').trigger('click')
@@ -413,7 +502,11 @@ describe('SettingsView: Failed logins card, the policy', () => {
       max: vm.failedLoginsMaxDelaySeconds,
       keys: vm.failedLoginsCountRejectedKeys,
       all: vm.failedLoginsLockAllCredentials,
-    }, 'the values of the server are back').toEqual({ lock: 5, max: 120, keys: true, all: false })
+      secondFactorLimit: vm.failedLoginsSecondFactorLimit,
+      pause: vm.failedLoginsSecondFactorPauseMinutes,
+    }, 'the values of the server are back').toEqual({
+      lock: 5, max: 120, keys: true, all: false, secondFactorLimit: 7, pause: 30,
+    })
     expect(w.find('[data-testid="settings-save-bar"]').exists(), 'nothing is dirty').toBe(false)
     expect(updateFailedLoginsSettingsMock, 'nothing was sent').not.toHaveBeenCalled()
   })
@@ -467,9 +560,31 @@ describe('SettingsView: Failed logins card, the policy', () => {
       forget: vm.failedLoginsForgetAfterMinutes,
       keys: vm.failedLoginsCountRejectedKeys,
       all: vm.failedLoginsLockAllCredentials,
+      secondFactorLimit: vm.failedLoginsSecondFactorLimit,
+      pause: vm.failedLoginsSecondFactorPauseMinutes,
     }, 'the defaults of the server').toEqual({
       from: 2, first: 1, max: 60, lock: 3, unlock: 0, forget: 0, keys: false, all: true,
+      secondFactorLimit: 5, pause: 15,
     })
+    expect(w.find('[data-testid="settings-save-bar"]').exists(), 'nothing is dirty').toBe(false)
+  })
+
+  it('takes the defaults of the second factor when the server does not send them', async () => {
+    const {
+      failed_logins_second_factor_limit: _limit,
+      failed_logins_second_factor_pause_minutes: _pause,
+      ...older
+    } = SERVER_SETTINGS
+    getFailedLoginsSettingsMock.mockResolvedValue(older)
+
+    const w = await mountView()
+    const vm = vmOf(w)
+
+    expect(
+      { limit: vm.failedLoginsSecondFactorLimit, pause: vm.failedLoginsSecondFactorPauseMinutes },
+      'the defaults of the server',
+    ).toEqual({ limit: 5, pause: 15 })
+    expect(vm.failedLoginsLockAfter, 'the other values are loaded').toBe(5)
     expect(w.find('[data-testid="settings-save-bar"]').exists(), 'nothing is dirty').toBe(false)
   })
 })

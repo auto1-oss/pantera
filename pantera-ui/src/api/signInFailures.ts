@@ -76,18 +76,24 @@ export interface FailedPasswordLogin extends SignInOrigin {
 }
 
 /**
- * Logins refused by the sign-in form's own limit (System Settings → Login
- * Throttling). `hits` counts the refused logins, `failures` the failures
- * in the window when the limit last refused; `blocked` says whether the
- * block is still on.
+ * Sign-ins of one user from one client address whose password was right
+ * but whose second factor was not confirmed: a push denied or not
+ * answered, or a wrong code. `unconfirmed` counts those sign-ins,
+ * `refused` the sign-ins refused without a check during a pause.
+ * `last_reason` is `second_factor_failed` or `sign_in_paused`. `counted`
+ * is the number of unconfirmed sign-ins that counted towards the pause at
+ * the last event; `paused_until` is the end of the pause it reached, null
+ * when none was reached, and `paused` says whether that pause is still on.
  */
-export interface FormLimitHit extends SignInOrigin {
-  hits: number
-  failures: number
-  blocked_until: string | null
-  blocked: boolean
-  first_hit_at: string | null
-  last_hit_at: string | null
+export interface SecondFactorLine extends SignInOrigin {
+  unconfirmed: number
+  refused: number
+  last_reason: string
+  counted: number
+  paused_until: string | null
+  paused: boolean
+  first_seen_at: string | null
+  last_seen_at: string | null
 }
 
 /**
@@ -136,11 +142,11 @@ export function listFailedPasswordLogins(
   return list<FailedPasswordLogin>('/sign-in-failures/passwords', query, signal)
 }
 
-/** Logins the sign-in form's own limit refused. Needs the permission to read users. */
-export function listFormLimitHits(
+/** Sign-ins with an unconfirmed second factor. Needs the permission to read users. */
+export function listSecondFactorLines(
   query: SignInFailuresQuery = {}, signal?: AbortSignal,
-): Promise<PaginatedResponse<FormLimitHit>> {
-  return list<FormLimitHit>('/sign-in-failures/form-limit', query, signal)
+): Promise<PaginatedResponse<SecondFactorLine>> {
+  return list<SecondFactorLine>('/sign-in-failures/second-factor', query, signal)
 }
 
 /** The rejected API keys of the signed-in user, for every signed-in user. */

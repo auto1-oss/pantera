@@ -10,13 +10,13 @@ import { useNotificationStore } from '@/stores/notifications'
 
 const listRejectedApiKeysMock = vi.fn()
 const listFailedPasswordLoginsMock = vi.fn()
-const listFormLimitHitsMock = vi.fn()
+const listSecondFactorLinesMock = vi.fn()
 const getSignInReportSettingsMock = vi.fn()
 
 vi.mock('@/api/signInFailures', () => ({
   listRejectedApiKeys: (...a: unknown[]) => listRejectedApiKeysMock(...a),
   listFailedPasswordLogins: (...a: unknown[]) => listFailedPasswordLoginsMock(...a),
-  listFormLimitHits: (...a: unknown[]) => listFormLimitHitsMock(...a),
+  listSecondFactorLines: (...a: unknown[]) => listSecondFactorLinesMock(...a),
   getSignInReportSettings: (...a: unknown[]) => getSignInReportSettingsMock(...a),
 }))
 
@@ -49,10 +49,11 @@ const PASSWORD = {
   },
 }
 
-const LIMIT = {
+const SECOND_FACTOR = {
   user: 'carol', client_ip: '192.0.2.9', user_agent: 'Mozilla/5.0', path: 'ui',
-  hits: 2, failures: 5, blocked_until: '2026-11-26T19:33:32Z', blocked: true,
-  first_hit_at: '2026-11-26T19:18:32Z', last_hit_at: '2026-11-26T19:19:40Z',
+  unconfirmed: 5, refused: 1, last_reason: 'sign_in_paused', counted: 5,
+  paused_until: '2026-11-27T10:15:00Z', paused: true,
+  first_seen_at: '2026-11-27T09:58:00Z', last_seen_at: '2026-11-27T10:01:30Z',
 }
 
 function page(items: unknown[]) {
@@ -110,7 +111,7 @@ beforeEach(() => {
   setActivePinia(createPinia())
   listRejectedApiKeysMock.mockReset().mockResolvedValue(page([KEY]))
   listFailedPasswordLoginsMock.mockReset().mockResolvedValue(page([PASSWORD]))
-  listFormLimitHitsMock.mockReset().mockResolvedValue(page([LIMIT]))
+  listSecondFactorLinesMock.mockReset().mockResolvedValue(page([SECOND_FACTOR]))
   getSignInReportSettingsMock.mockReset().mockResolvedValue({
     sign_in_report_enabled: 'true', sign_in_report_retention_days: '90',
   })
@@ -209,7 +210,7 @@ describe('SignInFailuresView: the three tabs', () => {
 
     expect(tab(w, 'api-keys').text(), 'first tab').toBe('Rejected API keys')
     expect(tab(w, 'passwords').text(), 'second tab').toBe('Failed password logins')
-    expect(tab(w, 'form-limit').text(), 'third tab').toBe('Sign-in form limit')
+    expect(tab(w, 'second-factor').text(), 'third tab').toBe('Second factor')
     expect(tab(w, 'api-keys').attributes('aria-selected'), 'the first is selected').toBe('true')
     expect(tab(w, 'passwords').attributes('aria-selected'), 'the second is not').toBe('false')
     expect(panel(w, 'api-keys').text(), 'its lines are shown').toContain('CI token')
@@ -220,7 +221,7 @@ describe('SignInFailuresView: the three tabs', () => {
 
     expect(listRejectedApiKeysMock, 'the open tab is loaded').toHaveBeenCalledTimes(1)
     expect(listFailedPasswordLoginsMock, 'the second is not asked for yet').not.toHaveBeenCalled()
-    expect(listFormLimitHitsMock, 'nor the third').not.toHaveBeenCalled()
+    expect(listSecondFactorLinesMock, 'nor the third').not.toHaveBeenCalled()
 
     await openTab(w, 'passwords')
 
@@ -230,10 +231,14 @@ describe('SignInFailuresView: the three tabs', () => {
     expect(panel(w, 'passwords').isVisible(), 'its panel is shown').toBe(true)
     expect(panel(w, 'api-keys').isVisible(), 'the first panel is hidden').toBe(false)
 
-    await openTab(w, 'form-limit')
+    await openTab(w, 'second-factor')
 
-    expect(listFormLimitHitsMock, 'the third on its turn').toHaveBeenCalledTimes(1)
-    expect(panel(w, 'form-limit').text(), 'with its lines').toContain('carol')
+    expect(listSecondFactorLinesMock, 'the third on its turn').toHaveBeenCalledTimes(1)
+    expect(panel(w, 'second-factor').text(), 'with its lines').toContain('carol')
+    expect(panel(w, 'second-factor').find('[data-testid="sf-reason"]').text(), 'the reason in words')
+      .toBe('Refused during a pause')
+    expect(panel(w, 'second-factor').find('[data-testid="sf-paused"]').text(), 'the pause is still on')
+      .toBe('Still paused')
   })
 
   it('keeps the filter and the lines of a tab that was left', async () => {
@@ -257,8 +262,8 @@ describe('SignInFailuresView: the three tabs', () => {
   it('puts the open tab into the address', async () => {
     const { w, router } = await mountAt('/admin/sign-in-failures')
 
-    await openTab(w, 'form-limit')
-    expect(router.currentRoute.value.query.tab, 'the third tab').toBe('form-limit')
+    await openTab(w, 'second-factor')
+    expect(router.currentRoute.value.query.tab, 'the third tab').toBe('second-factor')
 
     await openTab(w, 'api-keys')
     expect(router.currentRoute.value.query.tab, 'the first tab needs none').toBeUndefined()
@@ -275,11 +280,11 @@ describe('SignInFailuresView: the three tabs', () => {
   it('follows a link to another tab while the page is open', async () => {
     const { w, router } = await mountAt('/admin/sign-in-failures')
 
-    await router.push('/admin/sign-in-failures?tab=form-limit')
+    await router.push('/admin/sign-in-failures?tab=second-factor')
     await flushPromises()
 
-    expect(tab(w, 'form-limit').attributes('aria-selected'), 'selected').toBe('true')
-    expect(listFormLimitHitsMock, 'loaded').toHaveBeenCalledTimes(1)
+    expect(tab(w, 'second-factor').attributes('aria-selected'), 'selected').toBe('true')
+    expect(listSecondFactorLinesMock, 'loaded').toHaveBeenCalledTimes(1)
   })
 
   it('loads nothing more when the page is left from a tab named in the address', async () => {
@@ -302,10 +307,10 @@ describe('SignInFailuresView: the three tabs', () => {
     const refused = { response: { status: 403, data: { error: 'FORBIDDEN', message: 'Access denied' } } }
     listRejectedApiKeysMock.mockRejectedValue(refused)
     listFailedPasswordLoginsMock.mockRejectedValue(refused)
-    listFormLimitHitsMock.mockRejectedValue(refused)
+    listSecondFactorLinesMock.mockRejectedValue(refused)
     const { w } = await mountAt('/admin/sign-in-failures', [])
 
-    for (const id of ['api-keys', 'passwords', 'form-limit']) {
+    for (const id of ['api-keys', 'passwords', 'second-factor']) {
       await openTab(w, id)
       expect(panel(w, id).find('[data-testid="list-forbidden"]').text(), `tab ${id}`)
         .toBe('You do not have permission to see this list.')
