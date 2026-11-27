@@ -8,6 +8,7 @@ import { ruleMember, rulesOf } from '@/utils/routingRules'
 import type { RepoConfigEnvelope, RoutingRule } from '@/types/repo'
 import type { StorageAlias } from '@/types'
 import InputText from 'primevue/inputtext'
+import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
@@ -94,6 +95,8 @@ const hadStorage = ref(true)
 // `immutable` is deliberately NOT listed: buildConfig() owns it only for the
 // types it applies to (see supportsImmutable); on proxy/group/docker configs
 // any stray value is round-tripped untouched like any other unmodelled key.
+// `tag_refresh_seconds` is not listed for the same reason: owned for
+// docker-proxy only (see isDockerProxy).
 const OWNED_KEYS = [
   'type', 'url', 'storage', 'remotes', 'members', 'cooldown',
   'anonymous_read', 'anonymous_write',
@@ -310,6 +313,14 @@ const anonymousWrite = ref(false)
 // the server, so new repos start checked; only an explicit false loads off.
 const immutableArtifacts = ref(true)
 
+// Tag refresh age of a docker-proxy (`repo.tag_refresh_seconds`): seconds a
+// cached image tag is served before the upstream is asked whether it moved.
+// null (an empty field) means the global setting applies, and the key is
+// left out of the config.
+const tagRefreshSeconds = ref<number | null>(null)
+/** Largest age the server accepts: a year. */
+const TAG_REFRESH_MAX = 31_536_000
+
 // Computed type flags
 const isProxy = computed(() => repoType.value.endsWith('-proxy'))
 const isGroup = computed(() => repoType.value.endsWith('-group'))
@@ -320,6 +331,17 @@ const isGroup = computed(() => repoType.value.endsWith('-group'))
 const supportsImmutable = computed(() =>
   !isProxy.value && !isGroup.value && repoType.value !== 'docker',
 )
+
+// The tag refresh age applies to docker proxies only.
+const isDockerProxy = computed(() => repoType.value === 'docker-proxy')
+
+// A set age must be a whole number from 0 to a year; the server refuses
+// anything else with 400.
+const tagRefreshInvalid = computed(() => {
+  const seconds = tagRefreshSeconds.value
+  return isDockerProxy.value && seconds !== null
+    && (!Number.isInteger(seconds) || seconds < 0 || seconds > TAG_REFRESH_MAX)
+})
 
 const repoTypes = REPO_TYPE_CREATE_OPTIONS
 
@@ -332,6 +354,7 @@ const isValid = computed<boolean>(() => {
   if (isGroup.value && groupMembers.value.length === 0) return false
   if (cooldownEnabled.value && !cooldownDuration.value) return false
   if (baseUrlInvalid.value) return false
+  if (tagRefreshInvalid.value) return false
   return true
 })
 
@@ -416,6 +439,16 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
   const rawImmutable: unknown = repo.immutable
   immutableArtifacts.value = !(rawImmutable === false
     || (typeof rawImmutable === 'string' && rawImmutable.trim().toLowerCase() === 'false'))
+
+  // A number from the server; tolerate digits in a string from a YAML file.
+  const rawTagRefresh: unknown = repo.tag_refresh_seconds
+  if (typeof rawTagRefresh === 'number') {
+    tagRefreshSeconds.value = rawTagRefresh
+  } else if (typeof rawTagRefresh === 'string' && /^\s*\d+\s*$/.test(rawTagRefresh)) {
+    tagRefreshSeconds.value = Number(rawTagRefresh.trim())
+  } else {
+    tagRefreshSeconds.value = null
+  }
 
   // Storage
   if (typeof repo.storage === 'string') {
@@ -578,6 +611,16 @@ function buildConfig(): RepoConfigEnvelope {
     repo.immutable = immutableArtifacts.value
   }
 
+  // Docker proxies: the age when one is set; an empty field removes the key,
+  // so the global setting applies. Other types keep a stray value untouched.
+  if (isDockerProxy.value) {
+    if (tagRefreshSeconds.value !== null) {
+      repo.tag_refresh_seconds = tagRefreshSeconds.value
+    } else {
+      delete repo.tag_refresh_seconds
+    }
+  }
+
   return { repo }
 }
 
@@ -595,6 +638,7 @@ watch(
     cooldownEnabled, cooldownDuration,
     anonymousRead, anonymousWrite,
     immutableArtifacts,
+    tagRefreshSeconds,
     clientBaseUrl,
   ],
   () => { emitConfig() },
@@ -612,6 +656,8 @@ defineExpose({
   anonymousWrite,
   immutableArtifacts,
   supportsImmutable,
+  tagRefreshSeconds,
+  isDockerProxy,
 })
 </script>
 
@@ -1057,6 +1103,34 @@ defineExpose({
           <InputText id="cdWindow" v-model="cooldownWindow" placeholder="30d" class="w-48" :invalid="!cooldownDuration" />
           <p class="text-xs text-gray-400 mt-1">e.g. 7d, 24h, 30m</p>
         </div>
+      </div>
+    </template>
+  </Card>
+
+  <!-- Tag refresh (docker-proxy only) -->
+  <Card v-if="isDockerProxy" class="shadow-sm" data-testid="tag-refresh-card">
+    <template #title>Tag refresh</template>
+    <template #content>
+      <div class="space-y-2">
+        <label for="tagRefreshSeconds" class="block text-xs text-gray-500 mb-1">
+          Tag refresh (seconds)
+        </label>
+        <InputNumber
+          v-model="tagRefreshSeconds"
+          input-id="tagRefreshSeconds"
+          :min="0"
+          :max="TAG_REFRESH_MAX"
+          :use-grouping="false"
+          placeholder="Global setting"
+          class="w-48"
+          :invalid="tagRefreshInvalid"
+        />
+        <p class="text-xs text-gray-400">
+          How long a cached image tag (e.g. <code>latest</code>) is served before Pantera
+          asks the upstream with a HEAD whether the tag moved. From 0 (every request) to
+          31536000 (a year). Empty uses the global setting (System Settings, Docker Proxy
+          Tags; default 3600).
+        </p>
       </div>
     </template>
   </Card>

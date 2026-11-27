@@ -842,6 +842,72 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void putWithInvalidTagRefreshReturns400(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // tag_refresh_seconds must be a JSON integer from 0 to 31536000; the
+        // proxy would ignore anything else at runtime, so the save refuses it.
+        final WebClient client = WebClient.create(vertx);
+        for (final Object value : new Object[] {-1, 31_536_001, "600", 1.5, true}) {
+            final JsonObject body = new JsonObject()
+                .put(
+                    "repo",
+                    new JsonObject()
+                        .put("type", "docker-proxy")
+                        .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                        .put("tag_refresh_seconds", value)
+                );
+            final HttpResponse<Buffer> res = client
+                .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/tag-refresh-bad")
+                .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+                .sendJsonObject(body).toCompletionStage().toCompletableFuture()
+                .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+            Assertions.assertEquals(400, res.statusCode(), value + " answers 400");
+            Assertions.assertEquals(
+                "tag_refresh_seconds must be an integer from 0 to 31536000",
+                res.bodyAsJsonObject().getString("message"),
+                value + " is refused with a message naming the key"
+            );
+        }
+        final HttpResponse<Buffer> stored = client
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/tag-refresh-bad")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(404, stored.statusCode(), "nothing was saved");
+        ctx.completeNow();
+    }
+
+    @Test
+    void putWithTagRefreshIsSavedAndReadBack(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "docker-proxy")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                    .put("tag_refresh_seconds", 0)
+            );
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/tag-refresh-ok")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body).toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, put.statusCode(), "0 is a valid age");
+        final HttpResponse<Buffer> get = client
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/tag-refresh-ok")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            0, get.bodyAsJsonObject().getJsonObject("repo").getInteger("tag_refresh_seconds"),
+            "the value is stored as given"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
     void putWithRelativeUrlReturns400(
         final Vertx vertx, final VertxTestContext ctx
     ) throws Exception {

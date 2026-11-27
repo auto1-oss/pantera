@@ -48,12 +48,14 @@ import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestTrace;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Docker proxy slice created from config.
@@ -85,7 +87,11 @@ public final class DockerProxy implements Slice {
     ) {
         this(
             client, cfg, policy, auth, tokens, events, cooldown,
-            new TagChecks(() -> java.time.Duration.ofHours(1))
+            new TagChecks(
+                cfg.tagRefresh()
+                    .<Supplier<Duration>>map(age -> () -> age)
+                    .orElseGet(DockerTagRefreshSettingsLoader::activeSupplier)
+            )
         );
     }
 

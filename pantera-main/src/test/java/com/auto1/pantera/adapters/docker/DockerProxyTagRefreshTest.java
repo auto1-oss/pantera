@@ -300,6 +300,18 @@ final class DockerProxyTagRefreshTest {
 
     @Test
     @Timeout(120)
+    void repositoryAgeOverridesTheGlobalOne() throws Exception {
+        final Fixture fixture = new Fixture("  tag_refresh_seconds: 0");
+        fixture.pulled();
+        fixture.digest(RqMethod.GET);
+        MatcherAssert.assertThat(
+            "a repository that sets 0 checks the tag on every request",
+            fixture.upstream.asked("HEAD", DockerProxyTagRefreshTest.BY_TAG), new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    @Timeout(120)
     void digestIsNeverChecked() throws Exception {
         final Fixture fixture = new Fixture(Duration.ZERO);
         final String path = "/manifests/" + DockerProxyTagRefreshTest.digest(OLD);
@@ -465,6 +477,28 @@ final class DockerProxyTagRefreshTest {
          * @throws IOException On error
          */
         Fixture(final Duration age) throws IOException {
+            this(Optional.of(age), "");
+        }
+
+        /**
+         * A proxy built as the server builds it: its age from the
+         * repository configuration, or else the global setting.
+         *
+         * @param extra Further lines of the repository configuration
+         * @throws IOException On error
+         */
+        Fixture(final String extra) throws IOException {
+            this(Optional.empty(), extra);
+        }
+
+        /**
+         * Ctor.
+         *
+         * @param age Tag refresh age of the test, or the server's
+         * @param extra Further lines of the repository configuration
+         * @throws IOException On error
+         */
+        private Fixture(final Optional<Duration> age, final String extra) throws IOException {
             final Storage memory = new InMemoryStorage();
             this.upstream = new Upstream();
             this.events = new ConcurrentLinkedQueue<>();
@@ -479,7 +513,8 @@ final class DockerProxyTagRefreshTest {
                         "  remotes:",
                         "    - url: https://upstream.example",
                         "  storage:",
-                        "    type: memory"
+                        "    type: memory",
+                        extra
                     )
                 ).readYamlMapping(),
                 new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
@@ -492,12 +527,22 @@ final class DockerProxyTagRefreshTest {
                 },
                 false
             );
-            this.proxy = new DockerProxy(
-                this.upstream, this.cfg, Policy.FREE,
-                (user, pass) -> Optional.of(new AuthUser(user, "test")),
-                token -> CompletableFuture.completedFuture(Optional.empty()),
-                Optional.of(this.events), this.cooldown, new TagChecks(() -> age, this.clock)
-            );
+            if (age.isPresent()) {
+                this.proxy = new DockerProxy(
+                    this.upstream, this.cfg, Policy.FREE,
+                    (user, pass) -> Optional.of(new AuthUser(user, "test")),
+                    token -> CompletableFuture.completedFuture(Optional.empty()),
+                    Optional.of(this.events), this.cooldown,
+                    new TagChecks(age::get, this.clock)
+                );
+            } else {
+                this.proxy = new DockerProxy(
+                    this.upstream, this.cfg, Policy.FREE,
+                    (user, pass) -> Optional.of(new AuthUser(user, "test")),
+                    token -> CompletableFuture.completedFuture(Optional.empty()),
+                    Optional.of(this.events), this.cooldown
+                );
+            }
         }
 
         /**

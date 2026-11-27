@@ -279,6 +279,8 @@ Requires the repository `delete` permission and a deployment with a database.
 
 For local repositories of every format except Docker, the form has a **Publishing** card with an **Immutable artifacts** checkbox (the repository's `immutable` setting). It is checked for a new repository: a stored artifact can then never be overwritten, and a re-upload is refused (usually with `409 Conflict`). Uncheck it to let users with `write` permission overwrite. Users with `delete` permission can delete artifacts either way. Editing a repository shows its current value, and saving writes the choice explicitly. Proxy, group and Docker repositories do not show the card (Docker tag moves are controlled by the `overwrite` permission). See [Overwrite rules](getting-started.md#overwrite-rules-immutable).
 
+For a `docker-proxy` repository, the form has a **Tag refresh** card with a **Tag refresh (seconds)** field (the repository's `tag_refresh_seconds` setting): how long a cached image tag (e.g. `latest`) is served before Pantera asks the upstream with a `HEAD` whether the tag moved, from `0` (every pull) to `31536000` (a year). Leave it empty to use the global value, set under **System Settings → Docker Proxy Tags** (default 3600); clearing the field and saving removes the repository's own value. See [Docker proxy tag refresh](../configuration-reference.md#docker-proxy-tag-refresh-auth_settings-table).
+
 ### Configuring Group Members
 
 When creating or editing a **Group** repository (e.g., `maven-group`), the **Group Members** section provides:

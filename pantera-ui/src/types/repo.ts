@@ -51,6 +51,12 @@ export interface RepoConfig {
    */
   immutable?: boolean
   /**
+   * docker-proxy only: seconds a cached image tag is served before the
+   * upstream is asked whether it moved, 0 (every request) to 31536000.
+   * Missing ⇒ the global `docker_tag_refresh_seconds` setting applies.
+   */
+  tag_refresh_seconds?: number
+  /**
    * Keys this UI does not model (e.g. `path`, the deb/rpm `settings` block).
    * They are round-tripped verbatim by RepoConfigForm: the server stores the
    * config as one JSONB document and PUT replaces it wholesale, so any key

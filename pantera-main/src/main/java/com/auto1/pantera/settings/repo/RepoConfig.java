@@ -14,12 +14,14 @@ import com.amihaiemil.eoyaml.Scalar;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
+import com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.SubStorage;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.http.client.RemoteConfig;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.settings.StorageByAlias;
 import com.google.common.base.Strings;
 
@@ -33,12 +35,23 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 /**
  * Repository configuration.
  */
 public final class RepoConfig {
+
+    /**
+     * Flat key of a docker-proxy repository's own tag refresh age.
+     */
+    private static final String TAG_REFRESH = "tag_refresh_seconds";
+
+    /**
+     * Largest tag refresh age a repository may set, in seconds.
+     */
+    private static final long TAG_REFRESH_MAX = DockerTagRefreshSettingsLoader.MAX_SECONDS;
 
     public static RepoConfig from(
         YamlMapping yaml,
@@ -112,6 +125,12 @@ public final class RepoConfig {
     private final String key;
     private final String type;
     private final Storage storage;
+
+    /**
+     * The repository's own tag refresh age once read: null until then, so
+     * an invalid value is logged once per loaded config.
+     */
+    private final AtomicReference<Optional<Duration>> tagRefresh = new AtomicReference<>();
 
     RepoConfig(YamlMapping repoYaml, String name, String type, Storage storage) {
         this(repoYaml, name, name, type, storage);
@@ -387,6 +406,75 @@ public final class RepoConfig {
      */
     public boolean immutable() {
         return !"false".equalsIgnoreCase(this.repoYaml().string("immutable"));
+    }
+
+    /**
+     * Tag refresh age of a docker-proxy repository: how long a cached image
+     * tag is served before the upstream is asked again for its digest. Flat
+     * {@code repo.tag_refresh_seconds} key, an integer of seconds in
+     * {@code 0..31536000} ({@code 0} = every request). Database configs reach
+     * here through {@code Json2Yaml}, so a JSON number arrives as a scalar.
+     * The repository API refuses any other value on save; one that reaches
+     * here anyway (a YAML file) is ignored with one WARN per loaded config,
+     * and the global {@code docker_tag_refresh_seconds} setting applies.
+     *
+     * @return The repository's own age, or empty when the global setting applies
+     */
+    public Optional<Duration> tagRefresh() {
+        final Optional<Duration> known = this.tagRefresh.get();
+        if (known != null) {
+            return known;
+        }
+        final YamlNode node = this.repoYaml().value(RepoConfig.TAG_REFRESH);
+        final String raw;
+        if (node instanceof Scalar scalar) {
+            raw = scalar.value();
+        } else if (node == null) {
+            raw = null;
+        } else {
+            raw = node.toString();
+        }
+        final Optional<Duration> parsed = RepoConfig.tagRefreshSeconds(raw).map(Duration::ofSeconds);
+        if (this.tagRefresh.compareAndSet(null, parsed) && raw != null && parsed.isEmpty()) {
+            EcsLogger.warn("com.auto1.pantera.settings")
+                .message(
+                    String.format(
+                        "Repository '%s' ignores %s '%s': not an integer from 0 to %d; "
+                            + "the global docker_tag_refresh_seconds setting applies",
+                        this.name, RepoConfig.TAG_REFRESH, raw, RepoConfig.TAG_REFRESH_MAX
+                    )
+                )
+                .eventCategory("configuration")
+                .eventAction("repository_config_invalid")
+                .eventOutcome("failure")
+                .field("event.reason", RepoConfig.TAG_REFRESH)
+                .field("repository.name", this.name)
+                .field("repository.type", this.type)
+                .field("log.source", "application")
+                .log();
+        }
+        return this.tagRefresh.get();
+    }
+
+    /**
+     * Parse a {@code tag_refresh_seconds} value.
+     *
+     * @param raw Scalar value, or null when the key is absent
+     * @return Seconds when the value is an integer in {@code 0..31536000}
+     */
+    private static Optional<Long> tagRefreshSeconds(final String raw) {
+        Optional<Long> res = Optional.empty();
+        if (raw != null) {
+            try {
+                final long seconds = Long.parseLong(raw.trim());
+                if (seconds >= 0 && seconds <= RepoConfig.TAG_REFRESH_MAX) {
+                    res = Optional.of(seconds);
+                }
+            } catch (final NumberFormatException ignored) {
+                // not an integer: ignored, the global setting applies
+            }
+        }
+        return res;
     }
 
     public Optional<HttpClientSettings> httpClientSettings() {
