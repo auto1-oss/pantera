@@ -344,6 +344,37 @@ final class PyProxySliceReplayTest {
         );
     }
 
+    @Test
+    @Timeout(120)
+    void staleIndexPageIsServedBeforeItsRefreshLands() throws Exception {
+        final byte[] stale = String.format(
+            "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"example-pkg\",\"files\":[{"
+                + "\"filename\":\"example_pkg-0.9.0-py3-none-any.whl\","
+                + "\"url\":\"/%s/packages/aa/bb/example_pkg-0.9.0-py3-none-any.whl\","
+                + "\"hashes\":{},\"upload-time\":\"2020-01-01T00:00:00Z\"}]}",
+            PyProxySliceReplayTest.REPO
+        ).getBytes(StandardCharsets.UTF_8);
+        this.storage.save(PyProxySliceReplayTest.PAGE_KEY, new Content.From(stale)).join();
+        this.upstream.serve(
+            PyProxySliceReplayTest.UPSTREAM_PAGE,
+            PyProxySliceReplayTest.page("https://files.pythonhosted.org", "1.0.0")
+        );
+        // The read of the stored page waits for the refresh to store the
+        // new one (or two seconds): a refresh started before the read wins
+        // the race every time.
+        final RefreshFirst slow = new RefreshFirst(this.storage, PyProxySliceReplayTest.PAGE_KEY);
+        final Answer client = PyProxySliceReplayTest.get(
+            PyProxySliceReplayTest.proxy(
+                PyProxySliceReplayTest.REPO, this.upstream, slow, this.events
+            ),
+            "/example-pkg/", PyProxySliceReplayTest.accept("text/html")
+        );
+        MatcherAssert.assertThat(
+            new String(client.body(), StandardCharsets.UTF_8),
+            new StringContains("example_pkg-0.9.0-py3-none-any.whl")
+        );
+    }
+
     /**
      * Replay a request as the Troubleshoot page does.
      * @param path Request path
@@ -567,6 +598,73 @@ final class PyProxySliceReplayTest {
                 }
                 return CompletableFuture.completedFuture(res);
             };
+        }
+    }
+
+    /**
+     * Storage whose first read of one key waits until that key is saved
+     * again, at most two seconds.
+     *
+     * @since 2.2.15
+     */
+    private static final class RefreshFirst extends Storage.Wrap {
+
+        /**
+         * Key whose read waits.
+         */
+        private final Key key;
+
+        /**
+         * Counted down when the key is saved.
+         */
+        private final java.util.concurrent.CountDownLatch saved;
+
+        /**
+         * Whether the next read of the key waits.
+         */
+        private final java.util.concurrent.atomic.AtomicBoolean armed;
+
+        /**
+         * Ctor.
+         *
+         * @param origin Storage
+         * @param key Key whose read waits
+         */
+        RefreshFirst(final Storage origin, final Key key) {
+            super(origin);
+            this.key = key;
+            this.saved = new java.util.concurrent.CountDownLatch(1);
+            this.armed = new java.util.concurrent.atomic.AtomicBoolean(true);
+        }
+
+        @Override
+        public CompletableFuture<Void> save(final Key target, final Content content) {
+            return super.save(target, content).thenRun(
+                () -> {
+                    if (target.equals(this.key)) {
+                        this.saved.countDown();
+                    }
+                }
+            );
+        }
+
+        @Override
+        public CompletableFuture<Content> value(final Key target) {
+            final CompletableFuture<Content> res;
+            if (target.equals(this.key) && this.armed.compareAndSet(true, false)) {
+                res = CompletableFuture.runAsync(
+                    () -> {
+                        try {
+                            this.saved.await(2, TimeUnit.SECONDS);
+                        } catch (final InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                ).thenCompose(ignored -> super.value(target));
+            } else {
+                res = super.value(target);
+            }
+            return res;
         }
     }
 }
