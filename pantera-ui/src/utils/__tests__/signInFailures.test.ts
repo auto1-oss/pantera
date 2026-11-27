@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  rejectedKeyReason, passwordFailureReason, shortKeyId, rejectedKeyName, userOrNoName,
+  rejectedKeyReason, passwordFailureReason, secondFactorReason, shortKeyId, rejectedKeyName, userOrNoName,
 } from '../signInFailures'
 
 describe('rejectedKeyReason', () => {
@@ -33,6 +33,23 @@ describe('passwordFailureReason', () => {
 
   it('shows a token it does not know as it is', () => {
     expect(passwordFailureReason('sign_in_busy')).toBe('sign_in_busy')
+  })
+})
+
+describe('secondFactorReason', () => {
+  it.each([
+    ['second_factor_failed', 'Second factor not confirmed'],
+    ['sign_in_paused', 'Refused during a pause'],
+  ])('reads %s as "%s"', (token, text) => {
+    expect(secondFactorReason(token)).toBe(text)
+  })
+
+  it('shows a token it does not know as it is', () => {
+    expect(secondFactorReason('second_factor_of_tomorrow')).toBe('second_factor_of_tomorrow')
+  })
+
+  it('shows a dash for no reason', () => {
+    expect(secondFactorReason('')).toBe('—')
   })
 })
 

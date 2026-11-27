@@ -182,7 +182,7 @@ export async function updateDockerSettings(settings: DockerSettings): Promise<vo
   await getApiClient().put('/admin/docker-settings', settings)
 }
 
-// --- Security policy settings (2.2.9): request limits, egress, login throttle ---
+// --- Security policy settings (2.2.9): request limits, egress ---
 
 /**
  * GET/PUT /admin/request-limits-settings. All values are strings, like
@@ -230,29 +230,6 @@ export async function getEgressSettings(): Promise<EgressSettings> {
 
 export async function updateEgressSettings(settings: Partial<EgressSettings>): Promise<void> {
   await getApiClient().put('/admin/egress-settings', settings)
-}
-
-/**
- * GET/PUT /admin/login-throttle-settings. Failed password logins per
- * (user, client IP) before further attempts are refused, and the window
- * (seconds) those failures count in.
- */
-export interface LoginThrottleSettings {
-  login_throttle_max_failures: string
-  login_throttle_window_seconds: string
-}
-
-export async function getLoginThrottleSettings(): Promise<LoginThrottleSettings> {
-  const { data } = await getApiClient().get<LoginThrottleSettings>(
-    '/admin/login-throttle-settings',
-  )
-  return data
-}
-
-export async function updateLoginThrottleSettings(
-  settings: Partial<LoginThrottleSettings>,
-): Promise<void> {
-  await getApiClient().put('/admin/login-throttle-settings', settings)
 }
 
 // --- Client-Facing Base URL Settings ---

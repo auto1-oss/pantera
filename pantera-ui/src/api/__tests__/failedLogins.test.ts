@@ -24,6 +24,8 @@ const SETTINGS = {
   failed_logins_forget_after_minutes: '0',
   failed_logins_count_rejected_keys: 'false',
   failed_logins_lock_all_credentials: 'true',
+  failed_logins_second_factor_limit: '5',
+  failed_logins_second_factor_pause_minutes: '15',
 }
 
 const LOCKED = {
@@ -47,6 +49,16 @@ describe('failed-logins settings', () => {
     put.mockResolvedValue({ status: 204, data: '' })
     await updateFailedLoginsSettings({ failed_logins_lock_after: '0' })
     expect(put).toHaveBeenCalledWith('/admin/failed-logins-settings', { failed_logins_lock_after: '0' })
+  })
+
+  it('sends the pause of an unconfirmed second factor to the same endpoint', async () => {
+    put.mockResolvedValue({ status: 204, data: '' })
+    const pause = {
+      failed_logins_second_factor_limit: '3',
+      failed_logins_second_factor_pause_minutes: '60',
+    }
+    await updateFailedLoginsSettings(pause)
+    expect(put).toHaveBeenCalledWith('/admin/failed-logins-settings', pause)
   })
 })
 

@@ -12,7 +12,6 @@ import {
   getClientBaseUrlSettings, updateClientBaseUrlSettings,
   getRequestLimitsSettings, updateRequestLimitsSettings,
   getEgressSettings, updateEgressSettings,
-  getLoginThrottleSettings, updateLoginThrottleSettings,
 } from '@/api/auth'
 import { getFailedLoginsSettings, updateFailedLoginsSettings } from '@/api/failedLogins'
 import {
@@ -54,7 +53,7 @@ type SectionId =
   | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker' | 'upstream_breaker' | 'docker_proxy'
   | 'cooldown' | 'http_client' | 'bulkhead' | 'http_server'
   | 'external_links' | 'client_base_url'
-  | 'request_limits' | 'egress' | 'login_throttle' | 'failed_logins' | 'sign_in_report'
+  | 'request_limits' | 'egress' | 'failed_logins' | 'sign_in_report'
 
 interface SectionMeta {
   /** Human-readable name shown in toasts and the dirty list. */
@@ -115,10 +114,6 @@ const SECTION_META: Record<SectionId, SectionMeta> = {
   },
   egress: {
     label: 'Outbound Egress Policy',
-    hotReload: true,
-  },
-  login_throttle: {
-    label: 'Login Throttling',
     hotReload: true,
   },
   failed_logins: {
@@ -212,13 +207,10 @@ const fsStorageRoots = ref('/var/pantera/data')
 const egressBlockPrivate = ref(false)
 const egressAllowHosts = ref('')
 const upstreamCredentialAllowHosts = ref('')
-// Login throttling: failed password logins per (user, client IP) before
-// further attempts are refused, and the window they count in.
-const loginThrottleMaxFailures = ref(5)
-const loginThrottleWindowSeconds = ref(900)
-// Failed logins (2.2.15): the login delay and the account lock, counted
-// per user name. NOT the login throttle above, which is the sign-in
-// form's own limit per user and client address.
+// Failed logins (2.2.15): counted per user name, on every node, for every
+// way of signing in. A wrong password counts towards the login delay and
+// the account lock; a second factor that was not confirmed (the password
+// was right) counts towards a pause of password sign-in and never locks.
 const failedLoginsDelayFromFailure = ref(2)
 const failedLoginsFirstDelaySeconds = ref(1)
 const failedLoginsMaxDelaySeconds = ref(60)
@@ -227,6 +219,8 @@ const failedLoginsUnlockAfterMinutes = ref(0)
 const failedLoginsForgetAfterMinutes = ref(0)
 const failedLoginsCountRejectedKeys = ref(false)
 const failedLoginsLockAllCredentials = ref(true)
+const failedLoginsSecondFactorLimit = ref(5)
+const failedLoginsSecondFactorPauseMinutes = ref(15)
 /** The card's list of locked names; loaded again after a save of the policy. */
 const lockedUsersList = ref<{ reload: () => Promise<void> } | null>(null)
 // Sign-in report (2.2.15): whether Pantera notes who fails to sign in, and
@@ -446,10 +440,6 @@ onMounted(async () => {
         egressAllowHosts.value = s.egress_allow_hosts ?? ''
         upstreamCredentialAllowHosts.value = s.upstream_credential_allow_hosts ?? ''
       }),
-      getLoginThrottleSettings().then(s => {
-        loginThrottleMaxFailures.value = parseInt(s.login_throttle_max_failures ?? '5')
-        loginThrottleWindowSeconds.value = parseInt(s.login_throttle_window_seconds ?? '900')
-      }),
       getFailedLoginsSettings().then(s => {
         failedLoginsDelayFromFailure.value = parseInt(s.failed_logins_delay_from_failure ?? '2')
         failedLoginsFirstDelaySeconds.value = parseInt(s.failed_logins_first_delay_seconds ?? '1')
@@ -460,6 +450,9 @@ onMounted(async () => {
         failedLoginsCountRejectedKeys.value = s.failed_logins_count_rejected_keys === 'true'
         // On unless the server says off: a missing value must not read as the weaker lock.
         failedLoginsLockAllCredentials.value = s.failed_logins_lock_all_credentials !== 'false'
+        failedLoginsSecondFactorLimit.value = parseInt(s.failed_logins_second_factor_limit ?? '5')
+        failedLoginsSecondFactorPauseMinutes.value =
+          parseInt(s.failed_logins_second_factor_pause_minutes ?? '15')
       }),
       getSignInReportSettings().then(s => {
         // On unless the server says off, as the server reads a missing value.
@@ -731,27 +724,6 @@ async function saveEgressSettings(): Promise<boolean> {
   }
 }
 
-async function saveLoginThrottleSettings(): Promise<boolean> {
-  if (loginThrottleMaxFailures.value < 1 || loginThrottleWindowSeconds.value < 1) {
-    notify.error('Login throttle failures and window must both be at least 1')
-    return false
-  }
-  saving.value = 'login-throttle'
-  try {
-    await updateLoginThrottleSettings({
-      login_throttle_max_failures: String(loginThrottleMaxFailures.value),
-      login_throttle_window_seconds: String(loginThrottleWindowSeconds.value),
-    })
-    notify.success('Login throttling settings saved')
-    return true
-  } catch (err) {
-    notify.error('Failed to save login throttling settings', apiErrorMessage(err, 'Request failed'))
-    return false
-  } finally {
-    saving.value = null
-  }
-}
-
 /**
  * Ranges the server accepts for the failed-logins numbers
  * (`FailedLoginsConfig`), with the label of each field for the message.
@@ -764,6 +736,8 @@ const FAILED_LOGINS_RANGES = {
   lockAfter: { label: 'Lock after failed logins', min: 0, max: 100 },
   unlockAfterMinutes: { label: 'Unlock automatically after (minutes)', min: 0, max: 1440 },
   forgetAfterMinutes: { label: 'Forget failures after (minutes)', min: 0, max: 43200 },
+  secondFactorLimit: { label: 'Pause after unconfirmed sign-ins', min: 0, max: 100 },
+  secondFactorPauseMinutes: { label: 'Pause (minutes)', min: 1, max: 1440 },
 }
 
 /**
@@ -779,6 +753,8 @@ const failedLoginsProblem = computed<string | null>(() => {
     ['lockAfter', failedLoginsLockAfter.value],
     ['unlockAfterMinutes', failedLoginsUnlockAfterMinutes.value],
     ['forgetAfterMinutes', failedLoginsForgetAfterMinutes.value],
+    ['secondFactorLimit', failedLoginsSecondFactorLimit.value],
+    ['secondFactorPauseMinutes', failedLoginsSecondFactorPauseMinutes.value],
   ]
   for (const [key, value] of values) {
     const range = FAILED_LOGINS_RANGES[key]
@@ -794,8 +770,9 @@ const failedLoginsProblem = computed<string | null>(() => {
 })
 
 /**
- * Save the login delay and the account lock. Applies to the next login
- * on every node. The card's list of locked names is loaded again: with
+ * Save the failed-logins policy: the login delay and the account lock of
+ * a wrong password, and the pause of an unconfirmed second factor.
+ * Applies to the next login on every node. The card's list of locked names is loaded again: with
  * the lock set to 0 the server unlocks every locked user, which can take
  * up to 15 seconds; the list has a Refresh for names not released yet.
  */
@@ -816,6 +793,8 @@ async function saveFailedLoginsSettings(): Promise<boolean> {
       failed_logins_forget_after_minutes: String(failedLoginsForgetAfterMinutes.value),
       failed_logins_count_rejected_keys: String(failedLoginsCountRejectedKeys.value),
       failed_logins_lock_all_credentials: String(failedLoginsLockAllCredentials.value),
+      failed_logins_second_factor_limit: String(failedLoginsSecondFactorLimit.value),
+      failed_logins_second_factor_pause_minutes: String(failedLoginsSecondFactorPauseMinutes.value),
     })
     notify.success('Failed logins settings saved')
     void lockedUsersList.value?.reload()
@@ -1098,8 +1077,6 @@ const TRACKED = {
   egressBlockPrivate,
   egressAllowHosts,
   upstreamCredentialAllowHosts,
-  loginThrottleMaxFailures,
-  loginThrottleWindowSeconds,
   failedLoginsDelayFromFailure,
   failedLoginsFirstDelaySeconds,
   failedLoginsMaxDelaySeconds,
@@ -1108,6 +1085,8 @@ const TRACKED = {
   failedLoginsForgetAfterMinutes,
   failedLoginsCountRejectedKeys,
   failedLoginsLockAllCredentials,
+  failedLoginsSecondFactorLimit,
+  failedLoginsSecondFactorPauseMinutes,
   signInReportEnabled,
   signInReportRetentionDays,
   cooldownEnabled,
@@ -1161,12 +1140,12 @@ const SECTION_FIELDS: Record<Exclude<SectionId, 'bulkhead'>, BaselineKey[]> = {
   ],
   request_limits: ['maxRequestBodyMiB', 'fsStorageRoots'],
   egress: ['egressBlockPrivate', 'egressAllowHosts', 'upstreamCredentialAllowHosts'],
-  login_throttle: ['loginThrottleMaxFailures', 'loginThrottleWindowSeconds'],
   failed_logins: [
     'failedLoginsDelayFromFailure', 'failedLoginsFirstDelaySeconds',
     'failedLoginsMaxDelaySeconds', 'failedLoginsLockAfter',
     'failedLoginsUnlockAfterMinutes', 'failedLoginsForgetAfterMinutes',
     'failedLoginsCountRejectedKeys', 'failedLoginsLockAllCredentials',
+    'failedLoginsSecondFactorLimit', 'failedLoginsSecondFactorPauseMinutes',
   ],
   sign_in_report: ['signInReportEnabled', 'signInReportRetentionDays'],
   cooldown: [
@@ -1211,7 +1190,6 @@ const isDirtyDockerProxy = sectionDirty('docker_proxy')
 const isDirtyClientBaseUrl = sectionDirty('client_base_url')
 const isDirtyRequestLimits = sectionDirty('request_limits')
 const isDirtyEgress = sectionDirty('egress')
-const isDirtyLoginThrottle = sectionDirty('login_throttle')
 const isDirtyFailedLogins = sectionDirty('failed_logins')
 const isDirtySignInReport = sectionDirty('sign_in_report')
 const isDirtyCooldown = sectionDirty('cooldown')
@@ -1236,7 +1214,6 @@ const DIRTY_PER_SECTION: Record<SectionId, { value: boolean }> = {
   client_base_url: isDirtyClientBaseUrl,
   request_limits: isDirtyRequestLimits,
   egress: isDirtyEgress,
-  login_throttle: isDirtyLoginThrottle,
   failed_logins: isDirtyFailedLogins,
   sign_in_report: isDirtySignInReport,
   cooldown: isDirtyCooldown,
@@ -1269,7 +1246,6 @@ function saveSectionById(id: SectionId): Promise<boolean> {
     case 'client_base_url': return saveClientBaseUrlSettings()
     case 'request_limits': return saveRequestLimitsSettings()
     case 'egress': return saveEgressSettings()
-    case 'login_throttle': return saveLoginThrottleSettings()
     case 'failed_logins': return saveFailedLoginsSettings()
     case 'sign_in_report': return saveSignInReportSettings()
     case 'cooldown': return saveCooldown()
@@ -1888,140 +1864,178 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
         </template>
       </Card>
 
-      <!-- Login Throttling (2.2.9) -->
-      <Card class="shadow-sm">
-        <template #title>
-          <SectionHeader id="login_throttle" :dirty="isDirtyLoginThrottle" />
-        </template>
-        <template #subtitle>
-          Failed password logins tolerated per user and client IP before further
-          attempts are refused for the window. Stored in the database; the
-          PANTERA_LOGIN_THROTTLE_* environment variables are only the fallback.
-          This is the sign-in form's own limit: with the default values the
-          lock of the "Failed logins" card below comes first.
-        </template>
-        <template #content>
-          <div class="space-y-4">
-            <div class="grid grid-cols-2 gap-4">
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Failures before lockout</label>
-                <InputNumber v-model="loginThrottleMaxFailures" :min="1" :max="1000" class="w-full" />
-                <span class="text-xs text-gray-400">Default: 5.</span>
-              </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Window (seconds)</label>
-                <InputNumber v-model="loginThrottleWindowSeconds" :min="1" :max="86400" suffix=" s" class="w-full" />
-                <span class="text-xs text-gray-400">Default: 900s (15 minutes).</span>
-              </div>
-            </div>
-            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
-              <i class="pi pi-info-circle mr-1" />
-              Applies to the next login attempt — no restart needed. Counters are kept
-              per node and clear on a successful login.
-            </div>
-          </div>
-        </template>
-      </Card>
-
-      <!-- Failed logins: login delay and account lock (2.2.15) -->
+      <!-- Failed logins: a wrong password delays and locks, an unconfirmed second factor pauses (2.2.15) -->
       <Card class="shadow-sm" data-testid="failed-logins-card">
         <template #title>
           <SectionHeader id="failed_logins" :dirty="isDirtyFailedLogins" />
         </template>
         <template #subtitle>
-          Failed logins are counted per user name, from every client address,
-          and answered in two stages: a delay that grows with each failure,
-          then a lock of the account. Stored in the database; the
-          PANTERA_FAILED_LOGINS_* environment variables are only the fallback.
-          Not the "Login Throttling" card above, which is the sign-in form's
-          own limit per user and client address.
+          Failed sign-ins are counted per user name, on every node, for every way of
+          signing in: the sign-in form, the token API and repository clients. A wrong
+          password and an unconfirmed second factor are counted apart. Stored in the
+          database; the PANTERA_FAILED_LOGINS_* environment variables are only the fallback.
         </template>
         <template #content>
           <div class="space-y-4">
-            <div class="grid grid-cols-2 gap-4">
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Delay logins from failed login number</label>
-                <InputNumber
-                  v-model="failedLoginsDelayFromFailure"
-                  :min="0"
-                  :max="100"
-                  class="w-full"
-                />
-                <span class="text-xs text-gray-400">
-                  Default: 2. From this failed login on, further logins of the user are
-                  refused for a time that grows with each failure. 0 = no delay.
-                </span>
+            <div
+              class="text-xs text-blue-400 bg-blue-500/10 border border-blue-500/20 rounded p-2"
+              data-testid="failed-logins-counted"
+            >
+              <div class="font-semibold mb-1">
+                <i class="pi pi-info-circle mr-1" />What is counted
               </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Lock after failed logins</label>
-                <InputNumber
-                  v-model="failedLoginsLockAfter"
-                  :min="0"
-                  :max="100"
-                  class="w-full"
-                />
-                <span class="text-xs text-gray-400">
-                  Default: 3. The failed login that reaches this number locks the user.
-                  0 = no lock; saving 0 unlocks every locked user within 15 seconds.
-                </span>
-              </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">First delay (seconds)</label>
-                <InputNumber
-                  v-model="failedLoginsFirstDelaySeconds"
-                  :min="1"
-                  :max="60"
-                  suffix=" s"
-                  class="w-full"
-                />
-                <span class="text-xs text-gray-400">
-                  Default: 1s. A delay lasts this many seconds times the square of the
-                  number of failed logins.
-                </span>
-              </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Longest delay (seconds)</label>
-                <InputNumber
-                  v-model="failedLoginsMaxDelaySeconds"
-                  :min="1"
-                  :max="3600"
-                  suffix=" s"
-                  class="w-full"
-                />
-                <span class="text-xs text-gray-400">
-                  Default: 60s. No delay is longer than this. Not below the first delay.
-                </span>
-              </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Unlock automatically after (minutes)</label>
-                <InputNumber
-                  v-model="failedLoginsUnlockAfterMinutes"
-                  :min="0"
-                  :max="1440"
-                  suffix=" min"
-                  class="w-full"
-                />
-                <span class="text-xs text-gray-400">
-                  Default: 0. A lock ends by itself after this time.
-                  0 = only an administrator unlocks.
-                </span>
-              </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Forget failures after (minutes)</label>
-                <InputNumber
-                  v-model="failedLoginsForgetAfterMinutes"
-                  :min="0"
-                  :max="43200"
-                  suffix=" min"
-                  class="w-full"
-                />
-                <span class="text-xs text-gray-400">
-                  Default: 0. A failed login later than this after the previous one
-                  starts a new count. 0 = never: failures count until a successful
-                  password login or an unlock. Ends no lock.
-                </span>
-              </div>
+              <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                <dt class="font-semibold">Wrong password</dt>
+                <dd>Counts toward the delay and the lock.</dd>
+                <dt class="font-semibold">Second factor not confirmed</dt>
+                <dd>
+                  The password was right; the push was denied or not answered, or the code
+                  was wrong. Counts toward the pause; never a wrong password, never locks.
+                </dd>
+                <dt class="font-semibold">Not counted</dt>
+                <dd>
+                  The identity provider cannot be reached, the account is locked or its
+                  password expired at the provider, a repository client was asked for a
+                  second factor it cannot give.
+                </dd>
+              </dl>
             </div>
+
+            <section class="space-y-4" data-testid="failed-logins-wrong-password">
+              <h4 class="text-sm font-semibold">Wrong password</h4>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Delay logins from failed login number</label>
+                  <InputNumber
+                    v-model="failedLoginsDelayFromFailure"
+                    :min="0"
+                    :max="100"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 2. From this failed login on, further logins of the user are
+                    refused for a time that grows with each failure. 0 = no delay.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Lock after failed logins</label>
+                  <InputNumber
+                    v-model="failedLoginsLockAfter"
+                    :min="0"
+                    :max="100"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 3. The failed login that reaches this number locks the user.
+                    0 = no lock; saving 0 unlocks every locked user within 15 seconds.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">First delay (seconds)</label>
+                  <InputNumber
+                    v-model="failedLoginsFirstDelaySeconds"
+                    :min="1"
+                    :max="60"
+                    suffix=" s"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 1s. A delay lasts this many seconds times the square of the
+                    number of failed logins.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Longest delay (seconds)</label>
+                  <InputNumber
+                    v-model="failedLoginsMaxDelaySeconds"
+                    :min="1"
+                    :max="3600"
+                    suffix=" s"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 60s. No delay is longer than this. Not below the first delay.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Unlock automatically after (minutes)</label>
+                  <InputNumber
+                    v-model="failedLoginsUnlockAfterMinutes"
+                    :min="0"
+                    :max="1440"
+                    suffix=" min"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 0. A lock ends by itself after this time.
+                    0 = only an administrator unlocks.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Forget failures after (minutes)</label>
+                  <InputNumber
+                    v-model="failedLoginsForgetAfterMinutes"
+                    :min="0"
+                    :max="43200"
+                    suffix=" min"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 0. A failed login later than this after the previous one
+                    starts a new count. 0 = never: failures count until a successful
+                    password login or an unlock. Ends no lock.
+                  </span>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <InputSwitch v-model="failedLoginsCountRejectedKeys" />
+                <div>
+                  <div class="text-sm">Count rejected API keys</div>
+                  <div class="text-xs text-gray-400">
+                    Default: off. On = a rejected API key counts as a failed login. Clear
+                    the stale keys your users' tools still send first: with the lock at 3,
+                    a tool that holds an old key locks its user with three requests.
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section
+              class="space-y-4 border-t border-gray-200 dark:border-gray-700 pt-4"
+              data-testid="failed-logins-second-factor"
+            >
+              <h4 class="text-sm font-semibold">Second factor not confirmed</h4>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Pause after unconfirmed sign-ins</label>
+                  <InputNumber
+                    v-model="failedLoginsSecondFactorLimit"
+                    :min="0"
+                    :max="100"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 5. From this unconfirmed sign-in on, password sign-in of the
+                    user is paused and no push is sent. 0 = never pause.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Pause (minutes)</label>
+                  <InputNumber
+                    v-model="failedLoginsSecondFactorPauseMinutes"
+                    :min="1"
+                    :max="1440"
+                    suffix=" min"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 15. Unconfirmed sign-ins count while each comes within this
+                    time of the previous one. A successful sign-in ends the count.
+                  </span>
+                </div>
+              </div>
+            </section>
+
             <div
               v-if="failedLoginsProblem"
               class="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded p-2"
@@ -2030,27 +2044,24 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
               <i class="pi pi-times-circle mr-1" />
               {{ failedLoginsProblem }}.
             </div>
-            <div class="flex items-center gap-3">
-              <InputSwitch v-model="failedLoginsCountRejectedKeys" />
-              <div>
-                <div class="text-sm">Count rejected API keys</div>
-                <div class="text-xs text-gray-400">
-                  Default: off. On = a rejected API key counts as a failed login. Clear
-                  the stale keys your users' tools still send first: with the lock at 3,
-                  a tool that holds an old key locks its user with three requests.
+
+            <section
+              class="space-y-4 border-t border-gray-200 dark:border-gray-700 pt-4"
+              data-testid="failed-logins-lock-scope"
+            >
+              <h4 class="text-sm font-semibold">Lock scope</h4>
+              <div class="flex items-center gap-3">
+                <InputSwitch v-model="failedLoginsLockAllCredentials" />
+                <div>
+                  <div class="text-sm">A lock blocks every credential</div>
+                  <div class="text-xs text-gray-400">
+                    Default: on. On = password, API keys, sessions and the provider
+                    button; off = password sign-in only.
+                  </div>
                 </div>
               </div>
-            </div>
-            <div class="flex items-center gap-3">
-              <InputSwitch v-model="failedLoginsLockAllCredentials" />
-              <div>
-                <div class="text-sm">A lock blocks every credential</div>
-                <div class="text-xs text-gray-400">
-                  Default: on. On = password, API keys, sessions and the provider
-                  button; off = password sign-in only.
-                </div>
-              </div>
-            </div>
+            </section>
+
             <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
               <i class="pi pi-info-circle mr-1" />
               Applies to the next login on every node — no restart needed. Anyone who
@@ -2072,8 +2083,8 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
         </template>
         <template #subtitle>
           Pantera notes who fails to sign in, with what, and from where: rejected
-          API keys, failed password logins, and logins the sign-in form's own limit
-          refused. Stored in the database; the PANTERA_SIGN_IN_REPORT_* environment
+          API keys, failed password logins, and sign-ins whose second factor was not
+          confirmed. Stored in the database; the PANTERA_SIGN_IN_REPORT_* environment
           variables are only the fallback.
         </template>
         <template #content>

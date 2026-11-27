@@ -62,8 +62,6 @@ vi.mock('@/api/auth', () => ({
   updateRequestLimitsSettings: vi.fn().mockResolvedValue(undefined),
   getEgressSettings: () => Promise.resolve({}),
   updateEgressSettings: vi.fn().mockResolvedValue(undefined),
-  getLoginThrottleSettings: () => Promise.resolve({}),
-  updateLoginThrottleSettings: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/composables/useRuntimeSettings', async () => {

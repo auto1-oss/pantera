@@ -91,10 +91,47 @@ describe('formatAuthError', () => {
       .toBe('Too many failed logins. Try again later.')
   })
 
-  it('keeps the generic message for the older limit of the form', () => {
+  it('shows the server message of a pause after unconfirmed second factors', () => {
+    const err = refused(
+      403,
+      {
+        error: 'SIGN_IN_PAUSED',
+        message: 'Too many sign-ins without a confirmed second factor. Try again in 14 minutes.',
+        status: 403,
+      },
+      { 'retry-after': '840' },
+    )
+    expect(formatAuthError(err)).toEqual({
+      kind: 'paused',
+      message: 'Too many sign-ins without a confirmed second factor. Try again in 14 minutes.',
+    })
+  })
+
+  it.each([
+    ['900', 'Try again in 15 minutes.'],
+    ['61', 'Try again in 2 minutes.'],
+    ['60', 'Try again in 1 minute.'],
+    ['30', 'Try again in 1 minute.'],
+  ])('words a pause of Retry-After %s seconds without a server message as "%s"', (seconds, end) => {
+    const withoutMessage = refused(403, { error: 'SIGN_IN_PAUSED' }, { 'retry-after': seconds })
+    const blankMessage = refused(403, { error: 'SIGN_IN_PAUSED', message: '  ' }, new AxiosHeaders({ 'Retry-After': seconds }))
+    const expected = `Too many sign-ins without a confirmed second factor. ${end}`
+    expect(formatAuthError(withoutMessage), 'no message').toEqual({ kind: 'paused', message: expected })
+    expect(formatAuthError(blankMessage).message, 'a blank message').toBe(expected)
+  })
+
+  it('names no number for a pause without a message and a readable Retry-After', () => {
+    const noHeader = refused(403, { error: 'SIGN_IN_PAUSED' })
+    const httpDate = refused(403, { error: 'SIGN_IN_PAUSED' }, { 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' })
+    const paused = 'Too many sign-ins without a confirmed second factor. Try again later.'
+    expect(formatAuthError(noHeader).message, 'without the header').toBe(paused)
+    expect(formatAuthError(httpDate).message, 'with a date').toBe(paused)
+  })
+
+  it('keeps the generic message for a 429', () => {
     const err = refused(
       429,
-      { error: 'TOO_MANY_REQUESTS', message: 'Too many sign-in attempts. Please wait and try again.', status: 429 },
+      { error: 'TOO_MANY_REQUESTS', message: 'Too many requests. Please wait and try again.', status: 429 },
       { 'retry-after': '857' },
     )
     expect(formatAuthError(err)).toEqual({ kind: 'credentials', message: GENERIC })
@@ -132,16 +169,28 @@ describe('formatAuthError', () => {
     }
   })
 
-  it('tells a delay and a lock apart by the code: both are answered 403', () => {
+  it('tells a delay, a pause and a lock apart by the code: all are answered 403', () => {
     const delayed = refused(
       403,
       { error: 'LOGIN_DELAYED', message: 'Too many failed logins. Try again in 5 seconds.', status: 403 },
       { 'retry-after': '5' },
     )
+    const paused = refused(
+      403,
+      {
+        error: 'SIGN_IN_PAUSED',
+        message: 'Too many sign-ins without a confirmed second factor. Try again in 15 minutes.',
+        status: 403,
+      },
+      { 'retry-after': '900' },
+    )
     // A lock carries no Retry-After; one that a proxy added must not turn it into a delay.
     const locked = refused(403, { error: 'ACCOUNT_LOCKED', status: 403 }, { 'retry-after': '5' })
     expect(formatAuthError(delayed), 'LOGIN_DELAYED').toEqual({
       kind: 'delayed', message: 'Too many failed logins. Try again in 5 seconds.',
+    })
+    expect(formatAuthError(paused), 'SIGN_IN_PAUSED').toEqual({
+      kind: 'paused', message: 'Too many sign-ins without a confirmed second factor. Try again in 15 minutes.',
     })
     expect(formatAuthError(locked), 'ACCOUNT_LOCKED').toEqual({ kind: 'locked', message: ACCOUNT_LOCKED_MESSAGE })
   })

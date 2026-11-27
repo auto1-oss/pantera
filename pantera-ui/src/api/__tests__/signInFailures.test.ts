@@ -10,7 +10,7 @@ vi.mock('../client', () => ({
 }))
 
 import {
-  listRejectedApiKeys, listFailedPasswordLogins, listFormLimitHits, listMyRejectedKeys,
+  listRejectedApiKeys, listFailedPasswordLogins, listSecondFactorLines, listMyRejectedKeys,
   getSignInReportSettings, updateSignInReportSettings,
 } from '../signInFailures'
 
@@ -34,7 +34,7 @@ describe('the three lists of all users', () => {
   it.each([
     ['rejected API keys', listRejectedApiKeys, '/sign-in-failures/api-keys'],
     ['failed password logins', listFailedPasswordLogins, '/sign-in-failures/passwords'],
-    ['the sign-in form limit', listFormLimitHits, '/sign-in-failures/form-limit'],
+    ['sign-ins with an unconfirmed second factor', listSecondFactorLines, '/sign-in-failures/second-factor'],
   ] as const)('reads %s with page, size and both filters', async (_name, list, url) => {
     const answer = page([KEY])
     get.mockResolvedValue({ data: answer })
@@ -69,9 +69,9 @@ describe('the three lists of all users', () => {
   it('asks for the first page of the server when nothing is given', async () => {
     get.mockResolvedValue({ data: page([]) })
 
-    await listFormLimitHits()
+    await listSecondFactorLines()
 
-    expect(get).toHaveBeenCalledWith('/sign-in-failures/form-limit', { params: {}, signal: undefined })
+    expect(get).toHaveBeenCalledWith('/sign-in-failures/second-factor', { params: {}, signal: undefined })
   })
 
   it('passes a refusal on to the caller', async () => {
