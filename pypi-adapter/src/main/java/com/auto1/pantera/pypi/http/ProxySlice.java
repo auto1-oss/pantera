@@ -686,15 +686,18 @@ final class ProxySlice implements Slice {
             if (exists) {
                 return this.indexCacheControl.validate(key, Remote.EMPTY).thenCompose(fresh -> {
                     if (!fresh) {
-                        // Stale content - serve immediately + background refresh.
+                        // Stale content - serve it, then refresh in the
+                        // background. The page is read before the refresh
+                        // starts: a refresh that is quick to store the new
+                        // page must not replace the one this answer serves.
                         // A Troubleshoot replay gets the stale page as a client
                         // does, without the refresh: it replaces the stored page.
-                        if (!replay) {
-                            this.backgroundRefreshIndex(key, line, upstream, format);
-                        }
-                        return this.asyncStorage.value(key).thenCompose(cached ->
-                            this.afterHit(line, rqheaders, key, cached, Headers.EMPTY, false)
-                        );
+                        return this.asyncStorage.value(key).thenCompose(cached -> {
+                            if (!replay) {
+                                this.backgroundRefreshIndex(key, line, upstream, format);
+                            }
+                            return this.afterHit(line, rqheaders, key, cached, Headers.EMPTY, false);
+                        });
                     }
                     // Fresh cache hit - serve from storage
                     return this.asyncStorage.value(key).thenCompose(cached ->
