@@ -60,6 +60,10 @@ public final class ReasonWeight {
             weight = 0;
         } else if (this.reason.startsWith(ReasonWeight.UPSTREAM)) {
             weight = ReasonWeight.upstream(this.reason.substring(ReasonWeight.UPSTREAM.length()));
+        } else if ("upstream_no_files".equals(this.reason)) {
+            // The upstream answered, with a project page that lists no file:
+            // as much a "not found" as its own 404.
+            weight = 10;
         } else if ("skipped_by_routing_rule".equals(this.reason)) {
             // A member that was not asked explains a "not found" less than
             // any member that was: it only says where nobody looked.

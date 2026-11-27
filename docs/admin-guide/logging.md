@@ -208,6 +208,7 @@ Every access record (logger `http.access`, `event.action: http_request`) with a 
 |----------------|---------------------------------------------|
 | `negative_cache` | A proxy or a group answered 404 from its negative cache; the upstream was not asked. For a group it also means a member did. |
 | `upstream_status_<code>` | The upstream answered `<code>`: `upstream_status_404` is the upstream's own "not found", `upstream_status_403` its refusal, `upstream_status_503` its failure. On a 404 with `upstream_status_401`, `_403`, `_400` and the like, see below. |
+| `upstream_no_files` | A PyPI proxy answered 404 for a project page that its upstream served (200) without a single file. The 404 is remembered in the negative cache like the upstream's own 404 (v2.2.15+). |
 | `connection_closed`, `connection_refused`, `connect_timeout`, `read_timeout`, `idle_timeout`, `request_timeout`, `unknown_host`, `tls_error`, `egress_denied`, `request_rejected` | The call to the upstream failed that way. The answer is a 5xx. |
 | `bulkhead_full` | The repository had no free permit within its wait bound (503). |
 | `circuit_open` | The circuit breaker of the upstream, or of every remaining group member, is open. |

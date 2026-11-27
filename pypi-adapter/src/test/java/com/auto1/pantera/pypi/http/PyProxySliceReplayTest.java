@@ -320,7 +320,8 @@ final class PyProxySliceReplayTest {
     @Test
     @Timeout(120)
     void replayOfAnIndexPageWithoutFilesEndsAsForAClient() throws Exception {
-        // The proxy keeps no page without links and answers it as a miss.
+        // The proxy keeps no page without links and answers it as a miss:
+        // 404, not a failure of the upstream.
         this.upstream.serve(
             "/simple/empty-pkg/",
             "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"empty-pkg\",\"files\":[]}"
@@ -339,7 +340,7 @@ final class PyProxySliceReplayTest {
             "the replay ends with the status a client gets", replay, new IsEqual<>(client)
         );
         MatcherAssert.assertThat(
-            "which is not a success", replay.success(), new IsEqual<>(false)
+            "which is not found", replay, new IsEqual<>(RsStatus.NOT_FOUND)
         );
     }
 

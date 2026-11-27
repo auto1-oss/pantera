@@ -18,7 +18,9 @@ import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyEventRetry;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
@@ -31,6 +33,8 @@ import org.hamcrest.core.IsEqual;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /**
  * Test for {@link PyProxyPackageProcessor}.
@@ -162,6 +166,43 @@ class PyProxyPackageProcessorTest {
             "Artifact name stored in normalized form",
             artifact.artifactName(),
             Matchers.equalTo("alarmtime")
+        );
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "pypi_repo/pantera-sample-2.1.tar.bz2,pantera-sample-2.1.tar.bz2,2.1",
+        "pypi_repo/pantera_sample-2.1-py3.7.egg,pantera_sample-2.1-py3.7.egg,2.1",
+        ",pantera_sample-2.1-py3-none-any.whl,2.1",
+        ",pantera-sample-2.1.tgz,2.1",
+        ",pantera-sample-2.1.tbz,2.1",
+        ",pantera-sample-2.1.tar.xz,2.1",
+        ",pantera-sample-2.1.txz,2.1",
+        ",pantera_sample-2.1.win32.exe,2.1",
+        ",pantera_sample-2.1.win32-py2.7.msi,2.1",
+        ",pantera_sample-2.1-1.noarch.rpm,2.1",
+        ",pantera_sample-2.1-py2.7-macosx10.6.dmg,2.1",
+        ",pantera-sample_2.1-1_all.deb,2.1"
+    })
+    void recordsTheReleaseOfEveryDistributionType(
+        final String resource, final String file, final String version
+    ) {
+        final Key key = new Key.From(file);
+        if (resource == null) {
+            // A file known by its name is not read: its bytes do not matter.
+            this.asto.save(
+                key, new Content.From("installer".getBytes(StandardCharsets.UTF_8))
+            ).join();
+        } else {
+            new TestResource(resource).saveTo(this.asto, key);
+        }
+        this.packages.add(new ProxyArtifactEvent(key, PyProxyPackageProcessorTest.REPO_NAME));
+        this.processor.run();
+        MatcherAssert.assertThat(
+            this.events.stream()
+                .map(event -> event.artifactName() + " " + event.artifactVersion())
+                .collect(Collectors.toList()),
+            new IsEqual<>(List.of("pantera-sample " + version))
         );
     }
 

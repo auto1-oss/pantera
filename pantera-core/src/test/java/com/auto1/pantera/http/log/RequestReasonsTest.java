@@ -49,6 +49,23 @@ final class RequestReasonsTest {
     }
 
     @Test
+    void anUpstreamWithoutFilesIsAMissNotAFailure() {
+        // A group: one PyPI member's upstream listed no files for the
+        // project, another member timed out. The timeout explains the answer;
+        // the empty page explains it as much as an upstream "not found".
+        final RequestReasons reasons = new RequestReasons();
+        final String slot = reasons.open();
+        final Headers request = RequestReasonsTest.request(slot);
+        reasons.note(request, "upstream_no_files");
+        reasons.note(request, "read_timeout");
+        reasons.note(request, "upstream_no_files");
+        reasons.note(request, "negative_cache");
+        MatcherAssert.assertThat(
+            reasons.close(slot), new IsEqual<>(Optional.of("read_timeout"))
+        );
+    }
+
+    @Test
     void aMemberThatWasNotAskedExplainsLeast() {
         // A group: one member was skipped by a routing rule, another said
         // "not found" from its upstream. The one that looked explains more.

@@ -29,9 +29,11 @@ import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.cache.UpstreamMiss;
 import com.auto1.pantera.http.context.ContextualExecutor;
+import com.auto1.pantera.http.log.AnswerReason;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.RequestReasons;
 import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -83,9 +85,22 @@ import org.slf4j.MDC;
 final class ProxySlice implements Slice {
 
     /**
-     * Python artifacts formats.
+     * Path of a distribution file, of every kind PyPI has served: source
+     * archives ({@code .tar.gz}, {@code .tgz}, {@code .tar.bz2}, {@code .tbz},
+     * {@code .tar.xz}, {@code .txz}, {@code .tar.Z}, {@code .tar}, {@code .zip})
+     * and built distributions ({@code .whl}, {@code .egg}, {@code .exe},
+     * {@code .msi}, {@code .rpm}, {@code .dmg}, {@code .deb}). A file is an
+     * artifact: cooldown is evaluated for it, the search index is told about
+     * it and it is streamed, never buffered like a project page.
      */
-    private static final String FORMATS = ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)";
+    static final String FORMATS =
+        ".*\\.(whl|egg|tar\\.gz|tgz|tar\\.bz2|tbz|tar\\.xz|txz|tar\\.Z|tar|zip"
+            + "|exe|msi|rpm|dmg|deb)";
+
+    /**
+     * Reason of the 404 for a project page the upstream served without files.
+     */
+    private static final String NO_FILES = "upstream_no_files";
 
     /**
      * Key used for an empty last path segment (the root project index).
@@ -93,19 +108,6 @@ final class ProxySlice implements Slice {
      * stored under it; normalised project names never contain {@code _}.
      */
     private static final Key ROOT_INDEX = new Key.From("_root_index");
-
-    /**
-     * Wheel filename pattern.
-     */
-    private static final Pattern WHEEL_PATTERN =
-        Pattern.compile("(?<name>.*?)-(?<version>[0-9a-z.]+)(-\\d+)?-((py\\d.?)+)-(.*)-(.*)\\.whl",
-            Pattern.CASE_INSENSITIVE);
-
-    /**
-     * Archive filename pattern.
-     */
-    private static final Pattern ARCHIVE_PATTERN =
-        Pattern.compile("(?<name>.*)-(?<version>[0-9a-z.]+?)\\.(?<ext>[a-zA-Z.]+)", Pattern.CASE_INSENSITIVE);
 
     /**
      * Pattern to rewrite HTML links pointing to upstream packages.
@@ -236,6 +238,11 @@ final class ProxySlice implements Slice {
     private final PypiJsonHandler jsonHandler;
 
     /**
+     * Largest project page rewritten, in bytes.
+     */
+    private final int indexLimit;
+
+    /**
      * Ctor with default 12h metadata TTL.
      * @param clients HTTP clients
      * @param auth Authenticator
@@ -291,8 +298,9 @@ final class ProxySlice implements Slice {
     }
 
     /**
-     * Canonical ctor, aware of the configured upstream so mirror fetches can
-     * bind the upstream credentials to trusted hosts only.
+     * Ctor aware of the configured upstream so mirror fetches can bind the
+     * upstream credentials to trusted hosts only, with the default bound of
+     * a project page the proxy rewrites.
      * @param clients HTTP clients
      * @param auth Authenticator
      * @param origin Origin slice
@@ -317,6 +325,41 @@ final class ProxySlice implements Slice {
         final Slice jsonApiUpstream,
         final Duration metadataTtl,
         final java.net.URI upstream) {
+        this(clients, auth, origin, backend, cache, events, rname, rtype,
+            cooldown, inspector, jsonApiUpstream, metadataTtl, upstream,
+            ProxySlice.MAX_INDEX_SIZE);
+    }
+
+    /**
+     * Canonical ctor.
+     * @param clients HTTP clients
+     * @param auth Authenticator
+     * @param origin Origin slice
+     * @param backend Backend storage
+     * @param cache Cache
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
+     * @param jsonApiUpstream Direct upstream slice for /pypi/{pkg}/{ver}/json
+     * @param metadataTtl TTL for index page cache
+     * @param upstream Configured upstream URI the credentials belong to (nullable)
+     * @param indexLimit Largest project page rewritten, in bytes (see
+     *  {@link #MAX_INDEX_SIZE}); tests use a small one
+     */
+    ProxySlice(final ClientSlices clients, final Authenticator auth,
+        final Slice origin, final Storage backend, final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final CooldownService cooldown,
+        final CooldownInspector inspector,
+        final Slice jsonApiUpstream,
+        final Duration metadataTtl,
+        final java.net.URI upstream,
+        final int indexLimit) {
+        this.indexLimit = indexLimit;
         this.mirrorTrust = com.auto1.pantera.http.client.auth.RealmTrust.forUpstream(upstream);
         this.origin = origin;
         this.clients = clients;
@@ -613,6 +656,10 @@ final class ProxySlice implements Slice {
             return Optional.empty();
         }
         final String withoutSuffix = path.substring(0, path.length() - ".metadata".length());
+        // Only the metadata of a distribution file, as extract() admits.
+        if (!withoutSuffix.matches(ProxySlice.FORMATS)) {
+            return Optional.empty();
+        }
         final int slash = withoutSuffix.lastIndexOf('/');
         final String filename = slash >= 0 ? withoutSuffix.substring(slash + 1) : withoutSuffix;
         return this.coordinatesFromFilename(filename);
@@ -889,7 +936,19 @@ final class ProxySlice implements Slice {
                                 }
                                 return ProxySlice.this.preRewriteContent(
                                     response.body(), response.headers(), line, replay
-                                ).<Optional<? extends Content>>thenApply(opt -> opt);
+                                ).<Optional<? extends Content>>thenApply(opt -> {
+                                    if (opt.isEmpty()) {
+                                        // The upstream answered a project
+                                        // page without files: not found. The
+                                        // stream-through cache reads a remote
+                                        // without content as a failed one, so
+                                        // the answer is kept here; else the
+                                        // client got 502 and a group counted
+                                        // a failure of this member.
+                                        missed.set(ProxySlice.withoutFiles(rqheaders));
+                                    }
+                                    return opt;
+                                });
                             }
                             missed.set(
                                 miss.answered(response.status().code(), response.headers())
@@ -1028,7 +1087,22 @@ final class ProxySlice implements Slice {
                     }
                     return Optional.<Content>of(new Content.From(bytes));
                 }
-                if (bytes.length > MAX_INDEX_SIZE) {
+                if (bytes.length > this.indexLimit) {
+                    // Kept and served as the upstream sent it: its file links
+                    // point at the upstream, not at this proxy. Logged once
+                    // per store; a cache hit serves it the same way.
+                    EcsLogger.warn("com.auto1.pantera.pypi")
+                        .field("repository.name", this.rname)
+                        .message(
+                            "PyPI index too large to rewrite (" + bytes.length + " bytes, max: "
+                                + this.indexLimit + " bytes): stored with the upstream's links"
+                        )
+                        .eventCategory("web")
+                        .eventAction("index_rewrite")
+                        .eventOutcome("failure")
+                        .field("url.path", line.uri().getPath())
+                        .field("log.source", "application")
+                        .log();
                     return Optional.<Content>of(new Content.From(bytes));
                 }
                 final String original = new String(bytes, StandardCharsets.UTF_8);
@@ -1453,6 +1527,19 @@ final class ProxySlice implements Slice {
     }
 
     /**
+     * Answer for a project page the upstream served without files: 404,
+     * remembered like the upstream's own 404, with a reason that says the
+     * upstream answered and listed no file.
+     *
+     * @param rqheaders Headers of the client request
+     * @return 404
+     */
+    private static Response withoutFiles(final Headers rqheaders) {
+        RequestReasons.instance().note(rqheaders, ProxySlice.NO_FILES);
+        return new AnswerReason(ResponseBuilder.notFound().build()).stamped(ProxySlice.NO_FILES);
+    }
+
+    /**
      * What this proxy answers when the upstream gave no content.
      *
      * @param line Request line
@@ -1622,10 +1709,16 @@ final class ProxySlice implements Slice {
     }
 
     /**
-     * Maximum size for index pages to prevent memory exhaustion (10MB).
-     * Typical PyPI index pages: 1-5MB. This limit protects against malicious/corrupted responses.
+     * Largest project page whose links are rewritten to point at this proxy
+     * (64 MiB). The page is already in memory when it is rewritten; the
+     * rewrite makes about three more copies of it (the decoded text, the
+     * rewritten text, its bytes), and this bound caps that amplification for
+     * a page of any size an upstream sends. A page above it is stored and
+     * served as the upstream sent it, with the upstream's links, on a cache
+     * hit as on the first request. Pages of nightly-build projects
+     * ({@code tf-nightly}, {@code tb-nightly}) are larger than 10 MB.
      */
-    private static final int MAX_INDEX_SIZE = 10 * 1024 * 1024;
+    private static final int MAX_INDEX_SIZE = 64 * 1024 * 1024;
 
     private CompletableFuture<Optional<Content>> rewriteIndex(
         final Content content,
@@ -1643,17 +1736,19 @@ final class ProxySlice implements Slice {
                         }
                         return Optional.of(new Content.From(bytes));
                     }
-                    // Size limit protection
-                    if (bytes.length > MAX_INDEX_SIZE) {
-                        EcsLogger.warn("com.auto1.pantera.pypi")
+                    // Size limit protection: a page too large to rewrite was
+                    // stored as the upstream sent it (preRewriteContent) and
+                    // is served the same way, never answered as missing.
+                    if (bytes.length > this.indexLimit) {
+                        EcsLogger.debug("com.auto1.pantera.pypi")
                             .field("repository.name", this.rname)
-                            .message("PyPI index too large (" + bytes.length + " bytes, max: " + MAX_INDEX_SIZE + " bytes)")
+                            .message("PyPI index too large to rewrite (" + bytes.length + " bytes, max: " + this.indexLimit + " bytes): served as stored")
                             .eventCategory("web")
                             .eventAction("index_rewrite")
-                            .eventOutcome("failure")
+                            .field("url.path", line.uri().getPath())
                             .field("log.source", "application")
                             .log();
-                        return Optional.empty();
+                        return Optional.of(new Content.From(bytes));
                     }
                     // Process in single pass to minimize memory copies
                     final String original = new String(bytes, StandardCharsets.UTF_8);
@@ -2198,30 +2293,16 @@ final class ProxySlice implements Slice {
         }
     }
 
+    /**
+     * Project and version of a distribution file, read from its name.
+     * @param filename Name of a file of one of the {@link #FORMATS}
+     * @return Coordinates, empty when the name does not say them
+     */
     private Optional<ArtifactCoordinates> coordinatesFromFilename(final String filename) {
-        final String lower = filename.toLowerCase(Locale.ROOT);
-        if (lower.endsWith(".whl")) {
-            final int first = filename.indexOf('-');
-            if (first > 0 && first < filename.length() - 1) {
-                final int second = filename.indexOf('-', first + 1);
-                if (second > first) {
-                    final String name = new NormalizedProjectName.Simple(filename.substring(0, first)).value();
-                    final String version = filename.substring(first + 1, second);
-                    return Optional.of(new ArtifactCoordinates(name, version));
-                }
-            }
-        }
-        final Matcher wheel = WHEEL_PATTERN.matcher(filename);
-        if (wheel.matches()) {
-            final String name = new NormalizedProjectName.Simple(wheel.group("name")).value();
-            return Optional.of(new ArtifactCoordinates(name, wheel.group("version")));
-        }
-        final Matcher archive = ARCHIVE_PATTERN.matcher(filename);
-        if (archive.matches() && filename.matches(ProxySlice.FORMATS)) {
-            final String name = new NormalizedProjectName.Simple(archive.group("name")).value();
-            return Optional.of(new ArtifactCoordinates(name, archive.group("version")));
-        }
-        return Optional.empty();
+        final DistFilename dist = new DistFilename(filename);
+        return dist.project().flatMap(
+            name -> dist.version().map(version -> new ArtifactCoordinates(name, version))
+        );
     }
 
     private static final class ArtifactCoordinates {
