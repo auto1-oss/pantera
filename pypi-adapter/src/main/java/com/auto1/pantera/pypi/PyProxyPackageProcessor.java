@@ -273,8 +273,9 @@ public final class PyProxyPackageProcessor extends QuartzJob {
     /**
      * Project and version of a stored distribution file. For the source
      * archives and eggs of {@link #READABLE} they come from the core metadata
-     * in the file, read as a stream, and must be the ones its name says. The
-     * other files PyPI has served (wheels, {@code .tgz}, {@code .tbz},
+     * in the file, read as a stream, and must be the ones its name says; an
+     * archive without core metadata (old sdists not built by setuptools) is
+     * known by its name. The other files PyPI has served (wheels, {@code .tgz}, {@code .tbz},
      * {@code .tar.xz}, {@code .txz}, Windows installers, RPM packages, disk
      * images, Debian packages) are known by their name and not read.
      *
@@ -292,16 +293,18 @@ public final class PyProxyPackageProcessor extends QuartzJob {
         if (PyProxyPackageProcessor.READABLE.stream().anyMatch(filename::endsWith)) {
             res = this.asto.value(key)
                 .thenCompose(
-                    content -> new ContentAsStream<PackageInfo>(content)
+                    content -> new ContentAsStream<Optional<PackageInfo>>(content)
                         .process(PyProxyPackageProcessor.reader(filename))
                 )
                 .thenApply(
-                    info -> named.filter(
-                        new Release(
-                            new NormalizedProjectName.Simple(info.name()).value(),
-                            info.version()
-                        )::equals
-                    )
+                    found -> found.map(
+                        info -> named.filter(
+                            new Release(
+                                new NormalizedProjectName.Simple(info.name()).value(),
+                                info.version()
+                            )::equals
+                        )
+                    ).orElse(named)
                 );
         } else {
             res = CompletableFuture.completedFuture(named);
@@ -318,11 +321,18 @@ public final class PyProxyPackageProcessor extends QuartzJob {
      * @param filename Name of the file
      * @return Reader
      */
-    private static Function<InputStream, PackageInfo> reader(final String filename) {
+    private static Function<InputStream, Optional<PackageInfo>> reader(final String filename) {
         return input -> {
-            final PackageInfo info = new Metadata.FromArchive(
-                CloseShieldInputStream.wrap(input), filename
-            ).read();
+            Optional<PackageInfo> info;
+            try {
+                info = Optional.of(
+                    new Metadata.FromArchive(CloseShieldInputStream.wrap(input), filename).read()
+                );
+            } catch (final Metadata.NotFound none) {
+                // No core metadata in the archive: the file is known by its
+                // name, as the upstream lists it.
+                info = Optional.empty();
+            }
             try {
                 input.transferTo(OutputStream.nullOutputStream());
             } catch (final IOException ex) {

@@ -155,6 +155,29 @@ final class PyProxyPackageProcessorStreamingTest {
         );
     }
 
+    @Test
+    void knowsAnSdistWithoutMetadataByItsName(@TempDir final Path dir) throws Exception {
+        // Old sdists were not all built by setuptools: Twisted 10.0.0, for
+        // one, carries no PKG-INFO. The upstream lists the file under its
+        // name, which then says the project and the version.
+        final Storage storage = new FileStorage(dir);
+        final Key key = new Key.From("big-pkg-1.0.tar.gz");
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (TarArchiveOutputStream tar =
+            new TarArchiveOutputStream(new GzipCompressorOutputStream(out))) {
+            PyProxyPackageProcessorStreamingTest.entry(
+                tar, "big-pkg-1.0/setup.py",
+                "from distutils.core import setup\n".getBytes(StandardCharsets.UTF_8)
+            );
+        }
+        final byte[] sdist = out.toByteArray();
+        storage.save(key, new Content.From(sdist)).join();
+        this.process(storage, key);
+        MatcherAssert.assertThat(
+            this.recorded(), new IsEqual<>(List.of("big-pkg 1.0 " + sdist.length))
+        );
+    }
+
     /**
      * Run the processor over one stored file.
      * @param storage Storage
