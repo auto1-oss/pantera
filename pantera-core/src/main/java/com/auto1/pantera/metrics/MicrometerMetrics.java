@@ -285,12 +285,12 @@ public final class MicrometerMetrics {
 
     /**
      * A login that was refused without being checked.
-     * @param reason Why: {@code login_delayed}, {@code account_locked} or
-     *  {@code sign_in_busy}
+     * @param reason Why: {@code login_delayed}, {@code sign_in_paused},
+     *  {@code account_locked} or {@code sign_in_busy}
      */
     public void recordLoginRefused(final String reason) {
         Counter.builder("pantera.auth.login.refused")
-            .description("Logins refused by the login delay or the account lock")
+            .description("Logins refused by the login delay, the sign-in pause or the account lock")
             .tags("reason", reason)
             .register(this.registry)
             .increment();
@@ -310,11 +310,22 @@ public final class MicrometerMetrics {
     }
 
     /**
-     * A login refused by the sign-in form's own limit.
+     * A sign-in whose password was accepted but whose second factor was not
+     * confirmed.
      */
-    public void recordFormLimitHit() {
-        Counter.builder("pantera.auth.form_limit.hits")
-            .description("Logins refused by the sign-in form's own limit")
+    public void recordSecondFactorFailure() {
+        Counter.builder("pantera.auth.second_factor.failures")
+            .description("Sign-ins whose second factor was not confirmed")
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
+     * Password sign-in of a user was paused after unconfirmed second factors.
+     */
+    public void recordSignInPause() {
+        Counter.builder("pantera.auth.sign_in.pauses")
+            .description("Password sign-ins paused after unconfirmed second factors")
             .register(this.registry)
             .increment();
     }

@@ -61,14 +61,6 @@ import javax.sql.DataSource;
 public final class AsyncApiVerticle extends AbstractVerticle {
 
     /**
-     * Login throttle shared by every instance of this verticle in the
-     * process (B16): VertxMain deploys several instances, and a per-instance
-     * throttle multiplied the configured limit by their number.
-     */
-    private static final com.auto1.pantera.auth.LoginThrottle LOGIN_THROTTLE =
-        new com.auto1.pantera.auth.LoginThrottle();
-
-    /**
      * Pantera caches.
      */
     private final PanteraCaches caches;
@@ -445,7 +437,6 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.dataSource != null ? new AuthProviderDao(this.dataSource) : null,
             this.dataSource != null ? new UserTokenDao(this.dataSource) : null,
             this.dataSource != null ? new AuthSettingsDao(this.dataSource) : null,
-            AsyncApiVerticle.LOGIN_THROTTLE,
             this.settings.failedLogins().orElse(null)
         );
         authHandler.register(router);

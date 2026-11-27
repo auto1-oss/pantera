@@ -71,6 +71,17 @@ public final class FailedLoginsSettingsLoader implements Supplier<FailedLoginsCo
     public static final String KEY_LOCK_ALL = "failed_logins_lock_all_credentials";
 
     /**
+     * Key: unconfirmed second factors after which password sign-in pauses.
+     */
+    public static final String KEY_SECOND_FACTOR_LIMIT = "failed_logins_second_factor_limit";
+
+    /**
+     * Key: minutes the pause after unconfirmed second factors lasts.
+     */
+    public static final String KEY_SECOND_FACTOR_PAUSE =
+        "failed_logins_second_factor_pause_minutes";
+
+    /**
      * Process-wide loader.
      */
     private static volatile FailedLoginsSettingsLoader installed;
@@ -224,10 +235,19 @@ public final class FailedLoginsSettingsLoader implements Supplier<FailedLoginsCo
                 def.lockAfterFailures(), def.unlockAfterMinutes(), val, false
             )
         );
+        final int limit = this.value(
+            FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_LIMIT, def.secondFactorLimit(),
+            val -> def.withSecondFactor(val, def.secondFactorPauseMinutes())
+        );
+        final int pause = this.value(
+            FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_PAUSE, def.secondFactorPauseMinutes(),
+            val -> def.withSecondFactor(def.secondFactorLimit(), val)
+        );
         return new FailedLoginsConfig(
             from, first, max, lock, unlock, forget,
             this.source.resolveBoolean(FailedLoginsSettingsLoader.KEY_COUNT_KEYS, false),
-            this.source.resolveBoolean(FailedLoginsSettingsLoader.KEY_LOCK_ALL, true)
+            this.source.resolveBoolean(FailedLoginsSettingsLoader.KEY_LOCK_ALL, true),
+            limit, pause
         );
     }
 

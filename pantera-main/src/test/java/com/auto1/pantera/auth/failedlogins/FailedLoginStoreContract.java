@@ -271,6 +271,61 @@ abstract class FailedLoginStoreContract {
         );
     }
 
+    @Test
+    void unconfirmedSecondFactorIsCountedApartFromTheFailures() {
+        final FailedLoginStore store = this.store();
+        FailedLoginStoreContract.fail(store, "alice", 1);
+        store.unconfirmed("alice", FailedLoginStoreContract.POLICY);
+        final LoginState state = store.unconfirmed("alice", FailedLoginStoreContract.POLICY)
+            .state();
+        MatcherAssert.assertThat(
+            "two unconfirmed second factors beside one failed login, kept as read",
+            java.util.List.of(
+                state.failures(), state.unconfirmed(),
+                store.read("alice").state().unconfirmed(),
+                store.read("alice").state().failures()
+            ),
+            new IsEqual<>(java.util.List.of(1, 2, 2, 1))
+        );
+        MatcherAssert.assertThat(
+            "the origin of the last failed login stays",
+            store.entry("alice").orElseThrow().origin(),
+            new IsEqual<>(FailedLoginStoreContract.ORIGIN)
+        );
+    }
+
+    @Test
+    void failureKeepsTheUnconfirmedSecondFactors() {
+        final FailedLoginStore store = this.store();
+        store.unconfirmed("alice", FailedLoginStoreContract.POLICY);
+        MatcherAssert.assertThat(
+            store.fail("alice", FailedLoginStoreContract.POLICY, FailedLoginStoreContract.ORIGIN)
+                .state().unconfirmed(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void nameWithOnlyUnconfirmedSecondFactorsIsNotCountedAsFailing() {
+        final FailedLoginStore store = this.store();
+        store.unconfirmed("alice", FailedLoginStoreContract.POLICY);
+        MatcherAssert.assertThat(
+            "not among the names with failed logins, not locked",
+            java.util.List.of(store.counted().size(), store.locked().size()),
+            new IsEqual<>(java.util.List.of(0, 0))
+        );
+    }
+
+    @Test
+    void forgettingANameRemovesItsUnconfirmedSecondFactors() {
+        final FailedLoginStore store = this.store();
+        store.unconfirmed("alice", FailedLoginStoreContract.POLICY);
+        store.forget("alice");
+        MatcherAssert.assertThat(
+            store.read("alice").state(), new IsEqual<>(LoginState.NONE)
+        );
+    }
+
     private static void fail(final FailedLoginStore store, final String name, final int times) {
         for (int idx = 0; idx < times; idx += 1) {
             store.fail(name, FailedLoginStoreContract.POLICY, FailedLoginStoreContract.ORIGIN);

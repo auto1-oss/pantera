@@ -11,7 +11,6 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.auth.JwtTokens;
-import com.auto1.pantera.auth.LoginThrottle;
 import com.auto1.pantera.auth.OktaAuthContext;
 import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.Vertx;
@@ -25,7 +24,6 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
-import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -77,8 +75,7 @@ final class AuthHandlerInteractiveSignInTest {
                 this.seen.add(OktaAuthContext.interactive() + "/" + OktaAuthContext.mfaCode());
                 return Optional.empty();
             },
-            null, Policy.FREE, null, null, null,
-            new LoginThrottle(100, Duration.ofMinutes(15), System::nanoTime)
+            null, Policy.FREE, null, null, null
         );
         final Router router = Router.router(vertx);
         router.route().handler(BodyHandler.create());

@@ -24,8 +24,6 @@ import com.auto1.pantera.settings.policy.PasswordSignInConfig;
 import com.auto1.pantera.settings.policy.PasswordSignInSettingsLoader;
 import com.auto1.pantera.settings.policy.SignInReportConfig;
 import com.auto1.pantera.settings.policy.SignInReportSettingsLoader;
-import com.auto1.pantera.settings.policy.LoginThrottleConfig;
-import com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader;
 import com.auto1.pantera.settings.policy.RequestLimitsConfig;
 import com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader;
 import com.auto1.pantera.settings.policy.SecurityPolicySettingsSync;
@@ -39,7 +37,7 @@ import java.util.function.Supplier;
 
 /**
  * Admin endpoints for the DB-backed security policy settings (2.2.9):
- * request &amp; storage limits, outbound egress policy, login throttling.
+ * request &amp; storage limits, outbound egress policy, failed logins.
  * Same contract as the breaker/client-base-URL endpoints in {@link
  * AdminAuthHandler}: admin authz, key whitelist per endpoint, partial PUT
  * validated by round-tripping the merged values through the config
@@ -68,20 +66,15 @@ public final class SecurityPolicySettingsHandler {
     );
 
     /**
-     * Keys accepted by the login-throttle endpoint.
-     */
-    private static final Set<String> LOGIN_THROTTLE_KEYS = Set.of(
-        LoginThrottleSettingsLoader.KEY_MAX_FAILURES, LoginThrottleSettingsLoader.KEY_WINDOW_SECONDS
-    );
-
-    /**
      * Keys accepted by the failed-logins endpoint.
      */
     private static final Set<String> FAILED_LOGINS_KEYS = Set.of(
         FailedLoginsSettingsLoader.KEY_DELAY_FROM, FailedLoginsSettingsLoader.KEY_FIRST_DELAY,
         FailedLoginsSettingsLoader.KEY_MAX_DELAY, FailedLoginsSettingsLoader.KEY_LOCK_AFTER,
         FailedLoginsSettingsLoader.KEY_UNLOCK_AFTER, FailedLoginsSettingsLoader.KEY_FORGET_AFTER,
-        FailedLoginsSettingsLoader.KEY_COUNT_KEYS, FailedLoginsSettingsLoader.KEY_LOCK_ALL
+        FailedLoginsSettingsLoader.KEY_COUNT_KEYS, FailedLoginsSettingsLoader.KEY_LOCK_ALL,
+        FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_LIMIT,
+        FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_PAUSE
     );
 
     /**
@@ -143,7 +136,6 @@ public final class SecurityPolicySettingsHandler {
         final AuthzHandler adminAuthz = new AuthzHandler(this.policy, ApiAdminPermission.ADMIN);
         this.route(router, adminAuthz, "/api/v1/admin/request-limits-settings", requestLimits());
         this.route(router, adminAuthz, "/api/v1/admin/egress-settings", egress());
-        this.route(router, adminAuthz, "/api/v1/admin/login-throttle-settings", loginThrottle());
         this.route(router, adminAuthz, "/api/v1/admin/failed-logins-settings", failedLogins());
         this.route(
             router, adminAuthz, "/api/v1/admin/password-sign-in-settings", passwordSignIn()
@@ -208,34 +200,9 @@ public final class SecurityPolicySettingsHandler {
     }
 
     /**
-     * Login throttling section.
-     * @return Section
-     */
-    static Section loginThrottle() {
-        return new Section(
-            "login-throttle", "login_throttle", LOGIN_THROTTLE_KEYS,
-            () -> {
-                final LoginThrottleConfig current = LoginThrottleSettingsLoader.activeSupplier().get();
-                return new JsonObject()
-                    .put(LoginThrottleSettingsLoader.KEY_MAX_FAILURES, String.valueOf(current.maxFailures()))
-                    .put(LoginThrottleSettingsLoader.KEY_WINDOW_SECONDS, String.valueOf(current.windowSeconds()));
-            },
-            merged -> new LoginThrottleConfig(
-                Section.parseInt(merged, LoginThrottleSettingsLoader.KEY_MAX_FAILURES),
-                Section.parseInt(merged, LoginThrottleSettingsLoader.KEY_WINDOW_SECONDS)
-            ),
-            () -> {
-                final LoginThrottleSettingsLoader loader = LoginThrottleSettingsLoader.installed();
-                if (loader != null) {
-                    loader.invalidate();
-                }
-            }
-        );
-    }
-
-    /**
-     * The policy of the login delay and the account lock ("Failed logins"
-     * card).
+     * The policy of failed sign-ins ("Failed logins" card): the delay and
+     * the lock after wrong passwords, the pause after unconfirmed second
+     * factors.
      * @return Section
      */
     static Section failedLogins() {
@@ -251,7 +218,15 @@ public final class SecurityPolicySettingsHandler {
                     .put(FailedLoginsSettingsLoader.KEY_UNLOCK_AFTER, String.valueOf(current.unlockAfterMinutes()))
                     .put(FailedLoginsSettingsLoader.KEY_FORGET_AFTER, String.valueOf(current.forgetAfterMinutes()))
                     .put(FailedLoginsSettingsLoader.KEY_COUNT_KEYS, String.valueOf(current.countRejectedKeys()))
-                    .put(FailedLoginsSettingsLoader.KEY_LOCK_ALL, String.valueOf(current.lockAllCredentials()));
+                    .put(FailedLoginsSettingsLoader.KEY_LOCK_ALL, String.valueOf(current.lockAllCredentials()))
+                    .put(
+                        FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_LIMIT,
+                        String.valueOf(current.secondFactorLimit())
+                    )
+                    .put(
+                        FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_PAUSE,
+                        String.valueOf(current.secondFactorPauseMinutes())
+                    );
             },
             merged -> new FailedLoginsConfig(
                 Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_DELAY_FROM),
@@ -261,7 +236,9 @@ public final class SecurityPolicySettingsHandler {
                 Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_UNLOCK_AFTER),
                 Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_FORGET_AFTER),
                 Section.parseBoolean(merged, FailedLoginsSettingsLoader.KEY_COUNT_KEYS),
-                Section.parseBoolean(merged, FailedLoginsSettingsLoader.KEY_LOCK_ALL)
+                Section.parseBoolean(merged, FailedLoginsSettingsLoader.KEY_LOCK_ALL),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_LIMIT),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_PAUSE)
             ),
             () -> {
                 final FailedLoginsSettingsLoader loader = FailedLoginsSettingsLoader.installed();

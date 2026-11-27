@@ -2,10 +2,10 @@
 
 > **Guide:** Admin Guide | **Section:** Sign-in Failures Report | **Since:** 2.2.15
 
-The report answers one question: **who fails to sign in, with what, and from where?** It lists rejected API keys with their owner, failed password logins with the user's delay and lock, and logins the sign-in form's own limit refused. Use it to find the tool that still sends an old key or password before that tool locks its user or reaches the directory behind an identity provider.
+The report answers one question: **who fails to sign in, with what, and from where?** It lists rejected API keys with their owner, failed password logins with the user's delay and lock, and sign-ins whose password was right but whose second factor was not confirmed. Use it to find the tool that still sends an old key or password before that tool locks its user or reaches the directory behind an identity provider.
 
 - **UI:** *Administration → Sign-in failures*, three tabs. Each list can be filtered by user and by client address.
-- **API:** `GET /api/v1/sign-in-failures/api-keys`, `/passwords` and `/form-limit`. See the [REST API reference](../rest-api-reference.md#get-apiv1sign-in-failuresapi-keys).
+- **API:** `GET /api/v1/sign-in-failures/api-keys`, `/passwords` and `/second-factor`. See the [REST API reference](../rest-api-reference.md#get-apiv1sign-in-failuresapi-keys).
 - **Every user** sees their own rejected keys on their profile page, and with `GET /api/v1/auth/rejected-keys`.
 
 The lists of all users need the permission to read users.
@@ -45,9 +45,13 @@ See [Failed Logins](failed-logins.md) for the delay and the lock themselves.
 
 ---
 
-## Sign-in Form Limit
+## Second Factor
 
-The sign-in form has a limit of its own beside the delay and the lock (**System Settings → Login Throttling**). Each time it refuses a login the report keeps the user, the client address and program, how often it refused, the failures counted in the window, and when the block ends.
+One line per user and client address for sign-ins whose password was right but whose second factor was not confirmed: an Okta push denied or not answered, or a wrong code. These never count as failed logins; after the limit they pause password sign-in of the user (see [Failed Logins](failed-logins.md#the-pause)).
+
+A line shows how many sign-ins were not confirmed, how many were refused without a check during a pause, the reason of the last one (`second_factor_failed` or `sign_in_paused`), the count toward the pause at the last one, when the pause ends and whether it still runs, when first and last, the client program and the sign-in path.
+
+A user with such lines approved no push that someone started with the right password. If that was not the user, someone else knows the password: have the user change it.
 
 ---
 
@@ -82,14 +86,15 @@ Environment fallbacks for an installation without a database: `PANTERA_SIGN_IN_R
 | Metric | Labels | Meaning |
 |--------|--------|---------|
 | `pantera_auth_api_key_rejected_total` | `reason` | API keys rejected, by reason. Counted also while the report is off. |
-| `pantera_auth_form_limit_hits_total` | -- | Logins refused by the sign-in form's own limit. |
+| `pantera_auth_second_factor_failures_total` | -- | Sign-ins whose second factor was not confirmed. |
+| `pantera_auth_sign_in_pauses_total` | -- | Pauses of password sign-in after unconfirmed second factors. |
 
-Both are on the **Pantera - Sign-in** dashboard. The counters say how much; the report says who.
+All are on the **Pantera - Sign-in** dashboard. The counters say how much; the report says who.
 
 ---
 
 ## Related Pages
 
-- [Failed Logins](failed-logins.md) -- the login delay and the account lock.
+- [Failed Logins](failed-logins.md) -- the login delay, the account lock and the second-factor pause.
 - [Authentication](authentication.md) -- providers, API keys, and where a provider takes passwords.
 - [Monitoring](monitoring.md) -- sign-in metrics.

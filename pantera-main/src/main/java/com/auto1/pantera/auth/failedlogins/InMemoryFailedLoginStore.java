@@ -87,6 +87,30 @@ public final class InMemoryFailedLoginStore implements FailedLoginStore {
     }
 
     @Override
+    public Seen unconfirmed(final String name, final FailedLoginsConfig policy) {
+        final Instant now = this.clock.get();
+        final Optional<String> counted = new Counted(name).name();
+        LoginState state = LoginState.NONE;
+        if (counted.isPresent()) {
+            state = this.entries.compute(
+                counted.get(),
+                (key, held) -> {
+                    final Entry res;
+                    if (held == null) {
+                        res = new Entry(
+                            LoginState.NONE.unconfirmed(now, policy), LoginOrigin.UNKNOWN
+                        );
+                    } else {
+                        res = new Entry(held.state().unconfirmed(now, policy), held.origin());
+                    }
+                    return res;
+                }
+            ).state();
+        }
+        return new Seen(state, now);
+    }
+
+    @Override
     public LoginState forget(final String name) {
         return new Counted(name).name()
             .map(this.entries::remove)

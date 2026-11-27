@@ -21,6 +21,13 @@ package com.auto1.pantera.settings.policy;
  * failures the user is locked until an admin unlocks it, or until the
  * automatic unlock time has passed when one is set.</p>
  *
+ * <p>A sign-in whose password was accepted but whose second factor was not
+ * confirmed (a push denied or not answered, a wrong code) is not a failed
+ * login: it neither delays nor locks. After the configured number of them,
+ * each within the pause time of the previous one, password sign-in of the
+ * user is paused for that time, so that no further push reaches the
+ * user's phone.</p>
+ *
  * <p>Every value is an admin setting (card "Failed logins", keys
  * {@code failed_logins_*} in {@code auth_settings}).</p>
  *
@@ -40,6 +47,11 @@ package com.auto1.pantera.settings.policy;
  * @param lockAllCredentials Whether a lock blocks every credential of the
  *  user (password, API keys, sessions, an identity provider's button), or
  *  password sign-in only
+ * @param secondFactorLimit Sign-ins with an unconfirmed second factor after
+ *  which password sign-in of the user is paused, 0 for no pause. Such a
+ *  sign-in is never a failed login: it neither delays nor locks
+ * @param secondFactorPauseMinutes Minutes the pause lasts; unconfirmed
+ *  sign-ins count while each comes within this time of the previous one
  * @since 2.2.15
  */
 public record FailedLoginsConfig(
@@ -50,7 +62,9 @@ public record FailedLoginsConfig(
     int unlockAfterMinutes,
     int forgetAfterMinutes,
     boolean countRejectedKeys,
-    boolean lockAllCredentials
+    boolean lockAllCredentials,
+    int secondFactorLimit,
+    int secondFactorPauseMinutes
 ) {
 
     /**
@@ -110,6 +124,21 @@ public record FailedLoginsConfig(
     public static final int MAX_FORGET_AFTER = 43_200;
 
     /**
+     * Default number of unconfirmed second factors that pause sign-in.
+     */
+    public static final int DEFAULT_SECOND_FACTOR_LIMIT = 5;
+
+    /**
+     * Default pause after unconfirmed second factors, in minutes.
+     */
+    public static final int DEFAULT_SECOND_FACTOR_PAUSE = 15;
+
+    /**
+     * Longest pause after unconfirmed second factors, in minutes.
+     */
+    public static final int MAX_SECOND_FACTOR_PAUSE = 1440;
+
+    /**
      * Ctor.
      */
     public FailedLoginsConfig {
@@ -143,6 +172,41 @@ public record FailedLoginsConfig(
             "failed_logins_forget_after_minutes", forgetAfterMinutes, 0,
             FailedLoginsConfig.MAX_FORGET_AFTER
         );
+        FailedLoginsConfig.inRange(
+            "failed_logins_second_factor_limit", secondFactorLimit, 0,
+            FailedLoginsConfig.MAX_FAILURES
+        );
+        FailedLoginsConfig.inRange(
+            "failed_logins_second_factor_pause_minutes", secondFactorPauseMinutes, 1,
+            FailedLoginsConfig.MAX_SECOND_FACTOR_PAUSE
+        );
+    }
+
+    /**
+     * Policy with the default pause after unconfirmed second factors.
+     *
+     * @param delayFromFailure Failure number from which logins are delayed
+     * @param firstDelaySeconds Unit of the delay, in seconds
+     * @param maxDelaySeconds Longest delay, in seconds
+     * @param lockAfterFailures Failures after which the user is locked
+     * @param unlockAfterMinutes Minutes after which a lock ends by itself
+     * @param forgetAfterMinutes Minutes after which failures are forgotten
+     * @param countRejectedKeys Whether a rejected API key counts
+     * @param lockAllCredentials Whether a lock blocks every credential
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public FailedLoginsConfig(
+        final int delayFromFailure, final int firstDelaySeconds, final int maxDelaySeconds,
+        final int lockAfterFailures, final int unlockAfterMinutes,
+        final int forgetAfterMinutes, final boolean countRejectedKeys,
+        final boolean lockAllCredentials
+    ) {
+        this(
+            delayFromFailure, firstDelaySeconds, maxDelaySeconds, lockAfterFailures,
+            unlockAfterMinutes, forgetAfterMinutes, countRejectedKeys, lockAllCredentials,
+            FailedLoginsConfig.DEFAULT_SECOND_FACTOR_LIMIT,
+            FailedLoginsConfig.DEFAULT_SECOND_FACTOR_PAUSE
+        );
     }
 
     /**
@@ -172,7 +236,8 @@ public record FailedLoginsConfig(
      * The defaults: delay from the second failure, one second unit, one
      * minute at most, lock after three failures, only an admin unlocks,
      * failures never forgotten by time, rejected API keys not counted, a
-     * lock blocks every credential.
+     * lock blocks every credential; password sign-in paused for 15 minutes
+     * after five unconfirmed second factors.
      *
      * @return Default policy
      */
@@ -181,7 +246,23 @@ public record FailedLoginsConfig(
             FailedLoginsConfig.DEFAULT_DELAY_FROM, FailedLoginsConfig.DEFAULT_FIRST_DELAY,
             FailedLoginsConfig.DEFAULT_MAX_DELAY, FailedLoginsConfig.DEFAULT_LOCK_AFTER,
             FailedLoginsConfig.DEFAULT_UNLOCK_AFTER, FailedLoginsConfig.DEFAULT_FORGET_AFTER,
-            false, true
+            false, true, FailedLoginsConfig.DEFAULT_SECOND_FACTOR_LIMIT,
+            FailedLoginsConfig.DEFAULT_SECOND_FACTOR_PAUSE
+        );
+    }
+
+    /**
+     * This policy with another pause after unconfirmed second factors.
+     *
+     * @param limit Unconfirmed second factors that pause sign-in, 0 for none
+     * @param pause Minutes the pause lasts
+     * @return Policy
+     */
+    public FailedLoginsConfig withSecondFactor(final int limit, final int pause) {
+        return new FailedLoginsConfig(
+            this.delayFromFailure, this.firstDelaySeconds, this.maxDelaySeconds,
+            this.lockAfterFailures, this.unlockAfterMinutes, this.forgetAfterMinutes,
+            this.countRejectedKeys, this.lockAllCredentials, limit, pause
         );
     }
 
@@ -215,6 +296,17 @@ public record FailedLoginsConfig(
      */
     public boolean locks(final int failures) {
         return this.lockAfterFailures > 0 && failures >= this.lockAfterFailures;
+    }
+
+    /**
+     * Whether the given number of unconfirmed second factors pauses
+     * password sign-in.
+     *
+     * @param unconfirmed Unconfirmed second factors counted for the user
+     * @return True when the pause is on and the limit is reached
+     */
+    public boolean pauses(final int unconfirmed) {
+        return this.secondFactorLimit > 0 && unconfirmed >= this.secondFactorLimit;
     }
 
     /**

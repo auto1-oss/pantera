@@ -29,7 +29,15 @@ import java.util.function.Supplier;
 /**
  * The failed logins of user names under the policy in force: whether a
  * login may be checked, what a failure and a success change, and who is
- * locked.
+ * locked. The one place that decides on failed sign-ins, for every way of
+ * signing in.
+ *
+ * <p>Two kinds of failed sign-in are counted apart. A wrong password
+ * ({@link #failed}) delays and then locks. A sign-in whose password was
+ * accepted but whose second factor was not confirmed
+ * ({@link #secondFactorFailed}) is no wrong password: it neither delays nor
+ * locks, and after the policy's limit it pauses password sign-in of the
+ * user, so that no further push reaches the user's phone.</p>
  *
  * <p>The policy is read on every decision, so a change in System Settings
  * applies to the next login. The counts live in a
@@ -54,6 +62,17 @@ public final class FailedLogins {
      * Reason of a login refused because its user is locked.
      */
     private static final String LOCKED = "account_locked";
+
+    /**
+     * Reason of a login refused during a delay after wrong passwords.
+     */
+    private static final String DELAYED = "login_delayed";
+
+    /**
+     * Reason of a password sign-in refused during the pause after
+     * unconfirmed second factors.
+     */
+    private static final String PAUSED = "sign_in_paused";
 
     /**
      * Credential of a login that was made with a password.
@@ -217,12 +236,58 @@ public final class FailedLogins {
     }
 
     /**
-     * A password login succeeded: its failures are forgotten.
+     * Count a sign-in whose password was accepted but whose second factor
+     * was not confirmed. It neither delays nor locks; the one that reaches
+     * the policy's limit starts the pause of password sign-in.
+     *
+     * @param name User name
+     * @param source Where the sign-in came from
+     * @return What applies to the next login of the name
+     */
+    public Admission secondFactorFailed(final String name, final LoginSource source) {
+        final FailedLoginsConfig policy = this.config.get();
+        final FailedLoginStore.Seen seen = this.store.unconfirmed(name, policy);
+        final LoginState state = seen.state();
+        final Instant paused = state.pausedUntil(policy);
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordSecondFactorFailure();
+        }
+        final SignInFailures noted = this.report;
+        if (noted != null) {
+            noted.unconfirmedSecondFactor(name, source, state.unconfirmed(), paused);
+        }
+        if (paused != null && state.unconfirmed() == policy.secondFactorLimit()) {
+            if (MicrometerMetrics.isInitialized()) {
+                MicrometerMetrics.getInstance().recordSignInPause();
+            }
+            EcsLogger.warn(FailedLogins.LOG)
+                .message(
+                    "Password sign-in of user paused for " + policy.secondFactorPauseMinutes()
+                        + " minutes after " + state.unconfirmed()
+                        + " sign-ins whose second factor was not confirmed (last from "
+                        + source.path() + "); the password was accepted each time"
+                )
+                .eventCategory("authentication")
+                .eventAction("sign_in_pause")
+                .eventOutcome("success")
+                .field("event.reason", FailedLogins.PAUSED)
+                .field("user.name", name)
+                .field("client.ip", source.clientIp())
+                .field("log.source", "application")
+                .log();
+        }
+        return state.admission(seen.now(), policy);
+    }
+
+    /**
+     * A password login succeeded: its failures and unconfirmed second
+     * factors are forgotten.
      *
      * @param name User name
      */
     public void succeeded(final String name) {
-        if (this.store.read(name).state().failures() > 0) {
+        final LoginState state = this.store.read(name).state();
+        if (state.failures() > 0 || state.unconfirmed() > 0) {
             this.store.forget(name);
             this.mark(name, false);
         }
@@ -394,20 +459,24 @@ public final class FailedLogins {
      * Refuse a login without a check: note on the thread why, for the
      * answer, and report it as refused.
      *
-     * @param admission What applies to the login: delayed or locked
+     * @param admission What applies to the login: delayed, paused or locked
      * @param name User name of the login
      */
     public void refuse(final Admission admission, final String name) {
         this.refuse(admission);
         final SignInFailures noted = this.report;
         if (noted != null) {
-            final String reason;
-            if (admission.kind() == Admission.Kind.LOCKED) {
-                reason = FailedLogins.LOCKED;
+            if (admission.kind() == Admission.Kind.PAUSED) {
+                final FailedLoginsConfig policy = this.config.get();
+                final LoginState state = this.store.read(name).state();
+                noted.refusedPaused(
+                    name, LoginSource.current(), state.unconfirmed(), state.pausedUntil(policy)
+                );
+            } else if (admission.kind() == Admission.Kind.LOCKED) {
+                noted.refusedPassword(name, LoginSource.current(), FailedLogins.LOCKED);
             } else {
-                reason = "login_delayed";
+                noted.refusedPassword(name, LoginSource.current(), FailedLogins.DELAYED);
             }
-            noted.refusedPassword(name, LoginSource.current(), reason);
         }
     }
 
@@ -415,7 +484,7 @@ public final class FailedLogins {
      * Refuse the login being checked on this thread without checking it:
      * note why for the answer and the access record, and count it.
      *
-     * @param admission Locked or delayed
+     * @param admission Locked, delayed or paused
      */
     public void refuse(final Admission admission) {
         final AuthRefusal refusal;
@@ -423,9 +492,22 @@ public final class FailedLogins {
             refusal = new AuthRefusal(
                 FailedLogins.LOCKED, RsStatus.FORBIDDEN, 0L, "Account locked"
             );
+        } else if (admission.kind() == Admission.Kind.PAUSED) {
+            final long minutes = Math.max(1L, (admission.seconds() + 59L) / 60L);
+            String unit = "minutes";
+            if (minutes == 1L) {
+                unit = "minute";
+            }
+            refusal = new AuthRefusal(
+                FailedLogins.PAUSED, RsStatus.FORBIDDEN, admission.seconds(),
+                String.format(
+                    "Too many sign-ins without a confirmed second factor. Try again in %d %s.",
+                    minutes, unit
+                )
+            );
         } else {
             refusal = new AuthRefusal(
-                "login_delayed", RsStatus.FORBIDDEN, admission.seconds(),
+                FailedLogins.DELAYED, RsStatus.FORBIDDEN, admission.seconds(),
                 String.format(
                     "Too many failed logins. Try again in %d seconds.", admission.seconds()
                 )

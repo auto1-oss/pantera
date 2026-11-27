@@ -56,7 +56,7 @@
   "title": "Pantera - Sign-in",
   "uid": "pantera-sign-in",
   "version": 1,
-  "description": "Password checks at identity providers, logins refused by the login delay and the account lock, locks and unlocks",
+  "description": "Password checks at identity providers, logins refused by the login delay, the account lock and the pause after unconfirmed second factors, locks and unlocks",
   "panels": [
     {
       "datasource": {
@@ -162,7 +162,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Logins the login delay or the account lock refused before any provider was asked, by reason.",
+      "description": "Logins the login delay, the account lock or the pause after unconfirmed second factors refused before any provider was asked, by reason (login_delayed, account_locked, sign_in_paused, sign_in_busy).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -555,13 +555,24 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(pantera_auth_form_limit_hits_total{job=\"pantera\"}[1h]))",
-          "legendFormat": "refused",
+          "expr": "sum(increase(pantera_auth_second_factor_failures_total{job=\"pantera\"}[1h]))",
+          "legendFormat": "second factor not confirmed",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(pantera_auth_sign_in_pauses_total{job=\"pantera\"}[1h]))",
+          "legendFormat": "sign-in paused",
+          "range": true,
+          "refId": "B"
         }
       ],
-      "title": "Sign-in form limit hits (per hour)",
+      "title": "Unconfirmed second factors and sign-in pauses (per hour)",
       "type": "timeseries"
     }
   ]

@@ -12,7 +12,6 @@ package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.auth.JwtTokens;
-import com.auto1.pantera.auth.LoginThrottle;
 import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpServer;
@@ -26,7 +25,6 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
-import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.hamcrest.MatcherAssert;
@@ -71,8 +69,7 @@ final class AuthHandlerGenerateTokenTypeTest {
                 (RSAPrivateKey) kp.getPrivate(), (RSAPublicKey) kp.getPublic(), null, null, null
             ),
             (name, pass) -> Optional.empty(),
-            null, Policy.FREE, null, null, null,
-            new LoginThrottle(5, Duration.ofMinutes(15), System::nanoTime)
+            null, Policy.FREE, null, null, null
         );
         final Router router = Router.router(vertx);
         router.route().handler(BodyHandler.create());

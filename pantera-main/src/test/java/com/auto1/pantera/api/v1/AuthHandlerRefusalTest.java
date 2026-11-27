@@ -11,15 +11,23 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.auth.JwtTokens;
-import com.auto1.pantera.auth.LoginThrottle;
 import com.auto1.pantera.auth.failedlogins.FailedLogins;
+import com.auto1.pantera.auth.failedlogins.GuardedPasswords;
 import com.auto1.pantera.auth.failedlogins.InMemoryFailedLoginStore;
+import com.auto1.pantera.auth.failedlogins.LockedOut;
 import com.auto1.pantera.auth.failedlogins.LoginOrigin;
+import com.auto1.pantera.auth.signin.InMemorySignInFailureStore;
+import com.auto1.pantera.auth.signin.SignInFailure;
+import com.auto1.pantera.auth.signin.SignInFailureStore;
+import com.auto1.pantera.auth.signin.SignInFailures;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.auth.AuthRefusal;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.LoginSource;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.policy.FailedLoginsConfig;
+import com.auto1.pantera.settings.policy.SignInReportConfig;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpServer;
@@ -33,9 +41,9 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
-import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -47,9 +55,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 
 /**
  * The sign-in endpoint tells a person why a sign-in is refused when the
- * sign-in chain knows: the account is locked, logins are delayed, the
- * identity provider cannot be reached. Everything else stays the one
- * generic message.
+ * sign-in chain knows: the account is locked, logins are delayed or
+ * paused, the identity provider cannot be reached. Everything else stays
+ * the one generic message, an unconfirmed second factor included.
  *
  * @since 2.2.15
  */
@@ -108,7 +116,6 @@ final class AuthHandlerRefusalTest {
                 return Optional.empty();
             },
             null, Policy.FREE, null, null, null,
-            new LoginThrottle(100, Duration.ofMinutes(15), System::nanoTime),
             this.logins
         );
         final Router router = Router.router(vertx);
@@ -217,42 +224,67 @@ final class AuthHandlerRefusalTest {
     }
 
     @Test
-    void lockedUserIsToldSoHoweverOftenTheFormIsTried(final Vertx vertx) throws Exception {
-        // The form has a limit of its own (here two tries). It must not
-        // take the place of the answer that says what is wrong.
-        final KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
-        gen.initialize(2048);
-        final KeyPair pair = gen.generateKeyPair();
-        final java.util.concurrent.atomic.AtomicInteger asked =
-            new java.util.concurrent.atomic.AtomicInteger();
-        final Router router = Router.router(vertx);
-        router.route().handler(BodyHandler.create());
-        new AuthHandler(
-            new JwtTokens(
-                (RSAPrivateKey) pair.getPrivate(), (RSAPublicKey) pair.getPublic(),
-                null, null, null
+    void pausedSignInIsAnswered403WithTheWaitAndItsOwnCode() throws Exception {
+        // The same status as a lock and a delay: the code tells them apart.
+        this.refusal.set(
+            new AuthRefusal(
+                "sign_in_paused", RsStatus.FORBIDDEN, 840L,
+                "Too many sign-ins without a confirmed second factor. Try again in 14 minutes."
+            )
+        );
+        final HttpResponse<Buffer> resp = this.signIn();
+        MatcherAssert.assertThat(
+            "status, wait, code and text",
+            java.util.List.of(
+                String.valueOf(resp.statusCode()), resp.getHeader("Retry-After"),
+                resp.bodyAsJsonObject().getString("error"),
+                resp.bodyAsJsonObject().getString("message")
             ),
-            (name, pass) -> {
-                asked.incrementAndGet();
-                return Optional.empty();
-            },
-            null, Policy.FREE, null, null, null,
-            new LoginThrottle(2, Duration.ofMinutes(15), System::nanoTime),
-            this.logins
-        ).register(router);
-        final HttpServer limited = vertx.createHttpServer().requestHandler(router)
-            .listen(0, "127.0.0.1")
-            .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+            new IsEqual<>(
+                java.util.List.of(
+                    "403", "840", "SIGN_IN_PAUSED",
+                    "Too many sign-ins without a confirmed second factor. Try again in 14 minutes."
+                )
+            )
+        );
+    }
+
+    @Test
+    void unconfirmedSecondFactorIsTheGenericFailedSignIn() throws Exception {
+        // Saying that the second factor failed would say that the password
+        // was right.
+        this.refusal.set(new AuthRefusal(AuthRefusal.SECOND_FACTOR_FAILED));
+        final HttpResponse<Buffer> resp = this.signIn();
+        MatcherAssert.assertThat("status", resp.statusCode(), new IsEqual<>(401));
+        MatcherAssert.assertThat(
+            "the body does not say what the chain knows",
+            resp.bodyAsString().contains("factor"), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void lockedUserIsToldSoAndNoProviderIsAsked(final Vertx vertx) throws Exception {
+        final AtomicInteger asked = new AtomicInteger();
+        final HttpServer guarded = this.serve(
+            vertx,
+            new LockedOut(
+                new GuardedPasswords(
+                    (name, pass) -> {
+                        asked.incrementAndGet();
+                        return Optional.empty();
+                    },
+                    this.logins
+                ),
+                this.logins
+            )
+        );
         try {
             for (int idx = 0; idx < 3; idx += 1) {
                 this.logins.failed("alice", LoginOrigin.UNKNOWN);
             }
             final java.util.List<String> answers = new java.util.ArrayList<>(5);
             for (int idx = 0; idx < 5; idx += 1) {
-                final HttpResponse<Buffer> resp = this.client
-                    .post(limited.actualPort(), "127.0.0.1", "/api/v1/auth/token")
-                    .sendJsonObject(new JsonObject().put("name", "Alice").put("pass", "secret"))
-                    .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+                final HttpResponse<Buffer> resp = this.signIn(guarded, "Alice", "secret", "");
                 answers.add(resp.statusCode() + " " + resp.bodyAsJsonObject().getString("error"));
             }
             MatcherAssert.assertThat(
@@ -263,59 +295,107 @@ final class AuthHandlerRefusalTest {
                 "and no provider is asked", asked.get(), new IsEqual<>(0)
             );
         } finally {
-            limited.close().toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+            guarded.close().toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
         }
     }
 
     @Test
-    void hitOfTheFormLimitGoesToTheReport(final Vertx vertx) throws Exception {
-        final com.auto1.pantera.auth.signin.SignInFailures report =
-            new com.auto1.pantera.auth.signin.SignInFailures(
-                new com.auto1.pantera.auth.signin.InMemorySignInFailureStore(),
-                com.auto1.pantera.settings.policy.SignInReportConfig::defaults
-            );
-        this.logins.reportTo(report);
-        final KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
-        gen.initialize(2048);
-        final KeyPair pair = gen.generateKeyPair();
-        final Router router = Router.router(vertx);
-        router.route().handler(BodyHandler.create());
-        new AuthHandler(
-            new JwtTokens(
-                (RSAPrivateKey) pair.getPrivate(), (RSAPublicKey) pair.getPublic(),
-                null, null, null
-            ),
-            (name, pass) -> Optional.empty(),
-            null, Policy.FREE, null, null, null,
-            new LoginThrottle(2, Duration.ofMinutes(15), System::nanoTime),
-            this.logins
-        ).register(router);
-        final HttpServer limited = vertx.createHttpServer().requestHandler(router)
-            .listen(0, "127.0.0.1")
-            .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
-        try {
-            for (int idx = 0; idx < 4; idx += 1) {
-                this.client.post(limited.actualPort(), "127.0.0.1", "/api/v1/auth/token")
-                    .putHeader("User-Agent", "Mozilla/5.0")
-                    .sendJsonObject(new JsonObject().put("name", "carol").put("pass", "secret"))
-                    .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
-            }
-            final com.auto1.pantera.auth.signin.SignInFailure line = report.list(
-                new com.auto1.pantera.auth.signin.SignInFailureStore.Query(
-                    com.auto1.pantera.auth.signin.SignInFailure.FORM_LIMIT, "carol", true, "",
-                    10, 0
-                )
-            ).items().get(0);
-            MatcherAssert.assertThat(
-                "the two refused tries, the failures that led to the block, and the client",
-                java.util.List.of(
-                    String.valueOf(line.hits()), String.valueOf(line.failures()),
-                    line.userAgent(), String.valueOf(line.blockedUntil() != null)
+    void wrongPasswordsFromChangingAddressesLockTheName(final Vertx vertx) throws Exception {
+        // Failed logins are counted per user name: a new client address,
+        // spoofed or not, buys no new guesses.
+        final HttpServer guarded = this.serve(
+            vertx,
+            new LockedOut(
+                new GuardedPasswords(
+                    (name, pass) -> {
+                        final Optional<AuthUser> res;
+                        if ("right".equals(pass)) {
+                            res = Optional.of(new AuthUser(name, "local"));
+                        } else {
+                            res = Optional.empty();
+                        }
+                        return res;
+                    },
+                    this.logins
                 ),
-                new IsEqual<>(java.util.List.of("2", "2", "Mozilla/5.0", "true"))
+                this.logins
+            )
+        );
+        try {
+            for (int idx = 1; idx <= 3; idx += 1) {
+                this.signIn(guarded, "victim", "wrong", "10.0.0." + idx);
+            }
+            final HttpResponse<Buffer> right = this.signIn(guarded, "victim", "right", "10.9.9.9");
+            MatcherAssert.assertThat(
+                "the right password from yet another address does not pass the lock",
+                right.statusCode() + " " + right.bodyAsJsonObject().getString("error"),
+                new IsEqual<>("403 ACCOUNT_LOCKED")
             );
         } finally {
-            limited.close().toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+            guarded.close().toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void unconfirmedSecondFactorsPauseSignInAndNeverCountAsWrongPasswords(final Vertx vertx)
+        throws Exception {
+        final SignInFailures report = new SignInFailures(
+            new InMemorySignInFailureStore(), SignInReportConfig::defaults
+        );
+        final FailedLogins policy = new FailedLogins(
+            new InMemoryFailedLoginStore(),
+            () -> new FailedLoginsConfig(2, 1, 60, 3, 0, 0, false, true, 2, 15)
+        );
+        policy.reportTo(report);
+        final AtomicInteger asked = new AtomicInteger();
+        final HttpServer guarded = this.serve(
+            vertx,
+            new LockedOut(
+                new GuardedPasswords(
+                    (name, pass) -> {
+                        // The password is right; the person denies the push.
+                        asked.incrementAndGet();
+                        new AuthRefusal(AuthRefusal.SECOND_FACTOR_FAILED).note();
+                        return Optional.empty();
+                    },
+                    policy
+                ),
+                policy
+            ),
+            policy
+        );
+        try {
+            final java.util.List<String> answers = new java.util.ArrayList<>(3);
+            for (int idx = 0; idx < 3; idx += 1) {
+                final HttpResponse<Buffer> resp = this.client
+                    .post(guarded.actualPort(), "127.0.0.1", "/api/v1/auth/token")
+                    .putHeader("User-Agent", "Mozilla/5.0")
+                    .putHeader("Origin", "http://ui.example.com")
+                    .sendJsonObject(new JsonObject().put("name", "carol").put("pass", "secret"))
+                    .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+                answers.add(resp.statusCode() + " " + resp.bodyAsJsonObject().getString("error"));
+            }
+            final SignInFailure line = report.list(
+                new SignInFailureStore.Query(SignInFailure.SECOND_FACTOR, "carol", true, "", 10, 0)
+            ).items().get(0);
+            MatcherAssert.assertThat(
+                "answers, pushes sent, report line, and failed logins of the name",
+                java.util.List.of(
+                    answers.toString(), String.valueOf(asked.get()),
+                    line.hits() + " unconfirmed, " + line.refused() + " refused, "
+                        + line.failures() + " counted, paused " + (line.blockedUntil() != null)
+                        + ", " + line.userAgent(),
+                    String.valueOf(policy.state("carol").failures())
+                ),
+                new IsEqual<>(
+                    java.util.List.of(
+                        "[401 UNAUTHORIZED, 403 SIGN_IN_PAUSED, 403 SIGN_IN_PAUSED]", "2",
+                        "2 unconfirmed, 1 refused, 2 counted, paused true, Mozilla/5.0", "0"
+                    )
+                )
+            );
+        } finally {
+            guarded.close().toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
         }
     }
 
@@ -340,6 +420,41 @@ final class AuthHandlerRefusalTest {
     private HttpResponse<Buffer> signIn() throws Exception {
         return this.client.post(this.server.actualPort(), "127.0.0.1", "/api/v1/auth/token")
             .sendJsonObject(new JsonObject().put("name", "alice").put("pass", "secret"))
+            .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+    }
+
+    private HttpResponse<Buffer> signIn(
+        final HttpServer to, final String name, final String pass, final String forwarded
+    ) throws Exception {
+        final io.vertx.ext.web.client.HttpRequest<Buffer> req =
+            this.client.post(to.actualPort(), "127.0.0.1", "/api/v1/auth/token");
+        if (!forwarded.isEmpty()) {
+            req.putHeader("X-Forwarded-For", forwarded);
+        }
+        return req.sendJsonObject(new JsonObject().put("name", name).put("pass", pass))
+            .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+    }
+
+    private HttpServer serve(final Vertx vertx, final Authentication chain) throws Exception {
+        return this.serve(vertx, chain, this.logins);
+    }
+
+    private HttpServer serve(
+        final Vertx vertx, final Authentication chain, final FailedLogins failed
+    ) throws Exception {
+        final KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
+        gen.initialize(2048);
+        final KeyPair pair = gen.generateKeyPair();
+        final Router router = Router.router(vertx);
+        router.route().handler(BodyHandler.create());
+        new AuthHandler(
+            new JwtTokens(
+                (RSAPrivateKey) pair.getPrivate(), (RSAPublicKey) pair.getPublic(),
+                null, null, null
+            ),
+            chain, null, Policy.FREE, null, null, null, failed
+        ).register(router);
+        return vertx.createHttpServer().requestHandler(router).listen(0, "127.0.0.1")
             .toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
     }
 }

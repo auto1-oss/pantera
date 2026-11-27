@@ -101,12 +101,11 @@ Authenticate with username and password. Returns an RS256-signed access token an
 
 | `error` | Meaning |
 |---------|---------|
-| `LOGIN_DELAYED` | Logins of this user are delayed after failed logins. `Retry-After` gives the seconds to wait. |
+| `LOGIN_DELAYED` | Logins of this user are delayed after wrong passwords. `Retry-After` gives the seconds to wait. |
+| `SIGN_IN_PAUSED` | Password sign-in of this user is paused after sign-ins whose second factor was not confirmed. `Retry-After` gives the seconds to wait; the message says the minutes. |
 | `ACCOUNT_LOCKED` | The user is locked after failed logins until an administrator unlocks it, or until the automatic unlock time has passed. |
 
 See [Failed Logins](admin-guide/failed-logins.md).
-
-**Response (429):** `TOO_MANY_REQUESTS` with `Retry-After`: the sign-in form's own limit (Login Throttling) refused the attempt.
 
 **Response (503):** `SERVICE_UNAVAILABLE`: the identity provider could not check the login (2.2.15). It is not a failed login of the user.
 
@@ -3450,61 +3449,9 @@ Partial updates are accepted; omitted keys keep their current values. The merged
 
 ---
 
-### GET /api/v1/admin/login-throttle-settings
-
-Retrieve the password-login throttle (2.2.9): failures per (user, client IP) tolerated before further attempts are refused, and the window they count in. Environment fallbacks `PANTERA_LOGIN_THROTTLE_MAX_FAILURES` / `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS` apply only while no row has been saved.
-
-**Authentication:** JWT Bearer token required.
-**Permission:** `api_admin_permissions:admin`
-
-**Response (200):** every key is always present; all values are strings.
-
-```json
-{
-  "login_throttle_max_failures": "5",
-  "login_throttle_window_seconds": "900"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `login_throttle_max_failures` | string (integer ≥ 1) | Sign-in attempts per (user, client address) before lockout; a user is also locked after 4× this many attempts from any address. Default `"5"`. |
-| `login_throttle_window_seconds` | string (integer ≥ 1) | Window in seconds; a successful login clears the (user, client address) counter. Counters are per node, shared by all API workers on it. A refused login answers `429` with `Retry-After` set to the rest of the window. Default `"900"`. |
-
-**curl example:**
-
-```bash
-curl http://localhost:8086/api/v1/admin/login-throttle-settings \
-  -H "Authorization: Bearer $ADMIN_TOKEN"
-```
-
----
-
-### PUT /api/v1/admin/login-throttle-settings
-
-Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, a `null` value, or a non-integer or a value below 1, is rejected with `400` and nothing is persisted. Takes effect on the next login attempt on every node. Every successful update is audit-logged (`event.category=configuration`).
-
-**Authentication:** JWT Bearer token required.
-**Permission:** `api_admin_permissions:admin`
-
-**Request Body:** any subset of the fields above, values as strings.
-
-**Response (204):** No content.
-
-**Response (400):**
-
-```json
-{
-  "error": "BAD_REQUEST",
-  "message": "Invalid login-throttle setting: ..."
-}
-```
-
----
-
 ### GET /api/v1/admin/failed-logins-settings
 
-Retrieve the policy of the login delay and the account lock (2.2.15). See [Failed Logins](admin-guide/failed-logins.md).
+Retrieve the policy of failed sign-ins (2.2.15): the delay and the lock after wrong passwords, and the pause after sign-ins whose second factor was not confirmed. See [Failed Logins](admin-guide/failed-logins.md).
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_admin_permissions:admin`
@@ -3520,7 +3467,9 @@ Retrieve the policy of the login delay and the account lock (2.2.15). See [Faile
   "failed_logins_unlock_after_minutes": "0",
   "failed_logins_forget_after_minutes": "0",
   "failed_logins_count_rejected_keys": "false",
-  "failed_logins_lock_all_credentials": "true"
+  "failed_logins_lock_all_credentials": "true",
+  "failed_logins_second_factor_limit": "5",
+  "failed_logins_second_factor_pause_minutes": "15"
 }
 ```
 
@@ -3535,7 +3484,7 @@ curl http://localhost:8086/api/v1/admin/failed-logins-settings \
 
 ### PUT /api/v1/admin/failed-logins-settings
 
-Partial updates are accepted; omitted keys keep their current values. The merged policy is validated: a value outside its range, or a longest delay below the first delay, answers `400` and writes nothing. The change applies to the next login on every node. Setting `failed_logins_lock_after` to `0` unlocks every locked user within 15 seconds.
+Partial updates are accepted; omitted keys keep their current values. The merged policy is validated: a value outside its range, or a longest delay below the first delay, answers `400` and writes nothing. The change applies to the next login on every node. Setting `failed_logins_lock_after` to `0` unlocks every locked user within 15 seconds; setting `failed_logins_second_factor_limit` to `0` switches the pause off.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_admin_permissions:admin`
@@ -3918,9 +3867,9 @@ Failed password logins, one line per user and client address, with the user's st
 
 ---
 
-### GET /api/v1/sign-in-failures/form-limit
+### GET /api/v1/sign-in-failures/second-factor
 
-Logins refused by the sign-in form's own limit (2.2.15).
+Sign-ins whose password was right but whose second factor was not confirmed (an Okta push denied or not answered, a wrong code), and password sign-ins refused during the pause that follows them, one line per user and client address (2.2.15). These are never failed logins. See [Failed Logins](admin-guide/failed-logins.md#the-pause).
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_user_permissions:read`
@@ -3933,16 +3882,25 @@ Logins refused by the sign-in form's own limit (2.2.15).
   "client_ip": "192.0.2.9",
   "user_agent": "Mozilla/5.0",
   "path": "ui",
-  "hits": 2,
-  "failures": 5,
-  "blocked_until": "2026-02-02T16:27:00Z",
-  "blocked": true,
-  "first_hit_at": "2026-02-02T16:12:40Z",
-  "last_hit_at": "2026-02-02T16:12:55Z"
+  "unconfirmed": 5,
+  "refused": 2,
+  "last_reason": "sign_in_paused",
+  "counted": 5,
+  "paused_until": "2026-02-02T16:27:55Z",
+  "paused": true,
+  "first_seen_at": "2026-02-02T16:08:40Z",
+  "last_seen_at": "2026-02-02T16:13:10Z"
 }
 ```
 
-`hits` is the number of logins the limit refused, `failures` the failures counted in its window when it last refused, `blocked` whether the block is still on.
+| Field | Description |
+|-------|-------------|
+| `unconfirmed` | Sign-ins whose second factor was not confirmed |
+| `refused` | Password sign-ins refused without a check during a pause |
+| `last_reason` | `second_factor_failed` or `sign_in_paused` |
+| `counted` | Unconfirmed second factors counted toward the pause at the last event |
+| `paused_until` | When the pause ends; `null` when the count did not reach the limit |
+| `paused` | Whether that pause still runs |
 
 ---
 

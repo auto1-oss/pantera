@@ -181,10 +181,10 @@ abstract class SignInFailureStoreContract {
     }
 
     @Test
-    void limitHitKeepsItsBlockAndAnUnlockItsActor() {
+    void secondFactorKeepsItsPauseAndAnUnlockItsActor() {
         final SignInFailureStore store = this.store();
         final SignInFailure hit = new SignInFailure(
-            SignInFailure.FORM_LIMIT, "alice", "192.0.2.7", "", "form_limit", true,
+            SignInFailure.SECOND_FACTOR, "alice", "192.0.2.7", "", "second_factor_failed", true,
             "Mozilla/5.0", "ui", 1L, 0L, SignInFailureStoreContract.START,
             SignInFailureStoreContract.START, 5,
             SignInFailureStoreContract.START.plusSeconds(900), ""
@@ -195,8 +195,8 @@ abstract class SignInFailureStoreContract {
         );
         store.save(List.of(hit, unlock));
         MatcherAssert.assertThat(
-            "the limit hit",
-            store.list(SignInFailureStoreContract.all(SignInFailure.FORM_LIMIT)).items(),
+            "the unconfirmed second factor",
+            store.list(SignInFailureStoreContract.all(SignInFailure.SECOND_FACTOR)).items(),
             new IsEqual<>(List.of(hit))
         );
         MatcherAssert.assertThat(

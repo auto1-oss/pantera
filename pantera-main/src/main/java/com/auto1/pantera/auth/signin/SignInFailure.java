@@ -21,7 +21,7 @@ import java.util.Locale;
  * event's own) and the stored line (its counts are the sums).</p>
  *
  * @param kind What failed: {@link #API_KEY}, {@link #PASSWORD},
- *  {@link #FORM_LIMIT}, or {@link #UNLOCK} for an unlock by an admin
+ *  {@link #SECOND_FACTOR}, or {@link #UNLOCK} for an unlock by an admin
  * @param username User name in lower case; empty when none is known
  * @param clientIp Client address, empty when unknown
  * @param tokenId Id of the API key, empty for another kind or a key that
@@ -31,12 +31,16 @@ import java.util.Locale;
  * @param userAgent Client program of the last event
  * @param path Sign-in path of the last event: {@code ui}, {@code api},
  *  {@code repository}
- * @param hits Rejected keys, failed logins or limit hits counted
- * @param refused Logins refused without a check, during a delay or a lock
+ * @param hits Rejected keys, failed logins or unconfirmed second factors
+ *  counted
+ * @param refused Logins refused without a check, during a delay, a lock
+ *  or a pause
  * @param firstSeen Time of the first event
  * @param lastSeen Time of the last event
- * @param failures For a limit hit: failures counted in the window
- * @param blockedUntil For a limit hit: when the block ends; null otherwise
+ * @param failures For a second factor: unconfirmed second factors counted
+ *  toward the pause at the last event
+ * @param blockedUntil For a second factor: when the pause ends, null
+ *  before the limit; null for another kind
  * @param actor For an unlock: who unlocked; empty otherwise
  * @since 2.2.15
  */
@@ -57,9 +61,10 @@ public record SignInFailure(
     public static final String PASSWORD = "password";
 
     /**
-     * A login refused by the sign-in form's own limit.
+     * A sign-in whose second factor was not confirmed, or a password
+     * sign-in refused during the pause that follows them.
      */
-    public static final String FORM_LIMIT = "form_limit";
+    public static final String SECOND_FACTOR = "second_factor";
 
     /**
      * An unlock of a user by an administrator.

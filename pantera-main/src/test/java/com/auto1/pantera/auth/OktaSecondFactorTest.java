@@ -104,10 +104,10 @@ final class OktaSecondFactorTest {
                 okta.count(FakeOkta.PUSH), new IsEqual<>(1L)
             );
             MatcherAssert.assertThat(
-                "the push was not approved: the sign-in did not complete, but it"
-                    + " is not refused as a repository login",
+                "the push was not approved: the password was right, the second factor"
+                    + " was not confirmed; neither a wrong password nor a repository login",
                 AuthRefusal.take().map(AuthRefusal::reason),
-                new IsEqual<>(Optional.of("sign_in_not_completed"))
+                new IsEqual<>(Optional.of(AuthRefusal.SECOND_FACTOR_FAILED))
             );
         }
     }

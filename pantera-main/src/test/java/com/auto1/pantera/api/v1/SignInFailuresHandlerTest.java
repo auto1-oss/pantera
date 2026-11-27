@@ -209,19 +209,24 @@ final class SignInFailuresHandlerTest {
     }
 
     @Test
-    void hitsOfTheFormLimitAreListedWithTheBlock() throws Exception {
-        this.report.formLimit("alice", new LoginSource("192.0.2.9", "Mozilla/5.0", "ui"), 5, 857L);
-        final JsonObject item = this.get("/api/v1/sign-in-failures/form-limit")
+    void unconfirmedSecondFactorsAreListedWithThePause() throws Exception {
+        final LoginSource form = new LoginSource("192.0.2.9", "Mozilla/5.0", "ui");
+        final java.time.Instant end = java.time.Instant.now().plusSeconds(857L);
+        this.report.unconfirmedSecondFactor("alice", form, 5, end);
+        this.report.refusedPaused("alice", form, 5, end);
+        final JsonObject item = this.get("/api/v1/sign-in-failures/second-factor")
             .getJsonArray("items").getJsonObject(0);
         MatcherAssert.assertThat(
-            "user, address, failures in the window, and the block is still on",
+            "user, address, unconfirmed, refused, count, and the pause is still on",
             List.of(
                 item.getString("user"), item.getString("client_ip"),
-                String.valueOf(item.getInteger("failures")),
-                String.valueOf(item.getBoolean("blocked")),
-                String.valueOf(item.getString("blocked_until") != null)
+                String.valueOf(item.getLong("unconfirmed")),
+                String.valueOf(item.getLong("refused")),
+                String.valueOf(item.getInteger("counted")),
+                String.valueOf(item.getBoolean("paused")),
+                String.valueOf(item.getString("paused_until") != null)
             ),
-            new IsEqual<>(List.of("alice", "192.0.2.9", "5", "true", "true"))
+            new IsEqual<>(List.of("alice", "192.0.2.9", "1", "1", "5", "true", "true"))
         );
     }
 
@@ -249,7 +254,7 @@ final class SignInFailuresHandlerTest {
             List.of(
                 this.call("/api/v1/sign-in-failures/api-keys").statusCode(),
                 this.call("/api/v1/sign-in-failures/passwords").statusCode(),
-                this.call("/api/v1/sign-in-failures/form-limit").statusCode()
+                this.call("/api/v1/sign-in-failures/second-factor").statusCode()
             ),
             new IsEqual<>(List.of(403, 403, 403))
         );
