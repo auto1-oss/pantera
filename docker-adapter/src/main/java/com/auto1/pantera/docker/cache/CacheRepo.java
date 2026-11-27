@@ -68,9 +68,14 @@ public final class CacheRepo implements Repo {
     private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
 
     /**
-     * Whether what the origin returns is stored in the cache.
+     * Whether a blob of the origin is stored in the cache while it is read.
      */
     private final boolean store;
+
+    /**
+     * When a manifest of the origin is copied into the cache.
+     */
+    private final ManifestCopies copies;
 
     /**
      * @param name Repository name.
@@ -118,7 +123,10 @@ public final class CacheRepo implements Repo {
                      Optional<Queue<ArtifactEvent>> events, String registryName,
                      Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
                      ConcurrentMap<String, CompletableFuture<Void>> inflight) {
-        this(name, origin, cache, events, registryName, inspector, upstreamUrl, inflight, true);
+        this(
+            name, origin, cache, events, registryName, inspector, upstreamUrl, inflight, true,
+            ManifestCopies.AT_ONCE
+        );
     }
 
     /**
@@ -130,14 +138,17 @@ public final class CacheRepo implements Repo {
      * @param inspector Cooldown inspector
      * @param upstreamUrl Upstream URL for metrics
      * @param inflight Manifest cache copies in flight, shared per proxy repository
-     * @param store Whether what the origin returns is stored in the cache;
-     *  false for a request that must leave the repository as it found it
+     * @param store Whether a blob of the origin is stored in the cache while
+     *  it is read; false for a request that must leave the repository as it
+     *  found it
+     * @param copies When a manifest of the origin is copied into the cache
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     CacheRepo(String name, Repo origin, Repo cache,
               Optional<Queue<ArtifactEvent>> events, String registryName,
               Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
-              ConcurrentMap<String, CompletableFuture<Void>> inflight, boolean store) {
+              ConcurrentMap<String, CompletableFuture<Void>> inflight, boolean store,
+              ManifestCopies copies) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
@@ -147,6 +158,7 @@ public final class CacheRepo implements Repo {
         this.upstreamUrl = upstreamUrl;
         this.inflight = inflight;
         this.store = store;
+        this.copies = copies;
     }
 
     @Override
@@ -168,7 +180,7 @@ public final class CacheRepo implements Repo {
             this.inspector,
             this.upstreamUrl,
             this.inflight,
-            this.store
+            this.copies
         );
     }
 

@@ -15,7 +15,6 @@ import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
-import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.response.CooldownResponseFactory;
 import com.auto1.pantera.docker.misc.OfficialImageName;
@@ -33,7 +32,6 @@ import io.reactivex.Flowable;
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
-import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.StreamSupport;
@@ -75,10 +73,10 @@ import java.util.stream.StreamSupport;
  *
  * <p>Scope guardrails:</p>
  * <ul>
- *   <li>GET only. HEAD requests bypass this handler (HEAD responses
- *       have no body to inspect and the existing
- *       {@code DockerProxyCooldownSlice} manifest path already guards
- *       them via artifact-fetch cooldown).</li>
+ *   <li>GET only. A HEAD is answered as the registry API answers it,
+ *       never refused; a proxy copies the manifest a HEAD read into its
+ *       cache only when {@link ManifestCooldown} allows it, decided as
+ *       here.</li>
  *   <li>Tag references only — digest references pass through to the
  *       generic flow (the URL is already immutable content addressing,
  *       not a hot-path resolution endpoint).</li>
@@ -108,14 +106,9 @@ public final class DockerManifestByTagHandler {
     private final Slice upstream;
 
     /**
-     * Cooldown evaluation service.
+     * Cooldown decision on the tag and the digest it resolves to.
      */
-    private final CooldownService cooldown;
-
-    /**
-     * Cooldown inspector (release-date lookups).
-     */
-    private final CooldownInspector inspector;
+    private final ManifestCooldown check;
 
     /**
      * Repository type (e.g. {@code "docker"}, {@code "docker-proxy"}).
@@ -186,8 +179,7 @@ public final class DockerManifestByTagHandler {
         final ManifestReleaseRecorder recorder
     ) {
         this.upstream = upstream;
-        this.cooldown = cooldown;
-        this.inspector = inspector;
+        this.check = new ManifestCooldown(cooldown, inspector, repoType, repoName);
         this.repoType = repoType;
         this.repoName = repoName;
         this.detector = new DockerManifestByTagMetadataRequestDetector();
@@ -269,19 +261,14 @@ public final class DockerManifestByTagHandler {
         final AuditContext ctx
     ) {
         final Optional<String> digest = digestHeader(upstreamHeaders);
-        final CompletableFuture<Boolean> tagCheck = this.isBlocked(image, tag, user);
-        final CompletableFuture<Boolean> digestCheck = digest
-            .map(d -> this.isBlocked(image, d, user))
-            .orElseGet(() -> CompletableFuture.completedFuture(false));
-        return tagCheck.thenCombine(digestCheck, (tagBlocked, digestBlocked) -> {
-            if (tagBlocked || digestBlocked) {
+        return this.check.refusal(image, tag, digest, user).thenApply(refusal -> {
+            if (refusal.isPresent()) {
                 EcsLogger.info("com.auto1.pantera.docker")
                     .message("Manifest-by-tag blocked by cooldown — returning 404")
                     .eventCategory("web")
                     .eventAction("manifest_tag_filter")
                     .eventOutcome("failure")
-                    .field("event.reason",
-                        tagBlocked ? "tag_blocked" : "digest_blocked")
+                    .field("event.reason", refusal.get())
                     .field("repository.name", this.repoName)
                     .field("package.name", image)
                     .field("package.version", tag)
@@ -334,35 +321,6 @@ public final class DockerManifestByTagHandler {
             .filter(h -> DIGEST_HEADER.equalsIgnoreCase(h.getKey()))
             .map(Header::getValue)
             .findFirst();
-    }
-
-    private CompletableFuture<Boolean> isBlocked(
-        final String image, final String version, final String user
-    ) {
-        final CooldownRequest req = new CooldownRequest(
-            this.repoType,
-            this.repoName,
-            image,
-            version,
-            user == null ? "docker-manifest" : user,
-            Instant.now()
-        );
-        return this.cooldown.evaluate(req, this.inspector)
-            .thenApply(result -> result.blocked())
-            .exceptionally(err -> {
-                EcsLogger.warn("com.auto1.pantera.docker")
-                    .message("Cooldown evaluation failed; treating as allowed")
-                    .eventCategory("database")
-                    .eventAction("cooldown_evaluate")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.repoName)
-                    .field("package.name", image)
-                    .field("package.version", version)
-                    .error(err)
-                    .field("log.source", "application")
-                    .log();
-                return false;
-            });
     }
 
     /**

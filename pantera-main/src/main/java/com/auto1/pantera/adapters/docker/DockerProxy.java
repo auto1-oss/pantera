@@ -11,12 +11,15 @@ import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.docker.asto.RegistryRoot;
 import com.auto1.pantera.docker.cache.CacheDocker;
 import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;
+import com.auto1.pantera.docker.cache.ManifestCopies;
 import com.auto1.pantera.cooldown.CooldownLinkedVersions;
 import com.auto1.pantera.docker.composite.MultiReadDocker;
 import com.auto1.pantera.docker.composite.ReadWriteDocker;
 import com.auto1.pantera.docker.cooldown.CooldownImageName;
+import com.auto1.pantera.docker.cooldown.ManifestCooldown;
 import com.auto1.pantera.docker.misc.OfficialImageName;
 import com.auto1.pantera.docker.http.DockerSlice;
+import com.auto1.pantera.docker.http.PathPatterns;
 import com.auto1.pantera.docker.http.TrimmedDocker;
 import com.auto1.pantera.docker.proxy.ProxyDocker;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -33,7 +36,9 @@ import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.RemoteConfig;
 import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.policy.Policy;
@@ -232,22 +237,100 @@ public final class DockerProxy implements Slice {
                 .map(remote -> remote instanceof CacheDocker cached ? cached.readOnly() : remote)
                 .toList()
         );
+        final ManifestCooldown check = new ManifestCooldown(
+            cooldown, inspector, cfg.type(), cfg.name()
+        );
         Slice slice = (line, headers, body) -> {
-            final Slice target;
+            final boolean manifest =
+                PathPatterns.MANIFESTS.matcher(line.uri().getPath()).matches();
+            final CompletableFuture<Response> res;
             if (RequestTrace.instance().traced(headers)) {
-                target = serving(
+                res = serving(
                     cfg, policy, scheme, Optional.empty(), cooldown,
                     inspector.overlay(), names, unstored
+                ).response(line, headers, body);
+            } else if (manifest && line.method() == RqMethod.GET) {
+                // Cooldown decides on a manifest after the cache layer read
+                // it from the upstream. The request is read through a view
+                // that holds the copy of that manifest into the cache (and
+                // its event for the search index) until the answer is
+                // known: a version cooldown refuses is neither stored nor
+                // indexed. Same storage, upstream clients and copies in
+                // flight as the repository's own view.
+                final ManifestCopies copies = new ManifestCopies();
+                res = serving(
+                    cfg, policy, scheme, events, cooldown, inspector, names,
+                    deciding(cfg, remotes, copies)
+                ).response(line, headers, body).whenComplete(
+                    (resp, err) -> {
+                        if (err == null && resp.status().success()) {
+                            copies.commit();
+                        } else {
+                            copies.discard();
+                        }
+                    }
                 );
+            } else if (manifest && line.method() == RqMethod.HEAD) {
+                // The answer to a HEAD is never refused (containerd resolves
+                // a tag with it, then GETs the digest, which cooldown
+                // decides on). The copy of the manifest it read is stored,
+                // and indexed, only when cooldown allows the version,
+                // decided as for a GET once the copy has read the release
+                // date.
+                res = serving(
+                    cfg, policy, scheme, events, cooldown, inspector, names,
+                    deciding(
+                        cfg, remotes,
+                        new ManifestCopies(DockerProxy.verdict(check, names, headers))
+                    )
+                ).response(line, headers, body);
             } else {
-                target = serving;
+                res = serving.response(line, headers, body);
             }
-            return target.response(line, headers, body);
+            return res;
         };
         if (cfg.port().isEmpty()) {
             slice = new DockerRoutingSlice.Reverted(slice);
         }
         return slice;
+    }
+
+    /**
+     * The repository for one client's request of a manifest: its manifest
+     * copies are made as {@code copies} decide.
+     *
+     * @param cfg Repository configuration
+     * @param remotes One Docker per remote
+     * @param copies Copies of the manifests the request reads
+     * @return Docker addressed by the repository-prefixed image name
+     */
+    private static Docker deciding(
+        final RepoConfig cfg, final List<Docker> remotes, final ManifestCopies copies
+    ) {
+        return view(
+            cfg,
+            remotes.stream()
+                .map(remote -> remote instanceof CacheDocker cached ? cached.deciding(copies) : remote)
+                .toList()
+        );
+    }
+
+    /**
+     * Cooldown verdict on the copy of a manifest a HEAD read: its tag and
+     * the digest the tag resolves to, or its digest, as a GET is decided.
+     *
+     * @param check Cooldown decision on a manifest
+     * @param names Canonical cooldown artifact naming
+     * @param headers Request headers
+     * @return Verdict
+     */
+    private static ManifestCopies.Verdict verdict(
+        final ManifestCooldown check, final CooldownImageName names, final Headers headers
+    ) {
+        final String user = new Login(headers).getValue();
+        return (image, ref, manifest) -> check.refusal(
+            names.of(image), ref.digest(), Optional.of(manifest.digest().string()), user
+        ).thenApply(Optional::isEmpty);
     }
 
     /**

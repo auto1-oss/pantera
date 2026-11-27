@@ -95,9 +95,9 @@ public final class CacheManifests implements Manifests {
     private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
 
     /**
-     * Whether a manifest of the origin is stored in the cache.
+     * When a manifest of the origin is copied into the cache.
      */
-    private final boolean store;
+    private final ManifestCopies copies;
 
     /**
      * @param name Repository name.
@@ -145,7 +145,10 @@ public final class CacheManifests implements Manifests {
         Optional<Queue<ArtifactEvent>> events, String registryName,
         Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
         ConcurrentMap<String, CompletableFuture<Void>> inflight) {
-        this(name, origin, cache, events, registryName, inspector, upstreamUrl, inflight, true);
+        this(
+            name, origin, cache, events, registryName, inspector, upstreamUrl, inflight,
+            ManifestCopies.AT_ONCE
+        );
     }
 
     /**
@@ -157,14 +160,15 @@ public final class CacheManifests implements Manifests {
      * @param inspector Cooldown inspector
      * @param upstreamUrl Upstream URL for metrics
      * @param inflight Cache copies in flight, shared per proxy repository
-     * @param store Whether a manifest of the origin is stored in the cache;
-     *  false for a request that must leave the repository as it found it
+     * @param copies When a manifest of the origin is copied into the cache:
+     *  at once, never (a request that must leave the repository as it found
+     *  it) or once the request is answered (cooldown decides on it)
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     CacheManifests(String name, Repo origin, Repo cache,
         Optional<Queue<ArtifactEvent>> events, String registryName,
         Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
-        ConcurrentMap<String, CompletableFuture<Void>> inflight, boolean store) {
+        ConcurrentMap<String, CompletableFuture<Void>> inflight, ManifestCopies copies) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
@@ -173,7 +177,7 @@ public final class CacheManifests implements Manifests {
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
         this.inflight = inflight;
-        this.store = store;
+        this.copies = copies;
     }
 
     @Override
@@ -243,12 +247,12 @@ public final class CacheManifests implements Manifests {
                             Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_LIST_SCHEMA2.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_OCI_INDEX.equals(manifest.mediaType())) {
-                            if (this.store) {
-                                this.copy(
+                            this.copies.submit(
+                                () -> this.copy(
                                     ref, variant, manifest, requestOwner, requestTraceId,
                                     requestClientIp
-                                );
-                            }
+                                )
+                            );
                             result = CompletableFuture.completedFuture(original);
                         } else {
                             EcsLogger.warn("com.auto1.pantera.docker")
@@ -470,24 +474,69 @@ public final class CacheManifests implements Manifests {
                 : CompletableFuture.completedFuture(
                     manifest.layers().stream().mapToLong(ManifestLayer::size).sum()
                 );
-            // WS4-docker.7: stored under the variant-scoped link so distinct
-            // Accept-variants of one tag do not overwrite each other.
-            final ManifestReference stored = ref.withVariant(variant);
+            // Asked once the release date is recorded: a verdict of cooldown
+            // finds it without a request of its own to the origin.
             return sizeFuture.thenCompose(
-                size -> this.cache.manifests().putUnchecked(stored, manifest.content())
-                    .thenAccept(
-                        // Queued only once the manifest is in the cache: the
-                        // publish record describes a completed fetch-and-store.
-                        done -> this.events.filter(q -> ImageTag.valid(ref.digest()))
-                            .ifPresent(
-                                queue -> this.queuePublish(
-                                    queue, ref, stored, size, effectiveRelease, owner, traceId,
-                                    clientIp
-                                )
-                            )
-                    )
+                size -> this.copies.stores(this.name, ref, manifest).thenCompose(
+                    stores -> {
+                        final CompletionStage<Void> res;
+                        if (stores) {
+                            res = this.store(
+                                ref, ref.withVariant(variant), manifest, size, effectiveRelease,
+                                owner, traceId, clientIp
+                            );
+                        } else {
+                            EcsLogger.debug("com.auto1.pantera.docker")
+                                .message("Manifest not cached: cooldown refuses the version")
+                                .eventCategory("web")
+                                .eventAction("manifest_cache")
+                                .field("event.reason", "cooldown_active")
+                                .field("repository.name", this.rname)
+                                .field("container.image.name", this.name)
+                                .field("container.image.hash.all", ref.digest())
+                                .field("log.source", "application")
+                                .log();
+                            res = CompletableFuture.completedFuture(null);
+                        }
+                        return res;
+                    }
+                )
             );
         });
+    }
+
+    /**
+     * Store the manifest in the cache, then queue its artifact_publish
+     * event when it was read by a tag.
+     *
+     * @param ref Manifest reference
+     * @param stored Reference the manifest is stored under: its tag link
+     *  scoped to the Accept-variant it was read for (WS4-docker.7)
+     * @param manifest The manifest
+     * @param size Image size in bytes
+     * @param release Release timestamp, if known
+     * @param owner Authenticated user login captured from request thread
+     * @param traceId Request trace.id, nullable
+     * @param clientIp Request client.ip, nullable
+     * @return Completion when the manifest is stored and its event queued
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletionStage<Void> store(
+        final ManifestReference ref, final ManifestReference stored, final Manifest manifest,
+        final long size, final Optional<Long> release, final String owner, final String traceId,
+        final String clientIp
+    ) {
+        return this.cache.manifests().putUnchecked(stored, manifest.content())
+            .thenAccept(
+                // Queued only once the manifest is in the cache: the
+                // publish record describes a completed fetch-and-store.
+                done -> this.events.filter(q -> ImageTag.valid(ref.digest()))
+                    .ifPresent(
+                        queue -> this.queuePublish(
+                            queue, ref, stored, size, release, owner, traceId, clientIp
+                        )
+                    )
+            );
     }
 
     /**
