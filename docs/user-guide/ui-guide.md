@@ -231,7 +231,7 @@ Admin panels appear in the sidebar under **Administration** only if you have the
 | Repository Management | `api_repository_permissions:write` | Create, edit, delete repositories |
 | Repository Jobs | `api_repository_permissions:delete` | Restore deleted repositories, follow and retry background purge jobs, purge unowned storage directories |
 | User Management | `api_user_permissions:write` | Create, edit, enable/disable users |
-| Sign-in failures | `api_user_permissions:read` | Who fails to sign in, with what, and from where: rejected API keys, failed password logins, hits of the sign-in form's limit (v2.2.15+) |
+| Sign-in failures | `api_user_permissions:read` | Who fails to sign in, with what, and from where: rejected API keys, failed password logins, unconfirmed second factors (v2.2.15+) |
 | Roles & Permissions | `api_role_permissions:write` | Manage RBAC roles |
 | Storage Configuration | `api_storage_alias_permissions:create` | Manage storage aliases |
 | System Settings | Admin role | Configure server settings, auth providers |

@@ -303,7 +303,7 @@ Since 2.2.9 the security limits introduced in that release are DB-backed admin s
 | `failed_logins_lock_after` | integer (0-100) | `3` | Failed logins after which the user is locked; `0` switches the lock off and unlocks every locked user. |
 | `failed_logins_unlock_after_minutes` | integer (0-1440) | `0` | Minutes after which a lock ends by itself; `0` = only an admin unlocks. |
 | `failed_logins_forget_after_minutes` | integer (0-43200) | `0` | Minutes without a new failure after which the count starts again; `0` = failures are never forgotten by time. Ends no lock. |
-| `failed_logins_count_rejected_keys` | boolean | `false` | Whether a rejected API key counts as a failed login. |
+| `failed_logins_count_rejected_keys` | boolean | `false` | Whether a rejected API key counts as a failed login, sent as a password or as a Bearer token. |
 | `failed_logins_lock_all_credentials` | boolean | `true` | Whether a lock blocks every credential of the user (password, API keys, sessions, an identity provider's button) or password sign-in only. |
 | `failed_logins_second_factor_limit` | integer (0-100) | `5` | Sign-ins whose password was right but whose second factor was not confirmed (a push denied or not answered, a wrong code) after which password sign-in of the user is paused; `0` = no pause. Such a sign-in is never a failed login: it neither delays nor locks. |
 | `failed_logins_second_factor_pause_minutes` | integer (1-1440) | `15` | How long the pause lasts. Unconfirmed second factors count while each comes within this time of the previous one. |

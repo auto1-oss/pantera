@@ -23,10 +23,12 @@ import java.util.Optional;
  * The API key provider, with rejected keys counted as failed logins when
  * the policy says so ({@code failed_logins_count_rejected_keys}).
  *
- * <p>A rejected key counts for the user name it was sent with. An accepted
- * key forgets no failures: a build that runs with a valid key would
- * otherwise keep clearing the count of an attack on its user. Keys are not
- * delayed; a locked user's key is stopped by {@link LockedOut}.</p>
+ * <p>A rejected key counts for the user name it was sent with, by the rule
+ * of {@link FailedLogins#keyRejected}, which also counts a key sent as a
+ * Bearer token. An accepted key forgets no failures: a build that runs with
+ * a valid key would otherwise keep clearing the count of an attack on its
+ * user. Keys are not delayed; a locked user's key is stopped by
+ * {@link LockedOut}.</p>
  *
  * @since 2.2.15
  */
@@ -85,20 +87,7 @@ public final class CountedKeys implements Authentication {
             } else {
                 known = this.report.rejected(password, username, source);
             }
-            boolean locked = false;
-            if (this.logins.policy().countRejectedKeys()) {
-                final Admission after = this.logins.failed(
-                    username,
-                    new LoginOrigin(
-                        source.clientIp(), source.userAgent(), source.path(), "api_key"
-                    )
-                );
-                if (after.kind() == Admission.Kind.LOCKED) {
-                    this.logins.refuse(after);
-                    locked = true;
-                }
-            }
-            if (!locked) {
+            if (!this.logins.keyRejected(username, source)) {
                 // The client is told why: an expired key is replaced, a
                 // password is not what is wrong.
                 known.ifPresent(

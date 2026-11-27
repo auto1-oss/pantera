@@ -117,7 +117,7 @@ Group response-body drain concurrency is sized automatically per repository by t
 | `PANTERA_FAILED_LOGINS_LOCK_AFTER` | `3` | **Fallback tier only**: failed logins after which a user is locked; `0` = no lock. |
 | `PANTERA_FAILED_LOGINS_UNLOCK_AFTER_MINUTES` | `0` | **Fallback tier only**: minutes after which a lock ends by itself; `0` = only an admin unlocks. |
 | `PANTERA_FAILED_LOGINS_FORGET_AFTER_MINUTES` | `0` | **Fallback tier only**: minutes without a new failure after which the count starts again; `0` = never. |
-| `PANTERA_FAILED_LOGINS_COUNT_REJECTED_KEYS` | `false` | **Fallback tier only**: whether a rejected API key counts as a failed login. |
+| `PANTERA_FAILED_LOGINS_COUNT_REJECTED_KEYS` | `false` | **Fallback tier only**: whether a rejected API key counts as a failed login, sent as a password or as a Bearer token. |
 | `PANTERA_FAILED_LOGINS_LOCK_ALL_CREDENTIALS` | `true` | **Fallback tier only**: whether a lock blocks every credential or password sign-in only. |
 | `PANTERA_FAILED_LOGINS_SECOND_FACTOR_LIMIT` | `5` | **Fallback tier only**: sign-ins whose password was right but whose second factor was not confirmed after which password sign-in of the user is paused (0-100); `0` = no pause. Never a failed login. |
 | `PANTERA_FAILED_LOGINS_SECOND_FACTOR_PAUSE_MINUTES` | `15` | **Fallback tier only**: length of that pause, in minutes (1-1440); unconfirmed second factors count while each comes within this time of the previous one. |

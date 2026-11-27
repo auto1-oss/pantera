@@ -510,16 +510,30 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                         );
                     } else {
                         // An API key that was rejected goes to the sign-in
-                        // failures report; a session that ran out does not.
-                        unifiedAuth.rejected(
+                        // failures report, and counts as a failed login of
+                        // its owner when the policy says so; a session that
+                        // ran out does neither. The one that locks its owner
+                        // is answered as the lock.
+                        final boolean locked = unifiedAuth.rejected(
                             rawToken,
                             new com.auto1.pantera.http.auth.LoginSource(
                                 ctx.request().remoteAddress() == null
                                     ? "" : ctx.request().remoteAddress().host(),
                                 ctx.request().getHeader("User-Agent"), "api"
                             )
-                        );
-                        ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid or expired token");
+                        ).filter(
+                            refusal -> refusal.status() == com.auto1.pantera.http.RsStatus.FORBIDDEN
+                        ).isPresent();
+                        if (locked) {
+                            ApiResponse.sendError(
+                                ctx, 403, "ACCOUNT_LOCKED",
+                                "Account locked. Ask an administrator to unlock it."
+                            );
+                        } else {
+                            ApiResponse.sendError(
+                                ctx, 401, "UNAUTHORIZED", "Invalid or expired token"
+                            );
+                        }
                     }
                 })
                 .exceptionally(err -> {
@@ -589,7 +603,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             logins -> new LockedUsersHandler(logins, this.security.policy()).register(router)
         );
         // Sign-in failures report: rejected API keys, failed password
-        // logins, hits of the sign-in form's own limit.
+        // logins, unconfirmed second factors.
         this.settings.failedLogins().ifPresent(
             logins -> logins.report().ifPresent(
                 report -> new SignInFailuresHandler(

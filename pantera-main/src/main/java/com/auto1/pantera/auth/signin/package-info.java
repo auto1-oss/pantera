@@ -11,9 +11,9 @@
 
 /**
  * The sign-in failures report: who fails to sign in, with what, and from
- * where. Rejected API keys, failed password logins and hits of the
- * sign-in form's own limit are noted in memory on the request path and
- * written to the store once a minute.
+ * where. Rejected API keys, failed password logins and unconfirmed
+ * second factors are noted in memory on the request path and written to
+ * the store once a minute.
  *
  * @since 2.2.15
  */

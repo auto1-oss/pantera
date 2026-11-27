@@ -12,6 +12,7 @@ package com.auto1.pantera.auth;
 
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
+import com.auto1.pantera.auth.failedlogins.FailedLogins;
 import com.auto1.pantera.auth.signin.KeyInspector;
 import com.auto1.pantera.auth.signin.SignInFailures;
 import com.auto1.pantera.api.AuthTokenRest;
@@ -74,6 +75,11 @@ public final class JwtTokens implements Tokens {
      * Sign-in failures report, null when none is kept.
      */
     private final SignInFailures report;
+
+    /**
+     * Failed logins, null when none are counted.
+     */
+    private final FailedLogins logins;
 
     /**
      * Lifetime of an API token issued to a password login from a
@@ -151,7 +157,35 @@ public final class JwtTokens implements Tokens {
         final UserEnabledCheck enabledCheck,
         final SignInFailures report
     ) {
+        this(privateKey, publicKey, tokenDao, settingsDao, blocklist, enabledCheck, report, null);
+    }
+
+    /**
+     * Ctor.
+     * @param privateKey RSA private key for signing
+     * @param publicKey RSA public key for verification
+     * @param tokenDao Token DAO (nullable)
+     * @param settingsDao Settings DAO for token TTLs (nullable)
+     * @param blocklist Revocation blocklist (nullable)
+     * @param enabledCheck Per-request enabled-state gate (nullable)
+     * @param report Sign-in failures report (nullable): it is told what is
+     *  known of a rejected API key, which needs the public key
+     * @param logins Failed logins (nullable): a rejected API key sent as a
+     *  Bearer token counts as a failed login of its owner when the policy
+     *  says so
+     */
+    public JwtTokens(
+        final RSAPrivateKey privateKey,
+        final RSAPublicKey publicKey,
+        final UserTokenDao tokenDao,
+        final AuthSettingsDao settingsDao,
+        final RevocationBlocklist blocklist,
+        final UserEnabledCheck enabledCheck,
+        final SignInFailures report,
+        final FailedLogins logins
+    ) {
         this.report = report;
+        this.logins = logins;
         if (report != null) {
             final java.util.function.BiPredicate<String, String> stored;
             if (tokenDao == null) {
@@ -180,7 +214,8 @@ public final class JwtTokens implements Tokens {
     @Override
     public TokenAuthentication auth() {
         return new UnifiedJwtAuthHandler(
-            this.publicKey, this.tokenDao, this.blocklist, this.enabledCheck, this.report
+            this.publicKey, this.tokenDao, this.blocklist, this.enabledCheck, this.report,
+            this.logins
         );
     }
 

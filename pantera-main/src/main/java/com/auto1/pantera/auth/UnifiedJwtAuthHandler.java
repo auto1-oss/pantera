@@ -16,6 +16,7 @@ import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.auto1.pantera.api.AuthTokenRest;
+import com.auto1.pantera.auth.failedlogins.FailedLogins;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.auth.signin.RejectedKey;
 import com.auto1.pantera.auth.signin.SignInFailures;
@@ -74,6 +75,12 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
     private final SignInFailures report;
 
     /**
+     * Failed logins, which count a rejected API key of its owner when the
+     * policy says so; null when none are counted.
+     */
+    private final FailedLogins logins;
+
+    /**
      * Ctor.
      * @param publicKey RSA public key used for RS256 verification
      * @param tokenDao DAO for JTI validation; {@code null} disables JTI enforcement
@@ -120,7 +127,29 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
         final UserEnabledCheck enabledCheck,
         final SignInFailures report
     ) {
+        this(publicKey, tokenDao, blocklist, enabledCheck, report, null);
+    }
+
+    /**
+     * Ctor.
+     * @param publicKey RSA public key used for RS256 verification
+     * @param tokenDao DAO for token JTI validation (nullable for tests)
+     * @param blocklist Revocation blocklist (nullable)
+     * @param enabledCheck Per-request enabled-state gate
+     * @param report Sign-in failures report for rejected API keys (nullable)
+     * @param logins Failed logins, which count a rejected API key of its
+     *  owner when the policy says so (nullable)
+     */
+    public UnifiedJwtAuthHandler(
+        final RSAPublicKey publicKey,
+        final UserTokenDao tokenDao,
+        final RevocationBlocklist blocklist,
+        final UserEnabledCheck enabledCheck,
+        final SignInFailures report,
+        final FailedLogins logins
+    ) {
         this.report = report;
+        this.logins = logins;
         this.verifier = JWT.require(Algorithm.RSA256(publicKey))
             .withClaimPresence(AuthTokenRest.JTI)
             .withClaimPresence(AuthTokenRest.TYPE)
@@ -171,23 +200,42 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
     }
 
     /**
-     * What is known of a token that was rejected, when it is an API key:
-     * noted in the sign-in failures report and handed back for the answer.
-     * For a caller that validated the token itself and got nothing.
+     * Why a token that was rejected is refused, when it is an API key: it
+     * is noted in the sign-in failures report, and it is a failed login of
+     * its owner by the rule of {@link FailedLogins#keyRejected}, as a key
+     * sent as a password is. The client is told the key's reason, or that
+     * its owner is locked. For a caller that validated the token itself
+     * and got nothing.
+     *
+     * <p>Only a key this installation signed names its owner: a token that
+     * proves no owner is a failed login of nobody.</p>
      *
      * @param token The rejected token
      * @param source Where the request came from
-     * @return What is known of the key; empty for a token that is no API
-     *  key, or when no report is kept
+     * @return The refusal; empty for a token that is no API key, or when no
+     *  report is kept
      */
-    public Optional<RejectedKey> rejected(final String token, final LoginSource source) {
+    public Optional<AuthRefusal> rejected(final String token, final LoginSource source) {
         final Optional<RejectedKey> key;
         if (this.report == null) {
             key = Optional.empty();
         } else {
             key = this.report.rejected(token, "", source);
         }
-        return key;
+        final Optional<AuthRefusal> res;
+        if (this.logins != null && key.filter(RejectedKey::verified)
+            .map(known -> this.logins.keyRejected(known.owner(), source))
+            .orElse(false)) {
+            // The lock is the answer; it was noted on this thread.
+            res = AuthRefusal.take();
+        } else {
+            res = key.map(
+                known -> new AuthRefusal(
+                    known.reason(), RsStatus.UNAUTHORIZED, 0L, known.message()
+                )
+            );
+        }
+        return res;
     }
 
     private CompletionStage<PasswordCheck.Outcome> checked(
@@ -212,12 +260,7 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                         // A rejected API key: the report learns whose it
                         // was, the client why it was rejected.
                         outcome = new PasswordCheck.Outcome(
-                            user,
-                            this.rejected(token, source).map(
-                                key -> new AuthRefusal(
-                                    key.reason(), RsStatus.UNAUTHORIZED, 0L, key.message()
-                                )
-                            )
+                            user, this.rejected(token, source)
                         );
                     }
                     return outcome;
