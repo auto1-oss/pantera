@@ -56,9 +56,14 @@ public final class CacheDocker implements Docker {
     private final String upstreamUrl;
 
     /**
-     * Whether what the origin returns is stored in the cache.
+     * Whether a blob of the origin is stored in the cache while it is read.
      */
     private final boolean store;
+
+    /**
+     * When a manifest of the origin is copied into the cache.
+     */
+    private final ManifestCopies copies;
 
     /**
      * Manifest cache copies in flight for this proxy repository: concurrent
@@ -93,7 +98,10 @@ public final class CacheDocker implements Docker {
                        Optional<DockerProxyCooldownInspector> inspector,
                        String upstreamUrl
     ) {
-        this(origin, cache, events, inspector, upstreamUrl, true);
+        this(
+            origin, cache, events, inspector, upstreamUrl, new ConcurrentHashMap<>(), true,
+            ManifestCopies.AT_ONCE
+        );
     }
 
     /**
@@ -102,7 +110,10 @@ public final class CacheDocker implements Docker {
      * @param events Artifact metadata events queue
      * @param inspector Cooldown inspector
      * @param upstreamUrl Upstream URL for metrics
-     * @param store Whether what the origin returns is stored in the cache
+     * @param inflight Manifest cache copies in flight for this proxy repository
+     * @param store Whether a blob of the origin is stored in the cache while
+     *  it is read
+     * @param copies When a manifest of the origin is copied into the cache
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     private CacheDocker(Docker origin,
@@ -110,15 +121,18 @@ public final class CacheDocker implements Docker {
                         Optional<Queue<ArtifactEvent>> events,
                         Optional<DockerProxyCooldownInspector> inspector,
                         String upstreamUrl,
-                        boolean store
+                        ConcurrentMap<String, CompletableFuture<Void>> inflight,
+                        boolean store,
+                        ManifestCopies copies
     ) {
         this.origin = origin;
         this.cache = cache;
         this.events = events;
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
+        this.inflight = inflight;
         this.store = store;
-        this.inflight = new ConcurrentHashMap<>();
+        this.copies = copies;
     }
 
     @Override
@@ -137,7 +151,8 @@ public final class CacheDocker implements Docker {
             this.inspector,
             this.upstreamUrl,
             this.inflight,
-            this.store
+            this.store,
+            this.copies
         );
     }
 
@@ -159,7 +174,29 @@ public final class CacheDocker implements Docker {
     public Docker readOnly() {
         return new CacheDocker(
             this.origin, this.cache, Optional.empty(), Optional.empty(),
-            this.upstreamUrl, false
+            this.upstreamUrl, this.inflight, false, ManifestCopies.NEVER
+        );
+    }
+
+    /**
+     * The same repository for a client's request on which cooldown decides
+     * after the manifest was read: a manifest the origin returns is copied
+     * into the cache (stored, its artifact event queued) as {@code decided}
+     * says. For a GET, only when the answer serves it,
+     * {@link ManifestCopies#commit()}, never when cooldown refuses it,
+     * {@link ManifestCopies#discard()}; for a HEAD, whose answer is never
+     * refused, only when the {@link ManifestCopies.Verdict} allows it.
+     * Everything else is as in this view: blobs are stored while they are
+     * read, release dates are recorded, and concurrent copies of one
+     * reference are made once.
+     *
+     * @param decided Copies of the manifests the request reads
+     * @return View of this repository for one request
+     */
+    public Docker deciding(final ManifestCopies decided) {
+        return new CacheDocker(
+            this.origin, this.cache, this.events, this.inspector,
+            this.upstreamUrl, this.inflight, true, decided
         );
     }
 }
