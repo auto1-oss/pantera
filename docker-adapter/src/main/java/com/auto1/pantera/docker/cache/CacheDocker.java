@@ -141,7 +141,7 @@ public final class CacheDocker implements Docker {
     }
 
     @Override
-    public Repo repo(final String name) {
+    public CacheRepo repo(final String name) {
         return new CacheRepo(
             name,
             this.origin.repo(name),
@@ -171,7 +171,7 @@ public final class CacheDocker implements Docker {
      *
      * @return Read-only view of this repository
      */
-    public Docker readOnly() {
+    public CacheDocker readOnly() {
         return new CacheDocker(
             this.origin, this.cache, Optional.empty(), Optional.empty(),
             this.upstreamUrl, this.inflight, false, ManifestCopies.NEVER
@@ -193,7 +193,7 @@ public final class CacheDocker implements Docker {
      * @param decided Copies of the manifests the request reads
      * @return View of this repository for one request
      */
-    public Docker deciding(final ManifestCopies decided) {
+    public CacheDocker deciding(final ManifestCopies decided) {
         return new CacheDocker(
             this.origin, this.cache, this.events, this.inspector,
             this.upstreamUrl, this.inflight, true, decided

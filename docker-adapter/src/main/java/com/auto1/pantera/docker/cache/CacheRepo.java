@@ -170,7 +170,7 @@ public final class CacheRepo implements Repo {
     }
 
     @Override
-    public Manifests manifests() {
+    public CacheManifests manifests() {
         return new CacheManifests(
             this.name,
             this.origin,

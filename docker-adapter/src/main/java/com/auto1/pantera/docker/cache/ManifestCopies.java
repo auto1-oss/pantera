@@ -18,6 +18,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 /**
  * When {@link CacheManifests} copies a manifest the origin returned into
@@ -124,6 +125,34 @@ public final class ManifestCopies {
             // The decision may have come while the copy was being added.
             this.settle();
         }
+    }
+
+    /**
+     * Make a copy and wait for it, when copies are made at once. A refresh
+     * of a cached tag answers with what the cache holds once its copy is
+     * decided, so it cannot leave the copy for after the answer.
+     *
+     * @param copy The copy
+     * @return True once the copy is done; false at once when copies are
+     *  discarded (nothing is stored) or held for the decision on the
+     *  answer (the copy then waits for that decision)
+     */
+    CompletionStage<Boolean> now(final Supplier<CompletionStage<Void>> copy) {
+        final State now = this.state.get();
+        CompletionStage<Boolean> res;
+        if (now == State.COMMITTED) {
+            try {
+                res = copy.get().thenApply(ignored -> true);
+            } catch (final RuntimeException ex) {
+                res = CompletableFuture.failedFuture(ex);
+            }
+        } else {
+            if (now == State.HELD) {
+                this.submit(copy::get);
+            }
+            res = CompletableFuture.completedFuture(false);
+        }
+        return res;
     }
 
     /**

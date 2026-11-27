@@ -162,6 +162,64 @@ public final class ProxyManifests implements Manifests {
         ).result();
     }
 
+    /**
+     * Digest the upstream names for a reference, asked with a {@code HEAD}:
+     * a registry answers it without the manifest, and Docker Hub does not
+     * count it against its pull limit. An answer without
+     * {@code Docker-Content-Digest} is followed by a {@code GET}.
+     *
+     * @param ref Manifest reference
+     * @return Digest, empty if the upstream does not have the reference
+     */
+    @Override
+    public CompletableFuture<Optional<Digest>> digest(final ManifestReference ref) {
+        final String uri = String.format("/v2/%s/manifests/%s", this.name, ref.digest());
+        final long start = System.currentTimeMillis();
+        return new ResponseSink<>(
+            this.remote.response(
+                new RequestLine(RqMethod.HEAD, uri),
+                ProxyManifests.MANIFEST_ACCEPT_HEADERS,
+                Content.EMPTY
+            ),
+            response -> {
+                EcsLogger.debug("com.auto1.pantera.docker.proxy")
+                    .message("ProxyManifests upstream digest")
+                    .eventCategory("web")
+                    .eventAction("proxy_manifest_head")
+                    .eventOutcome(response.status().success() ? "success" : "failure")
+                    .field("container.image.name", this.name)
+                    .field("container.image.tag", ref.digest())
+                    .field("http.response.status_code", response.status().code())
+                    .duration(System.currentTimeMillis() - start)
+                    .field("log.source", "application")
+                    .log();
+                final CompletableFuture<Optional<Digest>> result;
+                if (response.status() == RsStatus.OK) {
+                    final Optional<Digest> named = response.headers()
+                        .find("Docker-Content-Digest").stream()
+                        .findFirst()
+                        .map(header -> new Digest.FromString(header.getValue()));
+                    result = response.body().asBytesFuture().thenCompose(
+                        ignored -> named.isPresent()
+                            ? CompletableFuture.completedFuture(named)
+                            : this.get(ref).thenApply(found -> found.map(Manifest::digest))
+                    );
+                } else if (response.status() == RsStatus.NOT_FOUND
+                    || response.status() == RsStatus.UNAUTHORIZED
+                    || response.status() == RsStatus.FORBIDDEN
+                    || response.status() == RsStatus.PRECONDITION_FAILED) {
+                    // As for a GET: the image is not to be had from here.
+                    result = response.body().asBytesFuture().thenApply(ignored -> Optional.empty());
+                } else {
+                    result = response.body().asBytesFuture().thenCompose(
+                        ignored -> unexpected(response)
+                    );
+                }
+                return result;
+            }
+        ).result();
+    }
+
     @Override
     public CompletableFuture<Tags> tags(Pagination pagination) {
         return new ResponseSink<>(
