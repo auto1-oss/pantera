@@ -456,7 +456,7 @@ public final class VertxMain {
             );
         }
         // 2.2.9 security policy settings (request-body cap + fs storage
-        // roots, outbound egress policy, login throttling): DB row -> env
+        // roots, outbound egress policy, failed logins): DB row -> env
         // -> default per key, admin-editable at runtime. Installed
         // unconditionally for the same DB-less-boot reason as above; the
         // egress loader also feeds http-client's EgressSettingsRegistry.
@@ -466,11 +466,10 @@ public final class VertxMain {
         com.auto1.pantera.settings.policy.EgressSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
-        com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader.install(
-            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
-        );
-        // Policy of the login delay and the account lock ("Failed logins"
-        // card): read by the sign-in chain on every decision.
+        // Policy of failed sign-ins ("Failed logins" card): the login delay
+        // and the account lock after wrong passwords, the pause after
+        // unconfirmed second factors. Read by the sign-in chain on every
+        // decision.
         com.auto1.pantera.settings.policy.FailedLoginsSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );

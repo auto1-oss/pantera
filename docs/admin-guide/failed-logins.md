@@ -1,10 +1,38 @@
-# Failed Logins: Login Delay and Account Lock
+# Failed Logins: Delay, Lock and Second-Factor Pause
 
 > **Guide:** Admin Guide | **Section:** Failed Logins
 
-Since 2.2.15 Pantera counts failed logins per user and answers them in two stages, as JFrog Artifactory does: a short delay that grows with every failure, then an account lock. During a delay or a lock Pantera checks nothing and asks no identity provider, so a tool that repeats a wrong password cannot pile failed logins onto the user's directory account.
+Since 2.2.15 one policy decides on failed sign-ins, for every way of signing in: the sign-in form, the token API, `npm login`, and repository clients that send a password. It counts two kinds of failed sign-in apart:
+
+- a **wrong password**, answered in two stages as JFrog Artifactory does: a short delay that grows with every failure, then an account lock;
+- a sign-in whose password was right but whose **second factor was not confirmed** (an Okta push denied or not answered, a wrong code). It is never a wrong password: it never delays and never locks. After a limit, password sign-in of the user is **paused**, so that no further push reaches the user's phone.
+
+During a delay, a pause or a lock Pantera checks nothing and asks no identity provider, so a tool that repeats a password cannot pile failed logins onto the user's directory account, and nobody can send push after push to the user's phone.
 
 Every value is an admin setting: **System Settings → Failed logins**, or `GET`/`PUT /api/v1/admin/failed-logins-settings`. A change applies to the next login, on every node, without a restart.
+
+---
+
+## What Counts
+
+| What happened | Counted as | Leads to |
+|---------------|------------|----------|
+| The identity provider rejected the password | failed login | delay, then lock |
+| A rejected API key, when *Count rejected API keys* is on | failed login | delay, then lock |
+| The password was right; the second factor was not confirmed: the push was denied or not answered, or the code was wrong (`second_factor_failed`) | unconfirmed second factor | pause of password sign-in |
+| A repository client was asked for a second factor it cannot give (`mfa_required`) | nothing | -- |
+| The directory account is locked or its password expired at the identity provider | nothing | -- |
+| The identity provider cannot be reached or limits the rate (answered `503`, not `401`) | nothing | -- |
+| A sign-in refused during a delay, a pause or a lock | nothing | -- |
+
+- One count per user name serves the delay and the lock; the unconfirmed second factors have a count of their own. The name is counted in lower case and without surrounding spaces: `Alice@example.com` and `alice@example.com` are one account at a directory, and one count here.
+- The **client address is not part of the count**. A limit per user and address would give an attacker a new allowance from every address.
+- A name **without a Pantera user** is counted too: a login that is checked with an identity provider is a failed login of the directory account behind it.
+- The [Sign-in Failures Report](sign-in-failures.md) lists the rejected API keys with their owners whether they count or not. Before you turn *Count rejected API keys* on, clear the stale keys your users' tools still send: with the lock at 3, an IDE that holds an old key locks its owner with its first three requests, and again after every unlock.
+- A successful password login forgets the failed logins and the unconfirmed second factors. A request with a valid API key does not: a running build would otherwise keep clearing the count of an attack on its user.
+- While a name has failures on record, its logins are not answered from the credential cache: each is checked, so that the right password does forget the failures. A node learns of a failure counted on another node within 15 seconds.
+
+Logins of one user are checked one at a time on a node. Guesses sent at once therefore reach the identity provider no more often than the lock limit allows. Repository requests that wait behind one with the same password take its answer when it was accepted, so a build that opens many connections with one right password asks the provider once. A sign-in on the sign-in form or the token API is never answered from a remembered login and never remembered: a person signs in there, and the identity provider asks for the second factor every time.
 
 ---
 
@@ -12,6 +40,7 @@ Every value is an admin setting: **System Settings → Failed logins**, or `GET`
 
 | Setting | Key | Values | Default |
 |---------|-----|--------|---------|
+| **Wrong password** | | | |
 | Delay logins from failed login number | `failed_logins_delay_from_failure` | 0 (no delay) to 100 | `2` |
 | First delay | `failed_logins_first_delay_seconds` | 1 to 60 seconds | `1` |
 | Longest delay | `failed_logins_max_delay_seconds` | 1 to 3600 seconds | `60` |
@@ -19,6 +48,10 @@ Every value is an admin setting: **System Settings → Failed logins**, or `GET`
 | Unlock automatically after | `failed_logins_unlock_after_minutes` | 0 (only an admin unlocks) to 1440 minutes | `0` |
 | Forget failures after | `failed_logins_forget_after_minutes` | 0 (never) to 43200 minutes | `0` |
 | Count rejected API keys | `failed_logins_count_rejected_keys` | `true` / `false` | `false` |
+| **Second factor not confirmed** | | | |
+| Pause after unconfirmed sign-ins | `failed_logins_second_factor_limit` | 0 (no pause) to 100 | `5` |
+| Pause | `failed_logins_second_factor_pause_minutes` | 1 to 1440 minutes | `15` |
+| **Lock scope** | | | |
 | A lock blocks every credential | `failed_logins_lock_all_credentials` | `true` / `false` | `true` |
 
 Each key also has an environment variable, `PANTERA_<KEY IN UPPER CASE>`, that is used when the database has no row for it.
@@ -29,36 +62,23 @@ Each key also has an environment variable, `PANTERA_<KEY IN UPPER CASE>`, that i
 
 **Forget failures after.** With 0, failures count until a successful password login or an unlock, however far apart they are. Three mistyped passwords spread over months then lock a user who normally signs in with an identity provider's button and never resets the count. Set a time, for example 30 minutes, to count only failures that follow each other: a failure that comes later than that after the previous one starts a new count. The time ends no lock.
 
----
+**The pause.** Unconfirmed second factors count while each comes within the pause time of the previous one; one that comes later starts a new count. The one that reaches the limit pauses password sign-in of the user for the pause time. During the pause no password is checked and no push is sent; the pause ends by itself, and so does the count. With the defaults, five pushes the user did not approve, each within 15 minutes of the previous one, pause password sign-in for 15 minutes.
 
-## What Counts
-
-- A **failed password login**: from the sign-in form, the token API, `npm login`, or a repository client that sends a password. One count per user name serves the delay and the lock.
-- The name is counted in lower case and without surrounding spaces. `Alice@example.com` and `alice@example.com` are one account at a directory, and one count here.
-- The **client address is not part of the count**. A limit per user and address would give an attacker a new allowance from every address.
-- A name **without a Pantera user** is counted too: a login that is checked with an identity provider is a failed login of the directory account behind it.
-- A **rejected API key** counts only when *Count rejected API keys* is on. The [Sign-in Failures Report](sign-in-failures.md) lists the rejected keys with their owners whether they count or not. Before you turn it on, clear the stale keys your users' tools still send: with the lock at 3, an IDE that holds an old key locks its owner with its first three requests, and again after every unlock.
-- A successful password login forgets the failures. A request with a valid API key does not: a running build would otherwise keep clearing the count of an attack on its user.
-- While a name has failures on record, its logins are not answered from the credential cache: each is checked, so that the right password does forget the failures. A node learns of a failure counted on another node within 15 seconds.
-
-**Not counted:**
-
-- a login refused during a delay or a lock;
-- a login the identity provider refused for a reason of its own: a second factor was asked for (`mfa_required`), the directory account is locked or its password expired;
-- a login that could not be checked because the identity provider cannot be reached or limits the rate. Such a login is answered `503`, not `401`.
-
-Logins of one user are checked one at a time on a node. Guesses sent at once therefore reach the identity provider no more often than the lock limit allows. Requests that wait behind one with the same password take its answer when it was accepted, so a build that opens many connections with one right password asks the provider once.
+The pause does not lock and does not delay: the password was right, so it is the user who missed the push, or someone who knows the password. In the second case the user should change the password: the pause is a log record (`sign_in_pause`) and a line in the Sign-in failures report, where you can see it.
 
 ---
 
-## What a Delay and a Lock Do
+## What a Delay, a Pause and a Lock Do
 
-| State | Answer | Reason on the access record |
-|-------|--------|-----------------------------|
-| Logins delayed | `403` with `Retry-After` and "Too many failed logins. Try again in N seconds." | `login_delayed` |
-| User locked | `403` with "Account locked" | `account_locked` |
+| State | Answer | Code | Reason on the access record |
+|-------|--------|------|-----------------------------|
+| Logins delayed | `403` with `Retry-After` and "Too many failed logins. Try again in N seconds." | `LOGIN_DELAYED` | `login_delayed` |
+| Sign-in paused | `403` with `Retry-After` and "Too many sign-ins without a confirmed second factor. Try again in N minutes." | `SIGN_IN_PAUSED` | `sign_in_paused` |
+| User locked | `403` with "Account locked" | `ACCOUNT_LOCKED` | `account_locked` |
 
-Both answers are `403`, as in JFrog Artifactory. A client tells them apart by the `Retry-After` header, which only a delay carries, and by the text; the sign-in form and the management API also carry the codes `LOGIN_DELAYED` and `ACCOUNT_LOCKED`.
+All three answers are `403`, as in JFrog Artifactory. A client tells them apart by the `Retry-After` header, which a lock does not carry, and by the text; the sign-in form and the management API also carry the codes. A second factor that was not confirmed is itself answered with the one generic "Sign-in failed": the answer never says that the password was right.
+
+The pause covers password sign-in only. API keys, open UI sessions and a sign-in through an identity provider's button keep working.
 
 With *A lock blocks every credential* on, a locked user can do nothing in Pantera: password logins, API keys (as a password or as a Bearer token), open UI sessions and a sign-in through an identity provider's button are all refused. The sign-in form and the management API answer `403` with the code `ACCOUNT_LOCKED`.
 
@@ -84,23 +104,21 @@ DELETE FROM login_failures WHERE username = 'alice@example.com';
 DELETE FROM login_failures WHERE locked_at IS NOT NULL;
 ```
 
-An unlock also sets the user's count back to zero.
+An unlock, and **Clear failed logins**, set the user's counts back to zero and end a pause.
 
 ---
 
 ## Several Nodes
 
-The counts and the locks are in the database (`login_failures`), so all nodes count the same failures and a restart forgets none. Password logins read the database on every attempt. The check that stops a locked user's API key or session answers from memory; a node learns of a lock or an unlock made elsewhere within 15 seconds.
+The counts, the pauses and the locks are in the database (`login_failures`), so all nodes count the same failures and a restart forgets none. Password logins read the database on every attempt. The check that stops a locked user's API key or session answers from memory; a node learns of a lock or an unlock made elsewhere within 15 seconds.
 
 Without a database the counts are kept in memory, per node, and do not survive a restart.
 
 ---
 
-## The Sign-in Form's Own Limit
+## Upgrading from 2.2.14 or Earlier
 
-The sign-in form keeps its older limit beside this policy (**System Settings → Login Throttling**): 5 failures per user and client address in 15 minutes, answered `429`. A failed login on the form counts for both. With the lock at 3 a user is locked before that limit is reached; it matters when you raise the lock limit above it or switch the lock off.
-
-A locked user is answered `403` "Account locked" on the form however often they try: the lock is checked before this limit, and those tries are not counted against it.
+Before 2.2.15 the sign-in form had a limit of its own, **System Settings → Login Throttling** (`login_throttle_max_failures`, `login_throttle_window_seconds`, `PANTERA_LOGIN_THROTTLE_*`, `/api/v1/admin/login-throttle-settings`): attempts per user and client address, kept in the memory of each node, for the form only. It is gone. Wrong passwords are counted by the delay and the lock above, on every node and every way of signing in; the one thing it did beyond them, limiting sign-ins whose second factor is not confirmed, is the pause. The upgrade (migration `V153`) removes the old settings and sets the pause to its defaults, 5 unconfirmed sign-ins and 15 minutes, which match the old limit's defaults. Remove `PANTERA_LOGIN_THROTTLE_*` from your deployment; they are no longer read.
 
 ---
 
@@ -108,12 +126,14 @@ A locked user is answered `403` "Account locked" on the form however often they 
 
 | Metric | Labels | Meaning |
 |--------|--------|---------|
-| `pantera_auth_login_refused_total` | `reason` (`login_delayed`, `account_locked`, `sign_in_busy`) | Logins refused without a check |
+| `pantera_auth_login_refused_total` | `reason` (`login_delayed`, `sign_in_paused`, `account_locked`, `sign_in_busy`) | Logins refused without a check |
 | `pantera_auth_account_locks_total` | -- | Users locked after failed logins |
 | `pantera_auth_account_unlocks_total` | `cause` (`admin`, `automatic`, `lock_off`) | Locks that ended |
+| `pantera_auth_second_factor_failures_total` | -- | Sign-ins whose password was right but whose second factor was not confirmed |
+| `pantera_auth_sign_in_pauses_total` | -- | Pauses of password sign-in after unconfirmed second factors |
 | `pantera_auth_provider_checks_total` | `provider`, `outcome` | Passwords sent to an identity provider; see [Authentication](authentication.md#which-credentials-reach-an-identity-provider) |
 
-The **Pantera - Sign-in** dashboard charts them. Every lock and unlock is also a log record (`event.action` `account_lock` / `account_unlock`, with the user and, for an unlock, who did it).
+The **Pantera - Sign-in** dashboard charts them. Every lock, unlock and pause is also a log record (`event.action` `account_lock` / `account_unlock` / `sign_in_pause`, with the user and, for an unlock, who did it).
 
 ---
 

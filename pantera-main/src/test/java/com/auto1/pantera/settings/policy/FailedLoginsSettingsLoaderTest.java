@@ -82,7 +82,11 @@ final class FailedLoginsSettingsLoaderTest {
         "failed_logins_lock_after, 101",
         "failed_logins_lock_after, abc",
         "failed_logins_unlock_after_minutes, 1441",
-        "failed_logins_forget_after_minutes, -5"
+        "failed_logins_forget_after_minutes, -5",
+        "failed_logins_second_factor_limit, 101",
+        "failed_logins_second_factor_limit, many",
+        "failed_logins_second_factor_pause_minutes, 0",
+        "failed_logins_second_factor_pause_minutes, 1441"
     })
     void valueOutsideItsRangeFallsBackAloneToItsDefault(final String key, final String value) {
         final FailedLoginsSettingsLoader loader = new FailedLoginsSettingsLoader(
@@ -166,6 +170,19 @@ final class FailedLoginsSettingsLoaderTest {
         MatcherAssert.assertThat(
             FailedLoginsSettingsLoader.activeSupplier().get().lockAfterFailures(),
             new IsEqual<>(9)
+        );
+    }
+
+    @Test
+    void secondFactorPauseIsReadFromItsRowsThenTheEnvironment() {
+        final FailedLoginsSettingsLoader loader = new FailedLoginsSettingsLoader(
+            FakeAuthSettings.withRows(Map.of("failed_logins_second_factor_limit", "0")),
+            Map.of("PANTERA_FAILED_LOGINS_SECOND_FACTOR_PAUSE_MINUTES", "30")::get
+        );
+        MatcherAssert.assertThat(
+            "the row switches the pause off; the environment sets its length",
+            java.util.List.of(loader.get().secondFactorLimit(), loader.get().secondFactorPauseMinutes()),
+            new IsEqual<>(java.util.List.of(0, 30))
         );
     }
 }

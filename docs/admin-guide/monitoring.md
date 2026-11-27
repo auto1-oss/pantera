@@ -122,11 +122,12 @@ Pantera 2.2.0 introduced a per-host upstream circuit breaker and a per-repo conc
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `pantera_auth_provider_checks_total` | Counter | `provider` (`okta`, `keycloak`, `github`), `outcome` (`accepted`, `rejected`, `refused`, `unavailable`) | Passwords that left Pantera for an external identity provider. `rejected` is a failed login of a user at the identity provider; a sudden rise means a client repeats a wrong password. |
-| `pantera_auth_login_refused_total` | Counter | `reason` (`login_delayed`, `account_locked`, `sign_in_busy`) | Logins the login delay or the account lock refused before any provider was asked. |
+| `pantera_auth_login_refused_total` | Counter | `reason` (`login_delayed`, `sign_in_paused`, `account_locked`, `sign_in_busy`) | Logins the login delay, the sign-in pause or the account lock refused before any provider was asked. |
 | `pantera_auth_account_locks_total` | Counter | -- | Users locked after failed logins. |
 | `pantera_auth_account_unlocks_total` | Counter | `cause` (`admin`, `automatic`, `lock_off`) | Account locks that ended. |
 | `pantera_auth_api_key_rejected_total` | Counter | `reason` (`api_key_expired`, `api_key_revoked`, `api_key_refused`, `api_key_unknown`) | API keys that were rejected. Who sends them: the [Sign-in Failures Report](sign-in-failures.md). |
-| `pantera_auth_form_limit_hits_total` | Counter | -- | Logins refused by the sign-in form's own limit (Login Throttling). |
+| `pantera_auth_second_factor_failures_total` | Counter | -- | Sign-ins whose password was right but whose second factor was not confirmed. A rise for one user means pushes they did not approve: someone may know the password. |
+| `pantera_auth_sign_in_pauses_total` | Counter | -- | Pauses of password sign-in after unconfirmed second factors. |
 
 The **Pantera - Sign-in** dashboard (`pantera-sign-in.json`) charts them. See [Failed Logins](failed-logins.md).
 

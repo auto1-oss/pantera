@@ -11,6 +11,7 @@
 package com.auto1.pantera.auth.signin;
 
 import com.auto1.pantera.auth.failedlogins.FailedLoginStore;
+import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.auth.LoginSource;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.metrics.MicrometerMetrics;
@@ -205,22 +206,38 @@ public final class SignInFailures {
     }
 
     /**
-     * The sign-in form's own limit refused a login.
+     * A sign-in whose password was accepted but whose second factor was not
+     * confirmed: a push denied or not answered, a wrong code.
      *
      * @param name User name
-     * @param source Where the login came from
-     * @param failures Failures counted in the window
-     * @param seconds Seconds until the block ends
+     * @param source Where the sign-in came from
+     * @param counted Unconfirmed second factors counted toward the pause
+     * @param paused End of the pause, null when the count is below the limit
      */
-    public void formLimit(
-        final String name, final LoginSource source, final int failures, final long seconds
+    public void unconfirmedSecondFactor(
+        final String name, final LoginSource source, final int counted, final Instant paused
     ) {
-        if (MicrometerMetrics.isInitialized()) {
-            MicrometerMetrics.getInstance().recordFormLimitHit();
-        }
         this.note(
-            SignInFailure.FORM_LIMIT, name, source, "", "form_limit", true, 1L, 0L, failures,
-            this.clock.get().plusSeconds(seconds), ""
+            SignInFailure.SECOND_FACTOR, name, source, "", AuthRefusal.SECOND_FACTOR_FAILED,
+            true, 1L, 0L, counted, paused, ""
+        );
+    }
+
+    /**
+     * A password sign-in was refused without a check during the pause after
+     * unconfirmed second factors.
+     *
+     * @param name User name
+     * @param source Where the sign-in came from
+     * @param counted Unconfirmed second factors counted toward the pause
+     * @param paused End of the pause
+     */
+    public void refusedPaused(
+        final String name, final LoginSource source, final int counted, final Instant paused
+    ) {
+        this.note(
+            SignInFailure.SECOND_FACTOR, name, source, "", "sign_in_paused", true, 0L, 1L,
+            counted, paused, ""
         );
     }
 

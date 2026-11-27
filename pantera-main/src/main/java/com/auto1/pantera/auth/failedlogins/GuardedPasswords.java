@@ -36,10 +36,13 @@ import java.util.concurrent.locks.ReentrantLock;
  * the providers reject is counted, and the one that reaches the lock limit
  * is answered as locked. A success forgets the failures.</p>
  *
- * <p>Not counted: a login a provider refused for a reason of its own (it
- * noted an {@link AuthRefusal}: a second factor was asked for, the
- * identity provider cannot be reached). Such a login is no wrong
- * password.</p>
+ * <p>A sign-in whose password a provider accepted but whose second factor
+ * was not confirmed ({@link AuthRefusal#SECOND_FACTOR_FAILED}) is no wrong
+ * password: it is counted apart, never delays or locks, and the one that
+ * reaches the policy's limit is answered as paused. Not counted at all: a
+ * login a provider refused for another reason of its own (it noted an
+ * {@link AuthRefusal}: a repository client was asked for a second factor
+ * it cannot give, the identity provider cannot be reached).</p>
  *
  * <p>Logins of one name are checked one at a time on a node. Guesses sent
  * at once can then reach the providers no more often than the lock limit
@@ -179,12 +182,22 @@ public final class GuardedPasswords implements Authentication {
         final String counted, final String username, final String password, final byte[] digest
     ) {
         final Optional<AuthUser> res = this.origin.user(username, password);
+        final Optional<AuthRefusal> refusal = AuthRefusal.noted();
         if (res.isPresent()) {
             this.logins.succeeded(username);
             if (!LoginSource.current().form()) {
                 this.accepted.put(counted, new Accepted(digest, res.get()));
             }
-        } else if (AuthRefusal.noted().isEmpty()) {
+        } else if (refusal.isPresent() && refusal.get().unconfirmedSecondFactor()) {
+            // The password was right: no failed login, a count toward the
+            // pause. The one that reaches the limit is answered as paused.
+            this.accepted.invalidate(counted);
+            final Admission after =
+                this.logins.secondFactorFailed(username, LoginSource.current());
+            if (after.kind() == Admission.Kind.PAUSED) {
+                this.logins.refuse(after);
+            }
+        } else if (refusal.isEmpty()) {
             // A failure changes what the name may do: an answer accepted
             // moments ago is not handed to the logins that follow it.
             this.accepted.invalidate(counted);

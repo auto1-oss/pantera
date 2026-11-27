@@ -66,7 +66,8 @@ public final class ClientIpResolver {
 
     /**
      * The client address as the trusted proxy itself recorded it, for
-     * decisions a client must not be able to steer (the login throttle).
+     * records a client must not be able to steer (who failed to sign in,
+     * and from where).
      *
      * <p>A proxy configured the documented way
      * ({@code X-Forwarded-For $proxy_add_x_forwarded_for}) appends the

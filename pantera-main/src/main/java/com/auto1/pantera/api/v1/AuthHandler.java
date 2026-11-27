@@ -75,6 +75,12 @@ public final class AuthHandler {
     private static final String DELAYED = "login_delayed";
 
     /**
+     * Reason of a sign-in refused during the pause after second factors
+     * that were not confirmed.
+     */
+    private static final String PAUSED = "sign_in_paused";
+
+    /**
      * Status of a sign-in that could not be checked.
      */
     private static final int UNAVAILABLE = 503;
@@ -99,14 +105,9 @@ public final class AuthHandler {
     private final AuthSettingsDao settingsDao;
 
     /**
-     * Login attempt throttle (SecOps import-misc). Shared by every API
-     * verticle instance in the process (B16) — a per-instance throttle
-     * multiplied the limit by the verticle count.
-     */
-    private final com.auto1.pantera.auth.LoginThrottle loginThrottle;
-
-    /**
-     * Failed logins behind the account lock, null without one.
+     * Failed logins: the delay, the lock and the pause after unconfirmed
+     * second factors, null without them. They decide inside the sign-in
+     * chain; this handler only asks whether a user may get a session.
      */
     private final com.auto1.pantera.auth.failedlogins.FailedLogins failedLogins;
 
@@ -130,29 +131,7 @@ public final class AuthHandler {
         final CrudUsers users, final Policy<?> policy,
         final AuthProviderDao providerDao, final UserTokenDao tokenDao,
         final AuthSettingsDao settingsDao) {
-        this(tokens, auth, users, policy, providerDao, tokenDao, settingsDao,
-            new com.auto1.pantera.auth.LoginThrottle());
-    }
-
-    /**
-     * Full ctor.
-     * @param tokens Token issuer
-     * @param auth Authentication chain
-     * @param users Users store
-     * @param policy Security policy
-     * @param providerDao Auth provider DAO (nullable)
-     * @param tokenDao User token DAO (nullable)
-     * @param settingsDao Auth settings DAO (nullable)
-     * @param loginThrottle Process-wide login throttle
-     * @checkstyle ParameterNumberCheck (5 lines)
-     */
-    public AuthHandler(final Tokens tokens, final Authentication auth,
-        final CrudUsers users, final Policy<?> policy,
-        final AuthProviderDao providerDao, final UserTokenDao tokenDao,
-        final AuthSettingsDao settingsDao,
-        final com.auto1.pantera.auth.LoginThrottle loginThrottle) {
-        this(tokens, auth, users, policy, providerDao, tokenDao, settingsDao,
-            loginThrottle, null);
+        this(tokens, auth, users, policy, providerDao, tokenDao, settingsDao, null);
     }
 
     /**
@@ -165,19 +144,16 @@ public final class AuthHandler {
      * @param providerDao Auth providers (nullable)
      * @param tokenDao User tokens (nullable)
      * @param settingsDao Auth settings (nullable)
-     * @param loginThrottle Limit of the sign-in form
-     * @param failedLogins Failed logins behind the account lock; null for an
-     *  installation without one
+     * @param failedLogins Failed logins behind the delay, the lock and the
+     *  pause; null for an installation without them
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public AuthHandler(final Tokens tokens, final Authentication auth,
         final CrudUsers users, final Policy<?> policy,
         final AuthProviderDao providerDao, final UserTokenDao tokenDao,
         final AuthSettingsDao settingsDao,
-        final com.auto1.pantera.auth.LoginThrottle loginThrottle,
         final com.auto1.pantera.auth.failedlogins.FailedLogins failedLogins) {
         this.failedLogins = failedLogins;
-        this.loginThrottle = loginThrottle;
         this.tokens = tokens;
         this.auth = auth;
         this.users = users;
@@ -237,47 +213,16 @@ public final class AuthHandler {
         final String name = body.getString("name");
         final String pass = body.getString("pass");
         final String mfa = body.getString("mfa_code");
-        // SECURITY (2.2.9, SecOps import-misc): throttle online password
-        // guessing per (username, client IP). Never reveals whether the user
-        // exists — an unknown user is throttled the same as a real one.
-        // B16: the address comes from the TCP peer unless a trusted proxy is
-        // declared (trust_forwarded_headers), and the attempt is counted
-        // before the credential check so concurrent guesses cannot race past.
-        final String client = clientIp(ctx);
-        // A locked user is told so, however often the form is tried: the
-        // form's own limit below must not take the place of the one
-        // answer that says what is wrong and who can help. No provider is
-        // asked and the try is not counted against the form's limit.
-        if (this.failedLogins != null && name != null && this.failedLogins.passwordLocked(name)) {
-            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
-                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
-                    .recordLoginRefused("account_locked");
-            }
-            ApiResponse.sendError(
-                ctx, AuthHandler.FORBIDDEN, "ACCOUNT_LOCKED",
-                "Account locked. Ask an administrator to unlock it."
-            );
-            return;
-        }
-        final java.util.OptionalLong retry = this.loginThrottle.admit(name, client);
+        // Failed sign-ins are decided inside the chain, by the failed-logins
+        // policy, for this endpoint and for repository clients alike: a
+        // wrong password delays and locks, an unconfirmed second factor
+        // pauses, and a delayed, paused or locked user is refused before
+        // any provider is asked. The address comes from the TCP peer unless
+        // a trusted proxy is declared (trust_forwarded_headers).
         final com.auto1.pantera.http.auth.LoginSource source =
             new com.auto1.pantera.http.auth.LoginSource(
-                client, ctx.request().getHeader("User-Agent"), AuthHandler.signInPath(ctx)
+                clientIp(ctx), ctx.request().getHeader("User-Agent"), AuthHandler.signInPath(ctx)
             );
-        if (retry.isPresent()) {
-            // The form's own limit refused the login: the sign-in failures
-            // report keeps who, from where, and until when.
-            if (this.failedLogins != null) {
-                final int counted = this.loginThrottle.failures(name, client);
-                this.failedLogins.report().ifPresent(
-                    report -> report.formLimit(name, source, counted, retry.getAsLong())
-                );
-            }
-            ctx.response().putHeader("Retry-After", Long.toString(retry.getAsLong()));
-            ApiResponse.sendError(ctx, 429, "TOO_MANY_REQUESTS",
-                "Too many sign-in attempts. Please wait and try again.");
-            return;
-        }
         CompletableFuture.supplyAsync(
             (java.util.function.Supplier<com.auto1.pantera.http.auth.PasswordCheck.Outcome>) () -> {
                 // A person is signing in: the Okta provider may start a
@@ -301,7 +246,6 @@ public final class AuthHandler {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
                     "Sign-in is temporarily unavailable. Please try again.", err);
             } else if (outcome.user().isPresent()) {
-                this.loginThrottle.recordSuccess(name, client);
                 final Tokens.TokenPair pair = this.tokens.generatePair(outcome.user().get());
                 ctx.response()
                     .setStatusCode(200)
@@ -335,18 +279,23 @@ public final class AuthHandler {
         final int status = refusal
             .map(why -> why.status().code())
             .orElse(AuthHandler.UNAUTHORIZED);
-        // A delay and a lock are both answered 403, as in Artifactory: the
-        // code, and the Retry-After of a delay, tell them apart.
-        final boolean delayed = refusal
-            .map(why -> AuthHandler.DELAYED.equals(why.reason()))
-            .orElse(false);
-        if (delayed) {
+        // A delay, a pause and a lock are all answered 403, as in
+        // Artifactory: the code, and the Retry-After of a delay or a pause,
+        // tell them apart.
+        final String reason = refusal
+            .map(com.auto1.pantera.http.auth.AuthRefusal::reason)
+            .orElse("");
+        if (AuthHandler.DELAYED.equals(reason)) {
             final long seconds = refusal.get().retryAfter().orElse(1L);
             ctx.response().putHeader("Retry-After", Long.toString(seconds));
             ApiResponse.sendError(
                 ctx, status, "LOGIN_DELAYED",
                 String.format("Too many failed logins. Try again in %d seconds.", seconds)
             );
+        } else if (AuthHandler.PAUSED.equals(reason)) {
+            final long seconds = refusal.get().retryAfter().orElse(1L);
+            ctx.response().putHeader("Retry-After", Long.toString(seconds));
+            ApiResponse.sendError(ctx, status, "SIGN_IN_PAUSED", refusal.get().message());
         } else if (status == AuthHandler.FORBIDDEN) {
             ApiResponse.sendError(
                 ctx, status, "ACCOUNT_LOCKED",
@@ -1482,7 +1431,8 @@ public final class AuthHandler {
     }
 
     /**
-     * Client address for login throttling (SecOps import-misc, B16).
+     * Client address of a sign-in, for the failed-logins records and the
+     * sign-in failures report (SecOps import-misc, B16).
      * Forwarding headers are client-supplied: they count only when the
      * deployment declares a trusted reverse proxy
      * ({@code trust_forwarded_headers}); otherwise the TCP peer is used.
@@ -1490,7 +1440,7 @@ public final class AuthHandler {
      * (the rightmost {@code X-Forwarded-For} entry, else {@code X-Real-IP}
      * when no {@code X-Forwarded-For} arrived): the leftmost entry and a
      * passed-through {@code X-Real-IP} are whatever the client sent, and
-     * rotating either would buy a fresh throttle budget per request.
+     * rotating either would hide where the sign-ins come from.
      *
      * @param ctx Routing context
      * @return Client IP, or {@code null} when indeterminable

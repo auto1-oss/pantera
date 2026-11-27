@@ -456,14 +456,22 @@ public final class OktaOidcClient {
                 status = body.getString("status", "");
             }
         }
+        // The password was accepted; the person did not confirm the second
+        // factor. Never a wrong password: the failed-logins policy counts it
+        // toward its pause, not toward its delay and lock.
         EcsLogger.warn("com.auto1.pantera.auth")
-            .message("Okta MFA verification failed")
+            .message(
+                "Okta accepted the password but the second factor was not confirmed"
+                    + " (push denied or not answered, or a wrong code)"
+            )
             .eventCategory("authentication")
             .eventAction("login")
             .eventOutcome("failure")
+            .field("event.reason", AuthRefusal.SECOND_FACTOR_FAILED)
             .field("user.name", username)
             .field("log.source", "application")
             .log();
+        new AuthRefusal(AuthRefusal.SECOND_FACTOR_FAILED).note();
         return null;
     }
 

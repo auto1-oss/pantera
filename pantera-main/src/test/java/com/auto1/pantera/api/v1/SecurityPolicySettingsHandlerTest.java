@@ -50,17 +50,7 @@ final class SecurityPolicySettingsHandlerTest {
     }
 
     @Test
-    void loginThrottleWhitelistCoversBothKeys() {
-        final Set<String> keys = SecurityPolicySettingsHandlerTest.keys("LOGIN_THROTTLE_KEYS");
-        MatcherAssert.assertThat(
-            "exact key set",
-            keys,
-            new IsEqual<>(Set.of("login_throttle_max_failures", "login_throttle_window_seconds"))
-        );
-    }
-
-    @Test
-    void failedLoginsWhitelistCoversTheEightKeys() {
+    void failedLoginsWhitelistCoversTheTenKeys() {
         MatcherAssert.assertThat(
             SecurityPolicySettingsHandlerTest.keys("FAILED_LOGINS_KEYS"),
             new IsEqual<>(
@@ -68,7 +58,9 @@ final class SecurityPolicySettingsHandlerTest {
                     "failed_logins_delay_from_failure", "failed_logins_first_delay_seconds",
                     "failed_logins_max_delay_seconds", "failed_logins_lock_after",
                     "failed_logins_unlock_after_minutes", "failed_logins_forget_after_minutes",
-                    "failed_logins_count_rejected_keys", "failed_logins_lock_all_credentials"
+                    "failed_logins_count_rejected_keys", "failed_logins_lock_all_credentials",
+                    "failed_logins_second_factor_limit",
+                    "failed_logins_second_factor_pause_minutes"
                 )
             )
         );
@@ -208,11 +200,14 @@ final class SecurityPolicySettingsHandlerTest {
             egress.validate(new JsonObject().put("egress_block_private", "maybe")));
         Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
             egress.validate(new JsonObject().put("upstream_credential_allow_hosts", "bad host")));
-        final SecurityPolicySettingsHandler.Section throttle =
-            SecurityPolicySettingsHandler.loginThrottle();
-        throttle.validate(new JsonObject().put("login_throttle_max_failures", "3"));
+        final SecurityPolicySettingsHandler.Section failed =
+            SecurityPolicySettingsHandler.failedLogins();
+        failed.validate(new JsonObject().put("failed_logins_second_factor_limit", "0"));
+        failed.validate(new JsonObject().put("failed_logins_second_factor_pause_minutes", "1440"));
         Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
-            throttle.validate(new JsonObject().put("login_throttle_window_seconds", "0")));
+            failed.validate(new JsonObject().put("failed_logins_second_factor_limit", "101")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            failed.validate(new JsonObject().put("failed_logins_second_factor_pause_minutes", "0")));
     }
 
     @Test

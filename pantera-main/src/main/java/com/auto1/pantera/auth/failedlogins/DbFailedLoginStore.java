@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 import javax.sql.DataSource;
 
 /**
@@ -40,7 +41,8 @@ public final class DbFailedLoginStore implements FailedLoginStore {
      */
     private static final String READ = String.join(
         " ",
-        "SELECT clock_timestamp() AS now, f.failures, f.last_failure_at, f.locked_at",
+        "SELECT clock_timestamp() AS now, f.failures, f.last_failure_at, f.locked_at,",
+        "f.second_factor_failures, f.last_second_factor_at",
         "FROM (SELECT 1) one LEFT JOIN login_failures f ON f.username = ?"
     );
 
@@ -55,7 +57,8 @@ public final class DbFailedLoginStore implements FailedLoginStore {
      */
     private static final String LOCK = String.join(
         " ",
-        "SELECT clock_timestamp() AS now, failures, last_failure_at, locked_at",
+        "SELECT clock_timestamp() AS now, failures, last_failure_at, locked_at,",
+        "second_factor_failures, last_second_factor_at",
         "FROM login_failures WHERE username = ? FOR UPDATE"
     );
 
@@ -70,12 +73,22 @@ public final class DbFailedLoginStore implements FailedLoginStore {
     );
 
     /**
+     * Writes the unconfirmed second factors of a name.
+     */
+    private static final String WRITE_UNCONFIRMED = String.join(
+        " ",
+        "UPDATE login_failures SET second_factor_failures = ?, last_second_factor_at = ?",
+        "WHERE username = ?"
+    );
+
+    /**
      * Removes the row of a name and hands back what it held.
      */
     private static final String FORGET = String.join(
         " ",
         "DELETE FROM login_failures WHERE username = ?",
-        "RETURNING failures, last_failure_at, locked_at"
+        "RETURNING failures, last_failure_at, locked_at,",
+        "second_factor_failures, last_second_factor_at"
     );
 
     /**
@@ -84,6 +97,7 @@ public final class DbFailedLoginStore implements FailedLoginStore {
     private static final String LOCKED = String.join(
         " ",
         "SELECT username, failures, last_failure_at, locked_at,",
+        "second_factor_failures, last_second_factor_at,",
         "client_ip, user_agent, sign_in_path, credential",
         "FROM login_failures WHERE locked_at IS NOT NULL ORDER BY locked_at, username"
     );
@@ -94,6 +108,7 @@ public final class DbFailedLoginStore implements FailedLoginStore {
     private static final String ENTRY = String.join(
         " ",
         "SELECT username, failures, last_failure_at, locked_at,",
+        "second_factor_failures, last_second_factor_at,",
         "client_ip, user_agent, sign_in_path, credential",
         "FROM login_failures WHERE username = ?"
     );
@@ -150,7 +165,50 @@ public final class DbFailedLoginStore implements FailedLoginStore {
         final Optional<String> counted = new Counted(name).name();
         final Seen res;
         if (counted.isPresent()) {
-            res = this.count(counted.get(), policy, origin);
+            res = this.change(
+                counted.get(),
+                before -> before.state().failed(before.now(), policy),
+                (conn, key, after) -> {
+                    try (PreparedStatement stmt =
+                        conn.prepareStatement(DbFailedLoginStore.WRITE)) {
+                        stmt.setInt(1, after.failures());
+                        stmt.setTimestamp(2, DbFailedLoginStore.timestamp(after.lastFailure()));
+                        stmt.setTimestamp(3, DbFailedLoginStore.timestamp(after.lockedAt()));
+                        stmt.setString(4, origin.clientIp());
+                        stmt.setString(5, origin.userAgent());
+                        stmt.setString(6, origin.path());
+                        stmt.setString(7, origin.credential());
+                        stmt.setString(8, key);
+                        stmt.executeUpdate();
+                    }
+                }
+            );
+        } else {
+            res = new Seen(LoginState.NONE, this.read("").now());
+        }
+        return res;
+    }
+
+    @Override
+    public Seen unconfirmed(final String name, final FailedLoginsConfig policy) {
+        final Optional<String> counted = new Counted(name).name();
+        final Seen res;
+        if (counted.isPresent()) {
+            res = this.change(
+                counted.get(),
+                before -> before.state().unconfirmed(before.now(), policy),
+                (conn, key, after) -> {
+                    try (PreparedStatement stmt =
+                        conn.prepareStatement(DbFailedLoginStore.WRITE_UNCONFIRMED)) {
+                        stmt.setInt(1, after.unconfirmed());
+                        stmt.setTimestamp(
+                            2, DbFailedLoginStore.timestamp(after.lastUnconfirmed())
+                        );
+                        stmt.setString(3, key);
+                        stmt.executeUpdate();
+                    }
+                }
+            );
         } else {
             res = new Seen(LoginState.NONE, this.read("").now());
         }
@@ -249,14 +307,16 @@ public final class DbFailedLoginStore implements FailedLoginStore {
     }
 
     /**
-     * Count one failure of a name under its row lock.
+     * Change the state of a name under its row lock.
      *
      * @param name Counted name
-     * @param policy Policy
-     * @param origin Where the login came from
-     * @return The state after the failure
+     * @param next The state after the change, from the state before it
+     * @param write Writes the state after the change
+     * @return The state after the change
      */
-    private Seen count(final String name, final FailedLoginsConfig policy, final LoginOrigin origin) {
+    private Seen change(
+        final String name, final Function<Seen, LoginState> next, final Write write
+    ) {
         try (Connection conn = this.source.getConnection()) {
             final boolean auto = conn.getAutoCommit();
             conn.setAutoCommit(false);
@@ -277,18 +337,8 @@ public final class DbFailedLoginStore implements FailedLoginStore {
                         before = DbFailedLoginStore.seen(res);
                     }
                 }
-                final LoginState after = before.state().failed(before.now(), policy);
-                try (PreparedStatement stmt = conn.prepareStatement(DbFailedLoginStore.WRITE)) {
-                    stmt.setInt(1, after.failures());
-                    stmt.setTimestamp(2, DbFailedLoginStore.timestamp(after.lastFailure()));
-                    stmt.setTimestamp(3, DbFailedLoginStore.timestamp(after.lockedAt()));
-                    stmt.setString(4, origin.clientIp());
-                    stmt.setString(5, origin.userAgent());
-                    stmt.setString(6, origin.path());
-                    stmt.setString(7, origin.credential());
-                    stmt.setString(8, name);
-                    stmt.executeUpdate();
-                }
+                final LoginState after = next.apply(before);
+                write.write(conn, name, after);
                 conn.commit();
                 return new Seen(after, before.now());
             } catch (final SQLException | RuntimeException err) {
@@ -326,7 +376,9 @@ public final class DbFailedLoginStore implements FailedLoginStore {
             state = new LoginState(
                 failures,
                 DbFailedLoginStore.instant(res.getTimestamp("last_failure_at")),
-                DbFailedLoginStore.instant(res.getTimestamp("locked_at"))
+                DbFailedLoginStore.instant(res.getTimestamp("locked_at")),
+                res.getInt("second_factor_failures"),
+                DbFailedLoginStore.instant(res.getTimestamp("last_second_factor_at"))
             );
         }
         return state;
@@ -350,5 +402,23 @@ public final class DbFailedLoginStore implements FailedLoginStore {
             res = Timestamp.from(instant);
         }
         return res;
+    }
+
+    /**
+     * Writes the state of a name inside the transaction that changes it.
+     *
+     * @since 2.2.15
+     */
+    @FunctionalInterface
+    private interface Write {
+        /**
+         * Write.
+         *
+         * @param conn Connection of the transaction
+         * @param name Counted name
+         * @param after State after the change
+         * @throws SQLException When the database fails
+         */
+        void write(Connection conn, String name, LoginState after) throws SQLException;
     }
 }

@@ -10,7 +10,7 @@
  */
 /**
  * DB-backed, admin-editable security policy settings (request limits,
- * outbound egress, login throttling): loaders resolving {@code auth_settings}
+ * outbound egress, failed logins): loaders resolving {@code auth_settings}
  * rows, then {@code PANTERA_*} environment variables, then documented
  * defaults, exposed to consumers through live suppliers.
  *

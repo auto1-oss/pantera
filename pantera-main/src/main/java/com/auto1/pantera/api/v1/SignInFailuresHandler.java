@@ -44,8 +44,9 @@ import java.util.function.Supplier;
  *   <li>{@code GET /api/v1/sign-in-failures/api-keys} - rejected API keys</li>
  *   <li>{@code GET /api/v1/sign-in-failures/passwords} - failed password
  *   logins, with the count, delay and lock of the user</li>
- *   <li>{@code GET /api/v1/sign-in-failures/form-limit} - logins refused by
- *   the sign-in form's own limit</li>
+ *   <li>{@code GET /api/v1/sign-in-failures/second-factor} - sign-ins whose
+ *   password was accepted but whose second factor was not confirmed, and
+ *   password sign-ins refused during the pause that follows them</li>
  *   <li>{@code GET /api/v1/auth/rejected-keys} - the caller's own rejected
  *   API keys</li>
  * </ul>
@@ -120,8 +121,8 @@ public final class SignInFailuresHandler {
         router.get("/api/v1/sign-in-failures/passwords").handler(read).handler(
             ctx -> this.list(ctx, SignInFailure.PASSWORD, "", false)
         );
-        router.get("/api/v1/sign-in-failures/form-limit").handler(read).handler(
-            ctx -> this.list(ctx, SignInFailure.FORM_LIMIT, "", false)
+        router.get("/api/v1/sign-in-failures/second-factor").handler(read).handler(
+            ctx -> this.list(ctx, SignInFailure.SECOND_FACTOR, "", false)
         );
         // Every signed-in user: the rejected keys of that user, no others.
         router.get("/api/v1/auth/rejected-keys").handler(
@@ -172,7 +173,7 @@ public final class SignInFailuresHandler {
             } else if (SignInFailure.PASSWORD.equals(kind)) {
                 items = this.passwordItems(found.items());
             } else {
-                items = SignInFailuresHandler.limitItems(found.items());
+                items = SignInFailuresHandler.secondFactorItems(found.items());
             }
             return ApiResponse.paginated(items, page, size, found.total());
         };
@@ -278,21 +279,30 @@ public final class SignInFailuresHandler {
         return state;
     }
 
-    private static JsonArray limitItems(final List<SignInFailure> lines) {
+    /**
+     * Lines of second factors that were not confirmed.
+     *
+     * @param lines Lines of the report
+     * @return Items: the unconfirmed second factors and the refusals during
+     *  a pause, the count toward the pause and when the pause ends
+     */
+    private static JsonArray secondFactorItems(final List<SignInFailure> lines) {
         final Instant now = Instant.now();
         final JsonArray items = new JsonArray();
         for (final SignInFailure line : lines) {
             items.add(
                 SignInFailuresHandler.origin(line)
-                    .put("hits", line.hits())
-                    .put("failures", line.failures())
-                    .put("blocked_until", SignInFailuresHandler.iso(line.blockedUntil()))
+                    .put("unconfirmed", line.hits())
+                    .put("refused", line.refused())
+                    .put("last_reason", line.reason())
+                    .put("counted", line.failures())
+                    .put("paused_until", SignInFailuresHandler.iso(line.blockedUntil()))
                     .put(
-                        "blocked",
+                        "paused",
                         line.blockedUntil() != null && line.blockedUntil().isAfter(now)
                     )
-                    .put("first_hit_at", SignInFailuresHandler.iso(line.firstSeen()))
-                    .put("last_hit_at", SignInFailuresHandler.iso(line.lastSeen()))
+                    .put("first_seen_at", SignInFailuresHandler.iso(line.firstSeen()))
+                    .put("last_seen_at", SignInFailuresHandler.iso(line.lastSeen()))
             );
         }
         return items;

@@ -429,6 +429,86 @@ final class GuardedPasswordsTest {
     }
 
     @Test
+    void unconfirmedSecondFactorIsNoFailedLoginAndIsCountedApart() {
+        this.provider.refusal.set(new AuthRefusal(AuthRefusal.SECOND_FACTOR_FAILED));
+        final PasswordCheck.Outcome outcome = this.login("alice", GuardedPasswordsTest.RIGHT);
+        MatcherAssert.assertThat(
+            "the provider's reason, no failed login, one unconfirmed second factor",
+            List.of(
+                outcome.refusal().map(AuthRefusal::reason).orElse(""),
+                String.valueOf(this.failures("alice")),
+                String.valueOf(this.logins.state("alice").unconfirmed())
+            ),
+            new IsEqual<>(List.of(AuthRefusal.SECOND_FACTOR_FAILED, "0", "1"))
+        );
+    }
+
+    @Test
+    void secondFactorLimitPausesSignInAndNoProviderIsAskedDuringThePause() {
+        this.policy.set(FailedLoginsConfig.defaults().withSecondFactor(2, 15));
+        this.provider.refusal.set(new AuthRefusal(AuthRefusal.SECOND_FACTOR_FAILED));
+        this.login("alice", GuardedPasswordsTest.RIGHT);
+        final AuthRefusal reached =
+            this.login("alice", GuardedPasswordsTest.RIGHT).refusal().orElseThrow();
+        final AuthRefusal during =
+            this.login("alice", GuardedPasswordsTest.RIGHT).refusal().orElseThrow();
+        MatcherAssert.assertThat(
+            "the one that reaches the limit and the one after it are paused for 15 minutes",
+            List.of(
+                reached.reason(), String.valueOf(reached.retryAfter()), during.reason(),
+                String.valueOf(during.status())
+            ),
+            new IsEqual<>(
+                List.of(
+                    "sign_in_paused", "OptionalLong[900]", "sign_in_paused",
+                    String.valueOf(RsStatus.FORBIDDEN)
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "no push is sent during the pause, no lock",
+            List.of(
+                String.valueOf(this.provider.calls.get()),
+                String.valueOf(this.logins.passwordLocked("alice"))
+            ),
+            new IsEqual<>(List.of("2", "false"))
+        );
+    }
+
+    @Test
+    void signInIsCheckedAgainWhenThePauseIsOver() {
+        this.policy.set(FailedLoginsConfig.defaults().withSecondFactor(1, 15));
+        this.provider.refusal.set(new AuthRefusal(AuthRefusal.SECOND_FACTOR_FAILED));
+        this.login("alice", GuardedPasswordsTest.RIGHT);
+        this.provider.refusal.set(null);
+        this.clock.set(this.clock.get().plusSeconds(15L * 60L));
+        MatcherAssert.assertThat(
+            "the person confirms the push this time",
+            this.login("alice", GuardedPasswordsTest.RIGHT).user().isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "and the success ends the count",
+            this.logins.state("alice").unconfirmed(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void wrongPasswordsAndUnconfirmedSecondFactorsAreCountedApart() {
+        this.policy.set(FailedLoginsConfig.defaults().withSecondFactor(5, 15));
+        this.login("alice", "wrong");
+        this.provider.refusal.set(new AuthRefusal(AuthRefusal.SECOND_FACTOR_FAILED));
+        this.clock.set(this.clock.get().plusSeconds(60L));
+        this.login("alice", GuardedPasswordsTest.RIGHT);
+        this.login("alice", GuardedPasswordsTest.RIGHT);
+        MatcherAssert.assertThat(
+            "one wrong password, two unconfirmed second factors",
+            List.of(this.failures("alice"), this.logins.state("alice").unconfirmed()),
+            new IsEqual<>(List.of(1, 2))
+        );
+    }
+
+    @Test
     void signInOnTheFormIsNeverAnsweredFromMemory() {
         // A person signs in on the form, where the identity provider asks
         // for a second factor: a remembered answer would skip it.

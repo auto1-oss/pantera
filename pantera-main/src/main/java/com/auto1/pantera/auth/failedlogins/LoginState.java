@@ -30,19 +30,40 @@ import java.time.Instant;
  *   passed. A failure after such an end starts a new count.</li>
  *   <li>With a forget time set, a failure that comes that long after the
  *   last one starts a new count as well.</li>
+ *   <li>Second factors that were not confirmed are counted apart and never
+ *   delay or lock. They count while each comes within the pause time of
+ *   the previous one; from the limit on, password sign-in is paused until
+ *   the pause time has passed since the last one. Like the delay, the
+ *   pause is not stored.</li>
  * </ul>
  *
  * @param failures Failed logins counted
  * @param lastFailure Time of the last one, null when there is none
  * @param lockedAt Time the user was locked, null when not locked
+ * @param unconfirmed Second factors not confirmed, counted
+ * @param lastUnconfirmed Time of the last one, null when there is none
  * @since 2.2.15
  */
-public record LoginState(int failures, Instant lastFailure, Instant lockedAt) {
+public record LoginState(
+    int failures, Instant lastFailure, Instant lockedAt,
+    int unconfirmed, Instant lastUnconfirmed
+) {
 
     /**
      * State of a name without failed logins.
      */
-    public static final LoginState NONE = new LoginState(0, null, null);
+    public static final LoginState NONE = new LoginState(0, null, null, 0, null);
+
+    /**
+     * State without unconfirmed second factors.
+     *
+     * @param failures Failed logins counted
+     * @param lastFailure Time of the last one, null when there is none
+     * @param lockedAt Time the user was locked, null when not locked
+     */
+    public LoginState(final int failures, final Instant lastFailure, final Instant lockedAt) {
+        this(failures, lastFailure, lockedAt, 0, null);
+    }
 
     /**
      * Whether a lock is recorded. It may have expired: see
@@ -70,15 +91,47 @@ public record LoginState(int failures, Instant lastFailure, Instant lockedAt) {
                 res = Admission.LOCKED;
             }
         } else {
-            final long delay = policy.delaySeconds(this.failures);
-            if (delay > 0L && this.lastFailure != null
-                && now.isBefore(this.lastFailure.plusSeconds(delay))) {
-                final long millis =
-                    Duration.between(now, this.lastFailure.plusSeconds(delay)).toMillis();
-                res = Admission.delayed((millis + 999L) / 1000L);
-            } else {
-                res = Admission.OPEN;
-            }
+            res = this.waiting(now, policy);
+        }
+        return res;
+    }
+
+    /**
+     * The state after one more sign-in whose password was accepted but
+     * whose second factor was not confirmed. The failed logins, their delay
+     * and the lock stay as they are.
+     *
+     * @param now Time of the sign-in
+     * @param policy Policy
+     * @return New state
+     */
+    public LoginState unconfirmed(final Instant now, final FailedLoginsConfig policy) {
+        final int count;
+        if (this.lastUnconfirmed == null || !now.isBefore(
+            this.lastUnconfirmed.plus(Duration.ofMinutes(policy.secondFactorPauseMinutes()))
+        )) {
+            count = 1;
+        } else if (this.unconfirmed == Integer.MAX_VALUE) {
+            count = this.unconfirmed;
+        } else {
+            count = this.unconfirmed + 1;
+        }
+        return new LoginState(this.failures, this.lastFailure, this.lockedAt, count, now);
+    }
+
+    /**
+     * When the pause after unconfirmed second factors ends.
+     *
+     * @param policy Policy
+     * @return The end, null when the count has not reached the limit or the
+     *  pause is off. It may lie in the past
+     */
+    public Instant pausedUntil(final FailedLoginsConfig policy) {
+        final Instant res;
+        if (this.lastUnconfirmed != null && policy.pauses(this.unconfirmed)) {
+            res = this.lastUnconfirmed.plus(Duration.ofMinutes(policy.secondFactorPauseMinutes()));
+        } else {
+            res = null;
         }
         return res;
     }
@@ -93,7 +146,8 @@ public record LoginState(int failures, Instant lastFailure, Instant lockedAt) {
     public LoginState failed(final Instant now, final FailedLoginsConfig policy) {
         final LoginState res;
         if (this.lockExpired(now, policy) || this.forgotten(now, policy)) {
-            res = LoginState.NONE.failed(now, policy);
+            res = new LoginState(0, null, null, this.unconfirmed, this.lastUnconfirmed)
+                .failed(now, policy);
         } else {
             final int count;
             if (this.failures == Integer.MAX_VALUE) {
@@ -105,7 +159,7 @@ public record LoginState(int failures, Instant lastFailure, Instant lockedAt) {
             if (lock == null && policy.locks(count)) {
                 lock = now;
             }
-            res = new LoginState(count, now, lock);
+            res = new LoginState(count, now, lock, this.unconfirmed, this.lastUnconfirmed);
         }
         return res;
     }
@@ -140,5 +194,44 @@ public record LoginState(int failures, Instant lastFailure, Instant lockedAt) {
                     this.lockedAt.plus(Duration.ofMinutes(policy.unlockAfterMinutes()))
                 )
         );
+    }
+
+    /**
+     * What applies to a name that is not locked: the delay after wrong
+     * passwords or the pause after unconfirmed second factors, whichever
+     * ends later.
+     *
+     * @param now Current time
+     * @param policy Policy
+     * @return Open, delayed or paused
+     */
+    private Admission waiting(final Instant now, final FailedLoginsConfig policy) {
+        final long delay = policy.delaySeconds(this.failures);
+        Instant delayed = null;
+        if (delay > 0L && this.lastFailure != null) {
+            delayed = this.lastFailure.plusSeconds(delay);
+        }
+        final Instant paused = this.pausedUntil(policy);
+        final Admission res;
+        if (paused != null && now.isBefore(paused)
+            && (delayed == null || !paused.isBefore(delayed))) {
+            res = Admission.paused(LoginState.seconds(now, paused));
+        } else if (delayed != null && now.isBefore(delayed)) {
+            res = Admission.delayed(LoginState.seconds(now, delayed));
+        } else {
+            res = Admission.OPEN;
+        }
+        return res;
+    }
+
+    /**
+     * Whole seconds from now until a time, rounded up.
+     *
+     * @param now Current time
+     * @param until Time in the future
+     * @return Seconds
+     */
+    private static long seconds(final Instant now, final Instant until) {
+        return (Duration.between(now, until).toMillis() + 999L) / 1000L;
     }
 }

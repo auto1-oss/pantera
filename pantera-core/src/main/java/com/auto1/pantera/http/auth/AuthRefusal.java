@@ -38,6 +38,14 @@ import java.util.regex.Pattern;
 public final class AuthRefusal {
 
     /**
+     * Reason of a sign-in whose password was accepted but whose second
+     * factor was not confirmed: the push was denied or not answered, or the
+     * code was wrong. Never a wrong password: it counts toward the pause of
+     * the failed-logins policy, not toward its delay and lock.
+     */
+    public static final String SECOND_FACTOR_FAILED = "second_factor_failed";
+
+    /**
      * Refusal noted for the login being checked on this thread.
      */
     private static final ThreadLocal<AuthRefusal> NOTED = new ThreadLocal<>();
@@ -138,6 +146,15 @@ public final class AuthRefusal {
      */
     public String reason() {
         return this.token;
+    }
+
+    /**
+     * Whether this refusal is a second factor that was not confirmed.
+     *
+     * @return True for {@link #SECOND_FACTOR_FAILED}
+     */
+    public boolean unconfirmedSecondFactor() {
+        return AuthRefusal.SECOND_FACTOR_FAILED.equals(this.token);
     }
 
     /**

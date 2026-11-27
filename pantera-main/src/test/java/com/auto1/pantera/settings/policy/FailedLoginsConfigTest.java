@@ -163,4 +163,39 @@ final class FailedLoginsConfigTest {
             () -> new FailedLoginsConfig(from, first, max, lock, unlock, 0, true)
         );
     }
+
+    @Test
+    void defaultsPauseAfterFiveUnconfirmedSecondFactorsForFifteenMinutes() {
+        final FailedLoginsConfig def = FailedLoginsConfig.defaults();
+        MatcherAssert.assertThat(
+            java.util.List.of(def.secondFactorLimit(), def.secondFactorPauseMinutes()),
+            new IsEqual<>(java.util.List.of(5, 15))
+        );
+    }
+
+    @ParameterizedTest
+    @CsvSource({"-1, 15", "101, 15", "5, 0", "5, 1441"})
+    void secondFactorValuesOutsideTheirRangeAreRejected(final int limit, final int pause) {
+        Assertions.assertThrows(
+            IllegalArgumentException.class,
+            () -> FailedLoginsConfig.defaults().withSecondFactor(limit, pause)
+        );
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0, 1", "100, 1440"})
+    void secondFactorValuesAtTheEndsOfTheirRangeAreAccepted(final int limit, final int pause) {
+        Assertions.assertDoesNotThrow(
+            () -> FailedLoginsConfig.defaults().withSecondFactor(limit, pause)
+        );
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0, 10, false", "5, 4, false", "5, 5, true", "5, 6, true"})
+    void pauseComesAtTheLimit(final int limit, final int unconfirmed, final boolean pauses) {
+        MatcherAssert.assertThat(
+            FailedLoginsConfig.defaults().withSecondFactor(limit, 15).pauses(unconfirmed),
+            new IsEqual<>(pauses)
+        );
+    }
 }

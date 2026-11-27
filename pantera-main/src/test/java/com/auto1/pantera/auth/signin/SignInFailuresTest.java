@@ -142,14 +142,31 @@ final class SignInFailuresTest {
     }
 
     @Test
-    void limitHitCarriesTheFailuresAndTheEndOfTheBlock() {
-        this.report.formLimit("alice", new LoginSource("192.0.2.9", "Mozilla/5.0", "ui"), 5, 857L);
+    void secondFactorLineCarriesTheCountAndTheEndOfThePause() {
+        final Instant end = Instant.parse("2026-01-01T10:15:00Z");
+        final LoginSource form = new LoginSource("192.0.2.9", "Mozilla/5.0", "ui");
+        this.report.unconfirmedSecondFactor("alice", form, 5, end);
+        this.report.refusedPaused("alice", form, 5, end);
         final SignInFailure line = this.report
-            .list(SignInFailuresTest.all(SignInFailure.FORM_LIMIT)).items().get(0);
-        MatcherAssert.assertThat("failures in the window", line.failures(), new IsEqual<>(5));
+            .list(SignInFailuresTest.all(SignInFailure.SECOND_FACTOR)).items().get(0);
         MatcherAssert.assertThat(
-            "the block ends when the limit said",
-            line.blockedUntil(), new IsEqual<>(Instant.parse("2026-01-01T10:14:17Z"))
+            "unconfirmed, refused during the pause, the count, and the end of the pause",
+            List.of(
+                String.valueOf(line.hits()), String.valueOf(line.refused()),
+                String.valueOf(line.failures()), String.valueOf(line.blockedUntil())
+            ),
+            new IsEqual<>(List.of("1", "1", "5", "2026-01-01T10:15:00Z"))
+        );
+    }
+
+    @Test
+    void secondFactorIsNotAFailedPassword() {
+        this.report.unconfirmedSecondFactor(
+            "alice", new LoginSource("192.0.2.9", "Mozilla/5.0", "ui"), 1, null
+        );
+        MatcherAssert.assertThat(
+            this.report.list(SignInFailuresTest.all(SignInFailure.PASSWORD)).total(),
+            new IsEqual<>(0)
         );
     }
 

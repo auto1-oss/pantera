@@ -33,7 +33,7 @@ final class SecurityPolicySettingsSyncValkeyTest {
 
     @AfterEach
     void tearDown() {
-        LoginThrottleSettingsLoader.uninstall();
+        FailedLoginsSettingsLoader.uninstall();
     }
 
     @Test
@@ -42,8 +42,8 @@ final class SecurityPolicySettingsSyncValkeyTest {
     void broadcastFromOneNodeInvalidatesTheOther() throws InterruptedException {
         final String host = System.getenv("VALKEY_HOST");
         final int port = Integer.parseInt(System.getenv().getOrDefault("VALKEY_PORT", "6379"));
-        final Map<String, String> rows = new HashMap<>(Map.of("login_throttle_max_failures", "5"));
-        LoginThrottleSettingsLoader.install(FakeAuthSettings.withRows(rows), Map.<String, String>of()::get);
+        final Map<String, String> rows = new HashMap<>(Map.of("failed_logins_second_factor_limit", "5"));
+        FailedLoginsSettingsLoader.install(FakeAuthSettings.withRows(rows), Map.<String, String>of()::get);
         try (
             ValkeyConnection connA = new ValkeyConnection(host, port, Duration.ofSeconds(2));
             ValkeyConnection connB = new ValkeyConnection(host, port, Duration.ofSeconds(2));
@@ -53,14 +53,14 @@ final class SecurityPolicySettingsSyncValkeyTest {
             SecurityPolicySettingsSync.attach(Optional.of(busB));
             final SecurityPolicySettingsSync nodeA = SecurityPolicySettingsSync.attach(Optional.of(busA));
             MatcherAssert.assertThat(
-                "cached before the write", LoginThrottleSettingsLoader.activeSupplier().get().maxFailures(), new IsEqual<>(5)
+                "cached before the write", FailedLoginsSettingsLoader.activeSupplier().get().secondFactorLimit(), new IsEqual<>(5)
             );
-            rows.put("login_throttle_max_failures", "3");
-            nodeA.broadcast("login_throttle");
-            int seen = LoginThrottleSettingsLoader.activeSupplier().get().maxFailures();
+            rows.put("failed_logins_second_factor_limit", "3");
+            nodeA.broadcast("failed_logins");
+            int seen = FailedLoginsSettingsLoader.activeSupplier().get().secondFactorLimit();
             while (seen != 3) {
                 Thread.sleep(50L);
-                seen = LoginThrottleSettingsLoader.activeSupplier().get().maxFailures();
+                seen = FailedLoginsSettingsLoader.activeSupplier().get().secondFactorLimit();
             }
             MatcherAssert.assertThat("node B reloaded the row", seen, new IsEqual<>(3));
         }

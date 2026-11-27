@@ -63,7 +63,20 @@ public interface FailedLoginStore {
     Seen fail(String name, FailedLoginsConfig policy, LoginOrigin origin);
 
     /**
-     * Forget the failures and the lock of a name.
+     * Count one sign-in whose password was accepted but whose second factor
+     * was not confirmed. The failed logins and the lock of the name, and
+     * the origin of its last failed login, stay as they are. Concurrent
+     * ones of one name are each counted.
+     *
+     * @param name User name
+     * @param policy Policy it is counted under
+     * @return The state after it, with the store's time
+     */
+    Seen unconfirmed(String name, FailedLoginsConfig policy);
+
+    /**
+     * Forget the failures, the unconfirmed second factors and the lock of a
+     * name.
      *
      * @param name User name
      * @return The state that was there
