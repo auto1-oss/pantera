@@ -229,10 +229,15 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 // JWT-as-password: Skip cache, validate directly.
                 // JWT tokens have their own expiry (exp claim), caching would
                 // override that expiry. Also, JWT validation is O(1) - no need to cache.
-                if (looksLikeJwt(pass) || this.bypass.test(user)) {
+                if (looksLikeJwt(pass) || this.bypass.test(user)
+                    || com.auto1.pantera.http.auth.LoginSource.current().form()) {
                     // JWT tokens bypass cache - validated directly using exp claim.
                     // So does a user the bypass names (a locked one): a
                     // remembered login must not pass, the chain decides.
+                    // So does a sign-in on the sign-in form or endpoint, which
+                    // is neither answered from nor remembered here: a person
+                    // signs in there, and a remembered login would skip the
+                    // second factor the identity provider asks for.
                     return this.origin.user(user, pass);
                 }
                 

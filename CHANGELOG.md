@@ -14,6 +14,7 @@
 
 ### 🔒 Security
 
+- **A remembered password no longer stands in for a second factor.** A sign-in on the sign-in form or with `POST /api/v1/auth/token` was answered from the credential cache when the same name and password had signed in on the same node within the lifetime of the credential cache, so it skipped the second factor the identity provider asks for. Such a sign-in is now never answered from the cache and never stored in it: the identity provider is asked every time. Repository requests keep the cache. ([@aydasraf](https://github.com/aydasraf))
 - **An API key is never passed to an identity provider.** With an Okta or Keycloak password provider configured, an API key that Pantera rejected (expired, revoked, or issued by another installation) went on to that provider as if it were the user's password, and a client that repeated the request added failed logins to the user's directory account. A credential that has the form of an API key is now checked as an API key only, in whatever order the providers are configured, and a rejected one is answered with `401`. ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔧 Bug fixes

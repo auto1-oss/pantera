@@ -46,7 +46,9 @@ import java.util.concurrent.locks.ReentrantLock;
  * allows; without this, all of them would pass before the first failure is
  * counted. Logins that wait behind one with the same password take its
  * answer when it was accepted, so a build that opens many connections with
- * one right password asks the provider once.</p>
+ * one right password asks the provider once. A sign-in on the sign-in form
+ * or endpoint is never answered that way, nor remembered: a person signs
+ * in there, and a remembered answer would skip the second factor.</p>
  *
  * @since 2.2.15
  */
@@ -154,7 +156,11 @@ public final class GuardedPasswords implements Authentication {
         final String counted, final String username, final String password
     ) {
         final byte[] digest = GuardedPasswords.digest(counted, password);
-        final Accepted before = this.accepted.getIfPresent(counted);
+        final boolean form = LoginSource.current().form();
+        Accepted before = null;
+        if (!form) {
+            before = this.accepted.getIfPresent(counted);
+        }
         Optional<AuthUser> res = Optional.empty();
         if (before != null && MessageDigest.isEqual(before.digest(), digest)) {
             res = Optional.of(before.user());
@@ -175,7 +181,9 @@ public final class GuardedPasswords implements Authentication {
         final Optional<AuthUser> res = this.origin.user(username, password);
         if (res.isPresent()) {
             this.logins.succeeded(username);
-            this.accepted.put(counted, new Accepted(digest, res.get()));
+            if (!LoginSource.current().form()) {
+                this.accepted.put(counted, new Accepted(digest, res.get()));
+            }
         } else if (AuthRefusal.noted().isEmpty()) {
             // A failure changes what the name may do: an answer accepted
             // moments ago is not handed to the logins that follow it.
