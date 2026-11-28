@@ -93,7 +93,7 @@ A user who is signed in to the UI when the lock comes is signed out with the nex
 
 ## Unlocking
 
-- **UI:** *Users* shows a **Locked** tag and an **Unlock** action per user, a **Locked only** filter and **Unlock all**. A user's page has a **Failed logins** panel with the count, the lock and where the last failed login came from, and **Unlock** (or **Clear failed logins** for a user who is not locked). The *Failed logins* card in System Settings lists every locked name, also those that have no Pantera user. The **Locked only** filter reads the user list in pages and covers the first 2,000 users; the card's list has no such limit.
+- **UI:** *Users* shows a **Locked** tag and an **Unlock** action per user, a **Locked only** filter and **Unlock all**. A user's page has a **Failed logins** panel with the count, the lock and where the last failed login came from, and **Unlock** (or **Clear failed logins** for a user who is not locked). The *Sign-in failures* page lists every locked name at its top, also those that have no Pantera user, with **Unlock** per name and **Unlock all**; the *Failed logins* card in System Settings holds the policy only and links there. The **Locked only** filter reads the user list in pages and covers the first 2,000 users; the list of the Sign-in failures page has no such limit.
 - **API:** `POST /api/v1/users/:name/unlock` and `POST /api/v1/users/unlock-all`. `GET /api/v1/locked-users` lists the locked names with the client address, client program and sign-in path of their last failed login. Unlocking needs the permission to enable or disable a user.
 - **Without a login,** for the case that every administrator is locked: remove the row in the database. Every node picks the change up within 15 seconds; no restart is needed.
 

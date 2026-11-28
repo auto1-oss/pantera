@@ -23,7 +23,6 @@ import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { useNotificationStore } from '@/stores/notifications'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import LockedUsersList from '@/components/admin/LockedUsersList.vue'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
@@ -221,11 +220,10 @@ const failedLoginsCountRejectedKeys = ref(false)
 const failedLoginsLockAllCredentials = ref(true)
 const failedLoginsSecondFactorLimit = ref(5)
 const failedLoginsSecondFactorPauseMinutes = ref(15)
-/** The card's list of locked names; loaded again after a save of the policy. */
-const lockedUsersList = ref<{ reload: () => Promise<void> } | null>(null)
 // Sign-in report (2.2.15): whether Pantera notes who fails to sign in, and
 // for how many days a line is kept. The report itself is the Sign-in
-// failures page, which is served to accounts that may read users.
+// failures page, which is served to accounts that may read users. The
+// names locked now, and their unlock, are on that page too.
 const signInReportEnabled = ref(true)
 const signInReportRetentionDays = ref(90)
 const canOpenSignInFailures = computed(() => auth.hasAction('api_user_permissions', 'read'))
@@ -772,9 +770,7 @@ const failedLoginsProblem = computed<string | null>(() => {
 /**
  * Save the failed-logins policy: the login delay and the account lock of
  * a wrong password, and the pause of an unconfirmed second factor.
- * Applies to the next login on every node. The card's list of locked names is loaded again: with
- * the lock set to 0 the server unlocks every locked user, which can take
- * up to 15 seconds; the list has a Refresh for names not released yet.
+ * Applies to the next login on every node.
  */
 async function saveFailedLoginsSettings(): Promise<boolean> {
   const problem = failedLoginsProblem.value
@@ -797,7 +793,6 @@ async function saveFailedLoginsSettings(): Promise<boolean> {
       failed_logins_second_factor_pause_minutes: String(failedLoginsSecondFactorPauseMinutes.value),
     })
     notify.success('Failed logins settings saved')
-    void lockedUsersList.value?.reload()
     return true
   } catch (err) {
     notify.error('Failed to save failed logins settings', apiErrorMessage(err, 'Request failed'))
@@ -2069,8 +2064,23 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
               unlock time, or limit the lock to password sign-in, where that is not
               acceptable for accounts that builds use.
             </div>
-            <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
-              <LockedUsersList ref="lockedUsersList" />
+            <div
+              class="border-t border-gray-200 dark:border-gray-700 pt-4 text-sm"
+              data-testid="failed-logins-locked-users"
+            >
+              <router-link
+                v-if="canOpenSignInFailures"
+                to="/admin/sign-in-failures"
+                class="text-blue-500 hover:underline"
+                data-testid="failed-logins-locked-users-link"
+              >
+                See and unlock the locked users on the Sign-in failures page
+                <i class="pi pi-arrow-right text-xs ml-1" />
+              </router-link>
+              <span v-else class="text-gray-500">
+                Locked users are listed and unlocked on the Sign-in failures page, for accounts
+                that may read users.
+              </span>
             </div>
           </div>
         </template>

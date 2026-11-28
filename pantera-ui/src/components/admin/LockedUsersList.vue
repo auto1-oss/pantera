@@ -9,9 +9,9 @@ import { localDateTime, relativeTime } from '@/utils/relativeTime'
 import UnlockAllDialog from './UnlockAllDialog.vue'
 
 // Every locked name with the origin of its last failed login, for the
-// Failed logins card of System Settings. Unlike the users list it also
-// shows names that have no Pantera user: a login checked with an identity
-// provider is counted for the directory account behind it.
+// Sign-in failures page. Unlike the users list it also shows names that
+// have no Pantera user: a login checked with an identity provider is
+// counted for the directory account behind it.
 const auth = useAuthStore()
 const {
   locked, loading, loadError, unlocking, unlockingAll, canUnlock, load, unlock, unlockAll,
@@ -25,6 +25,15 @@ const PAGE_ROWS = 20
 const canRead = computed(() => auth.hasAction('api_user_permissions', 'read'))
 const confirmVisible = ref(false)
 
+/** A name, or every name, was unlocked: other lists of the page show the lock too. */
+const emit = defineEmits<{ unlocked: [] }>()
+
+async function unlockOne(name: string) {
+  if (await unlock(name)) {
+    emit('unlocked')
+  }
+}
+
 async function reload() {
   if (canRead.value) {
     await load()
@@ -35,6 +44,7 @@ async function confirmUnlockAll() {
   // On a failure the dialog stays open under the error toast.
   if (await unlockAll()) {
     confirmVisible.value = false
+    emit('unlocked')
   }
 }
 
@@ -145,7 +155,7 @@ defineExpose({ reload })
               :loading="unlocking === data.name"
               :disabled="unlockingAll"
               data-testid="locked-user-unlock"
-              @click="unlock(data.name)"
+              @click="unlockOne(data.name)"
             />
           </template>
         </Column>

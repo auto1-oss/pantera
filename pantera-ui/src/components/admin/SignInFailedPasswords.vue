@@ -27,6 +27,9 @@ const list = ref<{ reload: () => Promise<void> } | null>(null)
 /** Unlocking needs the same permission as enabling or disabling a user. */
 const canUnlock = computed(() => auth.hasAction('api_user_permissions', 'enable'))
 
+/** A user was unlocked: other lists of the page show the lock too. */
+const emit = defineEmits<{ unlocked: [] }>()
+
 /** The user whose unlock waits for the confirmation; null for none. */
 const unlockTarget = ref<string | null>(null)
 const unlocking = ref(false)
@@ -51,6 +54,7 @@ async function confirmUnlock() {
       notify.info('User was not locked', `${name}: failed logins cleared`)
     }
     unlockTarget.value = null
+    emit('unlocked')
     // The state of the user is part of every line: read the lines again.
     await list.value?.reload()
   } catch (err) {
@@ -60,6 +64,13 @@ async function confirmUnlock() {
     unlocking.value = false
   }
 }
+
+/** Reads the lines again: a user was unlocked elsewhere on the page. */
+async function reload() {
+  await list.value?.reload()
+}
+
+defineExpose({ reload })
 </script>
 
 <template>

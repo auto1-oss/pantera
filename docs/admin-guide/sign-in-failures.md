@@ -4,7 +4,7 @@
 
 The report answers one question: **who fails to sign in, with what, and from where?** It lists rejected API keys with their owner, failed password logins with the user's delay and lock, and sign-ins whose password was right but whose second factor was not confirmed. Use it to find the tool that still sends an old key or password before that tool locks its user or reaches the directory behind an identity provider.
 
-- **UI:** *Administration → Sign-in failures*, three tabs. Each list can be filtered by user and by client address.
+- **UI:** *Administration → Sign-in failures*. At the top, the users locked now, with where their last failed login came from, **Unlock** per name and **Unlock all** (see [Failed Logins](failed-logins.md#unlocking)); below them three tabs. Each tab can be filtered by user and by client address. An unlock in either place updates the other.
 - **API:** `GET /api/v1/sign-in-failures/api-keys`, `/passwords` and `/second-factor`. See the [REST API reference](../rest-api-reference.md#get-apiv1sign-in-failuresapi-keys).
 - **Every user** sees their own rejected keys on their profile page, and with `GET /api/v1/auth/rejected-keys`.
 

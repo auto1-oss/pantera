@@ -21,7 +21,9 @@ vi.mock('@/api/signInFailures', () => ({
 }))
 
 vi.mock('@/api/failedLogins', () => ({
+  listLockedUsers: vi.fn().mockResolvedValue([]),
   unlockUser: vi.fn().mockResolvedValue(true),
+  unlockAllUsers: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/api/users', () => ({
