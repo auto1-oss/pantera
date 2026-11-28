@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.auth;
 
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.trace.TraceHeaders;
 import java.io.IOException;
@@ -41,6 +43,32 @@ import javax.json.JsonReader;
  * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
  */
 public final class OktaOidcClient {
+
+    /**
+     * Prefix of the Okta transaction statuses that ask for a second factor
+     * ({@code MFA_REQUIRED}, {@code MFA_CHALLENGE}, {@code MFA_ENROLL},
+     * {@code MFA_ENROLL_ACTIVATE}).
+     */
+    private static final String MFA_PREFIX = "MFA_";
+
+    /**
+     * Reason of a login refused because a second factor was asked for.
+     */
+    private static final String MFA_REASON = "mfa_required";
+
+    /**
+     * Reason of a login that Okta did not reject as a wrong password but
+     * that did not end in a sign-in either.
+     */
+    private static final String NOT_COMPLETED = "sign_in_not_completed";
+
+    /**
+     * Whether Okta said the credentials of the login being checked on this
+     * thread are wrong. Everything else that ends a login is no wrong
+     * password, and is refused with a reason of its own.
+     */
+    private final ThreadLocal<Boolean> rejected = ThreadLocal.withInitial(() -> Boolean.FALSE);
+
 
     private final HttpClient client;
 
@@ -109,11 +137,56 @@ public final class OktaOidcClient {
         this.userinfoUrl = oidcBase + "/v1/userinfo";
     }
 
+    /**
+     * Check a user name and password with Okta and, when they are right,
+     * read the user's identity.
+     *
+     * @param username User name
+     * @param password Password
+     * @param mfaCode Second-factor code the person typed, or null
+     * @param interactive Whether a person is signing in. When Okta asks
+     *  for a second factor and nobody is there to answer it (a repository
+     *  login), the login is refused and no factor is verified: no push is
+     *  sent to the user's phone, and no code is sent to Okta
+     * @return The identity, or null when the login is refused
+     * @throws IOException When Okta cannot be reached
+     * @throws InterruptedException When the calling thread is interrupted
+     */
     public OktaAuthResult authenticate(
         final String username,
         final String password,
-        final String mfaCode
+        final String mfaCode,
+        final boolean interactive
     ) throws IOException, InterruptedException {
+        final OktaAuthResult res = this.attempt(username, password, mfaCode, interactive);
+        if (res == null && !this.rejected.get().booleanValue()
+            && AuthRefusal.noted().isEmpty()) {
+            // Okta accepted the password, or never judged it, and the
+            // sign-in ended somewhere after that: no wrong password.
+            new AuthRefusal(OktaOidcClient.NOT_COMPLETED).note();
+        }
+        return res;
+    }
+
+    /**
+     * One sign-in at Okta. Sets {@link #rejected} when Okta said the
+     * credentials are wrong.
+     *
+     * @param username User name
+     * @param password Password
+     * @param mfaCode Second-factor code the person typed, or null
+     * @param interactive Whether a person is signing in
+     * @return The identity, or null when the login is refused
+     * @throws IOException When Okta cannot be reached
+     * @throws InterruptedException When the calling thread is interrupted
+     */
+    private OktaAuthResult attempt(
+        final String username,
+        final String password,
+        final String mfaCode,
+        final boolean interactive
+    ) throws IOException, InterruptedException {
+        this.rejected.set(Boolean.FALSE);
         EcsLogger.info("com.auto1.pantera.auth")
             .message(String.format("Starting Okta authentication: issuer=%s, authnUrl=%s, authorizeUrl=%s", this.issuer, this.authnUrl, this.authorizeUrl))
             .eventCategory("authentication")
@@ -158,6 +231,13 @@ public final class OktaOidcClient {
                 .field("http.response.status_code", authnStatus)
                 .field("log.source", "application")
                 .log();
+            if (authnCredFailure) {
+                this.rejected.set(Boolean.TRUE);
+            } else {
+                // Okta did not say the password is wrong: it is rate
+                // limiting or failing. Not a failed login of this user.
+                OktaOidcClient.unavailable().note();
+            }
             return null;
         }
         final JsonObject body = json(response.body());
@@ -165,8 +245,15 @@ public final class OktaOidcClient {
         String sessionToken = null;
         if ("SUCCESS".equals(status)) {
             sessionToken = body.getString("sessionToken", null);
+        } else if (!interactive && status.startsWith(OktaOidcClient.MFA_PREFIX)) {
+            OktaOidcClient.refuseSecondFactor(username, status);
+            return null;
         } else if ("MFA_REQUIRED".equals(status) || "MFA_CHALLENGE".equals(status)) {
             sessionToken = handleMfa(body, mfaCode, username);
+        } else if ("LOCKED_OUT".equals(status)) {
+            new AuthRefusal("directory_account_locked").note();
+        } else if ("PASSWORD_EXPIRED".equals(status)) {
+            new AuthRefusal("password_expired").note();
         }
         if (sessionToken == null || sessionToken.isEmpty()) {
             EcsLogger.error("com.auto1.pantera.auth")
@@ -225,6 +312,43 @@ public final class OktaOidcClient {
             .field("log.source", "application")
             .log();
         return parseIdToken(tokens.idToken, tokens.accessToken, username);
+    }
+
+    /**
+     * The refusal of a login that could not be checked because Okta cannot
+     * be reached, limits the rate or fails.
+     *
+     * @return Refusal answered 503: the client is told to come back, not
+     *  that its password is wrong
+     */
+    static AuthRefusal unavailable() {
+        return new AuthRefusal(
+            "identity_provider_unavailable", RsStatus.SERVICE_UNAVAILABLE, 0L,
+            "Sign-in is temporarily unavailable"
+        );
+    }
+
+    /**
+     * Refuse a login for which Okta asked for a second factor that nobody
+     * can give. The cause is noted for the answer and the access record.
+     *
+     * @param username User name
+     * @param status Okta's transaction status
+     */
+    private static void refuseSecondFactor(final String username, final String status) {
+        EcsLogger.warn("com.auto1.pantera.auth")
+            .message(
+                "Okta asked for a second factor (" + status + "): a repository login"
+                    + " cannot answer one, so the login is refused and no factor is verified"
+            )
+            .eventCategory("authentication")
+            .eventAction("login")
+            .eventOutcome("failure")
+            .field("event.reason", OktaOidcClient.MFA_REASON)
+            .field("user.name", username)
+            .field("log.source", "application")
+            .log();
+        new AuthRefusal(OktaOidcClient.MFA_REASON).note();
     }
 
     private String handleMfa(
@@ -332,14 +456,22 @@ public final class OktaOidcClient {
                 status = body.getString("status", "");
             }
         }
+        // The password was accepted; the person did not confirm the second
+        // factor. Never a wrong password: the failed-logins policy counts it
+        // toward its pause, not toward its delay and lock.
         EcsLogger.warn("com.auto1.pantera.auth")
-            .message("Okta MFA verification failed")
+            .message(
+                "Okta accepted the password but the second factor was not confirmed"
+                    + " (push denied or not answered, or a wrong code)"
+            )
             .eventCategory("authentication")
             .eventAction("login")
             .eventOutcome("failure")
+            .field("event.reason", AuthRefusal.SECOND_FACTOR_FAILED)
             .field("user.name", username)
             .field("log.source", "application")
             .log();
+        new AuthRefusal(AuthRefusal.SECOND_FACTOR_FAILED).note();
         return null;
     }
 

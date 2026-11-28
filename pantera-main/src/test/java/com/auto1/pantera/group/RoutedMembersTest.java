@@ -92,6 +92,77 @@ final class RoutedMembersTest {
     }
 
     @Test
+    void memberSkippedByItsRulesSaysSo() {
+        final List<String> asked = new CopyOnWriteArrayList<>();
+        final Slice central = RoutedMembersTest.members(
+            asked, new RoutingRule.PathPattern(RoutedMembersTest.CENTRAL, "(?!com/acme/).*")
+        ).slice(new Key.From(RoutedMembersTest.CENTRAL), 8080, 0);
+        final com.auto1.pantera.http.log.RequestReasons reasons =
+            com.auto1.pantera.http.log.RequestReasons.instance();
+        final String skipped = reasons.open();
+        central.response(
+            new RequestLine("GET", '/' + RoutedMembersTest.CENTRAL + RoutedMembersTest.INTERNAL),
+            Headers.EMPTY.copy().add(
+                new com.auto1.pantera.http.headers.Header(
+                    com.auto1.pantera.http.log.RequestReasons.SLOT_HEADER, skipped
+                )
+            ),
+            Content.EMPTY
+        ).join();
+        final String served = reasons.open();
+        central.response(
+            new RequestLine("GET", '/' + RoutedMembersTest.CENTRAL + RoutedMembersTest.PUBLIC),
+            Headers.EMPTY.copy().add(
+                new com.auto1.pantera.http.headers.Header(
+                    com.auto1.pantera.http.log.RequestReasons.SLOT_HEADER, served
+                )
+            ),
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the not-found of a member that was not asked names the rule as its reason",
+            reasons.close(skipped),
+            new IsEqual<>(java.util.Optional.of("skipped_by_routing_rule"))
+        );
+        MatcherAssert.assertThat(
+            "a path the member is asked for carries no such reason",
+            reasons.close(served), new IsEqual<>(java.util.Optional.empty())
+        );
+    }
+
+    @Test
+    void memberSkippedByItsRulesIsAStepOfTheTroubleshootTrace() {
+        final Slice central = RoutedMembersTest.members(
+            new CopyOnWriteArrayList<>(),
+            new RoutingRule.PathPattern(RoutedMembersTest.CENTRAL, "(?!com/acme/).*")
+        ).slice(new Key.From(RoutedMembersTest.CENTRAL), 8080, 0);
+        final com.auto1.pantera.http.log.RequestTrace trace =
+            com.auto1.pantera.http.log.RequestTrace.instance();
+        final String traced = trace.open();
+        central.response(
+            new RequestLine("GET", '/' + RoutedMembersTest.CENTRAL + RoutedMembersTest.INTERNAL),
+            Headers.EMPTY.copy().add(
+                new com.auto1.pantera.http.headers.Header(
+                    com.auto1.pantera.http.log.RequestTrace.HEADER, traced
+                )
+            ),
+            Content.EMPTY
+        ).join();
+        final List<com.auto1.pantera.http.log.RequestTrace.Step> steps = trace.close(traced);
+        MatcherAssert.assertThat(
+            "the member that was not asked is in the trace", steps.size(), new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "with its name, a 404 and the reason",
+            List.of(
+                steps.get(0).repository(), String.valueOf(steps.get(0).status()),
+                steps.get(0).reason()
+            ),
+            new IsEqual<>(List.of(RoutedMembersTest.CENTRAL, "404", "skipped_by_routing_rule"))
+        );
+    }
+
+    @Test
     void prefixRuleLimitsAMemberToItsPrefix() {
         final List<String> asked = new CopyOnWriteArrayList<>();
         final Slice central = RoutedMembersTest.members(

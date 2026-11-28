@@ -235,6 +235,86 @@ public final class RepoConfigTest {
         );
     }
 
+    @Test
+    void tagRefreshIsEmptyWithoutTheKey() {
+        Assertions.assertEquals(
+            Optional.empty(),
+            fromJson("{\"repo\":{\"type\":\"docker-proxy\"}}").tagRefresh()
+        );
+    }
+
+    @Test
+    void tagRefreshReadsItsSeconds() {
+        Assertions.assertAll(
+            () -> Assertions.assertEquals(
+                Optional.of(Duration.ofSeconds(600)),
+                fromJson("{\"repo\":{\"type\":\"docker-proxy\",\"tag_refresh_seconds\":600}}")
+                    .tagRefresh(),
+                "a JSON number of a database config"
+            ),
+            () -> Assertions.assertEquals(
+                Optional.of(Duration.ZERO),
+                fromJson("{\"repo\":{\"type\":\"docker-proxy\",\"tag_refresh_seconds\":0}}")
+                    .tagRefresh(),
+                "0 re-checks on every request"
+            ),
+            () -> Assertions.assertEquals(
+                Optional.of(Duration.ofDays(365)),
+                withTagRefresh("31536000").tagRefresh(),
+                "the largest age, from a YAML file"
+            )
+        );
+    }
+
+    @Test
+    void tagRefreshIgnoresAnInvalidValue() {
+        Assertions.assertAll(
+            () -> Assertions.assertEquals(
+                Optional.empty(), withTagRefresh("-1").tagRefresh(), "negative"
+            ),
+            () -> Assertions.assertEquals(
+                Optional.empty(), withTagRefresh("31536001").tagRefresh(), "above a year"
+            ),
+            () -> Assertions.assertEquals(
+                Optional.empty(), withTagRefresh("1h").tagRefresh(), "not a number"
+            ),
+            () -> Assertions.assertEquals(
+                Optional.empty(),
+                fromJson("{\"repo\":{\"type\":\"docker-proxy\",\"tag_refresh_seconds\":2.5}}")
+                    .tagRefresh(),
+                "a fraction"
+            ),
+            () -> Assertions.assertEquals(
+                Optional.empty(),
+                fromJson("{\"repo\":{\"type\":\"docker-proxy\",\"tag_refresh_seconds\":[60]}}")
+                    .tagRefresh(),
+                "not a scalar"
+            )
+        );
+    }
+
+    @Test
+    void tagRefreshKeepsItsAnswer() {
+        final RepoConfig cfg = withTagRefresh("soon");
+        Assertions.assertAll(
+            () -> Assertions.assertEquals(Optional.empty(), cfg.tagRefresh(), "first read"),
+            () -> Assertions.assertEquals(Optional.empty(), cfg.tagRefresh(), "second read")
+        );
+    }
+
+    private RepoConfig withTagRefresh(final String value) {
+        return RepoConfig.from(
+            Yaml.createYamlMappingBuilder().add(
+                "repo", Yaml.createYamlMappingBuilder()
+                    .add("type", "docker-proxy")
+                    .add("tag_refresh_seconds", value)
+                    .build()
+            ).build(),
+            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
+            new Key.From("repo-tag-refresh"), cache, false
+        );
+    }
+
     private RepoConfig withImmutable(final String value) {
         return RepoConfig.from(
             Yaml.createYamlMappingBuilder().add(

@@ -24,6 +24,7 @@ import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
@@ -403,6 +404,19 @@ public final class ProxyDownloadSlice implements Slice {
                             : AuditLogger.REASON_UPSTREAM_UNAVAILABLE
                     );
                     return CompletableFuture.completedFuture(response);
+                }
+                if (RequestTrace.instance().traced(headers)) {
+                    // A Troubleshoot replay asks what a client would get: the
+                    // upstream's archive is handed on as it comes. It is not
+                    // stored, so no event for the search index is written:
+                    // an index row for this proxy would change which member
+                    // a group asks from then on.
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok()
+                            .header("Content-Type", "application/zip")
+                            .body(response.body())
+                            .build()
+                    );
                 }
                 // STREAM the dist through to the client and the cache at once.
                 // Before 2.2.9 the whole upstream body was materialised with

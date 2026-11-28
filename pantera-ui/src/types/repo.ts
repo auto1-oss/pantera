@@ -11,6 +11,18 @@ export interface RepoCooldown {
   duration?: string
 }
 
+/**
+ * A routing rule of a group (`repo.routing`): the member is asked only for
+ * the paths its rules match. Exactly one of `prefix` (the path starts with
+ * the text) and `pattern` (a Java regular expression that must match the
+ * whole path) is set; the path has no leading slash.
+ */
+export interface RoutingRule {
+  member: string
+  prefix?: string
+  pattern?: string
+}
+
 export interface RepoConfig {
   type: string
   /**
@@ -25,6 +37,8 @@ export interface RepoConfig {
   remotes?: RepoRemote[]
   /** Group members — array of repo name strings */
   members?: string[]
+  /** Routing rules of a group, in their order; missing ⇒ every member is asked for every path. */
+  routing?: RoutingRule[]
   cooldown?: RepoCooldown
   /** Allow unauthenticated reads. Default true for proxy/group, false for hosted. */
   anonymous_read?: boolean
@@ -37,6 +51,12 @@ export interface RepoConfig {
    */
   immutable?: boolean
   /**
+   * docker-proxy only: seconds a cached image tag is served before the
+   * upstream is asked whether it moved, 0 (every request) to 31536000.
+   * Missing ⇒ the global `docker_tag_refresh_seconds` setting applies.
+   */
+  tag_refresh_seconds?: number
+  /**
    * Keys this UI does not model (e.g. `path`, the deb/rpm `settings` block).
    * They are round-tripped verbatim by RepoConfigForm: the server stores the
    * config as one JSONB document and PUT replaces it wholesale, so any key
@@ -45,6 +65,11 @@ export interface RepoConfig {
   [key: string]: unknown
 }
 
-export interface RepoConfigEnvelope {
+/**
+ * The document of `GET` / `PUT /repositories/:name`. A type alias, not an
+ * interface: the API layer hands the document over as
+ * `Record<string, unknown>`, and only an alias is compatible with that.
+ */
+export type RepoConfigEnvelope = {
   repo: RepoConfig
 }

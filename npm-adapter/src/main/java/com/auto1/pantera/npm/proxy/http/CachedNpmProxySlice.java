@@ -23,6 +23,7 @@ import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.cache.NegativeCacheRegistry;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -235,10 +236,19 @@ public final class CachedNpmProxySlice implements Slice {
         } else {
             flight = this.deduplicator;
         }
-        return flight.load(
-            key,
-            () -> this.doFetch(line, headers, body, key, leaderResponse)
-        ).thenCompose(outcome -> {
+        final CompletableFuture<UpstreamOutcome> fetched;
+        if (RequestTrace.instance().traced(headers)) {
+            // A Troubleshoot replay stores nothing, so it fetches on its
+            // own: a client that joined its flight would be sent, on
+            // SUCCESS, to a cache the replay did not fill.
+            fetched = this.doFetch(line, headers, body, key, leaderResponse);
+        } else {
+            fetched = flight.load(
+                key,
+                () -> this.doFetch(line, headers, body, key, leaderResponse)
+            );
+        }
+        return fetched.thenCompose(outcome -> {
             final Response captured = leaderResponse.get();
             if (captured != null) {
                 if (outcome.signal() == FetchSignal.SUCCESS) {

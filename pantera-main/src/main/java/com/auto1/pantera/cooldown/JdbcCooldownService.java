@@ -554,6 +554,12 @@ final class JdbcCooldownService implements CooldownService {
     }
 
     @Override
+    public boolean applies(final CooldownRequest request) {
+        return this.effectiveEnabled(request)
+            && !this.settings.exempt(request.repoName(), request.artifact());
+    }
+
+    @Override
     public CompletableFuture<CooldownResult> evaluateWithKnownDate(
         final CooldownRequest request,
         final Optional<Instant> knownReleaseDate

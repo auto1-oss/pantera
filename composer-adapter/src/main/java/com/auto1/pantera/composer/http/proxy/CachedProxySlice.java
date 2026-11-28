@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.log.ServerErrorLog;
 import com.auto1.pantera.http.cache.UpstreamMiss;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
@@ -25,7 +26,6 @@ import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.composer.ComposerBaseUrl;
 import com.auto1.pantera.composer.JsonPackages;
-import com.auto1.pantera.composer.Packages;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -310,8 +310,8 @@ final class CachedProxySlice implements Slice {
         final String name
     ) {
         // Check storage cache FIRST before any network calls. Metadata is
-        // written as <name>.json (ComposerStorageCache and fetchThroughCache),
-        // so the lookup and the freshness check must use that same key.
+        // written as <name>.json (fetchThroughCache), so the lookup and the
+        // freshness check must use that same key.
         final Key cachedKey = new Key.From(name + ".json");
         return new FromStorageCache(this.repo.storage()).load(
             cachedKey,
@@ -332,7 +332,10 @@ final class CachedProxySlice implements Slice {
                     return new CacheTimeControl(this.repo.storage()).validate(
                         cachedKey, Remote.EMPTY
                     ).thenCompose(fresh -> {
-                        if (!fresh) {
+                        // A Troubleshoot replay is served the stale copy as a
+                        // client is, but starts no refresh: the refresh
+                        // writes the document it fetched.
+                        if (!fresh && !RequestTrace.instance().traced(headers)) {
                             this.backgroundRefresh(line, headers, name);
                         }
                         return this.serveCachedMetadata(bytes, headers);
@@ -525,13 +528,15 @@ final class CachedProxySlice implements Slice {
         // malformed body) as opposed to answering "no such package": only
         // the latter may become a 404.
         final UpstreamFailure failure = new UpstreamFailure();
-        return this.cache.load(
+        return this.load(
             new Key.From(name),  // Cache key keeps ~dev to prevent collision
             CachedProxySlice.recording(
                 failure,
-                () -> this.repo.packages().thenApply(
-                        pckgs -> pckgs.orElse(new JsonPackages())
-                    ).thenCompose(Packages::content)
+                // The upstream document is merged with an empty registry: a
+                // proxy holds no package of its own (it takes no upload), and
+                // the root Repository#packages() reads names none (every read
+                // regenerates it, with an empty "packages", by a storage write).
+                () -> new JsonPackages().content()
                     .thenCombine(
                         this.packageFromRemote(line, headers, failure),
                         (lcl, rmt) -> new MergePackage.WithRemote(packageName, lcl).merge(rmt)
@@ -573,11 +578,24 @@ final class CachedProxySlice implements Slice {
                 );
             }
             // Content is already pre-rewritten at write time.
-            // Persist the rewritten bytes under {name}.json so
-            // ProxyDownloadSlice can resolve original_url on subsequent
-            // archive requests. Per-version cooldown is handled by
+            // Persist the rewritten bytes under {name}.json, the one write of
+            // the lookup (load does not let the cache store it): a later
+            // request is served it, and ProxyDownloadSlice resolves
+            // original_url from it. Per-version cooldown is handled by
             // ComposerPackageMetadataHandler upstream of this slice.
             return pkgs.get().asBytesFuture().thenCompose(bytes -> {
+                if (RequestTrace.instance().traced(headers)) {
+                    // A Troubleshoot replay gets the document a client would
+                    // get. It is not kept: the replay must leave the proxy as
+                    // it found it.
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok()
+                            .header("Content-Type", "application/json")
+                            .varyHeader(this.base.vary(headers))
+                            .body(new Content.From(bytes))
+                            .build()
+                    );
+                }
                 final Key metadataKey = new Key.From(name + ".json");
                 return this.repo.storage().save(metadataKey, new Content.From(bytes))
                     .thenApply(ignored -> {
@@ -607,6 +625,38 @@ final class CachedProxySlice implements Slice {
                 .log();
             return this.missResponse(failure, name, headers, foreground);
         }).toCompletableFuture();
+    }
+
+    /**
+     * Load a package document through the cache, which is only read: what
+     * it holds is served, and what it lacks is fetched from the remote
+     * without the cache storing it. {@link #fetchThroughCache} stores a
+     * fetched document itself, once, under the key later requests read
+     * ({@code <name>.json}), and not for a Troubleshoot replay
+     * ({@link RequestTrace}), which must leave the proxy as it found it. A
+     * cache handed the remote stores the document as well: the php-proxy's
+     * cache keeps it under that same key in the same storage, so a miss
+     * wrote it twice.
+     *
+     * @param key Cache key of the package
+     * @param origin Remote the document is fetched from on a miss
+     * @param control Freshness check of a cached document
+     * @return The document, empty when neither the cache nor the remote has it
+     */
+    private CompletionStage<Optional<? extends Content>> load(
+        final Key key, final Remote origin, final CacheControl control
+    ) {
+        return this.cache.load(key, Remote.EMPTY, control).thenCompose(
+            held -> {
+                final CompletionStage<Optional<? extends Content>> found;
+                if (held.isPresent()) {
+                    found = CompletableFuture.completedFuture(held);
+                } else {
+                    found = origin.get();
+                }
+                return found;
+            }
+        );
     }
 
     /**
@@ -1166,6 +1216,18 @@ final class CachedProxySlice implements Slice {
                     return CompletableFuture.completedFuture(
                         new UpstreamMiss("com.auto1.pantera.composer", this.rname, path, headers)
                             .answered(resp.status().code(), resp.headers())
+                    );
+                }
+                if (RequestTrace.instance().traced(headers)) {
+                    // A Troubleshoot replay asks what a client would get: the
+                    // upstream's archive is handed on as it comes. It is not
+                    // stored, and the requests parked behind this one are
+                    // let go to fetch it for themselves.
+                    if (!leaderGate.isDone()) {
+                        leaderGate.complete(null);
+                    }
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok().body(resp.body()).build()
                     );
                 }
                 return this.cacheWriter.streamThroughAndCommit(

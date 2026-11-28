@@ -61,14 +61,6 @@ import javax.sql.DataSource;
 public final class AsyncApiVerticle extends AbstractVerticle {
 
     /**
-     * Login throttle shared by every instance of this verticle in the
-     * process (B16): VertxMain deploys several instances, and a per-instance
-     * throttle multiplied the configured limit by their number.
-     */
-    private static final com.auto1.pantera.auth.LoginThrottle LOGIN_THROTTLE =
-        new com.auto1.pantera.auth.LoginThrottle();
-
-    /**
      * Pantera caches.
      */
     private final PanteraCaches caches;
@@ -393,8 +385,9 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     "Access-Control-Expose-Headers",
                     // Let the browser read the traceparent response
                     // header so APM and debugging tools can see the
-                    // server-generated span id.
-                    "traceparent"
+                    // server-generated span id, and Retry-After, so the
+                    // UI can say how long a delayed login has to wait.
+                    "traceparent,Retry-After"
                 )
                 .putHeader("Access-Control-Max-Age", "3600");
             if ("OPTIONS".equals(ctx.request().method().name())) {
@@ -444,7 +437,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.dataSource != null ? new AuthProviderDao(this.dataSource) : null,
             this.dataSource != null ? new UserTokenDao(this.dataSource) : null,
             this.dataSource != null ? new AuthSettingsDao(this.dataSource) : null,
-            AsyncApiVerticle.LOGIN_THROTTLE
+            this.settings.failedLogins().orElse(null)
         );
         authHandler.register(router);
         // JWT auth for all /api/v1/* routes EXCEPT download-direct (uses HMAC token auth).
@@ -508,8 +501,39 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                         ctx.setUser(io.vertx.ext.auth.User.fromToken(rawToken));
                         ctx.user().principal().mergeIn(principal);
                         ctx.next();
+                    } else if (unifiedAuth.ownerLocked(rawToken)) {
+                        // The session or key is fine; its user is locked
+                        // after failed logins. The UI shows this message.
+                        ApiResponse.sendError(
+                            ctx, 403, "ACCOUNT_LOCKED",
+                            "Account locked. Ask an administrator to unlock it."
+                        );
                     } else {
-                        ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid or expired token");
+                        // An API key that was rejected goes to the sign-in
+                        // failures report, and counts as a failed login of
+                        // its owner when the policy says so; a session that
+                        // ran out does neither. The one that locks its owner
+                        // is answered as the lock.
+                        final boolean locked = unifiedAuth.rejected(
+                            rawToken,
+                            new com.auto1.pantera.http.auth.LoginSource(
+                                ctx.request().remoteAddress() == null
+                                    ? "" : ctx.request().remoteAddress().host(),
+                                ctx.request().getHeader("User-Agent"), "api"
+                            )
+                        ).filter(
+                            refusal -> refusal.status() == com.auto1.pantera.http.RsStatus.FORBIDDEN
+                        ).isPresent();
+                        if (locked) {
+                            ApiResponse.sendError(
+                                ctx, 403, "ACCOUNT_LOCKED",
+                                "Account locked. Ask an administrator to unlock it."
+                            );
+                        } else {
+                            ApiResponse.sendError(
+                                ctx, 401, "UNAUTHORIZED", "Invalid or expired token"
+                            );
+                        }
                     }
                 })
                 .exceptionally(err -> {
@@ -572,6 +596,21 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 this.settings.cachedLocalEnabledFilter().orElse(null)
             ).register(router);
         }
+        // Account lock: who is locked, and the unlock of one user or all.
+        // A locked name need not be a Pantera user, so these routes do not
+        // depend on a users store.
+        this.settings.failedLogins().ifPresent(
+            logins -> new LockedUsersHandler(logins, this.security.policy()).register(router)
+        );
+        // Sign-in failures report: rejected API keys, failed password
+        // logins, unconfirmed second factors.
+        this.settings.failedLogins().ifPresent(
+            logins -> logins.report().ifPresent(
+                report -> new SignInFailuresHandler(
+                    report, logins, this::keyNames, this.security.policy()
+                ).register(router)
+            )
+        );
         if (roles != null) {
             new RoleHandler(
                 roles, this.caches.policyCache(), this.security.policy()
@@ -818,5 +857,29 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 return merged;
             }
         );
+    }
+
+    /**
+     * Names and dates of API keys, for the sign-in failures report.
+     * Blocking.
+     * @param ids Key ids
+     * @return Name and dates by key id; empty without a database
+     */
+    private java.util.Map<String, SignInFailuresHandler.KeyName> keyNames(
+        final java.util.Collection<String> ids
+    ) {
+        final java.util.Map<String, SignInFailuresHandler.KeyName> names =
+            new java.util.HashMap<>();
+        if (this.dataSource != null) {
+            new UserTokenDao(this.dataSource).byIds(ids).forEach(
+                (id, info) -> names.put(
+                    id,
+                    new SignInFailuresHandler.KeyName(
+                        info.label(), info.createdAt(), info.expiresAt()
+                    )
+                )
+            );
+        }
+        return names;
     }
 }

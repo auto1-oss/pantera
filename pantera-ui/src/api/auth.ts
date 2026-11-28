@@ -1,5 +1,5 @@
 import { getApiClient } from './client'
-import type { AuthProvidersResponse, TokenResponse, UserInfo } from '@/types'
+import type { AuthProvidersResponse, DockerSettings, TokenResponse, UserInfo } from '@/types'
 
 export async function getProviders(): Promise<AuthProvidersResponse> {
   const { data } = await getApiClient().get<AuthProvidersResponse>('/auth/providers')
@@ -171,7 +171,18 @@ export async function updateUpstreamBreakerSettings(
   await getApiClient().put('/admin/upstream-breaker-settings', settings)
 }
 
-// --- Security policy settings (2.2.9): request limits, egress, login throttle ---
+// --- Docker proxy tag refresh ---
+
+export async function getDockerSettings(): Promise<DockerSettings> {
+  const { data } = await getApiClient().get<DockerSettings>('/admin/docker-settings')
+  return data
+}
+
+export async function updateDockerSettings(settings: DockerSettings): Promise<void> {
+  await getApiClient().put('/admin/docker-settings', settings)
+}
+
+// --- Security policy settings (2.2.9): request limits, egress ---
 
 /**
  * GET/PUT /admin/request-limits-settings. All values are strings, like
@@ -221,33 +232,10 @@ export async function updateEgressSettings(settings: Partial<EgressSettings>): P
   await getApiClient().put('/admin/egress-settings', settings)
 }
 
-/**
- * GET/PUT /admin/login-throttle-settings. Failed password logins per
- * (user, client IP) before further attempts are refused, and the window
- * (seconds) those failures count in.
- */
-export interface LoginThrottleSettings {
-  login_throttle_max_failures: string
-  login_throttle_window_seconds: string
-}
-
-export async function getLoginThrottleSettings(): Promise<LoginThrottleSettings> {
-  const { data } = await getApiClient().get<LoginThrottleSettings>(
-    '/admin/login-throttle-settings',
-  )
-  return data
-}
-
-export async function updateLoginThrottleSettings(
-  settings: Partial<LoginThrottleSettings>,
-): Promise<void> {
-  await getApiClient().put('/admin/login-throttle-settings', settings)
-}
-
 // --- Client-Facing Base URL Settings ---
 
 /**
- * Shape of the 3 tunables returned by GET /admin/client-base-url-settings.
+ * Shape of the 4 tunables returned by GET /admin/client-base-url-settings.
  * These govern `ClientBaseUrl` (pantera-core) — the absolute-URL derivation
  * used for links Pantera emits (e.g. npm `dist.tarball`) when a repository
  * has no explicit `url:` configured. `client_base_host_allowlist` is a
@@ -258,12 +246,14 @@ export async function updateLoginThrottleSettings(
  * `https://reg.example.com/artifactory`); when non-empty it is ENFORCED for
  * every repository without an explicit `url:` — `trust_forwarded_headers`
  * and `client_base_host_allowlist` stop being consulted for those repos
- * entirely. Empty string (the default) means unset.
+ * entirely. Empty string (the default) means unset. `client_base_scheme` is
+ * `auto` (the default: derived from the request), `http` or `https`.
  */
 export interface ClientBaseUrlSettings {
   trust_forwarded_headers: string
   client_base_host_allowlist: string
   client_base_url: string
+  client_base_scheme: string
 }
 
 export async function getClientBaseUrlSettings(): Promise<ClientBaseUrlSettings> {

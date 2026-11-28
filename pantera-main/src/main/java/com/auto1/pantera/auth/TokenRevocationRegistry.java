@@ -105,6 +105,6 @@ public final class TokenRevocationRegistry implements PasswordTokenGate {
             }
         }
         final UserEnabledCheck check = this.enabledCheck;
-        return check == null || check.isEnabled(sub);
+        return check == null || check.isEnabled(sub) && !check.isLocked(sub);
     }
 }

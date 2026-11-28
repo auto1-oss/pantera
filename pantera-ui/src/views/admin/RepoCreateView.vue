@@ -108,6 +108,8 @@ async function handleCreate() {
           v-model:config="config"
           :initial-config="seedConfig"
           :read-only-type="true"
+          :repo-name="nameValid ? name : ''"
+          :save-error="saveError"
           @valid-change="formValid = $event"
         />
 

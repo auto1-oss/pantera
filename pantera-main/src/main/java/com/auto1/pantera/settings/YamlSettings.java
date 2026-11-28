@@ -36,6 +36,14 @@ import com.auto1.pantera.cooldown.YamlCooldownSettings;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.auto1.pantera.db.ArtifactDbFactory;
 import com.auto1.pantera.db.DbConsumer;
+import com.auto1.pantera.auth.failedlogins.CountedKeys;
+import com.auto1.pantera.auth.failedlogins.DbFailedLoginStore;
+import com.auto1.pantera.auth.failedlogins.FailedLoginStore;
+import com.auto1.pantera.auth.failedlogins.FailedLogins;
+import com.auto1.pantera.auth.failedlogins.GuardedPasswords;
+import com.auto1.pantera.auth.failedlogins.InMemoryFailedLoginStore;
+import com.auto1.pantera.auth.failedlogins.LockedOut;
+import com.auto1.pantera.http.auth.ApiKeyOnlyAuth;
 import com.auto1.pantera.http.auth.AuthLoader;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.client.HttpClientSettings;
@@ -45,6 +53,7 @@ import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.security.policy.CachedYamlPolicy;
 import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.cache.CachedUsers;
+import com.auto1.pantera.settings.policy.FailedLoginsSettingsLoader;
 import com.auto1.pantera.settings.cache.GuavaFiltersCache;
 import com.auto1.pantera.settings.cache.PublishingFiltersCache;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -83,6 +92,28 @@ import com.auto1.pantera.asto.factory.StoragesLoader;
  * @since 0.1
  */
 public final class YamlSettings implements Settings {
+
+    /**
+     * Seconds between two loads of the locked user names.
+     */
+    private static final long LOCK_REFRESH_SECONDS = 15L;
+
+    /**
+     * Seconds between two writes of the sign-in failures report.
+     */
+    private static final long REPORT_FLUSH_SECONDS = 60L;
+
+    /**
+     * Types of the providers that send a password to an identity provider
+     * outside Pantera.
+     */
+    private static final java.util.Set<String> EXTERNAL =
+        java.util.Set.of("okta", "keycloak", "github");
+
+    /**
+     * Type of the provider that checks API keys.
+     */
+    private static final String KEY_PROVIDER = "jwt-password";
 
     /**
      * Yaml node credentials.
@@ -223,6 +254,16 @@ public final class YamlSettings implements Settings {
     private final com.auto1.pantera.auth.CachedLocalEnabledFilter cachedLocalEnabledFilter;
 
     /**
+     * Failed logins behind the login delay and the account lock.
+     */
+    private final FailedLogins logins;
+
+    /**
+     * Loads the locked user names again every few seconds.
+     */
+    private final java.util.concurrent.ScheduledExecutorService lockWatch;
+
+    /**
      * Guard flag to make {@link #close()} idempotent without spurious error logs.
      * @since 1.20.13
      */
@@ -325,6 +366,8 @@ public final class YamlSettings implements Settings {
         );
         final CachedUsers auth = authChain.cachedUsers();
         this.cachedLocalEnabledFilter = authChain.enabledFilter();
+        this.logins = authChain.logins();
+        this.lockWatch = YamlSettings.watchLocks(this.logins);
         this.security = new PanteraSecurity.FromYaml(
             this.meta(), auth, new PolicyStorage(this.meta()).parse(),
             this.artifactsDb.orElse(null)
@@ -511,6 +554,11 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public Optional<FailedLogins> failedLogins() {
+        return Optional.ofNullable(this.logins);
+    }
+
+    @Override
     public PrefixesConfig prefixes() {
         return this.prefixesConfig;
     }
@@ -564,6 +612,21 @@ public final class YamlSettings implements Settings {
             .eventAction("settings_close")
             .field("log.source", "application")
             .log();
+        // Stops reading the locked users before the database closes, and
+        // writes the sign-in failures noted since the last minute.
+        this.lockWatch.shutdownNow();
+        this.logins.report().ifPresent(
+            report -> {
+                report.flush();
+                EcsLogger.info("com.auto1.pantera.settings")
+                    .message("Sign-in failures report written at shutdown")
+                    .eventCategory("configuration")
+                    .eventAction("sign_in_report_flush")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+            }
+        );
         // Close ordering is critical — dependencies flow downward:
         // 1. Tracked storages (may use DataSource / Valkey indirectly)
         // 2. Artifact index (uses DataSource via its executor)
@@ -866,12 +929,23 @@ public final class YamlSettings implements Settings {
         final AuthLoader loader, final String type,
         final YamlMapping settings, final DataSource dataSource
     ) {
-        final Authentication auth;
+        Authentication auth;
         if (dataSource != null && "okta".equals(type)) {
             auth = new com.auto1.pantera.auth.AuthFromOktaFactory()
                 .getAuthentication(settings, dataSource);
         } else {
             auth = loader.newObject(type, settings);
+        }
+        if (YamlSettings.EXTERNAL.contains(type)) {
+            // These hand the password to an identity provider outside
+            // Pantera: every such check is counted.
+            auth = new com.auto1.pantera.auth.CountedProvider(auth, type);
+            // And an administrator decides where: on the sign-in form and
+            // repository requests, on the form only, or nowhere.
+            auth = new com.auto1.pantera.auth.PasswordSignInGate(
+                auth, type,
+                com.auto1.pantera.settings.policy.PasswordSignInSettingsLoader.activeSupplier()
+            );
         }
         return auth;
     }
@@ -901,6 +975,134 @@ public final class YamlSettings implements Settings {
             .field("error.message", LogSanitizer.sanitizeMessage(err.getMessage()))
             .field("log.source", "application")
             .log();
+    }
+
+    /**
+     * Keep the set of locked user names current. It is loaded once before
+     * this method returns, so a lock set before a restart is in force from
+     * the first request, and then every {@link #LOCK_REFRESH_SECONDS}
+     * seconds: that picks up a lock or an unlock made on another node, and
+     * a lock an operator removed in the database.
+     * @param logins Failed logins
+     * @return The scheduler that reloads, to shut down on close
+     */
+    private static java.util.concurrent.ScheduledExecutorService watchLocks(
+        final FailedLogins logins
+    ) {
+        final Runnable reload = () -> {
+            try {
+                logins.refresh();
+            } catch (final RuntimeException err) {
+                // The set as last loaded stays in force: a database that
+                // cannot be read unlocks nobody.
+                EcsLogger.warn("com.auto1.pantera.settings")
+                    .message("Could not load the locked users; the last known set stays in force")
+                    .eventCategory("authentication")
+                    .eventAction("locked_users_load")
+                    .eventOutcome("failure")
+                    .error(err)
+                    .field("log.source", "application")
+                    .log();
+            }
+        };
+        reload.run();
+        final java.util.concurrent.ScheduledExecutorService watch =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+                task -> {
+                    final Thread thread = new Thread(task, "pantera-locked-users");
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            );
+        watch.scheduleWithFixedDelay(
+            reload, YamlSettings.LOCK_REFRESH_SECONDS, YamlSettings.LOCK_REFRESH_SECONDS,
+            java.util.concurrent.TimeUnit.SECONDS
+        );
+        // The sign-in failures noted in memory are written once a minute:
+        // a client that repeats a failing request costs one row a minute.
+        // flush() records its own failure and keeps what it could not write.
+        logins.report().ifPresent(
+            report -> watch.scheduleWithFixedDelay(
+                report::flush, YamlSettings.REPORT_FLUSH_SECONDS,
+                YamlSettings.REPORT_FLUSH_SECONDS, java.util.concurrent.TimeUnit.SECONDS
+            )
+        );
+        return watch;
+    }
+
+    /**
+     * Add the YAML-configured providers (SSO, env, ...) behind the primary
+     * one, and keep API keys apart from passwords: a credential with the
+     * form of an API key is answered by the {@code jwt-password} provider
+     * alone, in whatever order the providers are listed. A rejected key is
+     * therefore never handed to a provider that would present it to an
+     * external identity provider as a wrong password.
+     * @param primary Primary authenticator
+     * @param settings Settings ({@code meta}) YAML
+     * @param dataSource Database (nullable)
+     * @param enabledCache Enabled provider types (nullable without a database)
+     * @param logins Failed logins behind the login delay and the account lock
+     * @return The chain
+     */
+    private static Authentication withProviders(
+        final Authentication primary,
+        final YamlMapping settings,
+        final DataSource dataSource,
+        final com.auto1.pantera.auth.DbGatedAuth.EnabledTypesCache enabledCache,
+        final FailedLogins logins
+    ) {
+        Authentication passwords = primary;
+        Authentication keys = null;
+        final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
+        if (creds != null && !creds.isEmpty()) {
+            final AuthLoader loader = new AuthLoader();
+            for (final YamlNode node : creds.values()) {
+                final String type = node.asMapping().string(YamlSettings.NODE_TYPE);
+                // Skip "local" file-based auth when DB is primary
+                if (dataSource != null && "local".equals(type)) {
+                    continue;
+                }
+                try {
+                    final Authentication auth = YamlSettings.newProvider(
+                        loader, type, settings, dataSource
+                    );
+                    // Wrap in DbGatedAuth so disable/delete via the UI
+                    // actually takes effect on the running chain.
+                    final Authentication gated = enabledCache != null && type != null
+                        ? new com.auto1.pantera.auth.DbGatedAuth(
+                            auth, type, enabledCache)
+                        : auth;
+                    if (YamlSettings.KEY_PROVIDER.equals(type)) {
+                        // Joined, for its record of the provider that matched.
+                        keys = new Authentication.Joined(gated);
+                    } else {
+                        passwords = new Authentication.Joined(passwords, gated);
+                    }
+                } catch (final Exception ex) {
+                    // B4: YAML node `settings` may carry client_secret /
+                    // jwt private-key paths / IdP credentials. Drop the
+                    // throwable bundle and emit only sanitized message +
+                    // exception class so the secret-bearing scope never
+                    // reaches the log document.
+                    YamlSettings.logProviderNotLoaded(type, ex);
+                }
+            }
+        }
+        // Failed password logins are counted, delayed and locked behind
+        // GuardedPasswords; a rejected key counts when the policy says so.
+        if (keys == null) {
+            // No key provider: a credential with the form of a key is
+            // rejected, and counted like any other rejected key.
+            keys = (name, key) -> Optional.empty();
+        }
+        // A locked user can use no credential, a key included.
+        return new LockedOut(
+            new ApiKeyOnlyAuth(
+                new CountedKeys(keys, logins, logins.report().orElse(null)),
+                new GuardedPasswords(passwords, logins)
+            ),
+            logins
+        );
     }
 
     /**
@@ -945,37 +1147,33 @@ public final class YamlSettings implements Settings {
             dataSource != null
                 ? new com.auto1.pantera.auth.DbGatedAuth.EnabledTypesCache(dataSource)
                 : null;
-        // Add YAML-configured providers as fallbacks (SSO, env, etc.)
-        final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
-        if (creds != null && !creds.isEmpty()) {
-            final AuthLoader loader = new AuthLoader();
-            for (final YamlNode node : creds.values()) {
-                final String type = node.asMapping().string(YamlSettings.NODE_TYPE);
-                // Skip "local" file-based auth when DB is primary
-                if (dataSource != null && "local".equals(type)) {
-                    continue;
-                }
-                try {
-                    final Authentication auth = YamlSettings.newProvider(
-                        loader, type, settings, dataSource
-                    );
-                    // Wrap in DbGatedAuth so disable/delete via the UI
-                    // actually takes effect on the running chain.
-                    final Authentication gated = enabledCache != null && type != null
-                        ? new com.auto1.pantera.auth.DbGatedAuth(
-                            auth, type, enabledCache)
-                        : auth;
-                    res = new Authentication.Joined(res, gated);
-                } catch (final Exception ex) {
-                    // B4: YAML node `settings` may carry client_secret /
-                    // jwt private-key paths / IdP credentials. Drop the
-                    // throwable bundle and emit only sanitized message +
-                    // exception class so the secret-bearing scope never
-                    // reaches the log document.
-                    YamlSettings.logProviderNotLoaded(type, ex);
-                }
-            }
+        // The counts live in the database when there is one, so all nodes
+        // agree and a restart keeps them; the policy is read from System
+        // Settings on every decision.
+        final FailedLoginStore failures;
+        if (dataSource == null) {
+            failures = new InMemoryFailedLoginStore();
+        } else {
+            failures = new DbFailedLoginStore(dataSource);
         }
+        final FailedLogins logins = new FailedLogins(
+            failures, FailedLoginsSettingsLoader.activeSupplier()
+        );
+        // The sign-in failures report: who fails to sign in, with what and
+        // from where. Noted in memory, written once a minute.
+        final com.auto1.pantera.auth.signin.SignInFailureStore reported;
+        if (dataSource == null) {
+            reported = new com.auto1.pantera.auth.signin.InMemorySignInFailureStore();
+        } else {
+            reported = new com.auto1.pantera.auth.signin.DbSignInFailureStore(dataSource);
+        }
+        logins.reportTo(
+            new com.auto1.pantera.auth.signin.SignInFailures(
+                reported,
+                com.auto1.pantera.settings.policy.SignInReportSettingsLoader.activeSupplier()
+            )
+        );
+        res = YamlSettings.withProviders(res, settings, dataSource, enabledCache, logins);
         // Final enabled-state gate on the whole chain. Rejects any
         // successful authentication whose local user row is disabled.
         // This closes the hole where a user disabled in Pantera is
@@ -1016,7 +1214,19 @@ public final class YamlSettings implements Settings {
         } else {
             users = new CachedUsers(res, null, jwtSettings);
         }
-        return new AuthChain(users, cachedEnabledFilter);
+        // A login the cache remembers must not pass for a locked user, and
+        // must not hide a success from the count: while a name has failed
+        // logins on record or is locked, the cache steps aside and the
+        // chain decides, so the right password ends the count.
+        users.bypassFor(logins::pending);
+        // Nor may a login remembered from the sign-in form answer a
+        // repository request while a provider takes passwords on the
+        // form only, or one remembered before that setting changed.
+        users.scopedBy(
+            () -> com.auto1.pantera.settings.policy.PasswordSignInSettingsLoader.activeSupplier()
+                .get().scope(com.auto1.pantera.http.auth.LoginSource.current())
+        );
+        return new AuthChain(users, cachedEnabledFilter, logins);
     }
 
     /**
@@ -1026,10 +1236,12 @@ public final class YamlSettings implements Settings {
      *
      * @param cachedUsers Outer cached credential chain
      * @param enabledFilter Inner enabled-flag filter (nullable when no DB)
+     * @param logins Failed logins of the chain
      */
     private record AuthChain(
         CachedUsers cachedUsers,
-        com.auto1.pantera.auth.CachedLocalEnabledFilter enabledFilter
+        com.auto1.pantera.auth.CachedLocalEnabledFilter enabledFilter,
+        FailedLogins logins
     ) { }
 
     /**

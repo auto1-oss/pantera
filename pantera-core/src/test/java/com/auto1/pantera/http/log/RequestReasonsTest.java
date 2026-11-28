@@ -49,6 +49,48 @@ final class RequestReasonsTest {
     }
 
     @Test
+    void anUpstreamWithoutFilesIsAMissNotAFailure() {
+        // A group: one PyPI member's upstream listed no files for the
+        // project, another member timed out. The timeout explains the answer;
+        // the empty page explains it as much as an upstream "not found".
+        final RequestReasons reasons = new RequestReasons();
+        final String slot = reasons.open();
+        final Headers request = RequestReasonsTest.request(slot);
+        reasons.note(request, "upstream_no_files");
+        reasons.note(request, "read_timeout");
+        reasons.note(request, "upstream_no_files");
+        reasons.note(request, "negative_cache");
+        MatcherAssert.assertThat(
+            reasons.close(slot), new IsEqual<>(Optional.of("read_timeout"))
+        );
+    }
+
+    @Test
+    void aMemberThatWasNotAskedExplainsLeast() {
+        // A group: one member was skipped by a routing rule, another said
+        // "not found" from its upstream. The one that looked explains more.
+        final RequestReasons reasons = new RequestReasons();
+        final String slot = reasons.open();
+        final Headers request = RequestReasonsTest.request(slot);
+        reasons.note(request, "skipped_by_routing_rule");
+        reasons.note(request, "upstream_status_404");
+        reasons.note(request, "skipped_by_routing_rule");
+        MatcherAssert.assertThat(
+            reasons.close(slot), new IsEqual<>(Optional.of("upstream_status_404"))
+        );
+    }
+
+    @Test
+    void aSkipIsTheReasonWhenNobodyWasAsked() {
+        final RequestReasons reasons = new RequestReasons();
+        final String slot = reasons.open();
+        reasons.note(RequestReasonsTest.request(slot), "skipped_by_routing_rule");
+        MatcherAssert.assertThat(
+            reasons.close(slot), new IsEqual<>(Optional.of("skipped_by_routing_rule"))
+        );
+    }
+
+    @Test
     void aCachedNotFoundOutranksAnUpstreamNotFound() {
         // A group whose members all answered 404: it is a real "not found"
         // only if none of them answered from its negative cache.

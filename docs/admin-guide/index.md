@@ -20,6 +20,8 @@ This guide covers the installation, configuration, operation, and maintenance of
 
 2. [Configuration](configuration.md) -- Main pantera.yml structure, environment variable substitution, and section overview.
 3. [Authentication](authentication.md) -- Auth providers: env, pantera, Keycloak, Okta (MFA), JWT-as-Password.
+   - [Failed Logins](failed-logins.md) -- Login delay and account lock after wrong passwords, the pause after unconfirmed second factors, unlocking, what counts.
+   - [Sign-in Failures Report](sign-in-failures.md) -- Who fails to sign in, with what, and from where: rejected API keys, failed password logins, unconfirmed second factors.
 4. [Authorization](authorization.md) -- RBAC permission model, roles, user-role assignment, and policy management.
 5. [Storage Backends](storage-backends.md) -- Filesystem, S3, S3 Express, MinIO, disk cache, and storage aliases.
 6. [Environment Variables](environment-variables.md) -- Authoritative reference for all PANTERA_* environment variables.

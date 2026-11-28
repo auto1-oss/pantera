@@ -60,6 +60,33 @@ import java.util.stream.Collectors;
 public final class AuthHandler {
 
     /**
+     * Status of a failed sign-in.
+     */
+    private static final int UNAUTHORIZED = 401;
+
+    /**
+     * Status of a sign-in refused because the account is locked.
+     */
+    private static final int FORBIDDEN = 403;
+
+    /**
+     * Reason of a login that is refused during a login delay.
+     */
+    private static final String DELAYED = "login_delayed";
+
+    /**
+     * Reason of a sign-in refused during the pause after second factors
+     * that were not confirmed.
+     */
+    private static final String PAUSED = "sign_in_paused";
+
+    /**
+     * Status of a sign-in that could not be checked.
+     */
+    private static final int UNAVAILABLE = 503;
+
+
+    /**
      * Default token expiry: 30 days in seconds.
      */
     private static final int DEFAULT_EXPIRY_DAYS = 30;
@@ -78,11 +105,11 @@ public final class AuthHandler {
     private final AuthSettingsDao settingsDao;
 
     /**
-     * Login attempt throttle (SecOps import-misc). Shared by every API
-     * verticle instance in the process (B16) — a per-instance throttle
-     * multiplied the limit by the verticle count.
+     * Failed logins: the delay, the lock and the pause after unconfirmed
+     * second factors, null without them. They decide inside the sign-in
+     * chain; this handler only asks whether a user may get a session.
      */
-    private final com.auto1.pantera.auth.LoginThrottle loginThrottle;
+    private final com.auto1.pantera.auth.failedlogins.FailedLogins failedLogins;
 
     /**
      * Per-login OIDC nonces keyed by OAuth state (SecOps sso-oidc): the
@@ -104,28 +131,29 @@ public final class AuthHandler {
         final CrudUsers users, final Policy<?> policy,
         final AuthProviderDao providerDao, final UserTokenDao tokenDao,
         final AuthSettingsDao settingsDao) {
-        this(tokens, auth, users, policy, providerDao, tokenDao, settingsDao,
-            new com.auto1.pantera.auth.LoginThrottle());
+        this(tokens, auth, users, policy, providerDao, tokenDao, settingsDao, null);
     }
 
     /**
-     * Full ctor.
+     * Primary ctor.
+     *
      * @param tokens Token issuer
-     * @param auth Authentication chain
-     * @param users Users store
+     * @param auth Sign-in chain
+     * @param users Users store (nullable)
      * @param policy Security policy
-     * @param providerDao Auth provider DAO (nullable)
-     * @param tokenDao User token DAO (nullable)
-     * @param settingsDao Auth settings DAO (nullable)
-     * @param loginThrottle Process-wide login throttle
+     * @param providerDao Auth providers (nullable)
+     * @param tokenDao User tokens (nullable)
+     * @param settingsDao Auth settings (nullable)
+     * @param failedLogins Failed logins behind the delay, the lock and the
+     *  pause; null for an installation without them
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public AuthHandler(final Tokens tokens, final Authentication auth,
         final CrudUsers users, final Policy<?> policy,
         final AuthProviderDao providerDao, final UserTokenDao tokenDao,
         final AuthSettingsDao settingsDao,
-        final com.auto1.pantera.auth.LoginThrottle loginThrottle) {
-        this.loginThrottle = loginThrottle;
+        final com.auto1.pantera.auth.failedlogins.FailedLogins failedLogins) {
+        this.failedLogins = failedLogins;
         this.tokens = tokens;
         this.auth = auth;
         this.users = users;
@@ -185,43 +213,40 @@ public final class AuthHandler {
         final String name = body.getString("name");
         final String pass = body.getString("pass");
         final String mfa = body.getString("mfa_code");
-        // SECURITY (2.2.9, SecOps import-misc): throttle online password
-        // guessing per (username, client IP). Never reveals whether the user
-        // exists — an unknown user is throttled the same as a real one.
-        // B16: the address comes from the TCP peer unless a trusted proxy is
-        // declared (trust_forwarded_headers), and the attempt is counted
-        // before the credential check so concurrent guesses cannot race past.
-        final String client = clientIp(ctx);
-        final java.util.OptionalLong retry = this.loginThrottle.admit(name, client);
-        if (retry.isPresent()) {
-            ctx.response().putHeader("Retry-After", Long.toString(retry.getAsLong()));
-            ApiResponse.sendError(ctx, 429, "TOO_MANY_REQUESTS",
-                "Too many sign-in attempts. Please wait and try again.");
-            return;
-        }
+        // Failed sign-ins are decided inside the chain, by the failed-logins
+        // policy, for this endpoint and for repository clients alike: a
+        // wrong password delays and locks, an unconfirmed second factor
+        // pauses, and a delayed, paused or locked user is refused before
+        // any provider is asked. The address comes from the TCP peer unless
+        // a trusted proxy is declared (trust_forwarded_headers).
+        final com.auto1.pantera.http.auth.LoginSource source =
+            new com.auto1.pantera.http.auth.LoginSource(
+                clientIp(ctx), ctx.request().getHeader("User-Agent"), AuthHandler.signInPath(ctx)
+            );
         CompletableFuture.supplyAsync(
-            (java.util.function.Supplier<Optional<AuthUser>>) () -> {
-                // Also set user.name in MDC so logs from inside the
-                // auth chain (AuthFromDb, Keycloak, etc.) can reference
-                // who is attempting to log in.
-                org.slf4j.MDC.put(
-                    com.auto1.pantera.http.log.EcsMdc.USER_NAME, name
-                );
+            (java.util.function.Supplier<com.auto1.pantera.http.auth.PasswordCheck.Outcome>) () -> {
+                // A person is signing in: the Okta provider may start a
+                // push or verify the typed code. A repository request
+                // never marks its thread, and is refused instead.
+                OktaAuthContext.setInteractive(true);
                 OktaAuthContext.setMfaCode(mfa);
                 try {
-                    return this.auth.user(name, pass);
+                    // PasswordCheck puts user.name on the thread for the
+                    // records of the chain (AuthFromDb, Keycloak, ...) and
+                    // hands back why the chain refused, when it said so.
+                    return new com.auto1.pantera.http.auth.PasswordCheck(this.auth, source)
+                        .now(name, pass);
                 } finally {
                     OktaAuthContext.clear();
                 }
             },
             HandlerExecutor.get()
-        ).whenComplete((user, err) -> {
+        ).whenComplete((outcome, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
                     "Sign-in is temporarily unavailable. Please try again.", err);
-            } else if (user.isPresent()) {
-                this.loginThrottle.recordSuccess(name, client);
-                final Tokens.TokenPair pair = this.tokens.generatePair(user.get());
+            } else if (outcome.user().isPresent()) {
+                final Tokens.TokenPair pair = this.tokens.generatePair(outcome.user().get());
                 ctx.response()
                     .setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
@@ -231,13 +256,97 @@ public final class AuthHandler {
                         .put("expires_in", pair.expiresIn())
                         .encode());
             } else {
-                // Generic message — never disclose whether the user
-                // exists, the password is wrong, or MFA failed. Detail
-                // is in the server logs from the auth chain.
-                ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
-                    "Sign-in failed. Check your credentials and try again.");
+                AuthHandler.refused(ctx, outcome.refusal());
             }
         });
+    }
+
+    /**
+     * Answer a refused sign-in. A person is told that the account is
+     * locked, how long logins are delayed, or that the identity provider
+     * cannot be reached: none of these says whether the user exists or the
+     * password was right, and without them the person cannot know what to
+     * do. Every other refusal is the one generic message; its detail is in
+     * the server logs.
+     *
+     * @param ctx Routing context
+     * @param refusal Why the chain refused, when it said so
+     */
+    private static void refused(
+        final RoutingContext ctx,
+        final Optional<com.auto1.pantera.http.auth.AuthRefusal> refusal
+    ) {
+        final int status = refusal
+            .map(why -> why.status().code())
+            .orElse(AuthHandler.UNAUTHORIZED);
+        // A delay, a pause and a lock are all answered 403, as in
+        // Artifactory: the code, and the Retry-After of a delay or a pause,
+        // tell them apart.
+        final String reason = refusal
+            .map(com.auto1.pantera.http.auth.AuthRefusal::reason)
+            .orElse("");
+        if (AuthHandler.DELAYED.equals(reason)) {
+            final long seconds = refusal.get().retryAfter().orElse(1L);
+            ctx.response().putHeader("Retry-After", Long.toString(seconds));
+            ApiResponse.sendError(
+                ctx, status, "LOGIN_DELAYED",
+                String.format("Too many failed logins. Try again in %d seconds.", seconds)
+            );
+        } else if (AuthHandler.PAUSED.equals(reason)) {
+            final long seconds = refusal.get().retryAfter().orElse(1L);
+            ctx.response().putHeader("Retry-After", Long.toString(seconds));
+            ApiResponse.sendError(ctx, status, "SIGN_IN_PAUSED", refusal.get().message());
+        } else if (status == AuthHandler.FORBIDDEN) {
+            ApiResponse.sendError(
+                ctx, status, "ACCOUNT_LOCKED",
+                "Account locked. Ask an administrator to unlock it."
+            );
+        } else if (status == AuthHandler.UNAVAILABLE) {
+            ApiResponse.sendError(
+                ctx, status, "SERVICE_UNAVAILABLE",
+                "Sign-in is temporarily unavailable. Please try again."
+            );
+        } else {
+            // Generic message — never disclose whether the user
+            // exists, the password is wrong, or MFA failed. Detail
+            // is in the server logs from the auth chain.
+            ApiResponse.sendError(ctx, AuthHandler.UNAUTHORIZED, "UNAUTHORIZED",
+                "Sign-in failed. Check your credentials and try again.");
+        }
+    }
+
+    /**
+     * Sign-in path of a request to the token endpoint: the form when a
+     * browser sent it, else the API.
+     *
+     * @param ctx Routing context
+     * @return {@code ui} or {@code api}
+     */
+    private static String signInPath(final RoutingContext ctx) {
+        final String path;
+        if (ctx.request().getHeader("Origin") == null
+            && ctx.request().getHeader("Referer") == null) {
+            path = "api";
+        } else {
+            path = "ui";
+        }
+        return path;
+    }
+
+    /**
+     * The session of a user who signed in through an identity provider's
+     * button. A locked user gets none: the lock holds for every way in.
+     *
+     * @param username User name
+     * @param provider Provider type
+     * @return Token pair
+     * @throws LockedAccount When the user is locked after failed logins
+     */
+    Tokens.TokenPair ssoSession(final String username, final String provider) {
+        if (this.failedLogins != null && this.failedLogins.locked(username)) {
+            throw new LockedAccount(username);
+        }
+        return this.tokens.generatePair(new AuthUser(username, provider));
     }
 
     /**
@@ -758,9 +867,8 @@ public final class AuthHandler {
                     .field("user.name", username)
                     .field("log.source", "application")
                     .log();
-                // Generate Pantera JWT pair
-                final AuthUser authUser = new AuthUser(username, provider);
-                return AuthHandler.this.tokens.generatePair(authUser);
+                // Generate Pantera JWT pair, unless the user is locked.
+                return AuthHandler.this.ssoSession(username, provider);
             },
             HandlerExecutor.get()
         ).whenComplete((pair, err) -> {
@@ -790,7 +898,12 @@ public final class AuthHandler {
                     .error(cause)
                     .field("log.source", "application")
                     .log();
-                if (detail.contains("Provider '") && detail.contains("not found")) {
+                if (cause instanceof LockedAccount) {
+                    ApiResponse.sendError(
+                        ctx, AuthHandler.FORBIDDEN, "ACCOUNT_LOCKED",
+                        "Account locked. Ask an administrator to unlock it."
+                    );
+                } else if (detail.contains("Provider '") && detail.contains("not found")) {
                     ApiResponse.sendError(ctx, 404, "NOT_FOUND",
                         "Sign-in provider is not configured.");
                 } else {
@@ -1318,7 +1431,8 @@ public final class AuthHandler {
     }
 
     /**
-     * Client address for login throttling (SecOps import-misc, B16).
+     * Client address of a sign-in, for the failed-logins records and the
+     * sign-in failures report (SecOps import-misc, B16).
      * Forwarding headers are client-supplied: they count only when the
      * deployment declares a trusted reverse proxy
      * ({@code trust_forwarded_headers}); otherwise the TCP peer is used.
@@ -1326,7 +1440,7 @@ public final class AuthHandler {
      * (the rightmost {@code X-Forwarded-For} entry, else {@code X-Real-IP}
      * when no {@code X-Forwarded-For} arrived): the leftmost entry and a
      * passed-through {@code X-Real-IP} are whatever the client sent, and
-     * rotating either would buy a fresh throttle budget per request.
+     * rotating either would hide where the sign-ins come from.
      *
      * @param ctx Routing context
      * @return Client IP, or {@code null} when indeterminable
@@ -1342,5 +1456,25 @@ public final class AuthHandler {
             req.getHeader("X-Forwarded-For"),
             req.getHeader("X-Real-IP")
         );
+    }
+
+    /**
+     * A sign-in through an identity provider's button by a user who is
+     * locked after failed logins.
+     *
+     * @since 2.2.15
+     */
+    static final class LockedAccount extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Ctor.
+         *
+         * @param username The locked user
+         */
+        LockedAccount(final String username) {
+            super("User '" + username + "' is locked after failed logins");
+        }
     }
 }

@@ -8,13 +8,18 @@ import {
   getAuthSettings, updateAuthSettings,
   getCircuitBreakerSettings, updateCircuitBreakerSettings,
   getUpstreamBreakerSettings, updateUpstreamBreakerSettings,
+  getDockerSettings, updateDockerSettings,
   getClientBaseUrlSettings, updateClientBaseUrlSettings,
   getRequestLimitsSettings, updateRequestLimitsSettings,
   getEgressSettings, updateEgressSettings,
-  getLoginThrottleSettings, updateLoginThrottleSettings,
 } from '@/api/auth'
+import { getFailedLoginsSettings, updateFailedLoginsSettings } from '@/api/failedLogins'
+import {
+  getSignInReportSettings, updateSignInReportSettings, type SignInReportSettings,
+} from '@/api/signInFailures'
 import type { RuntimeSettingKey } from '@/api/runtimeSettings'
 import { useRuntimeSettings } from '@/composables/useRuntimeSettings'
+import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { useNotificationStore } from '@/stores/notifications'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -29,6 +34,7 @@ import Tag from 'primevue/tag'
 import type { Settings, CooldownConfig } from '@/types'
 import { apiErrorMessage } from '@/utils/apiError'
 
+const auth = useAuthStore()
 const config = useConfigStore()
 const notify = useNotificationStore()
 const uiVersion = __APP_VERSION__
@@ -43,10 +49,10 @@ const saving = ref<string | null>(null)
  * immediately vs require a restart. The id keys into {@link SECTION_META}.
  */
 type SectionId =
-  | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker' | 'upstream_breaker'
+  | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker' | 'upstream_breaker' | 'docker_proxy'
   | 'cooldown' | 'http_client' | 'bulkhead' | 'http_server'
   | 'external_links' | 'client_base_url'
-  | 'request_limits' | 'egress' | 'login_throttle'
+  | 'request_limits' | 'egress' | 'failed_logins' | 'sign_in_report'
 
 interface SectionMeta {
   /** Human-readable name shown in toasts and the dirty list. */
@@ -97,6 +103,10 @@ const SECTION_META: Record<SectionId, SectionMeta> = {
     label: 'Upstream HTTP Circuit Breaker',
     hotReload: true,
   },
+  docker_proxy: {
+    label: 'Docker Proxy Tags',
+    hotReload: true,
+  },
   request_limits: {
     label: 'Request & Storage Limits',
     hotReload: true,
@@ -105,8 +115,12 @@ const SECTION_META: Record<SectionId, SectionMeta> = {
     label: 'Outbound Egress Policy',
     hotReload: true,
   },
-  login_throttle: {
-    label: 'Login Throttling',
+  failed_logins: {
+    label: 'Failed logins',
+    hotReload: true,
+  },
+  sign_in_report: {
+    label: 'Sign-in report',
     hotReload: true,
   },
   cooldown: {
@@ -173,6 +187,11 @@ const ubWindowSeconds = ref(30)
 const ubSeedBackoffSeconds = ref(2)
 const ubMaxBackoffSeconds = ref(3600)
 
+// Docker proxy tags: how long a docker-proxy serves a cached image tag
+// before it asks the upstream with a HEAD whether the tag moved. Seconds;
+// an emptied number field holds null.
+const dockerTagRefreshSeconds = ref<number | null>(3600)
+
 // Security policy settings (2.2.9) — DB-backed, env vars are the fallback
 // tier only. Request & storage limits: the body cap is stored in bytes on
 // the server and edited here in MiB; fs storage roots is the
@@ -187,10 +206,27 @@ const fsStorageRoots = ref('/var/pantera/data')
 const egressBlockPrivate = ref(false)
 const egressAllowHosts = ref('')
 const upstreamCredentialAllowHosts = ref('')
-// Login throttling: failed password logins per (user, client IP) before
-// further attempts are refused, and the window they count in.
-const loginThrottleMaxFailures = ref(5)
-const loginThrottleWindowSeconds = ref(900)
+// Failed logins (2.2.15): counted per user name, on every node, for every
+// way of signing in. A wrong password counts towards the login delay and
+// the account lock; a second factor that was not confirmed (the password
+// was right) counts towards a pause of password sign-in and never locks.
+const failedLoginsDelayFromFailure = ref(2)
+const failedLoginsFirstDelaySeconds = ref(1)
+const failedLoginsMaxDelaySeconds = ref(60)
+const failedLoginsLockAfter = ref(3)
+const failedLoginsUnlockAfterMinutes = ref(0)
+const failedLoginsForgetAfterMinutes = ref(0)
+const failedLoginsCountRejectedKeys = ref(false)
+const failedLoginsLockAllCredentials = ref(true)
+const failedLoginsSecondFactorLimit = ref(5)
+const failedLoginsSecondFactorPauseMinutes = ref(15)
+// Sign-in report (2.2.15): whether Pantera notes who fails to sign in, and
+// for how many days a line is kept. The report itself is the Sign-in
+// failures page, which is served to accounts that may read users. The
+// names locked now, and their unlock, are on that page too.
+const signInReportEnabled = ref(true)
+const signInReportRetentionDays = ref(90)
+const canOpenSignInFailures = computed(() => auth.hasAction('api_user_permissions', 'read'))
 
 // Client-facing base URL derivation (ClientBaseUrl, pantera-core) — governs
 // absolute URLs Pantera emits (e.g. npm dist.tarball) when a repository has
@@ -204,6 +240,10 @@ const loginThrottleWindowSeconds = ref(900)
 const trustForwardedHeaders = ref(false)
 const clientBaseHostAllowlist = ref('')
 const clientBaseUrl = ref('')
+// Placeholders that show a URL are constants, not text in the template:
+// vue-tsc 3.3 takes `//` in an attribute of a component for the start of a
+// comment and generates broken code for the rest of the template.
+const CLIENT_BASE_URL_PLACEHOLDER = 'e.g. https://reg.example.com or https://reg.example.com/artifactory'
 const clientBaseScheme = ref('auto')
 const CLIENT_BASE_SCHEMES = [
   { label: 'auto — derive from the request', value: 'auto' },
@@ -242,9 +282,11 @@ function searchProxyTypes(event: { query: string }) {
   }
 }
 
-// External links
+// External links (the placeholders are constants for the reason given at CLIENT_BASE_URL_PLACEHOLDER)
 const grafanaUrl = ref('')
 const registryUrl = ref('')
+const GRAFANA_URL_PLACEHOLDER = 'https://grafana.example.com'
+const REGISTRY_URL_PLACEHOLDER = 'https://pantera.example.com'
 
 // Runtime tunables (per-repo bulkhead). Loaded into the same view so
 // admins have one place for everything that lives in the settings DB.
@@ -376,6 +418,9 @@ onMounted(async () => {
         ubSeedBackoffSeconds.value = parseInt(s.upstream_breaker_seed_backoff_seconds ?? '2')
         ubMaxBackoffSeconds.value = parseInt(s.upstream_breaker_max_backoff_seconds ?? '3600')
       }),
+      getDockerSettings().then(s => {
+        dockerTagRefreshSeconds.value = s.tag_refresh_seconds ?? 3600
+      }),
       getClientBaseUrlSettings().then(s => {
         trustForwardedHeaders.value = s.trust_forwarded_headers === 'true'
         clientBaseHostAllowlist.value = s.client_base_host_allowlist ?? ''
@@ -393,9 +438,24 @@ onMounted(async () => {
         egressAllowHosts.value = s.egress_allow_hosts ?? ''
         upstreamCredentialAllowHosts.value = s.upstream_credential_allow_hosts ?? ''
       }),
-      getLoginThrottleSettings().then(s => {
-        loginThrottleMaxFailures.value = parseInt(s.login_throttle_max_failures ?? '5')
-        loginThrottleWindowSeconds.value = parseInt(s.login_throttle_window_seconds ?? '900')
+      getFailedLoginsSettings().then(s => {
+        failedLoginsDelayFromFailure.value = parseInt(s.failed_logins_delay_from_failure ?? '2')
+        failedLoginsFirstDelaySeconds.value = parseInt(s.failed_logins_first_delay_seconds ?? '1')
+        failedLoginsMaxDelaySeconds.value = parseInt(s.failed_logins_max_delay_seconds ?? '60')
+        failedLoginsLockAfter.value = parseInt(s.failed_logins_lock_after ?? '3')
+        failedLoginsUnlockAfterMinutes.value = parseInt(s.failed_logins_unlock_after_minutes ?? '0')
+        failedLoginsForgetAfterMinutes.value = parseInt(s.failed_logins_forget_after_minutes ?? '0')
+        failedLoginsCountRejectedKeys.value = s.failed_logins_count_rejected_keys === 'true'
+        // On unless the server says off: a missing value must not read as the weaker lock.
+        failedLoginsLockAllCredentials.value = s.failed_logins_lock_all_credentials !== 'false'
+        failedLoginsSecondFactorLimit.value = parseInt(s.failed_logins_second_factor_limit ?? '5')
+        failedLoginsSecondFactorPauseMinutes.value =
+          parseInt(s.failed_logins_second_factor_pause_minutes ?? '15')
+      }),
+      getSignInReportSettings().then(s => {
+        // On unless the server says off, as the server reads a missing value.
+        signInReportEnabled.value = s.sign_in_report_enabled !== 'false'
+        signInReportRetentionDays.value = parseInt(s.sign_in_report_retention_days ?? '90')
       }),
       runtime.load(),
     ])
@@ -574,6 +634,46 @@ async function saveUpstreamBreakerSettings(): Promise<boolean> {
   }
 }
 
+/** Ages the server accepts for the docker tag refresh (`DockerTagRefreshSettingsLoader`). */
+const DOCKER_TAG_REFRESH = { label: 'Re-check a cached tag after (seconds)', min: 0, max: 31_536_000 }
+
+/**
+ * What keeps the Docker Proxy Tags card from being saved, or null. Shown in
+ * the card while editing and checked again by the save; the server
+ * validates the same range and answers 400.
+ */
+const dockerProxyProblem = computed<string | null>(() => {
+  const range = DOCKER_TAG_REFRESH
+  const seconds: number | null = dockerTagRefreshSeconds.value
+  if (seconds === null || !Number.isInteger(seconds) || seconds < range.min || seconds > range.max) {
+    return `${range.label} must be a whole number from ${range.min} to ${range.max}`
+  }
+  return null
+})
+
+/**
+ * Save the docker tag refresh age. Applies to the next docker request of the
+ * node that serves the save, without a restart.
+ */
+async function saveDockerSettings(): Promise<boolean> {
+  const problem = dockerProxyProblem.value
+  if (problem) {
+    notify.error(problem)
+    return false
+  }
+  saving.value = 'docker-proxy'
+  try {
+    await updateDockerSettings({ tag_refresh_seconds: dockerTagRefreshSeconds.value as number })
+    notify.success('Docker proxy tag settings saved')
+    return true
+  } catch (err) {
+    notify.error('Failed to save docker proxy tag settings', apiErrorMessage(err, 'Request failed'))
+    return false
+  } finally {
+    saving.value = null
+  }
+}
+
 async function saveRequestLimitsSettings(): Promise<boolean> {
   if (!Number.isFinite(maxRequestBodyMiB.value) || maxRequestBodyMiB.value < 1) {
     notify.error('Request body cap must be at least 1 MiB')
@@ -622,21 +722,131 @@ async function saveEgressSettings(): Promise<boolean> {
   }
 }
 
-async function saveLoginThrottleSettings(): Promise<boolean> {
-  if (loginThrottleMaxFailures.value < 1 || loginThrottleWindowSeconds.value < 1) {
-    notify.error('Login throttle failures and window must both be at least 1')
+/**
+ * Ranges the server accepts for the failed-logins numbers
+ * (`FailedLoginsConfig`), with the label of each field for the message.
+ * The number fields of the card carry the same labels and bounds.
+ */
+const FAILED_LOGINS_RANGES = {
+  delayFromFailure: { label: 'Delay logins from failed login number', min: 0, max: 100 },
+  firstDelaySeconds: { label: 'First delay (seconds)', min: 1, max: 60 },
+  maxDelaySeconds: { label: 'Longest delay (seconds)', min: 1, max: 3600 },
+  lockAfter: { label: 'Lock after failed logins', min: 0, max: 100 },
+  unlockAfterMinutes: { label: 'Unlock automatically after (minutes)', min: 0, max: 1440 },
+  forgetAfterMinutes: { label: 'Forget failures after (minutes)', min: 0, max: 43200 },
+  secondFactorLimit: { label: 'Pause after unconfirmed sign-ins', min: 0, max: 100 },
+  secondFactorPauseMinutes: { label: 'Pause (minutes)', min: 1, max: 1440 },
+}
+
+/**
+ * What keeps the failed-logins card from being saved, or null. Shown in
+ * the card while editing and checked again by the save; the server
+ * validates the same rules and answers 400.
+ */
+const failedLoginsProblem = computed<string | null>(() => {
+  const values: Array<[keyof typeof FAILED_LOGINS_RANGES, number | null]> = [
+    ['delayFromFailure', failedLoginsDelayFromFailure.value],
+    ['firstDelaySeconds', failedLoginsFirstDelaySeconds.value],
+    ['maxDelaySeconds', failedLoginsMaxDelaySeconds.value],
+    ['lockAfter', failedLoginsLockAfter.value],
+    ['unlockAfterMinutes', failedLoginsUnlockAfterMinutes.value],
+    ['forgetAfterMinutes', failedLoginsForgetAfterMinutes.value],
+    ['secondFactorLimit', failedLoginsSecondFactorLimit.value],
+    ['secondFactorPauseMinutes', failedLoginsSecondFactorPauseMinutes.value],
+  ]
+  for (const [key, value] of values) {
+    const range = FAILED_LOGINS_RANGES[key]
+    // An emptied number field holds null.
+    if (value === null || !Number.isInteger(value) || value < range.min || value > range.max) {
+      return `${range.label} must be a whole number from ${range.min} to ${range.max}`
+    }
+  }
+  if (failedLoginsMaxDelaySeconds.value < failedLoginsFirstDelaySeconds.value) {
+    return 'Longest delay must not be below the first delay'
+  }
+  return null
+})
+
+/**
+ * Save the failed-logins policy: the login delay and the account lock of
+ * a wrong password, and the pause of an unconfirmed second factor.
+ * Applies to the next login on every node.
+ */
+async function saveFailedLoginsSettings(): Promise<boolean> {
+  const problem = failedLoginsProblem.value
+  if (problem) {
+    notify.error(problem)
     return false
   }
-  saving.value = 'login-throttle'
+  saving.value = 'failed-logins'
   try {
-    await updateLoginThrottleSettings({
-      login_throttle_max_failures: String(loginThrottleMaxFailures.value),
-      login_throttle_window_seconds: String(loginThrottleWindowSeconds.value),
+    await updateFailedLoginsSettings({
+      failed_logins_delay_from_failure: String(failedLoginsDelayFromFailure.value),
+      failed_logins_first_delay_seconds: String(failedLoginsFirstDelaySeconds.value),
+      failed_logins_max_delay_seconds: String(failedLoginsMaxDelaySeconds.value),
+      failed_logins_lock_after: String(failedLoginsLockAfter.value),
+      failed_logins_unlock_after_minutes: String(failedLoginsUnlockAfterMinutes.value),
+      failed_logins_forget_after_minutes: String(failedLoginsForgetAfterMinutes.value),
+      failed_logins_count_rejected_keys: String(failedLoginsCountRejectedKeys.value),
+      failed_logins_lock_all_credentials: String(failedLoginsLockAllCredentials.value),
+      failed_logins_second_factor_limit: String(failedLoginsSecondFactorLimit.value),
+      failed_logins_second_factor_pause_minutes: String(failedLoginsSecondFactorPauseMinutes.value),
     })
-    notify.success('Login throttling settings saved')
+    notify.success('Failed logins settings saved')
     return true
   } catch (err) {
-    notify.error('Failed to save login throttling settings', apiErrorMessage(err, 'Request failed'))
+    notify.error('Failed to save failed logins settings', apiErrorMessage(err, 'Request failed'))
+    return false
+  } finally {
+    saving.value = null
+  }
+}
+
+/** Days the server accepts for the retention of the sign-in report (`SignInReportConfig`). */
+const SIGN_IN_REPORT_RETENTION = { label: 'Keep lines for (days)', min: 1, max: 3650 }
+
+/**
+ * What keeps the sign-in report card from being saved, or null. Shown in
+ * the card while editing and checked again by the save; the server
+ * validates the same range and answers 400.
+ */
+const signInReportProblem = computed<string | null>(() => {
+  const range = SIGN_IN_REPORT_RETENTION
+  // An emptied number field holds null.
+  const days: number | null = signInReportRetentionDays.value
+  if (days === null || !Number.isInteger(days) || days < range.min || days > range.max) {
+    return `${range.label} must be a whole number from ${range.min} to ${range.max}`
+  }
+  return null
+})
+
+/**
+ * Save the sign-in report settings. Applies on every node without a
+ * restart. Only the keys that differ from the loaded values are sent: the
+ * endpoint takes any subset, and a key that was not touched here keeps
+ * what another administrator may have set meanwhile.
+ */
+async function saveSignInReportSettings(): Promise<boolean> {
+  const problem = signInReportProblem.value
+  if (problem) {
+    notify.error(problem)
+    return false
+  }
+  const saved = baseline.value
+  const changed: Partial<SignInReportSettings> = {}
+  if (!saved || saved.signInReportEnabled !== signInReportEnabled.value) {
+    changed.sign_in_report_enabled = String(signInReportEnabled.value)
+  }
+  if (!saved || saved.signInReportRetentionDays !== signInReportRetentionDays.value) {
+    changed.sign_in_report_retention_days = String(signInReportRetentionDays.value)
+  }
+  saving.value = 'sign-in-report'
+  try {
+    await updateSignInReportSettings(changed)
+    notify.success('Sign-in report settings saved')
+    return true
+  } catch (err) {
+    notify.error('Failed to save sign-in report settings', apiErrorMessage(err, 'Request failed'))
     return false
   } finally {
     saving.value = null
@@ -852,6 +1062,7 @@ const TRACKED = {
   ubWindowSeconds,
   ubSeedBackoffSeconds,
   ubMaxBackoffSeconds,
+  dockerTagRefreshSeconds,
   trustForwardedHeaders,
   clientBaseHostAllowlist,
   clientBaseUrl,
@@ -861,8 +1072,18 @@ const TRACKED = {
   egressBlockPrivate,
   egressAllowHosts,
   upstreamCredentialAllowHosts,
-  loginThrottleMaxFailures,
-  loginThrottleWindowSeconds,
+  failedLoginsDelayFromFailure,
+  failedLoginsFirstDelaySeconds,
+  failedLoginsMaxDelaySeconds,
+  failedLoginsLockAfter,
+  failedLoginsUnlockAfterMinutes,
+  failedLoginsForgetAfterMinutes,
+  failedLoginsCountRejectedKeys,
+  failedLoginsLockAllCredentials,
+  failedLoginsSecondFactorLimit,
+  failedLoginsSecondFactorPauseMinutes,
+  signInReportEnabled,
+  signInReportRetentionDays,
   cooldownEnabled,
   cooldownAge,
   cooldownHistoryRetentionDays,
@@ -908,12 +1129,20 @@ const SECTION_FIELDS: Record<Exclude<SectionId, 'bulkhead'>, BaselineKey[]> = {
     'ubRatePct', 'ubMinCalls', 'ubWindowSeconds',
     'ubSeedBackoffSeconds', 'ubMaxBackoffSeconds',
   ],
+  docker_proxy: ['dockerTagRefreshSeconds'],
   client_base_url: [
     'trustForwardedHeaders', 'clientBaseHostAllowlist', 'clientBaseUrl', 'clientBaseScheme',
   ],
   request_limits: ['maxRequestBodyMiB', 'fsStorageRoots'],
   egress: ['egressBlockPrivate', 'egressAllowHosts', 'upstreamCredentialAllowHosts'],
-  login_throttle: ['loginThrottleMaxFailures', 'loginThrottleWindowSeconds'],
+  failed_logins: [
+    'failedLoginsDelayFromFailure', 'failedLoginsFirstDelaySeconds',
+    'failedLoginsMaxDelaySeconds', 'failedLoginsLockAfter',
+    'failedLoginsUnlockAfterMinutes', 'failedLoginsForgetAfterMinutes',
+    'failedLoginsCountRejectedKeys', 'failedLoginsLockAllCredentials',
+    'failedLoginsSecondFactorLimit', 'failedLoginsSecondFactorPauseMinutes',
+  ],
+  sign_in_report: ['signInReportEnabled', 'signInReportRetentionDays'],
   cooldown: [
     'cooldownEnabled', 'cooldownAge', 'cooldownHistoryRetentionDays',
     'cooldownCleanupBatchLimit', 'cooldownSnapshotEnabled', 'cooldownSnapshotAge',
@@ -952,10 +1181,12 @@ const isDirtyJwt = sectionDirty('jwt')
 const isDirtyAuth = sectionDirty('auth')
 const isDirtyCircuitBreaker = sectionDirty('circuit_breaker')
 const isDirtyUpstreamBreaker = sectionDirty('upstream_breaker')
+const isDirtyDockerProxy = sectionDirty('docker_proxy')
 const isDirtyClientBaseUrl = sectionDirty('client_base_url')
 const isDirtyRequestLimits = sectionDirty('request_limits')
 const isDirtyEgress = sectionDirty('egress')
-const isDirtyLoginThrottle = sectionDirty('login_throttle')
+const isDirtyFailedLogins = sectionDirty('failed_logins')
+const isDirtySignInReport = sectionDirty('sign_in_report')
 const isDirtyCooldown = sectionDirty('cooldown')
 const isDirtyHttpClient = sectionDirty('http_client')
 const isDirtyHttpServer = sectionDirty('http_server')
@@ -974,10 +1205,12 @@ const DIRTY_PER_SECTION: Record<SectionId, { value: boolean }> = {
   auth: isDirtyAuth,
   circuit_breaker: isDirtyCircuitBreaker,
   upstream_breaker: isDirtyUpstreamBreaker,
+  docker_proxy: isDirtyDockerProxy,
   client_base_url: isDirtyClientBaseUrl,
   request_limits: isDirtyRequestLimits,
   egress: isDirtyEgress,
-  login_throttle: isDirtyLoginThrottle,
+  failed_logins: isDirtyFailedLogins,
+  sign_in_report: isDirtySignInReport,
   cooldown: isDirtyCooldown,
   http_client: isDirtyHttpClient,
   bulkhead: isDirtyBulkhead,
@@ -1004,10 +1237,12 @@ function saveSectionById(id: SectionId): Promise<boolean> {
     case 'auth': return saveAuthSettings()
     case 'circuit_breaker': return saveCircuitBreakerSettings()
     case 'upstream_breaker': return saveUpstreamBreakerSettings()
+    case 'docker_proxy': return saveDockerSettings()
     case 'client_base_url': return saveClientBaseUrlSettings()
     case 'request_limits': return saveRequestLimitsSettings()
     case 'egress': return saveEgressSettings()
-    case 'login_throttle': return saveLoginThrottleSettings()
+    case 'failed_logins': return saveFailedLoginsSettings()
+    case 'sign_in_report': return saveSignInReportSettings()
     case 'cooldown': return saveCooldown()
     case 'http_client': return saveHttpClient()
     case 'bulkhead': return runtime.saveAllDirty()
@@ -1353,6 +1588,60 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
         </template>
       </Card>
 
+      <!-- Docker Proxy Tags: how long a cached image tag is served before it is re-checked -->
+      <Card class="shadow-sm" data-testid="docker-proxy-card">
+        <template #title>
+          <SectionHeader id="docker_proxy" :dirty="isDirtyDockerProxy" />
+        </template>
+        <template #subtitle>
+          A docker-proxy repository serves a cached tag (e.g. <code>latest</code>,
+          <code>20</code>) for this long, then asks the upstream with a HEAD whether
+          the tag moved. Same digest: the cached image is served. New digest: the new
+          image is fetched and stored, unless cooldown blocks it; then the cached image
+          stays in service. A digest reference is never re-checked.
+        </template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label for="dockerTagRefreshSeconds" class="text-sm text-gray-500 block mb-1">
+                  Re-check a cached tag after (seconds)
+                </label>
+                <InputNumber
+                  v-model="dockerTagRefreshSeconds"
+                  input-id="dockerTagRefreshSeconds"
+                  :min="0"
+                  :max="31536000"
+                  suffix=" s"
+                  class="w-full"
+                />
+                <span class="text-xs text-gray-400">
+                  Default: 3600 (1 hour). From 0 to 31536000 (a year). 0 re-checks on
+                  every request. A repository can override it with its own
+                  "Tag refresh (seconds)".
+                </span>
+              </div>
+            </div>
+            <div
+              v-if="dockerProxyProblem"
+              class="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded p-2"
+              data-testid="docker-proxy-problem"
+            >
+              <i class="pi pi-times-circle mr-1" />
+              {{ dockerProxyProblem }}.
+            </div>
+            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+              <i class="pi pi-info-circle mr-1" />
+              Applies to the next request of the node that saves it, no restart needed;
+              other nodes of a cluster read it at their next start. The age of a cached
+              tag is counted per node in memory, so after a restart each tag is
+              re-checked once on its first request. An unreachable upstream keeps the
+              cached image in service.
+            </div>
+          </div>
+        </template>
+      </Card>
+
       <!-- Client-Facing Base URL (forwarded-header trust + Host allowlist) -->
       <Card class="shadow-sm">
         <template #title>
@@ -1374,7 +1663,7 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
               <InputText
                 v-model="clientBaseUrl"
                 class="w-full"
-                placeholder="e.g. https://reg.example.com or https://reg.example.com/artifactory"
+                :placeholder="CLIENT_BASE_URL_PLACEHOLDER"
               />
               <div
                 v-if="clientBaseUrl.trim() && !isValidHttpUrl(clientBaseUrl)"
@@ -1570,34 +1859,297 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
         </template>
       </Card>
 
-      <!-- Login Throttling (2.2.9) -->
-      <Card class="shadow-sm">
+      <!-- Failed logins: a wrong password delays and locks, an unconfirmed second factor pauses (2.2.15) -->
+      <Card class="shadow-sm" data-testid="failed-logins-card">
         <template #title>
-          <SectionHeader id="login_throttle" :dirty="isDirtyLoginThrottle" />
+          <SectionHeader id="failed_logins" :dirty="isDirtyFailedLogins" />
         </template>
         <template #subtitle>
-          Failed password logins tolerated per user and client IP before further
-          attempts are refused for the window. Stored in the database; the
-          PANTERA_LOGIN_THROTTLE_* environment variables are only the fallback.
+          Failed sign-ins are counted per user name, on every node, for every way of
+          signing in: the sign-in form, the token API and repository clients. A wrong
+          password and an unconfirmed second factor are counted apart. Stored in the
+          database; the PANTERA_FAILED_LOGINS_* environment variables are only the fallback.
         </template>
         <template #content>
           <div class="space-y-4">
+            <div
+              class="text-xs text-blue-400 bg-blue-500/10 border border-blue-500/20 rounded p-2"
+              data-testid="failed-logins-counted"
+            >
+              <div class="font-semibold mb-1">
+                <i class="pi pi-info-circle mr-1" />What is counted
+              </div>
+              <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                <dt class="font-semibold">Wrong password</dt>
+                <dd>Counts toward the delay and the lock.</dd>
+                <dt class="font-semibold">Second factor not confirmed</dt>
+                <dd>
+                  The password was right; the push was denied or not answered, or the code
+                  was wrong. Counts toward the pause; never a wrong password, never locks.
+                </dd>
+                <dt class="font-semibold">Not counted</dt>
+                <dd>
+                  The identity provider cannot be reached, the account is locked or its
+                  password expired at the provider, a repository client was asked for a
+                  second factor it cannot give.
+                </dd>
+              </dl>
+            </div>
+
+            <section class="space-y-4" data-testid="failed-logins-wrong-password">
+              <h4 class="text-sm font-semibold">Wrong password</h4>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Delay logins from failed login number</label>
+                  <InputNumber
+                    v-model="failedLoginsDelayFromFailure"
+                    :min="0"
+                    :max="100"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 2. From this failed login on, further logins of the user are
+                    refused for a time that grows with each failure. 0 = no delay.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Lock after failed logins</label>
+                  <InputNumber
+                    v-model="failedLoginsLockAfter"
+                    :min="0"
+                    :max="100"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 3. The failed login that reaches this number locks the user.
+                    0 = no lock; saving 0 unlocks every locked user within 15 seconds.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">First delay (seconds)</label>
+                  <InputNumber
+                    v-model="failedLoginsFirstDelaySeconds"
+                    :min="1"
+                    :max="60"
+                    suffix=" s"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 1s. A delay lasts this many seconds times the square of the
+                    number of failed logins.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Longest delay (seconds)</label>
+                  <InputNumber
+                    v-model="failedLoginsMaxDelaySeconds"
+                    :min="1"
+                    :max="3600"
+                    suffix=" s"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 60s. No delay is longer than this. Not below the first delay.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Unlock automatically after (minutes)</label>
+                  <InputNumber
+                    v-model="failedLoginsUnlockAfterMinutes"
+                    :min="0"
+                    :max="1440"
+                    suffix=" min"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 0. A lock ends by itself after this time.
+                    0 = only an administrator unlocks.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Forget failures after (minutes)</label>
+                  <InputNumber
+                    v-model="failedLoginsForgetAfterMinutes"
+                    :min="0"
+                    :max="43200"
+                    suffix=" min"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 0. A failed login later than this after the previous one
+                    starts a new count. 0 = never: failures count until a successful
+                    password login or an unlock. Ends no lock.
+                  </span>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <InputSwitch v-model="failedLoginsCountRejectedKeys" />
+                <div>
+                  <div class="text-sm">Count rejected API keys</div>
+                  <div class="text-xs text-gray-400">
+                    Default: off. On = a rejected API key counts as a failed login. Clear
+                    the stale keys your users' tools still send first: with the lock at 3,
+                    a tool that holds an old key locks its user with three requests.
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section
+              class="space-y-4 border-t border-gray-200 dark:border-gray-700 pt-4"
+              data-testid="failed-logins-second-factor"
+            >
+              <h4 class="text-sm font-semibold">Second factor not confirmed</h4>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Pause after unconfirmed sign-ins</label>
+                  <InputNumber
+                    v-model="failedLoginsSecondFactorLimit"
+                    :min="0"
+                    :max="100"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 5. From this unconfirmed sign-in on, password sign-in of the
+                    user is paused and no push is sent. 0 = never pause.
+                  </span>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Pause (minutes)</label>
+                  <InputNumber
+                    v-model="failedLoginsSecondFactorPauseMinutes"
+                    :min="1"
+                    :max="1440"
+                    suffix=" min"
+                    class="w-full"
+                  />
+                  <span class="text-xs text-gray-400">
+                    Default: 15. Unconfirmed sign-ins count while each comes within this
+                    time of the previous one. A successful sign-in ends the count.
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <div
+              v-if="failedLoginsProblem"
+              class="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded p-2"
+              data-testid="failed-logins-problem"
+            >
+              <i class="pi pi-times-circle mr-1" />
+              {{ failedLoginsProblem }}.
+            </div>
+
+            <section
+              class="space-y-4 border-t border-gray-200 dark:border-gray-700 pt-4"
+              data-testid="failed-logins-lock-scope"
+            >
+              <h4 class="text-sm font-semibold">Lock scope</h4>
+              <div class="flex items-center gap-3">
+                <InputSwitch v-model="failedLoginsLockAllCredentials" />
+                <div>
+                  <div class="text-sm">A lock blocks every credential</div>
+                  <div class="text-xs text-gray-400">
+                    Default: on. On = password, API keys, sessions and the provider
+                    button; off = password sign-in only.
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+              <i class="pi pi-info-circle mr-1" />
+              Applies to the next login on every node — no restart needed. Anyone who
+              knows a user name can lock it with wrong passwords; set an automatic
+              unlock time, or limit the lock to password sign-in, where that is not
+              acceptable for accounts that builds use.
+            </div>
+            <div
+              class="border-t border-gray-200 dark:border-gray-700 pt-4 text-sm"
+              data-testid="failed-logins-locked-users"
+            >
+              <router-link
+                v-if="canOpenSignInFailures"
+                to="/admin/sign-in-failures"
+                class="text-blue-500 hover:underline"
+                data-testid="failed-logins-locked-users-link"
+              >
+                See and unlock the locked users on the Sign-in failures page
+                <i class="pi pi-arrow-right text-xs ml-1" />
+              </router-link>
+              <span v-else class="text-gray-500">
+                Locked users are listed and unlocked on the Sign-in failures page, for accounts
+                that may read users.
+              </span>
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Sign-in report: what the Sign-in failures page records, and for how long (2.2.15) -->
+      <Card class="shadow-sm" data-testid="sign-in-report-card">
+        <template #title>
+          <SectionHeader id="sign_in_report" :dirty="isDirtySignInReport" />
+        </template>
+        <template #subtitle>
+          Pantera notes who fails to sign in, with what, and from where: rejected
+          API keys, failed password logins, and sign-ins whose second factor was not
+          confirmed. Stored in the database; the PANTERA_SIGN_IN_REPORT_* environment
+          variables are only the fallback.
+        </template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="flex items-center gap-3">
+              <InputSwitch v-model="signInReportEnabled" />
+              <div>
+                <div class="text-sm">Record sign-in failures</div>
+                <div class="text-xs text-gray-400">
+                  Default: on. Off = nothing is noted or stored. Lines already stored
+                  stay until their retention ends.
+                </div>
+              </div>
+            </div>
             <div class="grid grid-cols-2 gap-4">
               <div>
-                <label class="text-sm text-gray-500 block mb-1">Failures before lockout</label>
-                <InputNumber v-model="loginThrottleMaxFailures" :min="1" :max="1000" class="w-full" />
-                <span class="text-xs text-gray-400">Default: 5.</span>
+                <label class="text-sm text-gray-500 block mb-1">Keep lines for (days)</label>
+                <InputNumber
+                  v-model="signInReportRetentionDays"
+                  :min="1"
+                  :max="3650"
+                  class="w-full"
+                />
+                <span class="text-xs text-gray-400">
+                  Default: 90. From 1 to 3650. A line is removed this many days after
+                  its last event.
+                </span>
               </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Window (seconds)</label>
-                <InputNumber v-model="loginThrottleWindowSeconds" :min="1" :max="86400" suffix=" s" class="w-full" />
-                <span class="text-xs text-gray-400">Default: 900s (15 minutes).</span>
-              </div>
+            </div>
+            <div
+              v-if="signInReportProblem"
+              class="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded p-2"
+              data-testid="sign-in-report-problem"
+            >
+              <i class="pi pi-times-circle mr-1" />
+              {{ signInReportProblem }}.
             </div>
             <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
               <i class="pi pi-info-circle mr-1" />
-              Applies to the next login attempt — no restart needed. Counters are kept
-              per node and clear on a successful login.
+              Applies on every node — no restart needed. A line holds the user name,
+              client address and client program of a failed sign-in, and the id of a
+              rejected key. No password and no key is stored.
+            </div>
+            <div class="text-sm">
+              <router-link
+                v-if="canOpenSignInFailures"
+                to="/admin/sign-in-failures"
+                class="text-blue-500 hover:underline"
+                data-testid="sign-in-report-link"
+              >
+                Open the Sign-in failures page <i class="pi pi-arrow-right text-xs ml-1" />
+              </router-link>
+              <span v-else class="text-gray-500">
+                The lists are on the Sign-in failures page, for accounts that may read users.
+              </span>
             </div>
           </div>
         </template>
@@ -1730,7 +2282,7 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
                     :model-value="rt.minimum_allowed_age"
                     class="w-24 text-sm"
                     placeholder="7d"
-                    @update:model-value="(v: string) => updateRepoTypeAge(rt.name, v)"
+                    @update:model-value="(v: string | undefined) => updateRepoTypeAge(rt.name, v ?? '')"
                   />
                   <Button
                     icon="pi pi-trash"
@@ -1965,11 +2517,11 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
           <div class="space-y-3">
             <div>
               <label class="text-sm text-gray-500 block mb-1">Grafana URL</label>
-              <InputText v-model="grafanaUrl" class="w-full" placeholder="https://grafana.example.com" />
+              <InputText v-model="grafanaUrl" class="w-full" :placeholder="GRAFANA_URL_PLACEHOLDER" />
             </div>
             <div>
               <label class="text-sm text-gray-500 block mb-1">Registry URL</label>
-              <InputText v-model="registryUrl" class="w-full" placeholder="https://pantera.example.com" />
+              <InputText v-model="registryUrl" class="w-full" :placeholder="REGISTRY_URL_PLACEHOLDER" />
               <p class="text-xs text-gray-400 mt-1">
                 Address clients use to reach the registry (not the UI). Set Me Up appends the first global
                 path prefix unless this URL already ends with it.

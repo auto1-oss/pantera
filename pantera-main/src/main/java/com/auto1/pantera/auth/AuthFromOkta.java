@@ -35,9 +35,8 @@ public final class AuthFromOkta implements Authentication {
     public Optional<AuthUser> user(final String username, final String password) {
         Optional<AuthUser> res = Optional.empty();
         try {
-            final String mfaCode = OktaAuthContext.mfaCode();
             final OktaOidcClient.OktaAuthResult okta = this.client.authenticate(
-                username, password, mfaCode
+                username, password, OktaAuthContext.mfaCode(), OktaAuthContext.interactive()
             );
             if (okta != null) {
                 this.provisioning.provision(okta.username(), okta.email(), okta.groups());
@@ -45,6 +44,7 @@ public final class AuthFromOkta implements Authentication {
             }
         } catch (final InterruptedException interrupted) {
             Thread.currentThread().interrupt();
+            OktaOidcClient.unavailable().note();
             EcsLogger.error("com.auto1.pantera.auth")
                 .message("Okta authentication interrupted")
                 .eventCategory("authentication")
@@ -55,6 +55,8 @@ public final class AuthFromOkta implements Authentication {
                 .field("log.source", "application")
                 .log();
         } catch (final IOException err) {
+            // Okta cannot be reached: not a failed login of this user.
+            OktaOidcClient.unavailable().note();
             EcsLogger.error("com.auto1.pantera.auth")
                 .message("Okta authentication failed")
                 .eventCategory("authentication")

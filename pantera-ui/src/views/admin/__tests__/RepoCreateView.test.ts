@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import type { ComponentPublicInstance } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import PrimeVue from 'primevue/config'
 import Aura from '@primeuix/themes/aura'
@@ -20,7 +21,7 @@ vi.mock('@/components/admin/RepoConfigForm.vue', () => ({
     name: 'RepoConfigFormStub',
     props: ['config', 'initialConfig', 'readOnlyType'],
     emits: ['update:config', 'valid-change'],
-    mounted() {
+    mounted(this: ComponentPublicInstance) {
       this.$emit('update:config', { repo: { type: 'npm' } })
       this.$emit('valid-change', true)
     },
@@ -32,7 +33,7 @@ vi.mock('@/components/admin/RepoNameField.vue', () => ({
     name: 'RepoNameFieldStub',
     props: ['modelValue'],
     emits: ['update:modelValue', 'valid-change'],
-    mounted() {
+    mounted(this: ComponentPublicInstance) {
       this.$emit('update:modelValue', 'npm-new')
       this.$emit('valid-change', true)
     },

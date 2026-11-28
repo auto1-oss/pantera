@@ -3,6 +3,7 @@ import axios, {
   type InternalAxiosRequestConfig,
   type AxiosRequestConfig,
 } from 'axios'
+import { rememberSignOutReason, type SignOutReason } from '@/utils/authError'
 
 /**
  * Axios config shape extended with a private retry marker.
@@ -29,16 +30,51 @@ let pendingRefreshQueue: Array<(newToken: string) => void> = []
 /** Endpoints that must NOT trigger a silent refresh on 401 (they are the auth boundary). */
 const AUTH_BYPASS_URLS = ['/auth/token', '/auth/providers', '/auth/callback', '/auth/refresh']
 
+/**
+ * The sign-in calls themselves. A refusal there answers the attempt and is
+ * shown by the view that made it. Matched as the whole path: `/auth/tokens`
+ * and `/auth/token/generate` are calls of a signed-in user.
+ */
+const SIGN_IN_URLS = ['/auth/token', '/auth/callback']
+
 function flushPendingQueue(newToken: string) {
   pendingRefreshQueue.forEach((resolve) => resolve(newToken))
   pendingRefreshQueue = []
 }
 
-function redirectToLogin() {
+/**
+ * Ends the session and loads the sign-in page. With a reason, the page
+ * tells the person why they were signed out.
+ */
+function redirectToLogin(reason?: SignOutReason) {
   localStorage.removeItem('access_token')
   localStorage.removeItem('refresh_token')
   localStorage.removeItem('jwt')
+  if (reason) {
+    rememberSignOutReason(reason)
+  }
   window.location.href = '/login'
+}
+
+function isSignInCall(url: string): boolean {
+  const path = url.split('?')[0].replace(/\/+$/, '')
+  return SIGN_IN_URLS.some((signIn) => path.endsWith(signIn))
+}
+
+/**
+ * True for the answer the API gives a user who was locked after failed
+ * logins: 403 with the code `ACCOUNT_LOCKED`. The session or key is
+ * still valid, so this is not a 401, and no other 403 carries the code.
+ * A delayed login (`LOGIN_DELAYED`) and a paused password sign-in
+ * (`SIGN_IN_PAUSED`, after too many sign-ins whose second factor was not
+ * confirmed) are answered 403 as well, with `Retry-After`: they are
+ * temporary, end no session and are left to the caller.
+ */
+function isAccountLocked(error: { response?: { status?: number; data?: unknown } }): boolean {
+  const data = error.response?.data
+  return error.response?.status === 403
+    && typeof data === 'object' && data !== null
+    && (data as { error?: unknown }).error === 'ACCOUNT_LOCKED'
 }
 
 export function initApiClient(baseUrl: string): AxiosInstance {
@@ -77,10 +113,20 @@ export function initApiClient(baseUrl: string): AxiosInstance {
   apiClient.interceptors.response.use(
     (response) => response,
     async (error) => {
+      const url: string = error.config?.url ?? ''
+      // A user who was locked while signed in: every call is refused with
+      // 403 ACCOUNT_LOCKED and no refresh can help. End the session and
+      // let the sign-in page say why. A sign-in call that is refused this
+      // way has no session to end; its view shows the message.
+      if (isAccountLocked(error)) {
+        if (!isSignInCall(url)) {
+          redirectToLogin('account_locked')
+        }
+        return Promise.reject(error)
+      }
       if (error.response?.status !== 401) {
         return Promise.reject(error)
       }
-      const url: string = error.config?.url ?? ''
       // Auth-boundary endpoints are the ones the user hits BEFORE they
       // have a session (login, providers list, SSO callback, refresh).
       // A 401 from these is not a session-expiry signal — it means the

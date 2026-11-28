@@ -61,7 +61,8 @@ public final class SecurityPolicySettingsSync {
 
     /**
      * Tell peers a section was written.
-     * @param section Section name ({@code request_limits}, {@code egress}, {@code login_throttle})
+     * @param section Section name ({@code request_limits}, {@code egress}, {@code failed_logins},
+     *  {@code password_sign_in}, {@code sign_in_report})
      */
     public void broadcast(final String section) {
         if (this.bus != null) {
@@ -81,8 +82,23 @@ public final class SecurityPolicySettingsSync {
         if (all || "egress".equals(section)) {
             invalidate(EgressSettingsLoader.installed());
         }
-        if (all || "login_throttle".equals(section)) {
-            invalidate(LoginThrottleSettingsLoader.installed());
+        if (all || "failed_logins".equals(section)) {
+            final FailedLoginsSettingsLoader failed = FailedLoginsSettingsLoader.installed();
+            if (failed != null) {
+                failed.invalidate();
+            }
+        }
+        if (all || "sign_in_report".equals(section)) {
+            final SignInReportSettingsLoader reports = SignInReportSettingsLoader.installed();
+            if (reports != null) {
+                reports.invalidate();
+            }
+        }
+        if (all || "password_sign_in".equals(section)) {
+            final PasswordSignInSettingsLoader passwords = PasswordSignInSettingsLoader.installed();
+            if (passwords != null) {
+                passwords.invalidate();
+            }
         }
         EcsLogger.info(LOGGER)
             .message("Reloaded " + section + " settings after a peer node's update")
@@ -100,12 +116,6 @@ public final class SecurityPolicySettingsSync {
     }
 
     private static void invalidate(final EgressSettingsLoader loader) {
-        if (loader != null) {
-            loader.invalidate();
-        }
-    }
-
-    private static void invalidate(final LoginThrottleSettingsLoader loader) {
         if (loader != null) {
             loader.invalidate();
         }

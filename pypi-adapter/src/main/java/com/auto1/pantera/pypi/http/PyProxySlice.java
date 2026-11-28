@@ -41,9 +41,9 @@ import java.util.Queue;
 public final class PyProxySlice extends Slice.Wrap {
 
     /**
-     * Path of a distribution file.
+     * Path of a distribution file, of every kind PyPI has served.
      */
-    private static final String FILE = ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)";
+    private static final String FILE = ProxySlice.FORMATS;
 
     /**
      * Any path that is not a distribution file.

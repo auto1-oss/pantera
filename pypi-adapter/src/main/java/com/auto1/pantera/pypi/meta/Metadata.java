@@ -218,11 +218,32 @@ public interface Metadata {
                     );
                 }
             }
-            return res.orElseThrow(
-                () -> new PanteraIOException("Package metadata file not found")
-            );
+            return res.orElseThrow(NotFound::new);
         }
 
+    }
+
+    /**
+     * The archive holds no core metadata file ({@code PKG-INFO} or
+     * {@code METADATA}): old source archives that setuptools did not build
+     * have none. Still a {@link PanteraIOException} for the callers that
+     * refuse such a file.
+     *
+     * @since 2.2.15
+     */
+    final class NotFound extends PanteraIOException {
+
+        /**
+         * Serial version.
+         */
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Ctor.
+         */
+        public NotFound() {
+            super("Package metadata file not found");
+        }
     }
 
 }

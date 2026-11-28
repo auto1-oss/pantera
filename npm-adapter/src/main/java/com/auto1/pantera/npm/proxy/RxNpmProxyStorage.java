@@ -33,6 +33,9 @@ import io.reactivex.schedulers.Schedulers;
 import io.vertx.core.json.JsonObject;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.function.BiConsumer;
 
@@ -161,13 +164,8 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 // NpmProxy.conditionalRefresh (gated on
                 // metadata.upstreamEtag().isPresent()) has something to send
                 // as If-None-Match.
-                final NpmPackage.Metadata enrichedMeta = new NpmPackage.Metadata(
-                    pkg.meta().lastModified(),
-                    pkg.meta().lastRefreshed(),
-                    full.sha256(),
-                    abbreviated.size() > 0 ? abbreviated.sha256() : null,
-                    pkg.meta().upstreamEtag().orElse(null)
-                );
+                final NpmPackage.Metadata enrichedMeta =
+                    RxNpmProxyStorage.enriched(pkg, abbreviated);
                 // Save metadata FIRST, then data. This ensures readers always
                 // see metadata when data exists (they check metadata to
                 // validate). Sequential saves are safer than parallel -
@@ -531,6 +529,31 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
         return this.storage.exists(abbreviatedKey).toMaybe();
     }
 
+    @Override
+    public NpmProxyStorage.Unstored unstored() {
+        return new UnstoredView();
+    }
+
+    /**
+     * Metadata as it is stored with a packument: the metadata of the fetched
+     * package with the hashes of its full and its abbreviated document.
+     *
+     * @param pkg Fetched package
+     * @param abbreviated Its abbreviated document, empty when there is none
+     * @return Metadata to store
+     */
+    private static NpmPackage.Metadata enriched(
+        final NpmPackage pkg, final PackumentBody abbreviated
+    ) {
+        return new NpmPackage.Metadata(
+            pkg.meta().lastModified(),
+            pkg.meta().lastRefreshed(),
+            pkg.body().sha256(),
+            abbreviated.size() > 0 ? abbreviated.sha256() : null,
+            pkg.meta().upstreamEtag().orElse(null)
+        );
+    }
+
     /**
      * Read NPM package from storage.
      * @param name Package name
@@ -583,6 +606,190 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                     new NpmAsset.Metadata(metadata)
                 )
         );
+    }
+
+    /**
+     * Packument a request fetched and did not store.
+     *
+     * @param name Package name
+     * @param meta Metadata as a save would have stored it
+     * @param full Full document
+     * @param abbreviated Abbreviated document
+     */
+    private record Kept(
+        String name, NpmPackage.Metadata meta, PackumentBody full, PackumentBody abbreviated
+    ) {
+    }
+
+    /**
+     * This storage for one Troubleshoot replay: what is stored is read from
+     * the storage, and nothing is written to it.
+     *
+     * <p>A replay is a diagnosis and must leave the repository as it found
+     * it. The packument such a request fetched is kept here, with the
+     * metadata and the abbreviated document a save would have written, and
+     * read back in place of a stored one: the request is answered with the
+     * document a client would get, from temp files that {@link #release()}
+     * deletes. A tarball is handed back as it came from the upstream.</p>
+     */
+    private final class UnstoredView implements NpmProxyStorage.Unstored {
+
+        /**
+         * Documents this view owns: handed to it, or made by it.
+         */
+        private final List<PackumentBody> owned = new ArrayList<>(2);
+
+        /**
+         * Packument the request fetched, if any.
+         */
+        private Kept kept;
+
+        /**
+         * Whether {@link #release()} ran.
+         */
+        private boolean released;
+
+        @Override
+        public Completable save(final NpmPackage pkg) {
+            // The view owns the document from here on: however the save
+            // ends, release() frees it.
+            final Completable result;
+            if (this.own(pkg.body())) {
+                // What a save does up to its writes: the abbreviated
+                // document and the hashes the served ETag derives from. A
+                // document that is not one JSON object fails here as it
+                // fails a save.
+                result = Completable.fromAction(
+                    () -> {
+                        final PackumentBody abbreviated =
+                            RxNpmProxyStorage.this.generateAbbreviated(pkg.name(), pkg.body());
+                        if (this.own(abbreviated)) {
+                            this.keep(
+                                new Kept(
+                                    pkg.name(), RxNpmProxyStorage.enriched(pkg, abbreviated),
+                                    pkg.body(), abbreviated
+                                )
+                            );
+                        }
+                    }
+                ).subscribeOn(RxNpmProxyStorage.this.blocking);
+            } else {
+                result = Completable.complete();
+            }
+            return result;
+        }
+
+        @Override
+        public Completable save(final NpmAsset asset) {
+            // Not stored, but read to its end: a body nobody reads leaks.
+            return io.reactivex.Flowable.fromPublisher(asset.dataPublisher()).ignoreElements();
+        }
+
+        @Override
+        public Maybe<NpmAsset> saveStreamThrough(final NpmAsset asset) {
+            return Maybe.just(asset);
+        }
+
+        @Override
+        public Maybe<NpmPackage> getPackage(final String name) {
+            return RxNpmProxyStorage.this.getPackage(name);
+        }
+
+        @Override
+        public Maybe<NpmAsset> getAsset(final String path) {
+            return RxNpmProxyStorage.this.getAsset(path);
+        }
+
+        @Override
+        public Maybe<NpmPackage.Metadata> getPackageMetadata(final String name) {
+            return this.kept(name).map(pkg -> Maybe.just(pkg.meta()))
+                .orElseGet(() -> RxNpmProxyStorage.this.getPackageMetadata(name));
+        }
+
+        @Override
+        public Maybe<Content> getPackageContent(final String name) {
+            return this.kept(name).map(pkg -> Maybe.just(pkg.full().content()))
+                .orElseGet(() -> RxNpmProxyStorage.this.getPackageContent(name));
+        }
+
+        @Override
+        public Maybe<Content> getAbbreviatedContent(final String name) {
+            return this.kept(name).map(pkg -> Maybe.just(pkg.abbreviated().content()))
+                .orElseGet(() -> RxNpmProxyStorage.this.getAbbreviatedContent(name));
+        }
+
+        @Override
+        public Maybe<Boolean> hasAbbreviatedContent(final String name) {
+            return this.kept(name).map(pkg -> Maybe.just(Boolean.TRUE))
+                .orElseGet(() -> RxNpmProxyStorage.this.hasAbbreviatedContent(name));
+        }
+
+        @Override
+        public Completable saveMetadataOnly(
+            final String name, final NpmPackage.Metadata metadata
+        ) {
+            return Completable.complete();
+        }
+
+        @Override
+        public NpmProxyStorage.Unstored unstored() {
+            return this;
+        }
+
+        @Override
+        public void release() {
+            final List<PackumentBody> freed;
+            synchronized (this) {
+                this.released = true;
+                this.kept = null;
+                freed = new ArrayList<>(this.owned);
+                this.owned.clear();
+            }
+            freed.forEach(PackumentBody::release);
+        }
+
+        /**
+         * Take a document over, to be freed by {@link #release()}. After
+         * the release it is freed at once: nobody reads this view any more.
+         *
+         * @param body The document
+         * @return False when it was freed at once
+         */
+        private boolean own(final PackumentBody body) {
+            final boolean taken;
+            synchronized (this) {
+                taken = !this.released;
+                if (taken) {
+                    this.owned.add(body);
+                }
+            }
+            if (!taken) {
+                body.release();
+            }
+            return taken;
+        }
+
+        /**
+         * Keep a fetched packument for the request, in place of what was
+         * kept before.
+         *
+         * @param pkg The packument
+         */
+        private synchronized void keep(final Kept pkg) {
+            if (!this.released) {
+                this.kept = pkg;
+            }
+        }
+
+        /**
+         * The packument kept for the request.
+         *
+         * @param name Package name
+         * @return The kept packument when it is the one of this package
+         */
+        private synchronized Optional<Kept> kept(final String name) {
+            return Optional.ofNullable(this.kept).filter(pkg -> pkg.name().equals(name));
+        }
     }
 
 }

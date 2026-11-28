@@ -30,6 +30,12 @@ public final class NoopCooldownService implements CooldownService {
     }
 
     @Override
+    public boolean applies(final CooldownRequest request) {
+        // Nothing is ever blocked: a caller need not fetch a release date.
+        return false;
+    }
+
+    @Override
     public CompletableFuture<CooldownResult> evaluate(
         final CooldownRequest request,
         final CooldownInspector inspector

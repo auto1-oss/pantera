@@ -10,17 +10,23 @@ import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.docker.asto.RegistryRoot;
 import com.auto1.pantera.docker.cache.CacheDocker;
+import com.auto1.pantera.docker.cache.TagChecks;
+import com.auto1.pantera.docker.cache.TagRefreshDocker;
 import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;
+import com.auto1.pantera.docker.cache.ManifestCopies;
 import com.auto1.pantera.cooldown.CooldownLinkedVersions;
 import com.auto1.pantera.docker.composite.MultiReadDocker;
 import com.auto1.pantera.docker.cooldown.CooldownImageName;
+import com.auto1.pantera.docker.cooldown.ManifestCooldown;
 import com.auto1.pantera.docker.misc.OfficialImageName;
 import com.auto1.pantera.docker.http.DockerSlice;
+import com.auto1.pantera.docker.http.PathPatterns;
 import com.auto1.pantera.docker.http.TrimmedDocker;
 import com.auto1.pantera.docker.proxy.ProxyDocker;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.publishdate.DbPublishDateRegistry;
 import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.http.auth.AuthScheme;
 import com.auto1.pantera.http.auth.CombinedAuthScheme;
 import com.auto1.pantera.http.DockerRoutingSlice;
 import com.auto1.pantera.http.Headers;
@@ -31,17 +37,25 @@ import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.RemoteConfig;
 import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.repo.RepoConfig;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestTrace;
 
+import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Docker proxy slice created from config.
@@ -71,7 +85,40 @@ public final class DockerProxy implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final CooldownService cooldown
     ) {
-        this.delegate = createProxy(client, cfg, policy, auth, tokens, events, cooldown);
+        this(
+            client, cfg, policy, auth, tokens, events, cooldown,
+            new TagChecks(
+                cfg.tagRefresh()
+                    .<Supplier<Duration>>map(age -> () -> age)
+                    .orElseGet(DockerTagRefreshSettingsLoader::activeSupplier)
+            )
+        );
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param client HTTP client.
+     * @param cfg Repository configuration.
+     * @param policy Access policy.
+     * @param auth Authentication mechanism.
+     * @param tokens Token authentication.
+     * @param events Artifact events queue
+     * @param cooldown Cooldown service
+     * @param checks When the cached tags were last checked against the upstream
+     * @checkstyle ParameterNumberCheck (10 lines)
+     */
+    DockerProxy(
+        final ClientSlices client,
+        final RepoConfig cfg,
+        final Policy<?> policy,
+        final Authentication auth,
+        final TokenAuthentication tokens,
+        final Optional<Queue<ArtifactEvent>> events,
+        final CooldownService cooldown,
+        final TagChecks checks
+    ) {
+        this.delegate = createProxy(client, cfg, policy, auth, tokens, events, cooldown, checks);
     }
 
     @Override
@@ -123,6 +170,7 @@ public final class DockerProxy implements Slice {
      *
      * @return Docker proxy slice.
      */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
     private static Slice createProxy(
             final ClientSlices client,
             final RepoConfig cfg,
@@ -130,7 +178,8 @@ public final class DockerProxy implements Slice {
             final Authentication auth,
             final TokenAuthentication tokens,
             final Optional<Queue<ArtifactEvent>> events,
-            final CooldownService cooldown
+            final CooldownService cooldown,
+            final TagChecks checks
     ) {
         final OfficialImageName official = new OfficialImageName(
             cfg.remotes().stream().map(RemoteConfig::uri).toList()
@@ -149,11 +198,198 @@ public final class DockerProxy implements Slice {
                 )
             )
         );
-        final Docker proxies = new MultiReadDocker(
-            cfg.remotes().stream().map(r -> proxy(client, cfg, events, r, inspector))
-                .toList()
+        final List<Docker> remotes = cfg.remotes().stream()
+            .map(r -> proxy(client, cfg, events, r, inspector))
+            .toList();
+        final AuthScheme scheme = new CombinedAuthScheme(auth, tokens);
+        final CooldownImageName names = new CooldownImageName(cfg.name(), official);
+        final Slice serving = serving(
+            cfg, policy, scheme, events, cooldown, inspector, names, view(cfg, remotes)
         );
-        Docker docker = cfg.storageOpt()
+        // A Troubleshoot replay (RequestTrace) asks what a client would
+        // get and must leave the repository as it found it. It is answered
+        // by a second view of the same repository: the same cache storage
+        // and the same upstream clients, read in the same order, but
+        // nothing is stored, no artifact event is queued and the release
+        // dates cooldown is evaluated with stay on an inspector of that one
+        // request. The registry API carries no request headers down to the
+        // cache layer, so the view is chosen here, where they are known.
+        // A cached tag older than the refresh age is checked against the
+        // upstream as for a client, but the check neither stores nor counts:
+        // the next client's request checks the tag itself.
+        final Docker unstored = refreshing(
+            cfg, remotes, CacheDocker::readOnly, CacheDocker::readOnly, checks, false
+        );
+        final ManifestCooldown check = new ManifestCooldown(
+            cooldown, inspector, cfg.type(), cfg.name()
+        );
+        Slice slice = (line, headers, body) -> {
+            final boolean manifest =
+                PathPatterns.MANIFESTS.matcher(line.uri().getPath()).matches();
+            final CompletableFuture<Response> res;
+            if (RequestTrace.instance().traced(headers)) {
+                res = serving(
+                    cfg, policy, scheme, Optional.empty(), cooldown,
+                    inspector.overlay(), names, unstored
+                ).response(line, headers, body);
+            } else if (manifest && line.method() == RqMethod.GET) {
+                // Cooldown decides on a manifest after the cache layer read
+                // it from the upstream. The request is read through a view
+                // that holds the copy of that manifest into the cache (and
+                // its event for the search index) until the answer is
+                // known: a version cooldown refuses is neither stored nor
+                // indexed. Same storage, upstream clients and copies in
+                // flight as the repository's own view.
+                final ManifestCopies copies = new ManifestCopies();
+                res = serving(
+                    cfg, policy, scheme, events, cooldown, inspector, names,
+                    refreshing(
+                        cfg, remotes, cached -> cached.deciding(copies),
+                        cached -> cached.deciding(
+                            new ManifestCopies(DockerProxy.renewal(check, names, headers))
+                        ),
+                        checks, true
+                    )
+                ).response(line, headers, body).whenComplete(
+                    (resp, err) -> {
+                        if (err == null && resp.status().success()) {
+                            copies.commit();
+                        } else {
+                            copies.discard();
+                        }
+                    }
+                );
+            } else if (manifest && line.method() == RqMethod.HEAD) {
+                // The answer to a HEAD is never refused (containerd resolves
+                // a tag with it, then GETs the digest, which cooldown
+                // decides on). The copy of the manifest it read is stored,
+                // and indexed, only when cooldown allows the version,
+                // decided as for a GET once the copy has read the release
+                // date.
+                res = serving(
+                    cfg, policy, scheme, events, cooldown, inspector, names,
+                    refreshing(
+                        cfg, remotes,
+                        cached -> cached.deciding(
+                            new ManifestCopies(DockerProxy.verdict(check, names, headers))
+                        ),
+                        cached -> cached.deciding(
+                            new ManifestCopies(DockerProxy.renewal(check, names, headers))
+                        ),
+                        checks, true
+                    )
+                ).response(line, headers, body);
+            } else {
+                res = serving.response(line, headers, body);
+            }
+            return res;
+        };
+        if (cfg.port().isEmpty()) {
+            slice = new DockerRoutingSlice.Reverted(slice);
+        }
+        return slice;
+    }
+
+    /**
+     * The repository for one request of a manifest: its cache storage first,
+     * then its remotes, where a cached tag older than the tag refresh age is
+     * checked against the remotes before it is served.
+     *
+     * @param cfg Repository configuration
+     * @param remotes One Docker per remote
+     * @param read A remote as the request reads a manifest the cache does
+     *  not hold: its copies are made as the request decides
+     * @param renew A remote as it brings a cached tag up to date
+     * @param checks When the cached tags were last checked
+     * @param counted Whether the checks of this request count
+     * @return Docker addressed by the repository-prefixed image name
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private static Docker refreshing(
+        final RepoConfig cfg, final List<Docker> remotes,
+        final Function<CacheDocker, CacheDocker> read,
+        final Function<CacheDocker, CacheDocker> renew,
+        final TagChecks checks, final boolean counted
+    ) {
+        final List<CacheDocker> renewing = remotes.stream()
+            .filter(CacheDocker.class::isInstance)
+            .map(CacheDocker.class::cast)
+            .map(renew)
+            .toList();
+        return view(
+            cfg,
+            remotes.stream()
+                .map(remote -> remote instanceof CacheDocker cached ? read.apply(cached) : remote)
+                .toList(),
+            (local, proxies) -> new TagRefreshDocker(local, proxies, renewing, checks, counted)
+        );
+    }
+
+    /**
+     * Cooldown verdict on the manifest a cached tag names at the upstream
+     * now: it is stored under the tag only when cooldown allows its digest.
+     * The tag itself is not asked about: it is the cached manifest's until
+     * the new one is stored, and the cached one is served meanwhile.
+     *
+     * @param check Cooldown decision on a manifest
+     * @param names Canonical cooldown artifact naming
+     * @param headers Request headers
+     * @return Verdict
+     */
+    private static ManifestCopies.Verdict renewal(
+        final ManifestCooldown check, final CooldownImageName names, final Headers headers
+    ) {
+        final String user = new Login(headers).getValue();
+        return (image, ref, manifest) -> check.refusal(
+            names.of(image), manifest.digest().string(), Optional.empty(), user
+        ).thenApply(Optional::isEmpty);
+    }
+
+    /**
+     * Cooldown verdict on the copy of a manifest a HEAD read: its tag and
+     * the digest the tag resolves to, or its digest, as a GET is decided.
+     *
+     * @param check Cooldown decision on a manifest
+     * @param names Canonical cooldown artifact naming
+     * @param headers Request headers
+     * @return Verdict
+     */
+    private static ManifestCopies.Verdict verdict(
+        final ManifestCooldown check, final CooldownImageName names, final Headers headers
+    ) {
+        final String user = new Login(headers).getValue();
+        return (image, ref, manifest) -> check.refusal(
+            names.of(image), ref.digest(), Optional.of(manifest.digest().string()), user
+        ).thenApply(Optional::isEmpty);
+    }
+
+    /**
+     * The repository as the registry API reads it: its cache storage first,
+     * then its remotes.
+     *
+     * @param cfg Repository configuration
+     * @param remotes One Docker per remote
+     * @return Docker addressed by the repository-prefixed image name
+     */
+    private static Docker view(final RepoConfig cfg, final List<Docker> remotes) {
+        return DockerProxy.view(cfg, remotes, MultiReadDocker::new);
+    }
+
+    /**
+     * The repository as the registry API reads it, its cache storage and
+     * its remotes combined as given.
+     *
+     * @param cfg Repository configuration
+     * @param remotes One Docker per remote
+     * @param combined The cache storage and the remotes, as one Docker
+     * @return Docker addressed by the repository-prefixed image name
+     */
+    private static Docker view(
+        final RepoConfig cfg, final List<Docker> remotes,
+        final BiFunction<Docker, Docker, Docker> combined
+    ) {
+        final Docker proxies = new MultiReadDocker(remotes);
+        final Docker docker = cfg.storageOpt()
             .<Docker>map(
                 storage -> {
                     final AstoDocker local = new AstoDocker(
@@ -166,31 +402,50 @@ public final class DockerProxy implements Slice {
                     // `proxies` populate this storage. A ReadWriteDocker
                     // here let any user with push overwrite a cached
                     // upstream tag for every puller (B35).
-                    return new MultiReadDocker(local, proxies);
+                    return combined.apply(local, proxies);
                 }
             )
             .orElse(proxies);
-        docker = new TrimmedDocker(docker, cfg.name());
+        return new TrimmedDocker(docker, cfg.name());
+    }
+
+    /**
+     * The registry API over one view of the repository, behind the cooldown
+     * evaluation.
+     *
+     * @param cfg Repository configuration
+     * @param policy Access policy
+     * @param scheme Authentication scheme
+     * @param events Artifact events queue
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector the release dates are recorded on
+     * @param names Canonical cooldown artifact naming
+     * @param docker View of the repository
+     * @return Slice
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private static Slice serving(
+        final RepoConfig cfg,
+        final Policy<?> policy,
+        final AuthScheme scheme,
+        final Optional<Queue<ArtifactEvent>> events,
+        final CooldownService cooldown,
+        final DockerProxyCooldownInspector inspector,
+        final CooldownImageName names,
+        final Docker docker
+    ) {
         // writable=false: push routes answer 405 UNSUPPORTED before any
         // repository lookup, so a refused push never fetches, caches or
         // publishes the upstream manifest, and upload bodies are drained.
-        Slice slice = new DockerSlice(
-            docker, policy, new CombinedAuthScheme(auth, tokens), events,
-            SyncArtifactIndexer.NOOP, false
-        );
-        slice = new DockerProxyCooldownSlice(
-            slice,
+        return new DockerProxyCooldownSlice(
+            new DockerSlice(docker, policy, scheme, events, SyncArtifactIndexer.NOOP, false),
             cfg.name(),
             cfg.type(),
             cooldown,
             inspector,
             docker,
-            new CooldownImageName(cfg.name(), official)
+            names
         );
-        if (cfg.port().isEmpty()) {
-            slice = new DockerRoutingSlice.Reverted(slice);
-        }
-        return slice;
     }
 
     /**

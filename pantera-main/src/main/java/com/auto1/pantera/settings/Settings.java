@@ -227,6 +227,16 @@ public interface Settings extends AutoCloseable {
     }
 
     /**
+     * The failed logins behind the login delay and the account lock of the
+     * sign-in chain these settings built.
+     *
+     * @return The failed logins; empty for settings that build no chain
+     */
+    default Optional<com.auto1.pantera.auth.failedlogins.FailedLogins> failedLogins() {
+        return Optional.empty();
+    }
+
+    /**
      * Whether Proxy Protocol v2 is enabled for the main + per-repo HTTP listeners.
      * When true, the HTTP server will parse the PROXYv2 header prepended by an
      * upstream load balancer (typically AWS NLB with

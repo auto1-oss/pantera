@@ -73,6 +73,50 @@ Recommended ordering for production:
 3. **env** -- Static admin credential for emergency or DB-less access.
 4. **pantera** -- Native user database fallback.
 
+### API keys are checked apart from passwords
+
+A credential that has the form of an API key is checked by the `jwt-password` provider only, wherever that provider stands in the list. The form is that of a JWT: three parts separated by dots, the first one starting with `eyJ`.
+
+- A key that is expired, revoked or signed by another installation is answered with `401`. It is never passed to another provider, so Keycloak, Okta and the directory behind them never see it as a wrong password.
+- Without a `jwt-password` entry, a credential of that form is rejected.
+- Every other credential is a password: it is checked by the remaining providers in the listed order, and never by `jwt-password`.
+
+This holds for repository requests (the password of HTTP Basic authentication) and for the sign-in form. Before 2.2.15 a rejected key went on to the providers listed after `jwt-password`, and with an Okta or Keycloak provider every repeat of the request was a failed login for that user at the identity provider.
+
+### Which credentials reach an identity provider
+
+The `keycloak`, `okta` and `github` providers send the credential to a service outside Pantera. Every wrong one is a failed login of that user there, and at the directory behind it. This is what reaches them:
+
+| Credential | Reaches an identity provider? |
+|------------|-------------------------------|
+| A password, for a user name the provider's `user-domains` match | Yes, once per login. A login the credential cache still remembers after a success is not sent again. |
+| A password during a login delay, or for a locked user | No. See [Failed Logins](failed-logins.md). |
+| A credential with the form of an API key, valid or not | No. |
+| A Bearer token | No. |
+| A password of a local user who has a password in Pantera | No: the local check decides, also when it fails. |
+| A password, where the provider's **Password sign-in** setting does not allow it | No. See below. |
+
+### Password sign-in: where a provider takes passwords
+
+An administrator decides for each of these providers where it checks a user name and password (v2.2.15+): **Settings → Auth Providers**, **Password sign-in** on the provider's card, or `PUT /api/v1/admin/password-sign-in-settings`.
+
+| Mode | Setting value | The provider checks a password |
+|------|---------------|--------------------------------|
+| Sign-in form and repositories | `all` (default) | on the sign-in form, on `POST /api/v1/auth/token`, and with repository requests (`mvn`, `npm`, `docker login`, `curl -u`). |
+| Sign-in form only | `form` | on the sign-in form and `POST /api/v1/auth/token`. A repository request with a directory password is answered `401` and the provider is not asked; clients use an API key. |
+| Off | `off` | nowhere. |
+
+The setting applies to the next login on every node, without a restart. It does not touch the provider's sign-in button (the browser redirect), which sends no password through Pantera, and not API keys.
+
+What to expect:
+
+- A login the provider would have accepted, where the setting keeps it from the provider, is a failed login like any other: it is counted for the [login delay and the account lock](failed-logins.md). A build tool that keeps sending a directory password after a change to `form` locks its user after the configured number of failures. Hand out API keys first.
+- A login accepted on the sign-in form is not handed to a repository request, and a login remembered under one mode is not served under another.
+- With `form`, a second factor still works: only the sign-in form can ask for one.
+- Each skipped check is a `DEBUG` record `password_sign_in_skipped`; a change of the setting is an `INFO` record `password_sign_in_settings_update` that names the new value.
+
+`pantera_auth_provider_checks_total` counts every check that is sent by `provider` and `outcome` (`accepted`, `rejected`, `refused`, `unavailable`), and the **Pantera - Sign-in** dashboard charts it. Watch `rejected` after an upgrade or a configuration change: before 2.2.15 nothing showed that Pantera had started to send credentials to an identity provider.
+
 ---
 
 ## Environment Variables Provider (type: env)
@@ -238,6 +282,10 @@ curl -X POST http://pantera-host:8086/api/v1/auth/token \
 ```
 
 The `mfa_code` field is only required when the Okta organization enforces MFA. If MFA is not configured, omit the field.
+
+Without `mfa_code`, a sign-in through this endpoint (the sign-in form uses it) starts an Okta Verify push and waits up to 30 seconds for the person to approve it.
+
+**A repository login never starts a push and never sends a code** (v2.2.15+). When a build tool sends a directory password as its HTTP Basic password and Okta asks for a second factor, Pantera refuses the login with `401`, verifies no factor, and records `event.reason: mfa_required` in the application log and on the access record of the request. Before 2.2.15 every such request sent a push to the user's phone and held a sign-in thread for up to 30 seconds. Users whose Okta policy asks for a second factor on this path have to use an API key for build tools.
 
 ### Okta Setup Steps
 

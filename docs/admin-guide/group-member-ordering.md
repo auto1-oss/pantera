@@ -29,7 +29,21 @@ migration; it is purely noise at this point.
 ## How a request is routed
 
 - The artifact index narrows the walk: when it knows which members hold
-  the package, only those members are asked, still in declared order.
+  the package, those members are asked first, still in declared order.
+  The index knows packages by name, not by version, so what it says
+  counts differently for the two kinds of member (v2.2.15+):
+  - A **hosted** member the index names is asked, and its answer counts.
+  - A **proxy** member the index names is asked for its cache only: a
+    cached file is served, and its upstream is not contacted. If the file
+    is not in its cache, the group walks all members in the normal order
+    (hosted first, then proxies as declared), as for a package the index
+    does not know. The named proxy is then asked in its own place, like
+    every other member.
+
+  Before 2.2.15 the named proxy was asked as an ordinary request and its
+  answer was final. A proxy that holds another version of a package could
+  so answer for the whole group: with its cooldown block, or with the
+  failure of its upstream, for a file an earlier member serves.
 - When the index has no row yet (it is written a moment after an
   upload), the group asks the hosted members first, then the proxy
   members. A freshly published artifact is therefore served through the
@@ -48,12 +62,12 @@ migration; it is purely noise at this point.
   circuit, never 404.
 - A cached "not found" is per file: a missing `-sources.jar` or
   `.module` never hides the `.jar` or `.pom` of the same version.
-- When the index names the members that hold the file and they all fail,
-  the group answers by the kind of failure: `500` with
-  `X-Pantera-Fault: storage-unavailable` when a hosted member's storage
-  failed, `502` with a `proxies-failed` fault when a proxy member's
-  upstream failed, and `503` with `Retry-After` when the proxy member's
-  upstream circuit breaker is open.
+- When the index names a hosted member and its storage fails, the group
+  answers `500` with `X-Pantera-Fault: storage-unavailable`. A proxy
+  member the index names cannot fail the group this way: after its cache
+  miss the ordinary walk decides, with the rules of that walk (an
+  unreachable proxy does not turn another member's "not found" into an
+  error).
 - A member redirect (`3xx`) or a member that does not support the method
   (`405`, for example `HEAD` on a proxy endpoint that only answers `GET`)
   does not count as a member failure and is not relayed. Neither does any

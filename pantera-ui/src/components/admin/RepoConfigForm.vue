@@ -4,9 +4,11 @@ import { listStorages, putStorage } from '@/api/settings'
 import { useNotificationStore } from '@/stores/notifications'
 import { REPO_TYPE_CREATE_OPTIONS } from '@/utils/repoTypes'
 import { isoToShortDuration, shortToIsoDuration } from '@/utils/duration'
-import type { RepoConfigEnvelope } from '@/types/repo'
+import { ruleMember, rulesOf } from '@/utils/routingRules'
+import type { RepoConfigEnvelope, RoutingRule } from '@/types/repo'
 import type { StorageAlias } from '@/types'
 import InputText from 'primevue/inputtext'
+import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
@@ -16,6 +18,7 @@ import Tag from 'primevue/tag'
 import Dialog from 'primevue/dialog'
 import { listRepos } from '@/api/repos'
 import type { RepoListItem } from '@/types'
+import RepoRoutingRules from './RepoRoutingRules.vue'
 
 const props = defineProps<{
   /** Current config value (v-model:config) */
@@ -27,6 +30,12 @@ const props = defineProps<{
   /** When true the Cooldown card is not rendered: the parent edits the window
    *  through v-model:cooldown-enabled / v-model:cooldown-window instead. */
   hideCooldown?: boolean
+  /** Name of the repository, for the routing test of a group. Empty while a
+   *  new repository has no usable name yet. */
+  repoName?: string
+  /** The server's message of the last refused save. The Routing rules card
+   *  shows the rule problems in it on their rows. */
+  saveError?: string
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +44,13 @@ const emit = defineEmits<{
 }>()
 
 const notify = useNotificationStore()
+
+// Placeholders that show a URL are constants, not text in the template:
+// vue-tsc 3.3 takes `//` in an attribute of a component for the start of a
+// comment and generates broken code for the rest of the template.
+const BASE_URL_PLACEHOLDER = 'e.g. https://packages.example.com/api/npm/npm-local'
+const S3_ENDPOINT_PLACEHOLDER = 'https://s3.amazonaws.com'
+const REMOTE_URL_PLACEHOLDER = 'https://repo1.maven.org/maven2'
 
 // ---------------------------------------------------------------------------
 // Form fields
@@ -79,6 +95,8 @@ const hadStorage = ref(true)
 // `immutable` is deliberately NOT listed: buildConfig() owns it only for the
 // types it applies to (see supportsImmutable); on proxy/group/docker configs
 // any stray value is round-tripped untouched like any other unmodelled key.
+// `tag_refresh_seconds` is not listed for the same reason: owned for
+// docker-proxy only (see isDockerProxy).
 const OWNED_KEYS = [
   'type', 'url', 'storage', 'remotes', 'members', 'cooldown',
   'anonymous_read', 'anonymous_write',
@@ -116,8 +134,43 @@ function addMember() {
   groupMembers.value.push('')
 }
 
+// Routing rules of a group (`repo.routing`), in their order. `routing` is
+// not an owned key: until the admin changes the rules, buildConfig() sends
+// the stored value back verbatim through preservedKeys, like every key this
+// form does not model. Only a changed list replaces it.
+const routingRules = ref<RoutingRule[]>([])
+const loadedRouting = ref('[]')
+const routingChanged = computed(() => JSON.stringify(routingRules.value) !== loadedRouting.value)
+
+// What the save sends as `members`: the routing test gets the same list.
+const memberNames = computed(() =>
+  groupMembers.value.map(m => (typeof m === 'string' ? m.trim() : '')).filter(Boolean),
+)
+
+// A member that is removed while rules name it: the server refuses a rule
+// without its member, so the rules go with it, after a confirmation.
+const memberRemoval = ref({ idx: -1, name: '', rules: 0 })
+const memberRemovalVisible = ref(false)
+
 function removeMember(idx: number) {
+  const entry: unknown = groupMembers.value[idx]
+  const name = typeof entry === 'string' ? entry.trim() : ''
+  const rules = routingRules.value.filter(rule => ruleMember(rule) === name).length
+  // Listed a second time, the member stays in the group and keeps its rules.
+  const listedOnce = memberNames.value.filter(m => m === name).length === 1
+  if (name && rules > 0 && listedOnce) {
+    memberRemoval.value = { idx, name, rules }
+    memberRemovalVisible.value = true
+    return
+  }
   groupMembers.value.splice(idx, 1)
+}
+
+function confirmMemberRemoval() {
+  const { idx, name } = memberRemoval.value
+  memberRemovalVisible.value = false
+  groupMembers.value.splice(idx, 1)
+  routingRules.value = routingRules.value.filter(rule => ruleMember(rule) !== name)
 }
 
 function moveMemberUp(idx: number) {
@@ -260,6 +313,14 @@ const anonymousWrite = ref(false)
 // the server, so new repos start checked; only an explicit false loads off.
 const immutableArtifacts = ref(true)
 
+// Tag refresh age of a docker-proxy (`repo.tag_refresh_seconds`): seconds a
+// cached image tag is served before the upstream is asked whether it moved.
+// null (an empty field) means the global setting applies, and the key is
+// left out of the config.
+const tagRefreshSeconds = ref<number | null>(null)
+/** Largest age the server accepts: a year. */
+const TAG_REFRESH_MAX = 31_536_000
+
 // Computed type flags
 const isProxy = computed(() => repoType.value.endsWith('-proxy'))
 const isGroup = computed(() => repoType.value.endsWith('-group'))
@@ -270,6 +331,17 @@ const isGroup = computed(() => repoType.value.endsWith('-group'))
 const supportsImmutable = computed(() =>
   !isProxy.value && !isGroup.value && repoType.value !== 'docker',
 )
+
+// The tag refresh age applies to docker proxies only.
+const isDockerProxy = computed(() => repoType.value === 'docker-proxy')
+
+// A set age must be a whole number from 0 to a year; the server refuses
+// anything else with 400.
+const tagRefreshInvalid = computed(() => {
+  const seconds = tagRefreshSeconds.value
+  return isDockerProxy.value && seconds !== null
+    && (!Number.isInteger(seconds) || seconds < 0 || seconds > TAG_REFRESH_MAX)
+})
 
 const repoTypes = REPO_TYPE_CREATE_OPTIONS
 
@@ -282,6 +354,7 @@ const isValid = computed<boolean>(() => {
   if (isGroup.value && groupMembers.value.length === 0) return false
   if (cooldownEnabled.value && !cooldownDuration.value) return false
   if (baseUrlInvalid.value) return false
+  if (tagRefreshInvalid.value) return false
   return true
 })
 
@@ -324,6 +397,7 @@ watch(repoType, () => {
   if (!props.readOnlyType) {
     remotes.value = [{ url: '', username: '', password: '' }]
     groupMembers.value = []
+    routingRules.value = []
   }
   fetchCompatibleRepos()
 })
@@ -365,6 +439,16 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
   const rawImmutable: unknown = repo.immutable
   immutableArtifacts.value = !(rawImmutable === false
     || (typeof rawImmutable === 'string' && rawImmutable.trim().toLowerCase() === 'false'))
+
+  // A number from the server; tolerate digits in a string from a YAML file.
+  const rawTagRefresh: unknown = repo.tag_refresh_seconds
+  if (typeof rawTagRefresh === 'number') {
+    tagRefreshSeconds.value = rawTagRefresh
+  } else if (typeof rawTagRefresh === 'string' && /^\s*\d+\s*$/.test(rawTagRefresh)) {
+    tagRefreshSeconds.value = Number(rawTagRefresh.trim())
+  } else {
+    tagRefreshSeconds.value = null
+  }
 
   // Storage
   if (typeof repo.storage === 'string') {
@@ -412,6 +496,11 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
     }
   }
   groupMembers.value = members
+
+  // Routing rules: shown from the stored list; the stored value itself stays
+  // in preservedKeys.
+  routingRules.value = [...rulesOf(repo.routing)]
+  loadedRouting.value = JSON.stringify(routingRules.value)
 
   // Cooldown
   cooldownEnabled.value = !!repo.cooldown
@@ -494,6 +583,15 @@ function buildConfig(): RepoConfigEnvelope {
     repo.members = members
   }
 
+  // Changed rules replace the stored ones; an empty list removes the key.
+  if (isGroup.value && routingChanged.value) {
+    if (routingRules.value.length > 0) {
+      repo.routing = [...routingRules.value]
+    } else {
+      delete repo.routing
+    }
+  }
+
   if (cooldownEnabled.value && cooldownDuration.value) {
     repo.cooldown = { duration: cooldownDuration.value }
   }
@@ -513,6 +611,16 @@ function buildConfig(): RepoConfigEnvelope {
     repo.immutable = immutableArtifacts.value
   }
 
+  // Docker proxies: the age when one is set; an empty field removes the key,
+  // so the global setting applies. Other types keep a stray value untouched.
+  if (isDockerProxy.value) {
+    if (tagRefreshSeconds.value !== null) {
+      repo.tag_refresh_seconds = tagRefreshSeconds.value
+    } else {
+      delete repo.tag_refresh_seconds
+    }
+  }
+
   return { repo }
 }
 
@@ -530,12 +638,14 @@ watch(
     cooldownEnabled, cooldownDuration,
     anonymousRead, anonymousWrite,
     immutableArtifacts,
+    tagRefreshSeconds,
     clientBaseUrl,
   ],
   () => { emitConfig() },
 )
 watch(remotes, () => { emitConfig() }, { deep: true })
 watch(groupMembers, () => { emitConfig() }, { deep: true })
+watch(routingRules, () => { emitConfig() })
 
 // Exposed so tests and parent views can read the resolved per-repo policy
 // flags without round-tripping through emitted config payloads.
@@ -546,6 +656,8 @@ defineExpose({
   anonymousWrite,
   immutableArtifacts,
   supportsImmutable,
+  tagRefreshSeconds,
+  isDockerProxy,
 })
 </script>
 
@@ -613,7 +725,7 @@ defineExpose({
               </div>
               <div>
                 <label class="block text-xs text-gray-500 mb-1">Endpoint (optional)</label>
-                <InputText v-model="s3Endpoint" placeholder="https://s3.amazonaws.com" class="w-full" />
+                <InputText v-model="s3Endpoint" :placeholder="S3_ENDPOINT_PLACEHOLDER" class="w-full" />
               </div>
               <div class="flex gap-2">
                 <Button
@@ -649,7 +761,7 @@ defineExpose({
         <InputText
           v-model="clientBaseUrl"
           class="w-full"
-          placeholder="e.g. https://packages.example.com/api/npm/npm-local"
+          :placeholder="BASE_URL_PLACEHOLDER"
         />
         <p v-if="baseUrlInvalid" class="text-xs text-red-400">
           Must be an absolute <code>http://</code> or <code>https://</code> URL.
@@ -708,7 +820,7 @@ defineExpose({
             <label class="block text-xs text-gray-500 mb-1">URL</label>
             <InputText
               v-model="remote.url"
-              placeholder="https://repo1.maven.org/maven2"
+              :placeholder="REMOTE_URL_PLACEHOLDER"
               class="w-full"
             />
           </div>
@@ -895,7 +1007,7 @@ defineExpose({
               <label class="block text-sm font-medium mb-1">Remote URL</label>
               <InputText
                 v-model="newMemberRemoteUrl"
-                placeholder="https://repo1.maven.org/maven2"
+                :placeholder="REMOTE_URL_PLACEHOLDER"
                 class="w-full"
               />
             </div>
@@ -932,8 +1044,50 @@ defineExpose({
           />
         </template>
       </Dialog>
+
+      <Dialog
+        v-model:visible="memberRemovalVisible"
+        header="Remove member"
+        modal
+        :style="{ width: '30rem' }"
+      >
+        <div class="space-y-2 text-sm" data-testid="member-remove-dialog">
+          <p>
+            Remove <strong class="font-mono">{{ memberRemoval.name }}</strong> from the group?
+          </p>
+          <p class="text-gray-500">
+            {{ memberRemoval.rules }} routing {{ memberRemoval.rules === 1 ? 'rule names' : 'rules name' }}
+            this member. {{ memberRemoval.rules === 1 ? 'It is' : 'They are' }} removed with it:
+            a rule cannot name a repository that is not a member.
+          </p>
+        </div>
+        <template #footer>
+          <Button
+            label="Cancel"
+            severity="secondary"
+            text
+            data-testid="member-remove-cancel"
+            @click="memberRemovalVisible = false"
+          />
+          <Button
+            :label="memberRemoval.rules === 1 ? 'Remove member and 1 rule' : `Remove member and ${memberRemoval.rules} rules`"
+            severity="danger"
+            data-testid="member-remove-confirm"
+            @click="confirmMemberRemoval"
+          />
+        </template>
+      </Dialog>
     </template>
   </Card>
+
+  <!-- Group: Routing rules -->
+  <RepoRoutingRules
+    v-if="isGroup"
+    v-model:rules="routingRules"
+    :repo-name="repoName ?? ''"
+    :members="memberNames"
+    :save-error="saveError ?? ''"
+  />
 
   <!-- Cooldown (proxy only) -->
   <Card v-if="isProxy && !hideCooldown" class="shadow-sm">
@@ -949,6 +1103,34 @@ defineExpose({
           <InputText id="cdWindow" v-model="cooldownWindow" placeholder="30d" class="w-48" :invalid="!cooldownDuration" />
           <p class="text-xs text-gray-400 mt-1">e.g. 7d, 24h, 30m</p>
         </div>
+      </div>
+    </template>
+  </Card>
+
+  <!-- Tag refresh (docker-proxy only) -->
+  <Card v-if="isDockerProxy" class="shadow-sm" data-testid="tag-refresh-card">
+    <template #title>Tag refresh</template>
+    <template #content>
+      <div class="space-y-2">
+        <label for="tagRefreshSeconds" class="block text-xs text-gray-500 mb-1">
+          Tag refresh (seconds)
+        </label>
+        <InputNumber
+          v-model="tagRefreshSeconds"
+          input-id="tagRefreshSeconds"
+          :min="0"
+          :max="TAG_REFRESH_MAX"
+          :use-grouping="false"
+          placeholder="Global setting"
+          class="w-48"
+          :invalid="tagRefreshInvalid"
+        />
+        <p class="text-xs text-gray-400">
+          How long a cached image tag (e.g. <code>latest</code>) is served before Pantera
+          asks the upstream with a HEAD whether the tag moved. From 0 (every request) to
+          31536000 (a year). Empty uses the global setting (System Settings, Docker Proxy
+          Tags; default 3600).
+        </p>
       </div>
     </template>
   </Card>

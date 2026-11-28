@@ -18,3 +18,13 @@ export function relativeTime(iso: string | null | undefined, now: Date = new Dat
 function plural(n: number, unit: string): string {
   return `${n} ${unit}${n === 1 ? '' : 's'} ago`
 }
+
+/**
+ * Date and time of an ISO timestamp in the browser's locale; the text
+ * itself when it is no date, a dash for none.
+ */
+export function localDateTime(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
+}

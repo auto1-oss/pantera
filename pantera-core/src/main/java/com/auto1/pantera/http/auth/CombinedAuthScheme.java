@@ -89,9 +89,9 @@ public final class CombinedAuthScheme implements AuthScheme {
                         );
                     }
                     if (BasicAuthScheme.NAME.equals(auth.scheme())) {
-                        return this.authenticateBasic(auth);
+                        return this.authenticateBasic(auth, headers);
                     } else if (BearerAuthScheme.NAME.equals(auth.scheme())) {
-                        return this.authenticateBearer(auth);
+                        return this.authenticateBearer(auth, headers);
                     }
                     return CompletableFuture.completedFuture(
                         AuthScheme.result(AuthUser.ANONYMOUS, CombinedAuthScheme.CHALLENGE)
@@ -110,14 +110,19 @@ public final class CombinedAuthScheme implements AuthScheme {
      *
      * <p>A token-shaped password is validated as a JWT first and must
      * resolve to the supplied username; anything else (malformed token,
-     * foreign subject, plain password) goes through the regular
-     * password check, so passwords that merely look like a JWT keep
-     * working.
+     * foreign subject, plain password) goes to the {@link Authentication}
+     * this scheme was built with. Pantera's own chain answers a
+     * token-shaped credential with its key provider alone
+     * ({@link ApiKeyOnlyAuth}), so a rejected key reaches no password
+     * provider.
      *
      * @param auth Authorization header
+     * @param request Headers of the request
      * @return Authentication result
      */
-    private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
+    private CompletionStage<AuthScheme.Result> authenticateBasic(
+        final Authorization auth, final Headers request
+    ) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
         try {
             basic.username();
@@ -128,7 +133,7 @@ public final class CombinedAuthScheme implements AuthScheme {
                 AuthScheme.result(Optional.empty(), CombinedAuthScheme.CHALLENGE)
             );
         }
-        final CompletionStage<Optional<AuthUser>> resolved;
+        final CompletionStage<PasswordCheck.Outcome> resolved;
         if (AuthWorkerPool.jwtShaped(basic.password())) {
             // Snapshot MDC on the calling (event-loop) thread — tokenAuth.user()
             // completes on whatever thread the JWT validator's own async chain
@@ -175,23 +180,21 @@ public final class CombinedAuthScheme implements AuthScheme {
                 .thenApply(user -> user.filter(usr -> usr.name().equals(basic.username())))
                 .thenCompose(
                     user -> user.isPresent()
-                        ? CompletableFuture.completedFuture(user)
-                        : CompletableFuture.supplyAsync(
-                            () -> this.basicAuth.user(basic.username(), basic.password()),
-                            AuthWorkerPool.AUTH_EXECUTOR
+                        ? CompletableFuture.completedFuture(
+                            new PasswordCheck.Outcome(user, Optional.empty())
                         )
+                        : new PasswordCheck(this.basicAuth, request)
+                            .run(basic.username(), basic.password())
                 );
         } else {
             // Offload the (potentially blocking, DB/IdP-backed) password
             // check off the calling thread — mirrors BasicAuthScheme. The
             // /v2/ Docker ping runs this on a Vert.x event-loop thread.
-            resolved = CompletableFuture.supplyAsync(
-                            () -> this.basicAuth.user(basic.username(), basic.password()),
-                            AuthWorkerPool.AUTH_EXECUTOR
-                        );
+            resolved = new PasswordCheck(this.basicAuth, request)
+                .run(basic.username(), basic.password());
         }
         return resolved.thenApply(
-            user -> AuthScheme.result(user, CombinedAuthScheme.CHALLENGE)
+            outcome -> AuthScheme.result(outcome, CombinedAuthScheme.CHALLENGE)
         );
     }
 
@@ -199,10 +202,14 @@ public final class CombinedAuthScheme implements AuthScheme {
      * Authenticate using Bearer token authentication.
      *
      * @param auth Authorization header
+     * @param request Headers of the request
      * @return Authentication result
      */
-    private CompletionStage<AuthScheme.Result> authenticateBearer(final Authorization auth) {
-        return this.tokenAuth.user(new Authorization.Bearer(auth.credentials()).token())
-            .thenApply(user -> AuthScheme.result(user, CombinedAuthScheme.CHALLENGE));
+    private CompletionStage<AuthScheme.Result> authenticateBearer(
+        final Authorization auth, final Headers request
+    ) {
+        return this.tokenAuth
+            .check(new Authorization.Bearer(auth.credentials()).token(), request)
+            .thenApply(outcome -> AuthScheme.result(outcome, CombinedAuthScheme.CHALLENGE));
     }
 }

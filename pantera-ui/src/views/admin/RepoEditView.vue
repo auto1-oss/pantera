@@ -582,6 +582,8 @@ defineExpose({
           :initial-config="initialConfig"
           :read-only-type="true"
           :hide-cooldown="true"
+          :repo-name="name"
+          :save-error="saveError"
           @valid-change="isValid = $event"
         />
 

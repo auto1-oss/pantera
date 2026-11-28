@@ -142,18 +142,20 @@ public final class SatisLayout {
     }
 
     /**
-     * Generate root packages.json with lazy/on-demand metadata loading.
+     * The root packages.json, with lazy/on-demand metadata loading.
      * Uses metadata-url pattern so Composer requests packages directly without
      * needing a full provider list. This is much faster and scales to millions of packages.
      * 
      * Note: This disables composer search functionality, but all other operations
      * (require, update, install) work perfectly.
+     *
+     * <p>The document depends on the base URL only, so it is built for each
+     * read and never stored: storing it cost a write and a read-back on every
+     * request for it.</p>
      * 
-     * @return Completion stage
+     * @return The document
      */
-    public CompletionStage<Void> generateRootPackagesJson() {
-        final Key rootKey = new Key.From("packages.json");
-        
+    public byte[] rootPackagesJson() {
         // Build minimal packages.json with metadata-url pattern
         final JsonObjectBuilder root = Json.createObjectBuilder();
         
@@ -175,8 +177,7 @@ public final class SatisLayout {
         root.add("available-packages-url", availablePackagesUrl);
         
         final JsonObject rootJson = root.build();
-        final byte[] bytes = rootJson.toString().getBytes(StandardCharsets.UTF_8);
-        return this.storage.save(rootKey, new Content.From(bytes));
+        return rootJson.toString().getBytes(StandardCharsets.UTF_8);
     }
 
     /**

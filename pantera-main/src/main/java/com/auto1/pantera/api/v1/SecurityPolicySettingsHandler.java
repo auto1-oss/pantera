@@ -18,8 +18,12 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.policy.EgressConfig;
 import com.auto1.pantera.settings.policy.EgressSettingsLoader;
-import com.auto1.pantera.settings.policy.LoginThrottleConfig;
-import com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader;
+import com.auto1.pantera.settings.policy.FailedLoginsConfig;
+import com.auto1.pantera.settings.policy.FailedLoginsSettingsLoader;
+import com.auto1.pantera.settings.policy.PasswordSignInConfig;
+import com.auto1.pantera.settings.policy.PasswordSignInSettingsLoader;
+import com.auto1.pantera.settings.policy.SignInReportConfig;
+import com.auto1.pantera.settings.policy.SignInReportSettingsLoader;
 import com.auto1.pantera.settings.policy.RequestLimitsConfig;
 import com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader;
 import com.auto1.pantera.settings.policy.SecurityPolicySettingsSync;
@@ -33,7 +37,7 @@ import java.util.function.Supplier;
 
 /**
  * Admin endpoints for the DB-backed security policy settings (2.2.9):
- * request &amp; storage limits, outbound egress policy, login throttling.
+ * request &amp; storage limits, outbound egress policy, failed logins.
  * Same contract as the breaker/client-base-URL endpoints in {@link
  * AdminAuthHandler}: admin authz, key whitelist per endpoint, partial PUT
  * validated by round-tripping the merged values through the config
@@ -62,10 +66,32 @@ public final class SecurityPolicySettingsHandler {
     );
 
     /**
-     * Keys accepted by the login-throttle endpoint.
+     * Keys accepted by the failed-logins endpoint.
      */
-    private static final Set<String> LOGIN_THROTTLE_KEYS = Set.of(
-        LoginThrottleSettingsLoader.KEY_MAX_FAILURES, LoginThrottleSettingsLoader.KEY_WINDOW_SECONDS
+    private static final Set<String> FAILED_LOGINS_KEYS = Set.of(
+        FailedLoginsSettingsLoader.KEY_DELAY_FROM, FailedLoginsSettingsLoader.KEY_FIRST_DELAY,
+        FailedLoginsSettingsLoader.KEY_MAX_DELAY, FailedLoginsSettingsLoader.KEY_LOCK_AFTER,
+        FailedLoginsSettingsLoader.KEY_UNLOCK_AFTER, FailedLoginsSettingsLoader.KEY_FORGET_AFTER,
+        FailedLoginsSettingsLoader.KEY_COUNT_KEYS, FailedLoginsSettingsLoader.KEY_LOCK_ALL,
+        FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_LIMIT,
+        FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_PAUSE
+    );
+
+    /**
+     * Keys accepted by the sign-in report endpoint.
+     */
+    private static final Set<String> SIGN_IN_REPORT_KEYS = Set.of(
+        SignInReportSettingsLoader.KEY_ENABLED, SignInReportSettingsLoader.KEY_RETENTION
+    );
+
+    /**
+     * Keys accepted by the password sign-in endpoint: one per provider
+     * type that hands a password to an identity provider.
+     */
+    private static final Set<String> PASSWORD_SIGN_IN_KEYS = Set.of(
+        PasswordSignInSettingsLoader.KEY_PREFIX + "okta",
+        PasswordSignInSettingsLoader.KEY_PREFIX + "keycloak",
+        PasswordSignInSettingsLoader.KEY_PREFIX + "github"
     );
 
     /**
@@ -110,7 +136,13 @@ public final class SecurityPolicySettingsHandler {
         final AuthzHandler adminAuthz = new AuthzHandler(this.policy, ApiAdminPermission.ADMIN);
         this.route(router, adminAuthz, "/api/v1/admin/request-limits-settings", requestLimits());
         this.route(router, adminAuthz, "/api/v1/admin/egress-settings", egress());
-        this.route(router, adminAuthz, "/api/v1/admin/login-throttle-settings", loginThrottle());
+        this.route(router, adminAuthz, "/api/v1/admin/failed-logins-settings", failedLogins());
+        this.route(
+            router, adminAuthz, "/api/v1/admin/password-sign-in-settings", passwordSignIn()
+        );
+        this.route(
+            router, adminAuthz, "/api/v1/admin/sign-in-report-settings", signInReport()
+        );
     }
 
     /**
@@ -168,24 +200,115 @@ public final class SecurityPolicySettingsHandler {
     }
 
     /**
-     * Login throttling section.
+     * The policy of failed sign-ins ("Failed logins" card): the delay and
+     * the lock after wrong passwords, the pause after unconfirmed second
+     * factors.
      * @return Section
      */
-    static Section loginThrottle() {
+    static Section failedLogins() {
         return new Section(
-            "login-throttle", "login_throttle", LOGIN_THROTTLE_KEYS,
+            "failed-logins", "failed_logins", FAILED_LOGINS_KEYS,
             () -> {
-                final LoginThrottleConfig current = LoginThrottleSettingsLoader.activeSupplier().get();
+                final FailedLoginsConfig current = FailedLoginsSettingsLoader.activeSupplier().get();
                 return new JsonObject()
-                    .put(LoginThrottleSettingsLoader.KEY_MAX_FAILURES, String.valueOf(current.maxFailures()))
-                    .put(LoginThrottleSettingsLoader.KEY_WINDOW_SECONDS, String.valueOf(current.windowSeconds()));
+                    .put(FailedLoginsSettingsLoader.KEY_DELAY_FROM, String.valueOf(current.delayFromFailure()))
+                    .put(FailedLoginsSettingsLoader.KEY_FIRST_DELAY, String.valueOf(current.firstDelaySeconds()))
+                    .put(FailedLoginsSettingsLoader.KEY_MAX_DELAY, String.valueOf(current.maxDelaySeconds()))
+                    .put(FailedLoginsSettingsLoader.KEY_LOCK_AFTER, String.valueOf(current.lockAfterFailures()))
+                    .put(FailedLoginsSettingsLoader.KEY_UNLOCK_AFTER, String.valueOf(current.unlockAfterMinutes()))
+                    .put(FailedLoginsSettingsLoader.KEY_FORGET_AFTER, String.valueOf(current.forgetAfterMinutes()))
+                    .put(FailedLoginsSettingsLoader.KEY_COUNT_KEYS, String.valueOf(current.countRejectedKeys()))
+                    .put(FailedLoginsSettingsLoader.KEY_LOCK_ALL, String.valueOf(current.lockAllCredentials()))
+                    .put(
+                        FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_LIMIT,
+                        String.valueOf(current.secondFactorLimit())
+                    )
+                    .put(
+                        FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_PAUSE,
+                        String.valueOf(current.secondFactorPauseMinutes())
+                    );
             },
-            merged -> new LoginThrottleConfig(
-                Section.parseInt(merged, LoginThrottleSettingsLoader.KEY_MAX_FAILURES),
-                Section.parseInt(merged, LoginThrottleSettingsLoader.KEY_WINDOW_SECONDS)
+            merged -> new FailedLoginsConfig(
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_DELAY_FROM),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_FIRST_DELAY),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_MAX_DELAY),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_LOCK_AFTER),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_UNLOCK_AFTER),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_FORGET_AFTER),
+                Section.parseBoolean(merged, FailedLoginsSettingsLoader.KEY_COUNT_KEYS),
+                Section.parseBoolean(merged, FailedLoginsSettingsLoader.KEY_LOCK_ALL),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_LIMIT),
+                Section.parseInt(merged, FailedLoginsSettingsLoader.KEY_SECOND_FACTOR_PAUSE)
             ),
             () -> {
-                final LoginThrottleSettingsLoader loader = LoginThrottleSettingsLoader.installed();
+                final FailedLoginsSettingsLoader loader = FailedLoginsSettingsLoader.installed();
+                if (loader != null) {
+                    loader.invalidate();
+                }
+            }
+        );
+    }
+
+    /**
+     * Where each identity provider takes passwords ("Password sign-in" on
+     * the provider cards): everywhere, on the sign-in form only, nowhere.
+     * @return Section
+     */
+    static Section passwordSignIn() {
+        return new Section(
+            "password-sign-in", "password_sign_in", PASSWORD_SIGN_IN_KEYS,
+            () -> {
+                final PasswordSignInConfig current =
+                    PasswordSignInSettingsLoader.activeSupplier().get();
+                final JsonObject values = new JsonObject();
+                for (final String type : PasswordSignInConfig.TYPES) {
+                    values.put(PasswordSignInSettingsLoader.KEY_PREFIX + type, current.mode(type));
+                }
+                return values;
+            },
+            merged -> {
+                final java.util.Map<String, String> modes = new java.util.HashMap<>();
+                for (final String type : PasswordSignInConfig.TYPES) {
+                    modes.put(
+                        type, merged.getString(PasswordSignInSettingsLoader.KEY_PREFIX + type)
+                    );
+                }
+                new PasswordSignInConfig(modes);
+            },
+            () -> {
+                final PasswordSignInSettingsLoader loader =
+                    PasswordSignInSettingsLoader.installed();
+                if (loader != null) {
+                    loader.invalidate();
+                }
+            }
+        );
+    }
+
+    /**
+     * The policy of the sign-in failures report: whether failures are
+     * noted, and how long a line is kept.
+     * @return Section
+     */
+    static Section signInReport() {
+        return new Section(
+            "sign-in-report", "sign_in_report", SIGN_IN_REPORT_KEYS,
+            () -> {
+                final SignInReportConfig current =
+                    SignInReportSettingsLoader.activeSupplier().get();
+                return new JsonObject()
+                    .put(SignInReportSettingsLoader.KEY_ENABLED, String.valueOf(current.enabled()))
+                    .put(
+                        SignInReportSettingsLoader.KEY_RETENTION,
+                        String.valueOf(current.retentionDays())
+                    );
+            },
+            merged -> new SignInReportConfig(
+                Section.parseBoolean(merged, SignInReportSettingsLoader.KEY_ENABLED),
+                Section.parseInt(merged, SignInReportSettingsLoader.KEY_RETENTION)
+            ),
+            () -> {
+                final SignInReportSettingsLoader loader = SignInReportSettingsLoader.installed();
                 if (loader != null) {
                     loader.invalidate();
                 }
@@ -256,8 +379,8 @@ public final class SecurityPolicySettingsHandler {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
             } else {
                 EcsLogger.info(LOGGER)
-                    .message("Admin updated " + section.name() + " settings (keys="
-                        + String.join(",", body.fieldNames()) + ")")
+                    .message("Admin updated " + section.name() + " settings ("
+                        + SecurityPolicySettingsHandler.written(body) + ")")
                     .eventCategory("configuration")
                     .eventAction(section.eventPrefix() + "_settings_update")
                     .eventOutcome("success")
@@ -266,6 +389,27 @@ public final class SecurityPolicySettingsHandler {
                 ctx.response().setStatusCode(204).end();
             }
         });
+    }
+
+    /**
+     * What an update wrote, for its record: every key with its new value.
+     * None of these settings is a secret; a long value is cut.
+     * @param body The update
+     * @return {@code key=value} pairs
+     */
+    private static String written(final JsonObject body) {
+        final StringBuilder text = new StringBuilder(64);
+        for (final String key : new java.util.TreeSet<>(body.fieldNames())) {
+            String value = String.valueOf(body.getValue(key)).trim();
+            if (value.length() > 120) {
+                value = value.substring(0, 120) + "...";
+            }
+            if (text.length() > 0) {
+                text.append(", ");
+            }
+            text.append(key).append('=').append(value);
+        }
+        return text.toString();
     }
 
     /**

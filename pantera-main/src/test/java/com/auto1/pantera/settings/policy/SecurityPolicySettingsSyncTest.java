@@ -28,26 +28,44 @@ final class SecurityPolicySettingsSyncTest {
 
     @AfterEach
     void tearDown() {
-        LoginThrottleSettingsLoader.uninstall();
+        FailedLoginsSettingsLoader.uninstall();
+        PasswordSignInSettingsLoader.uninstall();
+    }
+
+    @Test
+    void passwordSignInChangedOnAPeerIsReloadedHere() {
+        final Map<String, String> rows = new HashMap<>(Map.of("password_sign_in_okta", "all"));
+        PasswordSignInSettingsLoader.install(FakeAuthSettings.withRows(rows), name -> null);
+        final SecurityPolicySettingsSync sync = SecurityPolicySettingsSync.attach(Optional.empty());
+        MatcherAssert.assertThat(
+            "initial value cached",
+            PasswordSignInSettingsLoader.activeSupplier().get().mode("okta"), new IsEqual<>("all")
+        );
+        rows.put("password_sign_in_okta", "off");
+        sync.receive("password_sign_in");
+        MatcherAssert.assertThat(
+            "the peer's change applies on this node",
+            PasswordSignInSettingsLoader.activeSupplier().get().mode("okta"), new IsEqual<>("off")
+        );
     }
 
     @Test
     void receivedInvalidationReloadsTheNamedLoader() {
-        final Map<String, String> rows = new HashMap<>(Map.of("login_throttle_max_failures", "5"));
-        LoginThrottleSettingsLoader.install(FakeAuthSettings.withRows(rows), Map.<String, String>of()::get);
+        final Map<String, String> rows = new HashMap<>(Map.of("failed_logins_second_factor_limit", "5"));
+        FailedLoginsSettingsLoader.install(FakeAuthSettings.withRows(rows), Map.<String, String>of()::get);
         final SecurityPolicySettingsSync sync = SecurityPolicySettingsSync.attach(Optional.empty());
         MatcherAssert.assertThat(
-            "initial value cached", LoginThrottleSettingsLoader.activeSupplier().get().maxFailures(), new IsEqual<>(5)
+            "initial value cached", FailedLoginsSettingsLoader.activeSupplier().get().secondFactorLimit(), new IsEqual<>(5)
         );
-        rows.put("login_throttle_max_failures", "2");
+        rows.put("failed_logins_second_factor_limit", "2");
         MatcherAssert.assertThat(
             "a row changed elsewhere is not seen until invalidated",
-            LoginThrottleSettingsLoader.activeSupplier().get().maxFailures(), new IsEqual<>(5)
+            FailedLoginsSettingsLoader.activeSupplier().get().secondFactorLimit(), new IsEqual<>(5)
         );
-        sync.receive("login_throttle");
+        sync.receive("failed_logins");
         MatcherAssert.assertThat(
             "the peer's invalidation reloads the row",
-            LoginThrottleSettingsLoader.activeSupplier().get().maxFailures(), new IsEqual<>(2)
+            FailedLoginsSettingsLoader.activeSupplier().get().secondFactorLimit(), new IsEqual<>(2)
         );
     }
 

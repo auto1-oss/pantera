@@ -218,6 +218,7 @@ The Profile page (`/profile`) shows your user information:
 - Username and authentication context
 - Email address
 - API token management (generate, list, revoke tokens)
+- Rejected API keys (v2.2.15+): keys of yours that a tool still sends although they are expired or revoked, with the client address and program, so you can find the tool and replace the key there. The section appears only when there is such a key.
 
 ---
 
@@ -230,13 +231,18 @@ Admin panels appear in the sidebar under **Administration** only if you have the
 | Repository Management | `api_repository_permissions:write` | Create, edit, delete repositories |
 | Repository Jobs | `api_repository_permissions:delete` | Restore deleted repositories, follow and retry background purge jobs, purge unowned storage directories |
 | User Management | `api_user_permissions:write` | Create, edit, enable/disable users |
+| Sign-in failures | `api_user_permissions:read` | The users locked now, with their unlock (`api_user_permissions:enable`), and who fails to sign in, with what, and from where: rejected API keys, failed password logins, unconfirmed second factors (v2.2.15+) |
 | Roles & Permissions | `api_role_permissions:write` | Manage RBAC roles |
 | Storage Configuration | `api_storage_alias_permissions:create` | Manage storage aliases |
 | System Settings | Admin role | Configure server settings, auth providers |
 | Negative Cache | Admin role | Find and clear cached "not found" answers |
 | Troubleshoot | Admin role | Explain why a URL fails or serves stale metadata |
 
-If you do not see the Administration section, you have read-only access. Contact your administrator for elevated permissions.
+If you do not see the Administration section, your account has none of these permissions. Contact your administrator for elevated permissions.
+
+A group repository's edit page has a **Routing rules** card (v2.2.15+): the rules that limit a member to the paths it can have, a check of every rule by the server before saving, and **Test a path**, which shows the repositories the group would ask for a path, with the unsaved rules. Rules that come from a nested group are listed read-only. See [Routing rules](../configuration-reference.md#routing-rules).
+
+The cards of the Okta, Keycloak and GitHub providers under **Auth Providers** have a **Password sign-in** control (v2.2.15+): where that provider checks a user name and password. See [Password sign-in](../admin-guide/authentication.md#password-sign-in-where-a-provider-takes-passwords).
 
 ### Managing Repositories (/admin/repositories)
 
@@ -272,6 +278,8 @@ Requires the repository `delete` permission and a deployment with a database.
 - **Unowned storage directories** lists top-level storage directories that hold files but belong to no repository, no deleted repository and no running purge: files left by repository deletes made before 2.2.14 (a removal that failed or was interrupted, or files written while it ran) or by an interrupted rename. Directories whose name starts with `.` or `_` are never listed. The list is empty until you press **Scan storages**; the scan lists every storage that repositories use and can take several seconds on S3, so it never runs on its own. Each row shows the storage location, the directory and the number of objects, counted up to 1,000 (`1,000+` means there are more). Pantera cannot know whether a storage also holds data it does not own, so nothing is removed until you purge a specific directory: **Purge…** asks you to type the directory name, has no restore window, and then appears in **Jobs** as an orphan purge. If a repository owns the directory by then, the purge is refused.
 
 For local repositories of every format except Docker, the form has a **Publishing** card with an **Immutable artifacts** checkbox (the repository's `immutable` setting). It is checked for a new repository: a stored artifact can then never be overwritten, and a re-upload is refused (usually with `409 Conflict`). Uncheck it to let users with `write` permission overwrite. Users with `delete` permission can delete artifacts either way. Editing a repository shows its current value, and saving writes the choice explicitly. Proxy, group and Docker repositories do not show the card (Docker tag moves are controlled by the `overwrite` permission). See [Overwrite rules](getting-started.md#overwrite-rules-immutable).
+
+For a `docker-proxy` repository, the form has a **Tag refresh** card with a **Tag refresh (seconds)** field (the repository's `tag_refresh_seconds` setting): how long a cached image tag (e.g. `latest`) is served before Pantera asks the upstream with a `HEAD` whether the tag moved, from `0` (every pull) to `31536000` (a year). Leave it empty to use the global value, set under **System Settings → Docker Proxy Tags** (default 3600); clearing the field and saving removes the repository's own value. See [Docker proxy tag refresh](../configuration-reference.md#docker-proxy-tag-refresh-auth_settings-table).
 
 ### Configuring Group Members
 
@@ -359,6 +367,8 @@ The Troubleshoot page (`/admin/troubleshoot`) explains why a request fails or re
 - **Checks** -- one line per layer (repository, group, negative cache, cooldown, metadata, upstream) with an ok, problem or info status and a message. A problem that has a known remedy offers a button (for example clearing the package from the negative cache or refreshing its metadata); after the fix runs the troubleshoot is repeated automatically.
 
 The request is replayed once. The negative cache is read before the replay: a "not found" the replay itself caches (as any client request for a missing file would) is not reported as a finding and is removed again, so running the check does not change what the next client gets and gives the same answer every time.
+
+A proxy that does not hold the file asks its upstream, as it would for a client, but does not store what the upstream has (v2.2.15+): no file, no metadata document, no entry in the search index, and no background refresh. This holds for every proxy format. A Maven or Gradle proxy answers `200` with a note in place of the file; the others show what the upstream sent. Before 2.2.15 the check cached the file, and a group then asked that proxy first for the artifact. The check still asks the upstream, so a large file is downloaded once, and it still evaluates cooldown as for a client.
 
 The **Package** mode takes a repository type and package name and opens the cooldown inspector. Deep link: `/admin/troubleshoot?url=<url>`.
 

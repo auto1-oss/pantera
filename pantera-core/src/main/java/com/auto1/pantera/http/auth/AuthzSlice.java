@@ -136,9 +136,7 @@ public final class AuthzSlice implements Slice {
                 ResponseBuilder.forbidden().build()
             );
         }
-        return ResponseBuilder.unauthorized()
-            .header(new WwwAuthenticate(result.challenge()))
-            .completedFuture();
+        return new FailedLogin(result, headers).response();
     }
 
     /**

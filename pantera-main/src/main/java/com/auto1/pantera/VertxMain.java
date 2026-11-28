@@ -311,13 +311,30 @@ public final class VertxMain {
         // admin UI has their sessions and API tokens rejected on the
         // next request, even if the token itself hasn't expired. In
         // non-DB modes we fall back to the always-enabled default.
-        final com.auto1.pantera.auth.UserEnabledCheck enabledCheck;
+        final com.auto1.pantera.auth.UserEnabledCheck enabled;
         if (settings.authz().policy()
             instanceof com.auto1.pantera.security.policy.CachedDbPolicy cachedPolicy) {
-            enabledCheck = cachedPolicy::isEnabled;
+            enabled = cachedPolicy::isEnabled;
         } else {
-            enabledCheck = com.auto1.pantera.auth.UserEnabledCheck.ALWAYS_ENABLED;
+            enabled = com.auto1.pantera.auth.UserEnabledCheck.ALWAYS_ENABLED;
         }
+        // The same gate refuses the tokens of a user locked after failed
+        // logins: an API key, a session and a refresh token alike. The lock
+        // is answered from memory (FailedLogins.locked).
+        final java.util.Optional<com.auto1.pantera.auth.failedlogins.FailedLogins> failedLogins =
+            settings.failedLogins();
+        final com.auto1.pantera.auth.UserEnabledCheck enabledCheck =
+            new com.auto1.pantera.auth.UserEnabledCheck() {
+                @Override
+                public boolean isEnabled(final String username) {
+                    return enabled.isEnabled(username);
+                }
+
+                @Override
+                public boolean isLocked(final String username) {
+                    return failedLogins.map(logins -> logins.locked(username)).orElse(false);
+                }
+            };
         // Revocation blocklist — previously never wired: revocation
         // endpoints persisted to the DB but in-flight access tokens kept
         // validating until natural expiry. Valkey-backed when the cluster
@@ -373,7 +390,13 @@ public final class VertxMain {
             .orElse(null);
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
             rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, authSettingsDao,
-            revocationBlocklist, enabledCheck
+            revocationBlocklist, enabledCheck,
+            // Rejected API keys go to the sign-in failures report, and count
+            // as failed logins of their owners when the policy says so.
+            settings.failedLogins()
+                .flatMap(com.auto1.pantera.auth.failedlogins.FailedLogins::report)
+                .orElse(null),
+            settings.failedLogins().orElse(null)
         );
         // Install the circuit-breaker settings loader BEFORE constructing
         // RepositorySlices so the default-constructor activeSupplier()
@@ -411,8 +434,31 @@ public final class VertxMain {
         com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
+        // Tag refresh age of docker-proxy repositories (docker_tag_refresh_seconds):
+        // same lifecycle, installed unconditionally so a DB-less boot still
+        // resolves PANTERA_DOCKER_TAG_REFRESH_SECONDS. The install reads the
+        // value here, on the boot thread, so a docker request never waits for
+        // the database.
+        com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        if (sharedDs.isPresent()) {
+            // auth_settings sends no change notification: each node re-reads
+            // the age every 30 s, so a change saved on one node reaches the
+            // others within that time. Off the event loop.
+            this.vertx.getDelegate().setPeriodic(
+                java.time.Duration.ofSeconds(30).toMillis(),
+                id -> java.util.concurrent.CompletableFuture.runAsync(
+                    () -> java.util.Optional.ofNullable(
+                        com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.installed()
+                    ).ifPresent(
+                        com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader::refresh
+                    )
+                )
+            );
+        }
         // 2.2.9 security policy settings (request-body cap + fs storage
-        // roots, outbound egress policy, login throttling): DB row -> env
+        // roots, outbound egress policy, failed logins): DB row -> env
         // -> default per key, admin-editable at runtime. Installed
         // unconditionally for the same DB-less-boot reason as above; the
         // egress loader also feeds http-client's EgressSettingsRegistry.
@@ -422,7 +468,20 @@ public final class VertxMain {
         com.auto1.pantera.settings.policy.EgressSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
-        com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader.install(
+        // Policy of failed sign-ins ("Failed logins" card): the login delay
+        // and the account lock after wrong passwords, the pause after
+        // unconfirmed second factors. Read by the sign-in chain on every
+        // decision.
+        com.auto1.pantera.settings.policy.FailedLoginsSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        // Policy of the sign-in failures report (on or off, retention).
+        com.auto1.pantera.settings.policy.SignInReportSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        // Where each identity provider takes passwords ("Password
+        // sign-in" on the provider cards): read on every login.
+        com.auto1.pantera.settings.policy.PasswordSignInSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
         // WS8 fixwave-c (2.3.0): install the client-base URL derivation

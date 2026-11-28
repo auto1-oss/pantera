@@ -79,6 +79,16 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
     private final Authentication origin;
 
     /**
+     * Users whose logins are never answered from this cache.
+     */
+    private volatile java.util.function.Predicate<String> bypass = name -> false;
+
+    /**
+     * Scope of the login being checked, part of its cache key.
+     */
+    private volatile java.util.function.Supplier<String> scope = () -> "";
+
+    /**
      * Ctor with default configuration.
      * Here an instance of cache is created. It is important that cache
      * is a local variable.
@@ -190,6 +200,28 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         this.ttl = Duration.ofMinutes(5);
     }
 
+    /**
+     * Name the users whose logins are never answered from this cache.
+     *
+     * @param users Predicate over user names; it runs on every login and
+     *  has to answer from memory
+     */
+    public void bypassFor(final java.util.function.Predicate<String> users) {
+        this.bypass = users;
+    }
+
+    /**
+     * Keep the remembered logins of different scopes apart: a login
+     * remembered in one scope does not answer in another. The scope is
+     * read for every login on the thread that checks it; an empty scope
+     * is the common one.
+     *
+     * @param scoped Scope of the login being checked
+     */
+    public void scopedBy(final java.util.function.Supplier<String> scoped) {
+        this.scope = scoped;
+    }
+
     @Override
     public Optional<AuthUser> user(final String user, final String pass) {
         return new UncheckedIOScalar<>(
@@ -197,8 +229,15 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 // JWT-as-password: Skip cache, validate directly.
                 // JWT tokens have their own expiry (exp claim), caching would
                 // override that expiry. Also, JWT validation is O(1) - no need to cache.
-                if (looksLikeJwt(pass)) {
-                    // JWT tokens bypass cache - validated directly using exp claim
+                if (looksLikeJwt(pass) || this.bypass.test(user)
+                    || com.auto1.pantera.http.auth.LoginSource.current().form()) {
+                    // JWT tokens bypass cache - validated directly using exp claim.
+                    // So does a user the bypass names (a locked one): a
+                    // remembered login must not pass, the chain decides.
+                    // So does a sign-in on the sign-in form or endpoint, which
+                    // is neither answered from nor remembered here: a person
+                    // signs in there, and a remembered login would skip the
+                    // second factor the identity provider asks for.
                     return this.origin.user(user, pass);
                 }
                 
@@ -371,7 +410,14 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         // Hash credentials to prevent password exposure
         // Format: SHA-256(username:password)
         final String combined = String.format("%s:%s", user, pass);
-        return DigestUtils.sha256Hex(combined);
+        final String within = this.scope.get();
+        final String key;
+        if (within.isEmpty()) {
+            key = DigestUtils.sha256Hex(combined);
+        } else {
+            key = DigestUtils.sha256Hex(within + '\n' + combined);
+        }
+        return key;
     }
     
     /**

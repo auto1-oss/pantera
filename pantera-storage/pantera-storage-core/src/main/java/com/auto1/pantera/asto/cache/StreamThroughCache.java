@@ -116,6 +116,13 @@ public final class StreamThroughCache implements Cache {
                 .log();
             return teeContentInMemory(key, remote);
         }
+        // Who owns the temp file once the stream ends: the save (the body
+        // completed) or the clean-up (it failed or was cancelled). The first
+        // to claim it acts, the other leaves it alone. A client may cancel
+        // while the completion is still on its way on another thread (a
+        // response writer that has written every byte); without the claim
+        // that cancel deleted the temp file under a save that had started,
+        // and the body was never stored.
         final AtomicBoolean saveFired = new AtomicBoolean(false);
         final Flowable<ByteBuffer> teed = Flowable.fromPublisher(remote)
             .doOnNext(buf -> {
@@ -138,7 +145,9 @@ public final class StreamThroughCache implements Cache {
             })
             .doOnError(err -> {
                 closeQuietly(channel);
-                deleteTempFileQuietly(tempFile);
+                if (saveFired.compareAndSet(false, true)) {
+                    deleteTempFileQuietly(tempFile);
+                }
                 EcsLogger.debug("com.auto1.pantera.asto.cache")
                     .message(String.format("Stream-through: remote stream error for key '%s', not caching", key.string()))
                     .eventCategory("database")
@@ -151,6 +160,10 @@ public final class StreamThroughCache implements Cache {
             // Client cancelled mid-stream (e.g., closed connection) — mirror doOnError cleanup
             // so the temp file/channel don't leak when subscription is cancelled.
             .doOnCancel(() -> {
+                if (!saveFired.compareAndSet(false, true)) {
+                    // The body completed and its save owns the temp file.
+                    return;
+                }
                 closeQuietly(channel);
                 deleteTempFileQuietly(tempFile);
                 EcsLogger.debug("com.auto1.pantera.asto.cache")

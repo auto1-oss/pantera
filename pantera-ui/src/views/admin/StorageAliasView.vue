@@ -35,6 +35,10 @@ const fsPath = ref('')
 const s3Bucket = ref('')
 const s3Region = ref('')
 const s3Endpoint = ref('')
+// Placeholders that show a URL are constants, not text in the template:
+// vue-tsc 3.3 takes `//` in an attribute of a component for the start of a
+// comment and generates broken code for the rest of the template.
+const S3_ENDPOINT_PLACEHOLDER = 'https://s3.amazonaws.com'
 const s3CredType = ref('basic')
 const s3AccessKey = ref('')
 const s3SecretKey = ref('')
@@ -255,7 +259,7 @@ onMounted(load)
               </div>
               <div>
                 <label class="block text-sm font-medium mb-1">Endpoint</label>
-                <InputText v-model="s3Endpoint" placeholder="https://s3.amazonaws.com" class="w-full" />
+                <InputText v-model="s3Endpoint" :placeholder="S3_ENDPOINT_PLACEHOLDER" class="w-full" />
                 <small class="text-gray-500">For MinIO or S3-compatible.</small>
               </div>
             </div>

@@ -86,6 +86,13 @@ import org.reactivestreams.Publisher;
 public final class CachedProxySlice extends BaseCachedProxySlice {
 
     /**
+     * Hosts of Maven Central. Their {@code Last-Modified} is the day an
+     * artifact was released.
+     */
+    private static final java.util.Set<String> CENTRAL_HOSTS =
+        java.util.Set.of("repo1.maven.org", "repo.maven.apache.org");
+
+    /**
      * Logger name of the proxy's application records.
      */
     private static final String LOGGER = "com.auto1.pantera.maven.http";
@@ -1102,8 +1109,10 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA1, () -> sha1Inflight);
+        final java.util.concurrent.atomic.AtomicReference<Dated> known =
+            new java.util.concurrent.atomic.AtomicReference<>();
         return this.fetchPrimaryBody(line, inboundHeaders).toCompletableFuture().thenCompose(body ->
-            this.cooldownAtHeaders(inboundHeaders, path, body.headers()).thenCompose(blockResp -> {
+            this.cooldownAtHeaders(inboundHeaders, path, body.headers(), known).thenCompose(blockResp -> {
                 if (blockResp.isPresent()) {
                     // Block decided at header time. Drain the upstream body so
                     // the connection is released, complete the leader gate so
@@ -1119,6 +1128,16 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                         com.auto1.pantera.audit.AuditLogger.REASON_COOLDOWN_ACTIVE
                     );
                     return CompletableFuture.completedFuture(blockResp.get());
+                }
+                if (com.auto1.pantera.http.log.RequestTrace.instance().traced(inboundHeaders)) {
+                    // A Troubleshoot replay asks what a client would get.
+                    // The upstream has the file and nothing blocks it: say
+                    // so, and leave the proxy as it was. Storing the file
+                    // would add it to the search index and change which
+                    // member a group asks from then on.
+                    drainUpstreamBody(body.publisher());
+                    singleFlightGate.complete(null);
+                    return CompletableFuture.completedFuture(BaseCachedProxySlice.notStored());
                 }
                 return this.cacheWriter.streamThroughAndCommit(
                     key, upstreamUri, body.size(), body.publisher(),
@@ -1172,7 +1191,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 // earlier async hop).
                 com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(inboundHeaders);
                 this.enqueueEventForWriter(
-                    key, body.headers(), artifact.body().size().orElse(0L),
+                    key, CachedProxySlice.dated(body.headers(), known.get()),
+                    artifact.body().size().orElse(0L),
                     new com.auto1.pantera.http.headers.Login(inboundHeaders).getValue()
                 );
                 this.auditPrimaryAccess(
@@ -1209,6 +1229,120 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     }
 
     /**
+     * The release date cooldown decides with.
+     *
+     * <p>Maven Central reports the day an artifact was released as its
+     * {@code Last-Modified}. Other upstreams need not: a repository that
+     * is itself a caching proxy (Artifactory, Nexus) reports the day it
+     * cached the file, and cooldown then reads an old release as a new
+     * one. For an upstream that is not Maven Central the date is looked
+     * up where release dates are kept (the publish-date registry, which
+     * asks Maven Central once per version and remembers the answer); the
+     * upstream's own header is the fallback for an artifact Maven Central
+     * does not have, and when the lookup fails.</p>
+     *
+     * @param request Cooldown request of the artifact
+     * @param upstreamHeaders Headers of the upstream's response
+     * @return The date, and whether it may be kept as the artifact's date
+     */
+    private CompletableFuture<Dated> releaseDate(
+        final com.auto1.pantera.cooldown.api.CooldownRequest request,
+        final Headers upstreamHeaders
+    ) {
+        final Optional<java.time.Instant> reported =
+            BaseCachedProxySlice.extractLastModified(upstreamHeaders)
+                .map(java.time.Instant::ofEpochMilli);
+        final CompletableFuture<Dated> res;
+        if (this.inspector() == null || this.upstreamIsCentral()) {
+            res = CompletableFuture.completedFuture(new Dated(reported, true));
+        } else if (!this.cooldownService.applies(request)) {
+            // Nobody asks Maven Central where cooldown is off: what the
+            // upstream reports is used for nothing, and is not kept.
+            res = CompletableFuture.completedFuture(new Dated(reported, false));
+        } else {
+            CompletableFuture<Optional<java.time.Instant>> lookup;
+            try {
+                lookup = this.inspector().releaseDate(request.artifact(), request.version());
+            } catch (final RuntimeException err) {
+                lookup = CompletableFuture.failedFuture(err);
+            }
+            res = lookup.handle(
+                (found, err) -> {
+                    final Dated dated;
+                    if (err != null || found == null) {
+                        // The fallback decides this request; it is not kept
+                        // as the artifact's date, which would stay for good.
+                        dated = new Dated(reported, false);
+                    } else if (found.isPresent()) {
+                        dated = new Dated(found, true);
+                    } else {
+                        dated = new Dated(reported, true);
+                    }
+                    return dated;
+                }
+            );
+        }
+        return res;
+    }
+
+    /**
+     * The upstream's headers as the artifact's event may see them. The
+     * event's {@code Last-Modified} becomes the release date in the search
+     * index and, for good, in the publish-date table: it is the date
+     * cooldown decided with, and absent when that date was only a guess.
+     *
+     * @param upstream Headers of the upstream's response
+     * @param known The date cooldown decided with, null for a file that
+     *  cooldown does not date
+     * @return Headers for the event
+     */
+    private static Headers dated(final Headers upstream, final Dated known) {
+        final Headers res;
+        if (known == null) {
+            res = upstream;
+        } else {
+            res = new Headers();
+            for (final com.auto1.pantera.http.headers.Header header : upstream) {
+                if (!"Last-Modified".equalsIgnoreCase(header.getKey())) {
+                    res.add(header);
+                }
+            }
+            if (known.keep() && known.date().isPresent()) {
+                res.add(new LastModified(known.date().get()));
+            }
+        }
+        return res;
+    }
+
+    /**
+     * A release date and what may be done with it.
+     *
+     * @param date The date, empty when nobody knows it
+     * @param keep Whether it may be kept as the artifact's date
+     * @since 2.2.15
+     */
+    private record Dated(Optional<java.time.Instant> date, boolean keep) {
+    }
+
+    /**
+     * Whether the upstream is Maven Central itself, whose
+     * {@code Last-Modified} is the release date.
+     *
+     * @return True for the hosts of Maven Central
+     */
+    private boolean upstreamIsCentral() {
+        boolean central;
+        try {
+            final String host = java.net.URI.create(this.upstreamUrl()).getHost();
+            central = host != null
+                && CachedProxySlice.CENTRAL_HOSTS.contains(host.toLowerCase(java.util.Locale.ROOT));
+        } catch (final IllegalArgumentException malformed) {
+            central = false;
+        }
+        return central;
+    }
+
+    /**
      * Evaluate cooldown using the publish-date carried by the upstream
      * GET response's {@code Last-Modified} header, instead of issuing a
      * separate HEAD probe via {@link com.auto1.pantera.publishdate.RegistryBackedInspector}.
@@ -1233,6 +1367,29 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final String path,
         final Headers upstreamHeaders
     ) {
+        return this.cooldownAtHeaders(
+            inboundHeaders, path, upstreamHeaders,
+            new java.util.concurrent.atomic.AtomicReference<>()
+        );
+    }
+
+    /**
+     * Header-time cooldown gate that also hands back the date it decided
+     * with.
+     *
+     * @param inboundHeaders Headers of the client's request
+     * @param path Request path
+     * @param upstreamHeaders Headers of the upstream's response
+     * @param known Receives the date and whether it may be kept; stays
+     *  empty for a file cooldown does not date
+     * @return A 403 when the version is blocked, empty otherwise
+     */
+    private CompletableFuture<Optional<Response>> cooldownAtHeaders(
+        final Headers inboundHeaders,
+        final String path,
+        final Headers upstreamHeaders,
+        final java.util.concurrent.atomic.AtomicReference<Dated> known
+    ) {
         if (this.cooldownService == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -1241,11 +1398,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         if (request.isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        final Optional<java.time.Instant> publishDate =
-            BaseCachedProxySlice.extractLastModified(upstreamHeaders)
-                .map(java.time.Instant::ofEpochMilli);
-        return this.cooldownService
-            .evaluateWithKnownDate(request.get(), publishDate)
+        return this.releaseDate(request.get(), upstreamHeaders)
+            .thenCompose(
+                dated -> {
+                    known.set(dated);
+                    return this.cooldownService
+                        .evaluateWithKnownDate(request.get(), dated.date());
+                }
+            )
             .thenApply(result -> {
                 if (result.blocked()) {
                     return Optional.of(

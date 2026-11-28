@@ -55,6 +55,12 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
      */
     private final OfficialImageName names;
 
+    /**
+     * The repository's inspector an {@link #overlay()} reads what it does
+     * not hold itself from; absent for the repository's own inspector.
+     */
+    private final Optional<DockerProxyCooldownInspector> base;
+
     public DockerProxyCooldownInspector() {
         this(new OfficialImageName(false));
     }
@@ -65,7 +71,20 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
      * @param names Official-image naming rule of the proxied upstream
      */
     public DockerProxyCooldownInspector(final OfficialImageName names) {
+        this(names, Optional.empty());
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param names Official-image naming rule of the proxied upstream
+     * @param base Inspector to read what this one does not hold from
+     */
+    private DockerProxyCooldownInspector(
+        final OfficialImageName names, final Optional<DockerProxyCooldownInspector> base
+    ) {
         this.names = names;
+        this.base = base;
         final long expiryHours = ConfigDefaults.getLong(
             "PANTERA_DOCKER_CACHE_EXPIRY_HOURS", 24L
         );
@@ -88,7 +107,12 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
 
     @Override
     public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
-        return CompletableFuture.completedFuture(Optional.ofNullable(this.releases.getIfPresent(key(artifact, version))));
+        final String key = key(artifact, version);
+        return CompletableFuture.completedFuture(
+            Optional.ofNullable(this.releases.getIfPresent(key)).or(
+                () -> this.base.map(shared -> shared.releases.getIfPresent(key))
+            )
+        );
     }
 
     @Override
@@ -133,12 +157,28 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
         }
     }
 
+    /**
+     * An inspector for one request that must leave the repository as it
+     * found it: a Troubleshoot replay ({@code RequestTrace}) evaluates
+     * cooldown as a client's request does. The overlay answers with the
+     * release dates this inspector knows and with those recorded on the
+     * overlay itself; what is recorded on it stays there and is never
+     * handed to the {@link ReleaseDateCallback}, so the request leaves no
+     * release date behind, neither here nor in the database.
+     *
+     * @return Overlay of this inspector
+     */
+    public DockerProxyCooldownInspector overlay() {
+        return new DockerProxyCooldownInspector(this.names, Optional.of(this));
+    }
+
     public Optional<String> ownerFor(final String repoName, final String digest) {
         return Optional.ofNullable(this.digestOwners.getIfPresent(digestKey(repoName, digest)));
     }
 
     public boolean known(final String artifact, final String version) {
-        return this.seen.getIfPresent(key(artifact, version)) != null;
+        return this.seen.getIfPresent(key(artifact, version)) != null
+            || this.base.map(shared -> shared.known(artifact, version)).orElse(false);
     }
 
     public boolean isBlocked(final String artifact, final String digest) {

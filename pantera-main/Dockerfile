@@ -30,7 +30,7 @@ RUN addgroup -g 2020 -S pantera && \
     chown pantera:pantera /opt/apm/elastic-apm-agent.jar
 
 ENV TMPDIR=/var/pantera/cache/tmp
-ENV PANTERA_VERSION=2.2.14
+ENV PANTERA_VERSION=2.2.15
 
 USER 2021:2020
 

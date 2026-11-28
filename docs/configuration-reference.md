@@ -175,7 +175,7 @@ credentials:
 
 #### Provider: `jwt-password`
 
-No additional keys. Validates JWT tokens (access tokens or API tokens) submitted as the password in HTTP Basic Authentication. Tokens are verified using the RS256 public key configured in `meta.jwt.public-key-path`. Access tokens are verified purely from the signature (no DB query). API tokens are additionally checked against the `user_tokens` table.
+No additional keys. Validates JWT tokens (access tokens or API tokens) submitted as the password in HTTP Basic Authentication. Tokens are verified using the RS256 public key configured in `meta.jwt.public-key-path`. Access tokens are verified purely from the signature (no DB query). API tokens are additionally checked against the `user_tokens` table. A credential that has the form of a JWT is checked by this provider only, wherever it stands in the list: a rejected token is answered with `401` and is never passed to another provider. Without this provider such a credential is rejected.
 
 ```yaml
 credentials:
@@ -288,7 +288,7 @@ Precedence for the base used to build a repository's emitted URLs:
 
 #### Security policy settings (auth_settings table)
 
-Since 2.2.9 the security limits introduced in that release are DB-backed admin settings, editable in the admin UI (Settings → *Request & Storage Limits*, *Outbound Egress Policy*, *Login Throttling*) or through `GET`/`PUT /api/v1/admin/request-limits-settings`, `/egress-settings` and `/login-throttle-settings` (see the [REST API reference](rest-api-reference.md)). Each key resolves **DB row → `PANTERA_<KEY>` environment variable → default**; the environment variable is a fallback consulted only while no row has been saved (rows are deliberately not seeded, so an existing env-driven deployment keeps working unchanged). A write reloads the node that served it and broadcasts the reload to peer nodes over Valkey (the shared cache-invalidation channel), and every consumer reads the setting per decision, so changes apply on the next request cluster-wide without a restart. Keys are validated independently: a value that fails validation (a body cap below the 1 MiB floor, a relative root, a malformed host list, a non-positive throttle value) is rejected with `400` by the admin endpoints and UI; if one nevertheless reaches the store or environment, only that key falls back to its default -- logged as `event.action=<section>_settings_load` with `event.reason=<key>` -- and its sibling keys keep their configured values.
+Since 2.2.9 the security limits introduced in that release are DB-backed admin settings, editable in the admin UI (Settings → *Request & Storage Limits*, *Outbound Egress Policy*, *Failed logins*) or through `GET`/`PUT /api/v1/admin/request-limits-settings`, `/egress-settings` and `/failed-logins-settings` (see the [REST API reference](rest-api-reference.md)). The *Login Throttling* card of 2.2.9 (`login_throttle_*`) was removed in 2.2.15: the failed-logins keys below replace it. Each key resolves **DB row → `PANTERA_<KEY>` environment variable → default**; the environment variable is a fallback consulted only while no row has been saved (rows are deliberately not seeded, so an existing env-driven deployment keeps working unchanged). A write reloads the node that served it and broadcasts the reload to peer nodes over Valkey (the shared cache-invalidation channel), and every consumer reads the setting per decision, so changes apply on the next request cluster-wide without a restart. Keys are validated independently: a value that fails validation (a body cap below the 1 MiB floor, a relative root, a malformed host list, a failed-logins value outside its range) is rejected with `400` by the admin endpoints and UI; if one nevertheless reaches the store or environment, only that key falls back to its default -- logged as `event.action=<section>_settings_load` with `event.reason=<key>` -- and its sibling keys keep their configured values.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -297,12 +297,31 @@ Since 2.2.9 the security limits introduced in that release are DB-backed admin s
 | `egress_block_private` | boolean | `false` | Outbound egress strictness for every connection Pantera makes on its own behalf (proxy remotes, index links, bearer realms, storage-alias endpoints). Link-local, any-local, multicast and the cloud metadata service (`169.254.169.254`, `fd00:ec2::254`, `fd20:ce::254`, `100.100.100.200`, `metadata.google.internal`, matched with or without a trailing dot) are always refused; `true` also refuses loopback and private ranges (RFC1918, `fc00::/7` unique-local, `100.64.0.0/10` shared address space). Enforced after DNS resolution on every connect, redirect hops included. Behind an outbound HTTP proxy (`meta.http_client.proxies` or the JVM `http.proxyHost`/`https.proxyHost` properties), each request target and redirect hop is checked by name and against Pantera's own DNS answer before the connection to the proxy opens; the proxy resolves the name itself, so a target Pantera cannot resolve is left to the proxy -- enforce the same deny list on the proxy. Env fallback `PANTERA_EGRESS_BLOCK_PRIVATE`. |
 | `egress_allow_hosts` | string (comma-separated host names) | `` (empty) | Hosts exempt from the strict-mode loopback/private-range refusal, e.g. an internal mirror that must stay reachable in strict mode. The allowlist never exempts the cloud metadata service, link-local, any-local or multicast destinations, even when an allowlisted name resolves to one. Env fallback `PANTERA_EGRESS_ALLOW_HOSTS`. |
 | `upstream_credential_allow_hosts` | string (comma-separated host names) | `` (empty) | Additional hosts that may receive an upstream's configured credentials: the host of a bearer-token realm, or of an index/mirror link. Only the upstream host itself qualifies by default: there is no parent-domain rule, because on shared suffixes a sibling subdomain is a different tenant. **Docker Hub is the common case:** its registry is `registry-1.docker.io` and its token realm is `auth.docker.io`, a different host, so a Docker Hub proxy with credentials pulls as anonymous (and hits the anonymous rate limit, and cannot see private images) until `auth.docker.io` is listed here. Pantera logs it once per upstream and host, then at most hourly (`event.action: bearer_realm_untrusted` or `mirror_credentials_withheld`). Env fallback `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS`. |
-| `login_throttle_max_failures` | integer (≥ 1) | `5` | Password sign-in attempts per (user, client IP) before further attempts are refused for the window; a user is also refused after 4× this many attempts from any address. The client IP is the TCP peer unless `trust_forwarded_headers` is on; then it is the address the proxy recorded: the rightmost `X-Forwarded-For` entry, else `X-Real-IP` when no `X-Forwarded-For` arrived. The leftmost entry is client-supplied and never used for throttling, and `X-Real-IP` never outranks `X-Forwarded-For` because a load balancer such as an ALB passes a client-sent `X-Real-IP` through unchanged. The per-user budget means repeated wrong passwords from anyone can lock a known account out of password sign-in (`POST /api/v1/auth/token`) for the window; SSO and already-issued tokens keep working. Env fallback `PANTERA_LOGIN_THROTTLE_MAX_FAILURES`. |
-| `login_throttle_window_seconds` | integer (≥ 1) | `900` | Window, in seconds, in which those attempts are counted; a successful login clears the (user, client IP) counter. Counters are per node, shared by all API workers on it. A refused login answers `429` with `Retry-After` set to the rest of the window. Env fallback `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS`. |
+| `failed_logins_delay_from_failure` | integer (0-100) | `2` | Failed login number from which logins of that user are delayed; `0` switches the delay off. See [Failed Logins](admin-guide/failed-logins.md) for this and the nine keys below (2.2.15). |
+| `failed_logins_first_delay_seconds` | integer (1-60) | `1` | Unit of the delay: a delay lasts this many seconds times the square of the failure count. |
+| `failed_logins_max_delay_seconds` | integer (1-3600) | `60` | Longest delay; not below the first delay. |
+| `failed_logins_lock_after` | integer (0-100) | `3` | Failed logins after which the user is locked; `0` switches the lock off and unlocks every locked user. |
+| `failed_logins_unlock_after_minutes` | integer (0-1440) | `0` | Minutes after which a lock ends by itself; `0` = only an admin unlocks. |
+| `failed_logins_forget_after_minutes` | integer (0-43200) | `0` | Minutes without a new failure after which the count starts again; `0` = failures are never forgotten by time. Ends no lock. |
+| `failed_logins_count_rejected_keys` | boolean | `false` | Whether a rejected API key counts as a failed login, sent as a password or as a Bearer token. |
+| `failed_logins_lock_all_credentials` | boolean | `true` | Whether a lock blocks every credential of the user (password, API keys, sessions, an identity provider's button) or password sign-in only. |
+| `failed_logins_second_factor_limit` | integer (0-100) | `5` | Sign-ins whose password was right but whose second factor was not confirmed (a push denied or not answered, a wrong code) after which password sign-in of the user is paused; `0` = no pause. Such a sign-in is never a failed login: it neither delays nor locks. |
+| `failed_logins_second_factor_pause_minutes` | integer (1-1440) | `15` | How long the pause lasts. Unconfirmed second factors count while each comes within this time of the previous one. |
+| `password_sign_in_okta`, `password_sign_in_keycloak`, `password_sign_in_github` | `all`, `form` or `off` | `all` | Where the provider of that type checks a user name and password: the sign-in form and repository requests, the sign-in form and `POST /api/v1/auth/token` only, or nowhere. See [Password sign-in](admin-guide/authentication.md#password-sign-in-where-a-provider-takes-passwords) (v2.2.15+). |
+| `sign_in_report_enabled` | boolean | `true` | Whether sign-in failures (rejected API keys, failed password logins, unconfirmed second factors) are noted and stored. See [Sign-in Failures Report](admin-guide/sign-in-failures.md) (v2.2.15+). |
+| `sign_in_report_retention_days` | integer (1-3650) | `90` | Days after its last event that a line of the report is kept. |
 
 A `PUT` with an unknown key, or a value the setting refuses (a body cap below 1 MiB, a relative storage root, a malformed host, a zero threshold), answers `400` and writes nothing.
 
 **Deliberately env-only (boot-time) settings.** A few 2.2.9 knobs stay environment variables because they are needed before the database is reachable, or because storing them in the settings table would defeat their purpose: `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` (consumed once, on the first database-backed start, before any admin exists), `PANTERA_DOWNLOAD_TOKEN_SECRET` (a signing secret; the table holds only the generated key when the variable is unset), `PANTERA_METRICS_BIND` (a listener bind address, fixed when the socket is opened at boot), and the dev-compose-only `KEYCLOAK_CLIENT_SECRET` / `PANTERA_DEV_SSO_USER_PASSWORD` (secrets injected into third-party containers, never Pantera settings).
+
+#### Docker proxy tag refresh (auth_settings table)
+
+How long a `docker-proxy` repository serves a cached image **tag** (e.g. `latest`, `20`) before it checks the tag against the upstream again. Editable in the admin UI (System Settings → *Docker Proxy Tags*) or through `GET`/`PUT /api/v1/admin/docker-settings` (see the [REST API reference](rest-api-reference.md#get-apiv1admindocker-settings)). Resolves **DB row → `PANTERA_DOCKER_TAG_REFRESH_SECONDS` → `3600`**; migration V152 seeds the row with `3600`, so on a deployment with a database the environment variable applies only while that row is absent (a database-less boot reads it directly). A `PUT` applies to the next request of the node that served it, without a restart; every other node of a cluster re-reads the row every 30 seconds. A repository overrides the value with its own [`tag_refresh_seconds`](#23-proxy-repository).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `docker_tag_refresh_seconds` | integer (0-31536000) | `3600` | Seconds a cached tag is served from the cache, counted per node from the moment that node last fetched or checked the tag. When a cached tag is older, Pantera asks the upstream for the tag's digest with a `HEAD` request (Docker Hub does not count a `HEAD` against its pull limit): the same digest serves the cached manifest; a new digest fetches and stores the new manifest -- when cooldown allows it; while cooldown blocks the new image, clients keep getting the cached one; an unreachable upstream serves the cached manifest. `0` checks the tag on every request. A digest reference (`@sha256:...`) is never checked again: it cannot change. The age is held in memory, so after a restart each tag is checked once on its first request. A `PUT` with any other key, or a value that is not a JSON integer in range, answers `400` and writes nothing. |
 
 ---
 
@@ -998,6 +1017,7 @@ A proxy repository caches artifacts from one or more remote upstream servers.
 | `remotes` | list | Yes | -- | Ordered list of upstream servers |
 | `url` | string | No | -- | Client-facing base URL for this repository -- same optionality and derivation as [2.2](#22-local-repository); proxy adapters that support the derivation (including `npm-proxy`) never hard-require it |
 | `path` | string | No | -- | URL path segment override |
+| `tag_refresh_seconds` | int | No | global `docker_tag_refresh_seconds` (`3600`) | `docker-proxy` only. Seconds this repository serves a cached image tag before it asks the upstream for the tag's digest again; `0` checks on every request. An integer from `0` to `31536000`; the repository API and UI refuse any other value with `400`, and a value in a YAML file that is not one is ignored with a `WARN` (`event.action=repository_config_invalid`), so the global setting applies. Leave it out to use the global setting -- see [Docker proxy tag refresh](#docker-proxy-tag-refresh-auth_settings-table) for what the check does. |
 
 Each entry in `remotes`:
 
@@ -1031,6 +1051,9 @@ repo:
     - url: https://docker.elastic.co
     - url: https://gcr.io
     - url: https://k8s.gcr.io
+  # Optional: check a cached tag against the upstream after 10 minutes
+  # instead of the global docker_tag_refresh_seconds (default 3600).
+  tag_refresh_seconds: 600
 ```
 
 ```yaml
@@ -1145,7 +1168,7 @@ everything.
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `member` | string | Yes | Name of a repository that is a direct member of the group |
+| `member` | string | Yes | Name of a repository that is a direct member of the group. Not a nested group and not a repository of one: see the notes |
 | `prefix` | string | One of `prefix` / `pattern` | The path starts with this text, e.g. `org/jboss/` |
 | `pattern` | string | One of `prefix` / `pattern` | Java regular expression that must match the whole path |
 
@@ -1188,6 +1211,32 @@ Notes:
   rule without `member`, or with neither `prefix` nor `pattern`, or with an
   invalid regular expression, keeps the group from loading; the error is
   logged.
+- **Nested groups.** A group asks the repositories of a nested group
+  itself, in the place of that group, and the nested group's rules come
+  along: they limit its repositories in every group that contains it. Keep
+  the rules for a nested group's repositories in that nested group. A rule
+  of the outer group that names the nested group, or one of its
+  repositories, holds for only a part of the requests (files or metadata,
+  not both) and is refused on save.
+- Saved through the UI or the REST API, rules are checked first (v2.2.15+):
+  a rule that cannot be read, names a repository that is not a direct
+  member, names a group, has both `prefix` and `pattern`, or repeats an
+  earlier rule is refused with `400` and the number of the rule. Take a
+  member's rules out when you take the member out of the group. A YAML file
+  is not checked this way.
+- Rules follow their member (v2.2.15+): renaming a repository renames it in
+  the rules of its groups, deleting it takes its rules out of them, and
+  restoring it puts them back under the name it is restored with. On
+  2.2.14 a rename left the old name in the rules, which then limited
+  nobody: check the rules of a group whose member was renamed on 2.2.14.
+- A member that was skipped by its rules is named in the Troubleshoot trace
+  with the reason `skipped_by_routing_rule`. The access record of a `404`
+  carries that reason only when no member was asked at all.
+
+To see which members a group would ask for a path, use the **Routing rules**
+card of the group's page (**Test a path**), or
+[`POST /api/v1/repositories/:name/routing/test`](rest-api-reference.md#post-apiv1repositoriesnameroutingtest).
+It works on rules that are not saved yet and sends no request to a member.
 - Rules apply to every request through the group, `maven-metadata.xml`
   included, and to every group type.
 - A nested group keeps its own rules. To limit a repository inside a nested
@@ -1759,6 +1808,7 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 |----------|---------|-------------|
 | `PANTERA_DEDUP_MAX_AGE_MS` | `300000` | Maximum age of in-flight dedup entries (ms) -- 5 minutes |
 | `PANTERA_DOCKER_CACHE_EXPIRY_HOURS` | `24` | Docker proxy cache entry lifetime (hours) |
+| `PANTERA_DOCKER_TAG_REFRESH_SECONDS` | `3600` | **Fallback tier only** -- the DB-backed `docker_tag_refresh_seconds` admin setting (see [Docker proxy tag refresh](#docker-proxy-tag-refresh-auth_settings-table)) is primary, and migration V152 seeds its row, so with a database this variable applies only while the row is absent. Seconds a `docker-proxy` serves a cached image tag before it checks the tag against the upstream, `0`-`31536000`; another value is ignored. |
 | `PANTERA_BODY_BUFFER_THRESHOLD` | `1048576` | Request body size threshold (bytes). Below this: buffered in memory. Above: streamed from disk. |
 | `PANTERA_MAX_REQUEST_BODY_BYTES` | `10737418240` (10 GiB) | **Fallback tier only** -- the DB-backed `max_request_body_bytes` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Hard cap on a single request body (bytes), metered on actual bytes for declared and chunked framing alike; exceeding it answers `413`. Applies regardless of per-repository `content-length-max`. |
 
@@ -1793,8 +1843,9 @@ Group response-body drain concurrency is sized automatically per repository by t
 | `PANTERA_EGRESS_BLOCK_PRIVATE` | `false` | **Fallback tier only** -- the DB-backed `egress_block_private` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Egress policy strictness: link-local/metadata/any-local/multicast destinations are always denied; `true` also denies loopback and private ranges (RFC1918, `fc00::/7` unique-local, `100.64.0.0/10` shared address space) (2.2.9). |
 | `PANTERA_EGRESS_ALLOW_HOSTS` | *(empty)* | **Fallback tier only** -- the DB-backed `egress_allow_hosts` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Hostnames exempt from the strict-mode loopback/private-range refusal; never from the always-denied metadata, link-local, any-local and multicast destinations (2.2.9). |
 | `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` | *(empty)* | **Fallback tier only** -- the DB-backed `upstream_credential_allow_hosts` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Extra hosts allowed to receive an upstream's credentials on Bearer realms / mirror links; the default is the upstream host only (2.2.9) -- Docker Hub needs `auth.docker.io` listed for authenticated pulls. |
-| `PANTERA_LOGIN_THROTTLE_MAX_FAILURES` | `5` | **Fallback tier only** -- the DB-backed `login_throttle_max_failures` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary. Password sign-in attempts per (user, client IP) before further attempts are refused; 4× this many per user from any address (2.2.9). |
-| `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS` | `900` | **Fallback tier only** -- the DB-backed `login_throttle_window_seconds` admin setting is primary. Window, in seconds, in which login failures are counted (2.2.9). |
+| `PANTERA_FAILED_LOGINS_DELAY_FROM_FAILURE`, `PANTERA_FAILED_LOGINS_FIRST_DELAY_SECONDS`, `PANTERA_FAILED_LOGINS_MAX_DELAY_SECONDS`, `PANTERA_FAILED_LOGINS_LOCK_AFTER`, `PANTERA_FAILED_LOGINS_UNLOCK_AFTER_MINUTES`, `PANTERA_FAILED_LOGINS_FORGET_AFTER_MINUTES`, `PANTERA_FAILED_LOGINS_COUNT_REJECTED_KEYS`, `PANTERA_FAILED_LOGINS_LOCK_ALL_CREDENTIALS`, `PANTERA_FAILED_LOGINS_SECOND_FACTOR_LIMIT`, `PANTERA_FAILED_LOGINS_SECOND_FACTOR_PAUSE_MINUTES` | `2`, `1`, `60`, `3`, `0`, `0`, `false`, `true`, `5`, `15` | **Fallback tier only** -- the DB-backed `failed_logins_*` admin settings are primary (see [Failed Logins](admin-guide/failed-logins.md)). |
+| `PANTERA_PASSWORD_SIGN_IN_OKTA`, `PANTERA_PASSWORD_SIGN_IN_KEYCLOAK`, `PANTERA_PASSWORD_SIGN_IN_GITHUB` | `all` | **Fallback tier only** -- the DB-backed `password_sign_in_<type>` admin settings are primary. Where that provider checks passwords: `all`, `form` or `off` (2.2.15). |
+| `PANTERA_SIGN_IN_REPORT_ENABLED`, `PANTERA_SIGN_IN_REPORT_RETENTION_DAYS` | `true`, `90` | **Fallback tier only** -- the DB-backed `sign_in_report_*` admin settings are primary. Whether sign-in failures are recorded, and for how many days a line is kept (2.2.15). |
 
 ### 7.8 Miscellaneous
 

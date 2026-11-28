@@ -94,6 +94,11 @@ public final class CacheManifests implements Manifests {
     private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
 
     /**
+     * When a manifest of the origin is copied into the cache.
+     */
+    private final ManifestCopies copies;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -139,6 +144,30 @@ public final class CacheManifests implements Manifests {
         Optional<Queue<ArtifactEvent>> events, String registryName,
         Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
         ConcurrentMap<String, CompletableFuture<Void>> inflight) {
+        this(
+            name, origin, cache, events, registryName, inspector, upstreamUrl, inflight,
+            ManifestCopies.AT_ONCE
+        );
+    }
+
+    /**
+     * @param name Repository name.
+     * @param origin Origin repository.
+     * @param cache Cache repository.
+     * @param events Artifact metadata events
+     * @param registryName Pantera repository name
+     * @param inspector Cooldown inspector
+     * @param upstreamUrl Upstream URL for metrics
+     * @param inflight Cache copies in flight, shared per proxy repository
+     * @param copies When a manifest of the origin is copied into the cache:
+     *  at once, never (a request that must leave the repository as it found
+     *  it) or once the request is answered (cooldown decides on it)
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    CacheManifests(String name, Repo origin, Repo cache,
+        Optional<Queue<ArtifactEvent>> events, String registryName,
+        Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
+        ConcurrentMap<String, CompletableFuture<Void>> inflight, ManifestCopies copies) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
@@ -147,6 +176,7 @@ public final class CacheManifests implements Manifests {
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
         this.inflight = inflight;
+        this.copies = copies;
     }
 
     @Override
@@ -193,11 +223,12 @@ public final class CacheManifests implements Manifests {
                             .field("log.source", "application")
                             .log();
                         Manifest manifest = original.get();
-                        if (Manifest.MANIFEST_SCHEMA2.equals(manifest.mediaType()) ||
-                            Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType()) ||
-                            Manifest.MANIFEST_LIST_SCHEMA2.equals(manifest.mediaType()) ||
-                            Manifest.MANIFEST_OCI_INDEX.equals(manifest.mediaType())) {
-                            this.copy(ref, manifest, requestOwner, requestTraceId, requestClientIp);
+                        if (CacheManifests.cacheable(manifest)) {
+                            this.copies.submit(
+                                () -> this.copy(
+                                    ref, manifest, requestOwner, requestTraceId, requestClientIp
+                                )
+                            );
                             result = CompletableFuture.completedFuture(original);
                         } else {
                             EcsLogger.warn("com.auto1.pantera.docker")
@@ -267,6 +298,156 @@ public final class CacheManifests implements Manifests {
     }
 
     /**
+     * Bring a tag the cache holds up to date with the origin, for a request
+     * of it. The origin is asked for the digest the tag names now (a
+     * {@code HEAD}); the manifest is downloaded only when that digest is not
+     * the cached one. A new manifest is copied as {@link ManifestCopies}
+     * decide, and the answer waits for the copy: it is what the cache holds
+     * afterwards, so a manifest cooldown refuses to store leaves the cached
+     * one in place and served. Without copies (a Troubleshoot replay) the
+     * new manifest is the answer and nothing is stored.
+     *
+     * @param ref Tag
+     * @param cached Manifest the cache holds under the tag
+     * @return The manifest to serve for the tag, empty when the origin does
+     *  not have the tag; a failure when the origin could not be asked
+     */
+    CompletionStage<Optional<Manifest>> refresh(
+        final ManifestReference ref, final Manifest cached
+    ) {
+        final String owner = MDC.get("user.name");
+        final String trace = MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID);
+        final String client = MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP);
+        return this.origin.manifests().digest(ref).thenCompose(
+            named -> {
+                final CompletionStage<Optional<Manifest>> res;
+                if (named.isEmpty()) {
+                    res = CompletableFuture.completedFuture(Optional.empty());
+                } else if (named.get().string().equals(cached.digest().string())) {
+                    this.refreshed(ref, cached, "unchanged", trace, client);
+                    res = CompletableFuture.completedFuture(Optional.of(cached));
+                } else {
+                    res = this.origin.manifests().get(ref).thenCompose(
+                        fetched -> fetched.isPresent()
+                            ? this.renewed(ref, fetched.get(), owner, trace, client)
+                            : CompletableFuture.completedFuture(Optional.empty())
+                    );
+                }
+                return res;
+            }
+        ).whenComplete(
+            (found, err) -> {
+                if (err != null) {
+                    EcsLogger.warn("com.auto1.pantera.docker.cache")
+                        .traceContext(trace, client)
+                        .message("Failed to check a cached tag against the upstream; serving the cached manifest")
+                        .eventCategory("web")
+                        .eventAction("docker_tag_refresh")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.rname)
+                        .field("container.image.name", this.name)
+                        .field("container.image.tag", ref.digest())
+                        .field("url.original", this.upstreamUrl)
+                        .error(err)
+                        .field("log.source", "application")
+                        .log();
+                }
+            }
+        );
+    }
+
+    /**
+     * The tag names another manifest at the origin than in the cache: copy
+     * it, then answer with what the cache holds.
+     *
+     * @param ref Tag
+     * @param fetched Manifest the origin names now
+     * @param owner Authenticated user login captured from request thread
+     * @param trace Request trace.id, nullable
+     * @param client Request client.ip, nullable
+     * @return Manifest to serve
+     */
+    private CompletionStage<Optional<Manifest>> renewed(
+        final ManifestReference ref, final Manifest fetched,
+        final String owner, final String trace, final String client
+    ) {
+        final CompletionStage<Optional<Manifest>> res;
+        if (CacheManifests.cacheable(fetched)) {
+            res = this.copies.now(() -> this.copy(ref, fetched, owner, trace, client))
+                .thenCompose(
+                    copied -> copied
+                        ? this.cache.manifests().get(ref).thenApply(
+                            held -> held.or(() -> Optional.of(fetched))
+                        )
+                        : CompletableFuture.completedFuture(Optional.of(fetched))
+                )
+                .thenApply(
+                    served -> {
+                        final boolean moved =
+                            served.get().digest().string().equals(fetched.digest().string());
+                        this.refreshed(
+                            ref, served.get(), moved ? "moved" : "kept", trace, client
+                        );
+                        return served;
+                    }
+                );
+        } else {
+            res = CompletableFuture.completedFuture(Optional.of(fetched));
+        }
+        return res;
+    }
+
+    /**
+     * Log the outcome of a tag check.
+     *
+     * @param ref Tag
+     * @param served Manifest served for it
+     * @param outcome {@code unchanged}: the origin names the cached
+     *  manifest; {@code moved}: the tag names a new one, served (and cached
+     *  unless nothing is stored); {@code kept}: the tag names a new one that
+     *  was not cached (cooldown refuses it), the cached one is served
+     * @param trace Request trace.id, nullable: the record is written on the
+     *  thread that completed the check
+     * @param client Request client.ip, nullable
+     */
+    private void refreshed(
+        final ManifestReference ref, final Manifest served, final String outcome,
+        final String trace, final String client
+    ) {
+        final EcsLogger log;
+        if ("unchanged".equals(outcome)) {
+            log = EcsLogger.debug("com.auto1.pantera.docker.cache");
+        } else {
+            log = EcsLogger.info("com.auto1.pantera.docker.cache");
+        }
+        log.traceContext(trace, client)
+            .message("Cached tag checked against the upstream: " + outcome)
+            .eventCategory("web")
+            .eventAction("docker_tag_refresh")
+            .eventOutcome("success")
+            .field("repository.name", this.rname)
+            .field("container.image.name", this.name)
+            .field("container.image.tag", ref.digest())
+            .field("container.image.hash.all", served.digest().string())
+            .field("url.original", this.upstreamUrl)
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * Whether a manifest is of a type the cache keeps.
+     *
+     * @param manifest Manifest
+     * @return True for image manifests and image indexes
+     */
+    private static boolean cacheable(final Manifest manifest) {
+        return Manifest.MANIFEST_SCHEMA2.equals(manifest.mediaType())
+            || Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType())
+            || Manifest.MANIFEST_LIST_SCHEMA2.equals(manifest.mediaType())
+            || Manifest.MANIFEST_OCI_INDEX.equals(manifest.mediaType());
+    }
+
+    /**
      * Copy the manifest the origin just returned into the cache, unless the
      * cache already holds this reference at the same digest. Concurrent
      * copies of the same reference share one run, so a burst of first
@@ -302,7 +483,9 @@ public final class CacheManifests implements Manifests {
                     // fetch-and-store — no rewrite, no publish record.
                     return CompletableFuture.<Void>completedFuture(null);
                 }
-                return this.copySequentially(ref, manifest, owner, traceId, clientIp);
+                return this.copySequentially(
+                    ref, manifest, owner, traceId, clientIp, cached.isPresent()
+                );
             })
             .handle(
                 (ignored, ex) -> {
@@ -336,14 +519,20 @@ public final class CacheManifests implements Manifests {
      * @param ref Manifest reference
      * @param manifest The manifest
      * @param owner Authenticated user login captured from request thread.
+     * @param traceId Request trace.id, nullable
+     * @param clientIp Request client.ip, nullable
+     * @param renewal Whether the cache holds the reference on another
+     *  manifest (a tag the origin moved)
      * @return Completion when manifest is cached
+     * @checkstyle ParameterNumberCheck (10 lines)
      */
     private CompletionStage<Void> copySequentially(
         final ManifestReference ref,
         final Manifest manifest,
         final String owner,
         final String traceId,
-        final String clientIp
+        final String clientIp,
+        final boolean renewal
     ) {
         final boolean needRelease = this.events.isPresent() || this.inspector.isPresent();
         final CompletionStage<Optional<Long>> release = needRelease
@@ -364,7 +553,9 @@ public final class CacheManifests implements Manifests {
                 })
             : CompletableFuture.completedFuture(Optional.empty());
         return release.thenCompose(
-            rel -> this.finalizeManifestCache(ref, manifest, rel, owner, traceId, clientIp)
+            rel -> this.finalizeManifestCache(
+                ref, manifest, rel, owner, traceId, clientIp, renewal
+            )
         );
     }
 
@@ -376,15 +567,22 @@ public final class CacheManifests implements Manifests {
      * @param manifest The manifest
      * @param rel Release timestamp from config
      * @param owner Authenticated user login captured from request thread.
+     * @param traceId Request trace.id, nullable
+     * @param clientIp Request client.ip, nullable
+     * @param renewal Whether the cache holds the reference on another
+     *  manifest (a tag the origin moved)
      * @return Completion when manifest is saved and events recorded
+     * @checkstyle ParameterNumberCheck (10 lines)
      */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
     private CompletionStage<Void> finalizeManifestCache(
         final ManifestReference ref,
         final Manifest manifest,
         final Optional<Long> rel,
         final String owner,
         final String traceId,
-        final String clientIp
+        final String clientIp,
+        final boolean renewal
     ) {
         // Get inspector release date asynchronously (FIX: removed blocking .join())
         final CompletionStage<Optional<Long>> inspectorReleaseFuture = this.inspector
@@ -394,10 +592,17 @@ public final class CacheManifests implements Manifests {
 
         return inspectorReleaseFuture.thenCompose(inspectorRelease -> {
             final Optional<Long> effectiveRelease = rel.isPresent() ? rel : inspectorRelease;
+            // Dated before the verdict, which reads the dates. A tag the
+            // cache holds on another manifest is dated only once the new
+            // manifest is stored under it: when cooldown refuses the new one,
+            // the cache keeps serving the old one under the tag, and the tag
+            // keeps the old one's date.
             effectiveRelease.ifPresent(
                 millis -> this.inspector.ifPresent(ins -> {
                     final Instant instant = Instant.ofEpochMilli(millis);
-                    ins.recordRelease(this.name, ref.digest(), instant);
+                    if (!renewal) {
+                        ins.recordRelease(this.name, ref.digest(), instant);
+                    }
                     ins.recordRelease(this.name, manifest.digest().string(), instant);
                 })
             );
@@ -406,20 +611,75 @@ public final class CacheManifests implements Manifests {
                 : CompletableFuture.completedFuture(
                     manifest.layers().stream().mapToLong(ManifestLayer::size).sum()
                 );
+            // Asked once the release date is recorded: a verdict of cooldown
+            // finds it without a request of its own to the origin.
             return sizeFuture.thenCompose(
-                size -> this.cache.manifests().putUnchecked(ref, manifest.content())
-                    .thenAccept(
-                        // Queued only once the manifest is in the cache: the
-                        // publish record describes a completed fetch-and-store.
-                        stored -> this.events.filter(q -> ImageTag.valid(ref.digest()))
-                            .ifPresent(
-                                queue -> this.queuePublish(
-                                    queue, ref, size, effectiveRelease, owner, traceId, clientIp
-                                )
-                            )
-                    )
+                size -> this.copies.stores(this.name, ref, manifest).thenCompose(
+                    stores -> {
+                        final CompletionStage<Void> res;
+                        if (stores) {
+                            if (renewal) {
+                                effectiveRelease.ifPresent(
+                                    millis -> this.inspector.ifPresent(
+                                        ins -> ins.recordRelease(
+                                            this.name, ref.digest(), Instant.ofEpochMilli(millis)
+                                        )
+                                    )
+                                );
+                            }
+                            res = this.store(
+                                ref, manifest, size, effectiveRelease, owner, traceId, clientIp
+                            );
+                        } else {
+                            EcsLogger.debug("com.auto1.pantera.docker")
+                                .message("Manifest not cached: cooldown refuses the version")
+                                .eventCategory("web")
+                                .eventAction("manifest_cache")
+                                .field("event.reason", "cooldown_active")
+                                .field("repository.name", this.rname)
+                                .field("container.image.name", this.name)
+                                .field("container.image.hash.all", ref.digest())
+                                .field("log.source", "application")
+                                .log();
+                            res = CompletableFuture.completedFuture(null);
+                        }
+                        return res;
+                    }
+                )
             );
         });
+    }
+
+    /**
+     * Store the manifest in the cache, then queue its artifact_publish
+     * event when it was read by a tag.
+     *
+     * @param ref Manifest reference
+     * @param manifest The manifest
+     * @param size Image size in bytes
+     * @param release Release timestamp, if known
+     * @param owner Authenticated user login captured from request thread
+     * @param traceId Request trace.id, nullable
+     * @param clientIp Request client.ip, nullable
+     * @return Completion when the manifest is stored and its event queued
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletionStage<Void> store(
+        final ManifestReference ref, final Manifest manifest, final long size,
+        final Optional<Long> release, final String owner, final String traceId,
+        final String clientIp
+    ) {
+        return this.cache.manifests().putUnchecked(ref, manifest.content())
+            .thenAccept(
+                // Queued only once the manifest is in the cache: the
+                // publish record describes a completed fetch-and-store.
+                stored -> this.events.filter(q -> ImageTag.valid(ref.digest()))
+                    .ifPresent(
+                        queue -> this.queuePublish(
+                            queue, ref, size, release, owner, traceId, clientIp
+                        )
+                    )
+            );
     }
 
     /**

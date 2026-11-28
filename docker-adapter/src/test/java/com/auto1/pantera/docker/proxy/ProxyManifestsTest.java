@@ -20,8 +20,10 @@ import com.auto1.pantera.docker.misc.Pagination;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.collection.IsEmptyIterable;
+import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.StringStartsWith;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -70,6 +72,69 @@ class ProxyManifestsTest {
             }, "my-test"
         ).get(ManifestReference.from("latest")).toCompletableFuture().join();
         Assertions.assertFalse(found.isPresent());
+    }
+
+    @Test
+    void namesTheDigestOfAReferenceWithAHead() {
+        final AtomicReference<String> asked = new AtomicReference<>();
+        final Optional<Digest> found = new ProxyManifests(
+            (line, headers, body) -> {
+                asked.set(line.toString());
+                return ResponseBuilder.ok()
+                    .header(new DigestHeader(new Digest.FromString("sha256:123")))
+                    .completedFuture();
+            }, "test"
+        ).digest(ManifestReference.from("abc")).join();
+        MatcherAssert.assertThat(
+            "the upstream is asked with a HEAD",
+            asked.get(), new StringStartsWith("HEAD /v2/test/manifests/abc ")
+        );
+        MatcherAssert.assertThat(
+            "the digest it names is the answer",
+            found.map(Digest::string), new IsEqual<>(Optional.of("sha256:123"))
+        );
+    }
+
+    @Test
+    void readsTheManifestWhenTheHeadNamesNoDigest() {
+        final Optional<Digest> found = new ProxyManifests(
+            (line, headers, body) -> {
+                final CompletionStage<com.auto1.pantera.http.Response> res;
+                if (line.method() == RqMethod.HEAD) {
+                    res = ResponseBuilder.ok().completedFuture();
+                } else {
+                    res = ResponseBuilder.ok()
+                        .header(new DigestHeader(new Digest.FromString("sha256:456")))
+                        .body("{}".getBytes())
+                        .completedFuture();
+                }
+                return res.toCompletableFuture();
+            }, "test"
+        ).digest(ManifestReference.from("abc")).join();
+        MatcherAssert.assertThat(
+            found.map(Digest::string), new IsEqual<>(Optional.of("sha256:456"))
+        );
+    }
+
+    @Test
+    void namesNoDigestForAReferenceTheUpstreamDoesNotHave() {
+        MatcherAssert.assertThat(
+            new ProxyManifests(
+                (line, headers, body) -> ResponseBuilder.notFound().completedFuture(), "test"
+            ).digest(ManifestReference.from("abc")).join(),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
+    void failsWhenTheUpstreamFails() {
+        Assertions.assertThrows(
+            java.util.concurrent.CompletionException.class,
+            () -> new ProxyManifests(
+                (line, headers, body) -> ResponseBuilder.internalError().completedFuture(),
+                "test"
+            ).digest(ManifestReference.from("abc")).join()
+        );
     }
 
     @Test

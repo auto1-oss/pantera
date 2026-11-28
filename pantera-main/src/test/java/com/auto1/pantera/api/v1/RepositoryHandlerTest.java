@@ -191,6 +191,198 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void groupWithABrokenRoutingRuleIsNotSaved(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/routed-bad")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven-group")
+                    .put("members", new JsonArray().add("maven-local").add("maven-central"))
+                    .put("routing", new JsonArray()
+                        .add(new JsonObject().put("member", "maven-central").put("prefix", "org/"))
+                        .add(new JsonObject().put("member", "maven-central").put("pattern", "(?!x"))
+                        .add(new JsonObject().put("member", "elsewhere").put("prefix", "com/")))
+            ))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(400, put.statusCode(), "a broken rule must be refused");
+        final String message = put.bodyAsJsonObject().getString("message");
+        Assertions.assertTrue(
+            message.contains("rule 2") && message.contains("not a valid regular expression"),
+            "the answer names the rule with the broken pattern: " + message
+        );
+        Assertions.assertTrue(
+            message.contains("rule 3") && message.contains("'elsewhere' is not a member"),
+            "and the rule for a repository that is no member: " + message
+        );
+        final HttpResponse<Buffer> get = client
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/routed-bad")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send()
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(404, get.statusCode(), "nothing was saved");
+        ctx.completeNow();
+    }
+
+    @Test
+    void pathIsTestedAgainstSavedAndUnsavedRoutingRules(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/routed-ok")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven-group")
+                    .put("members", new JsonArray().add("maven-local").add("maven-central"))
+                    .put("routing", new JsonArray()
+                        .add(new JsonObject().put("member", "maven-central")
+                            .put("pattern", "(?!com/example/).*")))
+            ))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, put.statusCode(), "valid rules are saved");
+        final HttpResponse<Buffer> saved = client
+            .post(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/routed-ok/routing/test")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put("path", "com/example/app/1.0/app-1.0.jar"))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, saved.statusCode());
+        final JsonArray members = saved.bodyAsJsonObject().getJsonArray("members");
+        Assertions.assertEquals(
+            java.util.List.of(true, false),
+            java.util.List.of(
+                members.getJsonObject(0).getBoolean("asked"),
+                members.getJsonObject(1).getBoolean("asked")
+            ),
+            "with the saved rules the hosted member is asked and the proxy is skipped"
+        );
+        final HttpResponse<Buffer> unsaved = client
+            .post(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/routed-ok/routing/test")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(
+                new JsonObject().put("path", "com/example/app/1.0/app-1.0.jar")
+                    .put("routing", new JsonArray())
+            )
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            true,
+            unsaved.bodyAsJsonObject().getJsonArray("members").getJsonObject(1).getBoolean("asked"),
+            "with the rules of the request (none) the proxy is asked"
+        );
+        final HttpResponse<Buffer> broken = client
+            .post(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/routed-ok/routing/test")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(
+                new JsonObject().put("path", "a/b")
+                    .put("routing", new JsonArray()
+                        .add(new JsonObject().put("member", "maven-central").put("pattern", "[")))
+            )
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(400, broken.statusCode(), "broken unsaved rules are refused");
+        final HttpResponse<Buffer> nopath = client
+            .post(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/routed-ok/routing/test")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject())
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, nopath.statusCode(), "without a path the rules are checked");
+        Assertions.assertFalse(
+            nopath.bodyAsJsonObject().getJsonArray("members").getJsonObject(0)
+                .containsKey("asked"),
+            "and the repositories are listed without a decision"
+        );
+        final HttpResponse<Buffer> blank = client
+            .post(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/routed-ok/routing/test")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put("path", 7))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(400, blank.statusCode(), "a path is text");
+        ctx.completeNow();
+    }
+
+    @Test
+    void pathTestNamesTheRepositoriesAndRulesOfANestedGroup(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/inner-grp")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven-group")
+                    .put("members", new JsonArray().add("maven-central"))
+                    .put("routing", new JsonArray()
+                        .add(new JsonObject().put("member", "maven-central").put("prefix", "org/")))
+            ))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, put.statusCode(), "the nested group is saved");
+        // The outer group is not saved: its members come with the request.
+        final HttpResponse<Buffer> listed = client
+            .post(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/outer-new/routing/test")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(
+                new JsonObject().put("path", "com/example/a.jar")
+                    .put("members", new JsonArray().add("maven-local").add("inner-grp"))
+            )
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, listed.statusCode());
+        Assertions.assertEquals(
+            new JsonArray()
+                .add(
+                    new JsonObject().put("member", "maven-local").put("through", "")
+                        .put("asked", true).put("rule", 0)
+                        .put("why", "no rules: asked for every path")
+                )
+                .add(
+                    new JsonObject().put("member", "maven-central").put("through", "inner-grp")
+                        .put("asked", false).put("rule", 0)
+                        .put("why", "no rule of the group 'inner-grp' matches: skipped")
+                ),
+            listed.bodyAsJsonObject().getJsonArray("members"),
+            "the nested group's repository is listed in its place, limited by its group's rule"
+        );
+        Assertions.assertEquals(
+            new JsonArray().add(
+                new JsonObject().put("group", "inner-grp").put("member", "maven-central")
+                    .put("prefix", "org/")
+            ),
+            listed.bodyAsJsonObject().getJsonArray("inherited"),
+            "the rules of the nested group are named with their group"
+        );
+        final HttpResponse<Buffer> misplaced = client
+            .post(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/outer-new/routing/test")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(
+                new JsonObject()
+                    .put("members", new JsonArray().add("maven-local").add("inner-grp"))
+                    .put("routing", new JsonArray()
+                        .add(new JsonObject().put("member", "inner-grp").put("prefix", "org/")))
+            )
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(400, misplaced.statusCode(), "a rule cannot name a nested group");
+        Assertions.assertTrue(
+            misplaced.bodyAsJsonObject().getString("message").contains("'inner-grp' is a group"),
+            misplaced.bodyAsString()
+        );
+        ctx.completeNow();
+    }
+
+    @Test
     void unsupportedRepositoryTypeIsRefused(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
         // B57: type "binary" was stored with 200 and then every request to
@@ -647,6 +839,72 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
                 );
             }
         );
+    }
+
+    @Test
+    void putWithInvalidTagRefreshReturns400(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // tag_refresh_seconds must be a JSON integer from 0 to 31536000; the
+        // proxy would ignore anything else at runtime, so the save refuses it.
+        final WebClient client = WebClient.create(vertx);
+        for (final Object value : new Object[] {-1, 31_536_001, "600", 1.5, true}) {
+            final JsonObject body = new JsonObject()
+                .put(
+                    "repo",
+                    new JsonObject()
+                        .put("type", "docker-proxy")
+                        .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                        .put("tag_refresh_seconds", value)
+                );
+            final HttpResponse<Buffer> res = client
+                .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/tag-refresh-bad")
+                .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+                .sendJsonObject(body).toCompletionStage().toCompletableFuture()
+                .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+            Assertions.assertEquals(400, res.statusCode(), value + " answers 400");
+            Assertions.assertEquals(
+                "tag_refresh_seconds must be an integer from 0 to 31536000",
+                res.bodyAsJsonObject().getString("message"),
+                value + " is refused with a message naming the key"
+            );
+        }
+        final HttpResponse<Buffer> stored = client
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/tag-refresh-bad")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(404, stored.statusCode(), "nothing was saved");
+        ctx.completeNow();
+    }
+
+    @Test
+    void putWithTagRefreshIsSavedAndReadBack(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "docker-proxy")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                    .put("tag_refresh_seconds", 0)
+            );
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/tag-refresh-ok")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body).toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, put.statusCode(), "0 is a valid age");
+        final HttpResponse<Buffer> get = client
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/tag-refresh-ok")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            0, get.bodyAsJsonObject().getJsonObject("repo").getInteger("tag_refresh_seconds"),
+            "the value is stored as given"
+        );
+        ctx.completeNow();
     }
 
     @Test

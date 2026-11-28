@@ -10,27 +10,36 @@
  */
 package com.auto1.pantera.pypi;
 
-import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.asto.ext.KeyLastPart;
+import com.auto1.pantera.asto.streams.ContentAsStream;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.pypi.NormalizedProjectName;
+import com.auto1.pantera.pypi.http.DistFilename;
 import com.auto1.pantera.pypi.meta.Metadata;
 import com.auto1.pantera.pypi.meta.PackageInfo;
-import com.auto1.pantera.pypi.meta.ValidFilename;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.JobDataRegistry;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyEventRetry;
 import com.auto1.pantera.scheduling.QuartzJob;
-import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.NoSuchFileException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.apache.commons.io.input.CloseShieldInputStream;
 import org.quartz.JobExecutionContext;
 
 /**
@@ -44,6 +53,18 @@ public final class PyProxyPackageProcessor extends QuartzJob {
      * Repository type.
      */
     private static final String REPO_TYPE = "pypi-proxy";
+
+    /**
+     * Suffixes of the files whose core metadata is read (case as
+     * {@link Metadata.FromArchive} compares them): source archives and eggs,
+     * whose names can be ambiguous. Any other file is known by its name,
+     * wheels included: a wheel's name is normative (PEP 427, PEP 491), and
+     * reading it would stream the whole file, a full GET on S3, for what the
+     * name already says.
+     */
+    private static final List<String> READABLE = List.of(
+        ".egg", ".zip", ".tar", ".tar.gz", ".tar.Z", ".tar.bz2"
+    );
 
     /**
      * Artifact events queue.
@@ -121,98 +142,35 @@ public final class PyProxyPackageProcessor extends QuartzJob {
     }
 
     /**
-     * Process a single package asynchronously.
+     * Process a single package asynchronously. The size of the file comes
+     * from the storage; the file itself is read only for its core metadata,
+     * as a stream, and not at all when its name is all that is known of it.
      * @param event Package event
      * @return CompletableFuture
      */
     private CompletableFuture<Void> processPackageAsync(final ProxyArtifactEvent event) {
         final Key key = event.artifactKey();
-        final String filename = new KeyLastPart(key).get();
-
-        return this.asto.exists(key).thenCompose(exists -> {
-            if (!exists) {
-                // The stream-through cache commits the file only when the
-                // client has read the body, which is after the event was
-                // queued; and it never commits when the client hangs up.
-                // Bounded retry with backoff: DEBUG while retrying, one
-                // WARN when given up.
-                new ProxyEventRetry(this.packages).again(event, "com.auto1.pantera.pypi");
-                return CompletableFuture.completedFuture(null);
+        return this.asto.metadata(key).handle(
+            (meta, err) -> {
+                final CompletableFuture<Void> res;
+                if (err == null) {
+                    res = this.record(
+                        event, meta.read(Meta.OP_SIZE).map(Long::longValue).orElse(0L)
+                    );
+                } else if (PyProxyPackageProcessor.absent(err)) {
+                    // The stream-through cache commits the file only when the
+                    // client has read the body, which is after the event was
+                    // queued; and it never commits when the client hangs up.
+                    // Bounded retry with backoff: DEBUG while retrying, one
+                    // WARN when given up.
+                    new ProxyEventRetry(this.packages).again(event, "com.auto1.pantera.pypi");
+                    res = CompletableFuture.completedFuture(null);
+                } else {
+                    res = CompletableFuture.failedFuture(err);
+                }
+                return res;
             }
-
-            return this.asto.value(key)
-                .thenCompose(content -> new Content.From(content).asBytesFuture())
-                .thenAccept(archive -> {
-                    try {
-                        final PackageInfo info = new Metadata.FromArchive(
-                            new ByteArrayInputStream(archive), filename
-                        ).read();
-
-                        if (new ValidFilename(info, filename).valid()) {
-                            final String owner = event.ownerLogin();
-                            final long created = System.currentTimeMillis();
-                            final Long release = event.releaseMillis().orElse(null);
-                            final String project =
-                                new NormalizedProjectName.Simple(info.name()).value();
-
-                            this.events.add(
-                                new ArtifactEvent(
-                                    PyProxyPackageProcessor.REPO_TYPE,
-                                    event.repoName(),
-                                    owner == null || owner.isBlank()
-                                        ? ArtifactEvent.DEF_OWNER
-                                        : owner,
-                                    project,
-                                    info.version(),
-                                    archive.length,
-                                    created,
-                                    release,
-                                    event.artifactKey().string()
-                                ).withContext(event.traceId(), event.clientIp())
-                            );
-
-                            EcsLogger.info("com.auto1.pantera.pypi")
-                                .traceContext(event.traceId(), event.clientIp())
-                                .message("Recorded PyPI proxy release")
-                                .eventCategory("web")
-                                .eventAction("package_processing")
-                                .eventOutcome("success")
-                                .field("package.name", project)
-                                .field("package.version", info.version())
-                                .field("repository.name", event.repoName())
-                                .field("package.size", archive.length)
-                                .field("package.release_date", release == null ? null
-                                    : Instant.ofEpochMilli(release).toString())
-                                .field("log.source", "application")
-                                .log();
-                        } else {
-                            EcsLogger.warn("com.auto1.pantera.pypi")
-                                .traceContext(event.traceId(), event.clientIp())
-                                .field("repository.name", event.repoName())
-                                .message("Python proxy package failed filename validation")
-                                .eventCategory("package")
-                                .eventAction("package_processing")
-                                .eventOutcome("failure")
-                                .field("event.reason", "filename did not match WHEEL_PTRN or ARCHIVE_PTRN")
-                                .field("file.name", filename)
-                                .field("log.source", "application")
-                                .log();
-                        }
-                    } catch (final Exception err) {
-                        EcsLogger.error("com.auto1.pantera.pypi")
-                            .traceContext(event.traceId(), event.clientIp())
-                            .field("repository.name", event.repoName())
-                            .message("Failed to parse/check python proxy package")
-                            .eventCategory("web")
-                            .eventAction("package_processing")
-                            .eventOutcome("failure")
-                            .field("package.name", key.string())
-                            .error(err)
-                            .field("log.source", "application")
-                            .log();
-                    }
-                });
-        }).exceptionally(err -> {
+        ).thenCompose(Function.identity()).exceptionally(err -> {
             EcsLogger.error("com.auto1.pantera.pypi")
                 .traceContext(event.traceId(), event.clientIp())
                 .field("repository.name", event.repoName())
@@ -226,6 +184,178 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                 .log();
             return null;
         });
+    }
+
+    /**
+     * Record the release of a stored file.
+     * @param event Package event
+     * @param size Size of the stored file
+     * @return Completes when the release is recorded, or found not to be one
+     */
+    private CompletableFuture<Void> record(final ProxyArtifactEvent event, final long size) {
+        final Key key = event.artifactKey();
+        final String filename = new KeyLastPart(key).get();
+        return this.release(key, filename).handle(
+            (found, err) -> {
+                if (err != null) {
+                    EcsLogger.error("com.auto1.pantera.pypi")
+                        .traceContext(event.traceId(), event.clientIp())
+                        .field("repository.name", event.repoName())
+                        .message("Failed to parse/check python proxy package")
+                        .eventCategory("web")
+                        .eventAction("package_processing")
+                        .eventOutcome("failure")
+                        .field("package.name", key.string())
+                        .error(err)
+                        .field("log.source", "application")
+                        .log();
+                } else if (found.isPresent()) {
+                    this.recorded(event, found.get(), size);
+                } else {
+                    EcsLogger.warn("com.auto1.pantera.pypi")
+                        .traceContext(event.traceId(), event.clientIp())
+                        .field("repository.name", event.repoName())
+                        .message("Python proxy package failed filename validation")
+                        .eventCategory("package")
+                        .eventAction("package_processing")
+                        .eventOutcome("failure")
+                        .field(
+                            "event.reason",
+                            "the filename does not name the project and version of its metadata"
+                        )
+                        .field("file.name", filename)
+                        .field("log.source", "application")
+                        .log();
+                }
+                return null;
+            }
+        );
+    }
+
+    /**
+     * Add the artifact event of a release.
+     * @param event Package event
+     * @param found Project and version
+     * @param size Size of the stored file
+     */
+    private void recorded(final ProxyArtifactEvent event, final Release found, final long size) {
+        final String owner = event.ownerLogin();
+        final Long release = event.releaseMillis().orElse(null);
+        this.events.add(
+            new ArtifactEvent(
+                PyProxyPackageProcessor.REPO_TYPE,
+                event.repoName(),
+                owner == null || owner.isBlank() ? ArtifactEvent.DEF_OWNER : owner,
+                found.project(),
+                found.version(),
+                size,
+                System.currentTimeMillis(),
+                release,
+                event.artifactKey().string()
+            ).withContext(event.traceId(), event.clientIp())
+        );
+        EcsLogger.info("com.auto1.pantera.pypi")
+            .traceContext(event.traceId(), event.clientIp())
+            .message("Recorded PyPI proxy release")
+            .eventCategory("web")
+            .eventAction("package_processing")
+            .eventOutcome("success")
+            .field("package.name", found.project())
+            .field("package.version", found.version())
+            .field("repository.name", event.repoName())
+            .field("package.size", size)
+            .field("package.release_date", release == null ? null
+                : Instant.ofEpochMilli(release).toString())
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * Project and version of a stored distribution file. For the source
+     * archives and eggs of {@link #READABLE} they come from the core metadata
+     * in the file, read as a stream, and must be the ones its name says; an
+     * archive without core metadata (old sdists not built by setuptools) is
+     * known by its name. The other files PyPI has served (wheels, {@code .tgz}, {@code .tbz},
+     * {@code .tar.xz}, {@code .txz}, Windows installers, RPM packages, disk
+     * images, Debian packages) are known by their name and not read.
+     *
+     * @param key Storage key of the file
+     * @param filename Name of the file
+     * @return Normalized project and version, empty when the name says
+     *  neither or disagrees with the metadata
+     */
+    private CompletableFuture<Optional<Release>> release(final Key key, final String filename) {
+        final DistFilename dist = new DistFilename(filename);
+        final Optional<Release> named = dist.project().flatMap(
+            project -> dist.version().map(version -> new Release(project, version))
+        );
+        final CompletableFuture<Optional<Release>> res;
+        if (PyProxyPackageProcessor.READABLE.stream().anyMatch(filename::endsWith)) {
+            res = this.asto.value(key)
+                .thenCompose(
+                    content -> new ContentAsStream<Optional<PackageInfo>>(content)
+                        .process(PyProxyPackageProcessor.reader(filename))
+                )
+                .thenApply(
+                    found -> found.map(
+                        info -> named.filter(
+                            new Release(
+                                new NormalizedProjectName.Simple(info.name()).value(),
+                                info.version()
+                            )::equals
+                        )
+                    ).orElse(named)
+                );
+        } else {
+            res = CompletableFuture.completedFuture(named);
+        }
+        return res;
+    }
+
+    /**
+     * Reader of the core metadata of a file streamed from the storage. The
+     * archive reader stops after the last entry, before the end of the file
+     * (a zip's central directory, a tar's end padding); the rest is read so
+     * that the stream feeding it completes. The archive reader closes what
+     * it reads, which must not close the stream before that.
+     * @param filename Name of the file
+     * @return Reader
+     */
+    private static Function<InputStream, Optional<PackageInfo>> reader(final String filename) {
+        return input -> {
+            Optional<PackageInfo> info;
+            try {
+                info = Optional.of(
+                    new Metadata.FromArchive(CloseShieldInputStream.wrap(input), filename).read()
+                );
+            } catch (final Metadata.NotFound none) {
+                // No core metadata in the archive: the file is known by its
+                // name, as the upstream lists it.
+                info = Optional.empty();
+            }
+            try {
+                input.transferTo(OutputStream.nullOutputStream());
+            } catch (final IOException ex) {
+                throw new PanteraIOException(ex);
+            }
+            return info;
+        };
+    }
+
+    /**
+     * Whether a storage failure says the file is not there (yet).
+     * @param err Failure
+     * @return True when any cause is a missing value or file
+     */
+    private static boolean absent(final Throwable err) {
+        Throwable cause = err;
+        boolean found = false;
+        while (cause != null && !found) {
+            found = cause instanceof ValueNotFoundException
+                || cause instanceof NoSuchFileException;
+            cause = cause.getCause();
+        }
+        return found;
     }
 
     /**
@@ -297,4 +427,11 @@ public final class PyProxyPackageProcessor extends QuartzJob {
         }
     }
 
+    /**
+     * Project and version of a distribution file.
+     * @param project Normalized project name
+     * @param version Version
+     */
+    private record Release(String project, String version) {
+    }
 }

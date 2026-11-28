@@ -97,6 +97,18 @@ Authenticate with username and password. Returns an RS256-signed access token an
 }
 ```
 
+**Response (403):** the login was not checked (2.2.15). `error` says why:
+
+| `error` | Meaning |
+|---------|---------|
+| `LOGIN_DELAYED` | Logins of this user are delayed after wrong passwords. `Retry-After` gives the seconds to wait. |
+| `SIGN_IN_PAUSED` | Password sign-in of this user is paused after sign-ins whose second factor was not confirmed. `Retry-After` gives the seconds to wait; the message says the minutes. |
+| `ACCOUNT_LOCKED` | The user is locked after failed logins until an administrator unlocks it, or until the automatic unlock time has passed. |
+
+See [Failed Logins](admin-guide/failed-logins.md).
+
+**Response (503):** `SERVICE_UNAVAILABLE`: the identity provider could not check the login (2.2.15). It is not a failed login of the user.
+
 **curl example:**
 
 ```bash
@@ -549,12 +561,15 @@ Create a new repository or update an existing one. If the repository exists, the
 | `repo.type`    | string | Yes      | Repository type (e.g. `maven`, `npm`, `docker-proxy`)  |
 | `repo.storage` | string | Yes      | Storage alias name (e.g. `default`)                    |
 | `repo.immutable` | boolean | No     | Local repositories except `docker`: when `true` (the default when the key is absent) a stored artifact is never overwritten; `false` lets users with `write` overwrite. See [Immutable artifacts](configuration-reference.md#immutable-artifacts) |
+| `repo.tag_refresh_seconds` | integer | No | `docker-proxy` only: seconds a cached image tag is served before the upstream is asked for its digest again, `0` (every request) to `31536000`. Absent: the global `docker_tag_refresh_seconds` applies (see [`/admin/docker-settings`](#get-apiv1admindocker-settings)) |
 
 Supported `repo.type` values: `file`, `file-proxy`, `file-group`, `maven`, `maven-proxy`, `maven-group`, `gradle`, `gradle-proxy`, `gradle-group`, `npm`, `npm-proxy`, `npm-group`, `pypi`, `pypi-proxy`, `pypi-group`, `docker`, `docker-proxy`, `docker-group`, `go`, `go-proxy`, `go-group`, `php`, `php-proxy`, `php-group`, `gem`, `gem-group`, `helm`, `rpm`, `nuget`, `deb`, `conda`, `conan`, `hexpm`.
 
 **Response (200):** Empty body on success.
 
-**Response (400):** Invalid body, including a `repo.type` that is not supported (the message lists the supported types), or a `repo.immutable` that is not a JSON boolean (`immutable must be a boolean`; the string `"false"` is refused too).
+**Response (400):** Invalid body, including a `repo.type` that is not supported (the message lists the supported types), a `repo.immutable` that is not a JSON boolean (`immutable must be a boolean`; the string `"false"` is refused too), or a `repo.tag_refresh_seconds` that is not a JSON integer from 0 to 31536000 (`tag_refresh_seconds must be an integer from 0 to 31536000`; a string such as `"600"` is refused too).
+
+For a group, `repo.routing` is checked (v2.2.15+): `Invalid routing rules: rule 2: 'jboss' is not a member of the group; rule 3: pattern is not a valid regular expression: ...`. Rules are numbered from 1 in the order sent. A rule is refused when it is not an object, names no `member`, names a repository that is not in `repo.members`, names a member that is a group, has neither `prefix` nor `pattern` or both, has a `pattern` that is not a valid regular expression, or repeats an earlier rule. Nothing is saved when one rule is refused. See [Routing rules](configuration-reference.md#routing-rules).
 
 The body replaces the repository's whole configuration: when updating a repository that has `"immutable": false`, send the key again, or the repository becomes immutable.
 
@@ -895,6 +910,68 @@ For non-group repositories:
 ```bash
 curl http://localhost:8086/api/v1/repositories/maven-group/members \
   -H "Authorization: Bearer eyJhbGciOi..."
+```
+
+---
+
+### POST /api/v1/repositories/:name/routing/test
+
+Check the [routing rules](configuration-reference.md#routing-rules) of a group and say which repositories it would ask for a path (v2.2.15+). No repository is asked and nothing is saved, so it also answers for members and rules that are not saved yet.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_repository_permissions:read`
+
+**Request Body:**
+
+```json
+{
+  "path": "org/jboss/logging/jboss-logging/3.5.0.Final/jboss-logging-3.5.0.Final.pom",
+  "members": ["libs-release-local", "thirdparty", "jboss"],
+  "routing": [
+    { "member": "jboss", "prefix": "org/jboss/" }
+  ]
+}
+```
+
+| Field     | Type   | Required | Description |
+|-----------|--------|----------|-------------|
+| `path`    | string | No       | Path inside the repository, as in the URL after the group's name. A leading slash is ignored. Left out: the rules are checked and the repositories listed, without a decision |
+| `members` | array  | No       | Members to test with. Left out: the saved members. Required for a group that is not saved yet |
+| `routing` | array  | No       | Rules to test with. Left out: the saved rules |
+
+**Response (200):** the repositories in the order the group asks them. The repositories of a nested group stand in the place of that group, each repository once.
+
+```json
+{
+  "path": "org/jboss/logging/jboss-logging/3.5.0.Final/jboss-logging-3.5.0.Final.pom",
+  "members": [
+    { "member": "libs-release-local", "through": "", "asked": true, "rule": 0, "why": "no rules: asked for every path" },
+    { "member": "maven-central", "through": "thirdparty", "asked": false, "rule": 0, "why": "no rule of the group 'thirdparty' matches: skipped" },
+    { "member": "jboss", "through": "", "asked": true, "rule": 1, "why": "rule 1 matches" }
+  ],
+  "inherited": [
+    { "group": "thirdparty", "member": "maven-central", "pattern": "(?!org/jboss/).*" }
+  ]
+}
+```
+
+| Field       | Description |
+|-------------|-------------|
+| `through`   | The nested group the repository is a member of; empty for a direct member |
+| `asked`     | `false`: the repository is skipped for this path and counts as "not found". Only with a `path` |
+| `rule`      | Number of the rule of this group that matched, counted from 1 over the `routing` list; `0` when none of them did. Only with a `path` |
+| `why`       | The decision in words. Only with a `path` |
+| `inherited` | The rules of the nested groups, each with the group that holds it. They are changed in that group |
+
+**Response (400):** a `path` that is not a string, a group that is not saved and no `members` in the body, or rules that would be refused on save (same message as `PUT /api/v1/repositories/:name`).
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/repositories/libs-release/routing/test \
+  -H "Authorization: Bearer eyJhbGciOi..." \
+  -H "Content-Type: application/json" \
+  -d '{"path": "com/acme/app/1.0/app-1.0.pom"}'
 ```
 
 ---
@@ -3200,6 +3277,72 @@ curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
 
 ---
 
+### GET /api/v1/admin/docker-settings
+
+Retrieve the tag refresh age of `docker-proxy` repositories: how long a cached image tag (e.g. `latest`) is served before Pantera asks the upstream with a `HEAD` whether the tag still names the same digest. The value in force: the `docker_tag_refresh_seconds` row, else `PANTERA_DOCKER_TAG_REFRESH_SECONDS`, else `3600`. See [Docker proxy tag refresh](configuration-reference.md#docker-proxy-tag-refresh-auth_settings-table).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):** the value is a JSON integer, not a string.
+
+```json
+{
+  "tag_refresh_seconds": 3600
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tag_refresh_seconds` | integer (0-31536000) | Seconds a cached tag is served before it is checked against the upstream; `0` checks on every request. A repository's own `tag_refresh_seconds` overrides it. |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/docker-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/docker-settings
+
+Set the tag refresh age. The body carries `tag_refresh_seconds` as a JSON integer from `0` to `31536000`; a string, a fraction, a value out of range, a `null`, an empty body or any other key answers `400` and writes nothing. The value is written to the `docker_tag_refresh_seconds` row of `auth_settings` and applies to the next request of the node that served the `PUT`, without a restart, and within 30 seconds on every other node of a cluster (each re-reads the row every 30 seconds). Every successful update is logged (`event.category=configuration`, `event.action=docker_settings_update`).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:**
+
+```json
+{
+  "tag_refresh_seconds": 600
+}
+```
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid docker setting: tag_refresh_seconds must be an integer from 0 to 31536000",
+  "status": 400
+}
+```
+
+**curl example:**
+
+```bash
+curl -X PUT http://localhost:8086/api/v1/admin/docker-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"tag_refresh_seconds": 600}'
+```
+
+---
+
 ### GET /api/v1/admin/request-limits-settings
 
 Retrieve the request &amp; storage limits (2.2.9): the hard cap on a single request body and the directories a local-filesystem (`fs`, `vertx-file`) repository or alias storage path may live under. Environment fallbacks `PANTERA_MAX_REQUEST_BODY_BYTES` / `PANTERA_FS_STORAGE_ROOTS` apply only while no row has been saved.
@@ -3306,39 +3449,42 @@ Partial updates are accepted; omitted keys keep their current values. The merged
 
 ---
 
-### GET /api/v1/admin/login-throttle-settings
+### GET /api/v1/admin/failed-logins-settings
 
-Retrieve the password-login throttle (2.2.9): failures per (user, client IP) tolerated before further attempts are refused, and the window they count in. Environment fallbacks `PANTERA_LOGIN_THROTTLE_MAX_FAILURES` / `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS` apply only while no row has been saved.
+Retrieve the policy of failed sign-ins (2.2.15): the delay and the lock after wrong passwords, and the pause after sign-ins whose second factor was not confirmed. See [Failed Logins](admin-guide/failed-logins.md).
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_admin_permissions:admin`
 
-**Response (200):** every key is always present; all values are strings.
+**Response (200):**
 
 ```json
 {
-  "login_throttle_max_failures": "5",
-  "login_throttle_window_seconds": "900"
+  "failed_logins_delay_from_failure": "2",
+  "failed_logins_first_delay_seconds": "1",
+  "failed_logins_max_delay_seconds": "60",
+  "failed_logins_lock_after": "3",
+  "failed_logins_unlock_after_minutes": "0",
+  "failed_logins_forget_after_minutes": "0",
+  "failed_logins_count_rejected_keys": "false",
+  "failed_logins_lock_all_credentials": "true",
+  "failed_logins_second_factor_limit": "5",
+  "failed_logins_second_factor_pause_minutes": "15"
 }
 ```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `login_throttle_max_failures` | string (integer ≥ 1) | Sign-in attempts per (user, client address) before lockout; a user is also locked after 4× this many attempts from any address. Default `"5"`. |
-| `login_throttle_window_seconds` | string (integer ≥ 1) | Window in seconds; a successful login clears the (user, client address) counter. Counters are per node, shared by all API workers on it. A refused login answers `429` with `Retry-After` set to the rest of the window. Default `"900"`. |
 
 **curl example:**
 
 ```bash
-curl http://localhost:8086/api/v1/admin/login-throttle-settings \
+curl http://localhost:8086/api/v1/admin/failed-logins-settings \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 ---
 
-### PUT /api/v1/admin/login-throttle-settings
+### PUT /api/v1/admin/failed-logins-settings
 
-Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, a `null` value, or a non-integer or a value below 1, is rejected with `400` and nothing is persisted. Takes effect on the next login attempt on every node. Every successful update is audit-logged (`event.category=configuration`).
+Partial updates are accepted; omitted keys keep their current values. The merged policy is validated: a value outside its range, or a longest delay below the first delay, answers `400` and writes nothing. The change applies to the next login on every node. Setting `failed_logins_lock_after` to `0` unlocks every locked user within 15 seconds; setting `failed_logins_second_factor_limit` to `0` switches the pause off.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_admin_permissions:admin`
@@ -3352,8 +3498,134 @@ Partial updates are accepted; omitted keys keep their current values. The merged
 ```json
 {
   "error": "BAD_REQUEST",
-  "message": "Invalid login-throttle setting: ..."
+  "message": "Invalid failed-logins setting: failed_logins_lock_after must be between 0 and 100"
 }
+```
+
+---
+
+### GET /api/v1/admin/password-sign-in-settings
+
+Where each identity provider checks a user name and password (2.2.15). See [Password sign-in](admin-guide/authentication.md#password-sign-in-where-a-provider-takes-passwords).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):**
+
+```json
+{
+  "password_sign_in_okta": "all",
+  "password_sign_in_keycloak": "all",
+  "password_sign_in_github": "all"
+}
+```
+
+| Value  | The provider checks a password |
+|--------|--------------------------------|
+| `all`  | on the sign-in form, on `POST /api/v1/auth/token` and with repository requests |
+| `form` | on the sign-in form and `POST /api/v1/auth/token` only |
+| `off`  | nowhere |
+
+A provider type is listed whether it is configured or not.
+
+---
+
+### PUT /api/v1/admin/password-sign-in-settings
+
+Partial updates are accepted; omitted keys keep their current values. The change applies to the next login on every node.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:** any subset of the fields above.
+
+```json
+{ "password_sign_in_okta": "form" }
+```
+
+**Response (204):** No content.
+
+**Response (400):** an unknown key, or a value that is not `all`, `form` or `off`.
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid password-sign-in setting: 'ui' is not a password sign-in mode (all, form, off)"
+}
+```
+
+---
+
+### GET /api/v1/locked-users
+
+List the user names locked after failed logins, oldest lock first (2.2.15). A locked name need not be a Pantera user.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:read`
+
+**Response (200):**
+
+```json
+{
+  "items": [
+    {
+      "name": "alice@example.com",
+      "locked": true,
+      "failures": 3,
+      "locked_at": "2026-01-01T10:00:04.099Z",
+      "last_failure_at": "2026-01-01T10:00:04.099Z",
+      "client_ip": "192.0.2.7",
+      "user_agent": "Apache-Maven/3.9.9",
+      "path": "repository",
+      "credential": "password"
+    }
+  ],
+  "total": 1
+}
+```
+
+`path` is `repository`, `ui` or `api`; `credential` is `password` or `api_key`.
+
+---
+
+### GET /api/v1/users/:name/failed-logins
+
+The failed logins counted for one user name: the count, whether the name is locked, and where the last failed login came from. A name without failed logins answers `{"name": "...", "failures": 0, "locked": false}`.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:read`
+
+---
+
+### POST /api/v1/users/:name/unlock
+
+Remove the lock and the count of one user name.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:enable`
+
+**Response (200):**
+
+```json
+{ "name": "alice@example.com", "unlocked": true }
+```
+
+`unlocked` is `false` when the name was not locked.
+
+---
+
+### POST /api/v1/users/unlock-all
+
+Remove every lock.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:enable`
+
+**Response (200):**
+
+```json
+{ "unlocked": ["alice@example.com", "bob"], "count": 2 }
 ```
 
 ---
@@ -3398,6 +3670,184 @@ Immediately revoke all tokens (access, refresh, and API) for the specified user.
 ```bash
 curl -X POST http://localhost:8086/api/v1/admin/revoke-user/jdoe \
   -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### GET /api/v1/sign-in-failures/api-keys
+
+Rejected API keys with their owner, the most recent first (2.2.15). One line per user, client address and key. See [Sign-in Failures Report](admin-guide/sign-in-failures.md).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:read`
+
+**Query Parameters** (the same for the three lists):
+
+| Parameter   | Default | Description |
+|-------------|---------|-------------|
+| `user`      | --      | Part of the user name, any case |
+| `client_ip` | --      | Part of the client address |
+| `page`      | `0`     | Page number, from 0 |
+| `size`      | `50`    | Lines per page, at most 200 |
+
+**Response (200):**
+
+```json
+{
+  "items": [
+    {
+      "user": "alice@example.com",
+      "client_ip": "192.0.2.7",
+      "user_agent": "Apache-Maven/3.9.9",
+      "path": "repository",
+      "verified": true,
+      "key_id": "a922f096-0c1b-4f0e-9d7a-2c5a3f1e8b11",
+      "key_name": "CI token",
+      "key_created_at": "2026-01-01T00:00:00Z",
+      "key_expires_at": "2026-02-01T00:00:00Z",
+      "reason": "api_key_expired",
+      "rejected": 48,
+      "first_rejected_at": "2026-02-02T16:12:00Z",
+      "last_rejected_at": "2026-02-02T19:29:00Z"
+    }
+  ],
+  "page": 0,
+  "size": 50,
+  "total": 1,
+  "hasMore": false
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `reason` | `api_key_expired`, `api_key_revoked`, `api_key_refused` (valid, but its owner is disabled or it came with another user name) or `api_key_unknown` (not signed by this installation) |
+| `verified` | `false` for `api_key_unknown`: the key proves no owner, and `user` is only the name the client sent |
+| `key_id` | Id of the key; empty for an unverified key |
+| `key_name`, `key_created_at`, `key_expires_at` | From the stored key; `null` for an unverified key or one that is no longer stored |
+| `rejected` | Requests rejected with this key from this address |
+| `path` | `repository` or `api` |
+
+---
+
+### GET /api/v1/sign-in-failures/passwords
+
+Failed password logins, one line per user and client address, with the user's state now (2.2.15).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:read`
+
+**Response (200):** paginated as above; an item:
+
+```json
+{
+  "user": "alice@example.com",
+  "client_ip": "192.0.2.7",
+  "user_agent": "Apache-Maven/3.9.9",
+  "path": "repository",
+  "failed": 3,
+  "refused": 12,
+  "last_reason": "account_locked",
+  "first_failure_at": "2026-02-02T16:12:00Z",
+  "last_failure_at": "2026-02-02T16:14:10Z",
+  "state": {
+    "failures": 3,
+    "locked": true,
+    "locked_at": "2026-02-02T16:12:09Z",
+    "delayed_seconds": 0,
+    "unlocked_at": null,
+    "unlocked_by": null
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `failed` | Logins that were checked and failed; these count towards the lock |
+| `refused` | Logins refused without a check, during a delay or a lock |
+| `last_reason` | `wrong_credentials`, `login_delayed` or `account_locked` |
+| `path` | `ui` (the sign-in form), `api` or `repository` |
+| `state` | The user's state now: failed logins on record, the lock and since when, seconds a login is still delayed, and the last unlock by an administrator |
+
+---
+
+### GET /api/v1/sign-in-failures/second-factor
+
+Sign-ins whose password was right but whose second factor was not confirmed (an Okta push denied or not answered, a wrong code), and password sign-ins refused during the pause that follows them, one line per user and client address (2.2.15). These are never failed logins. See [Failed Logins](admin-guide/failed-logins.md#the-pause).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:read`
+
+**Response (200):** paginated as above; an item:
+
+```json
+{
+  "user": "alice@example.com",
+  "client_ip": "192.0.2.9",
+  "user_agent": "Mozilla/5.0",
+  "path": "ui",
+  "unconfirmed": 5,
+  "refused": 2,
+  "last_reason": "sign_in_paused",
+  "counted": 5,
+  "paused_until": "2026-02-02T16:27:55Z",
+  "paused": true,
+  "first_seen_at": "2026-02-02T16:08:40Z",
+  "last_seen_at": "2026-02-02T16:13:10Z"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `unconfirmed` | Sign-ins whose second factor was not confirmed |
+| `refused` | Password sign-ins refused without a check during a pause |
+| `last_reason` | `second_factor_failed` or `sign_in_paused` |
+| `counted` | Unconfirmed second factors counted toward the pause at the last event |
+| `paused_until` | When the pause ends; `null` when the count did not reach the limit |
+| `paused` | Whether that pause still runs |
+
+---
+
+### GET /api/v1/auth/rejected-keys
+
+The caller's own rejected API keys (2.2.15): the items of `GET /api/v1/sign-in-failures/api-keys` for the signed-in user, with `page` and `size`.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** none: every signed-in user.
+
+---
+
+### GET /api/v1/admin/sign-in-report-settings
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):**
+
+```json
+{
+  "sign_in_report_enabled": "true",
+  "sign_in_report_retention_days": "90"
+}
+```
+
+---
+
+### PUT /api/v1/admin/sign-in-report-settings
+
+Partial updates are accepted. `sign_in_report_enabled` is `true` or `false`; `sign_in_report_retention_days` is 1 to 3650. The change applies on every node without a restart.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid sign-in-report setting: sign_in_report_retention_days must be between 1 and 3650"
+}
 ```
 
 ---
@@ -3915,6 +4365,12 @@ is replayed once, in-process, through the addressed repository's slice with
 the caller's credentials (it answers what an authorized admin client would
 get). The replay is traced: every repository on its way records what it
 answered and why. Then each layer is checked.
+
+A proxy on the way that does not hold the file asks its upstream but
+stores nothing (2.2.15): no file, no metadata document, no search-index
+row, and no background refresh is started. A Maven or Gradle proxy answers
+`200` with a short text in place of the file; a proxy of another format
+(npm, PyPI, Go, Composer, Docker, file) hands on what the upstream sent.
 
 **Query Parameters:** `url` (required) -- a full client URL (host, optional
 global prefix and `api/` segment) or a repository-relative path such as

@@ -111,4 +111,34 @@ public interface NpmProxyStorage {
      * @return Completion or error signal
      */
     Completable saveMetadataOnly(String name, NpmPackage.Metadata metadata);
+
+    /**
+     * This storage for one request that must leave the repository as it
+     * found it: a Troubleshoot replay
+     * ({@link com.auto1.pantera.http.log.RequestTrace}).
+     *
+     * <p>The view reads what this storage holds and writes nothing. A
+     * packument saved to it is kept for the request, in place of a stored
+     * one, so that the request is answered with the document a client would
+     * get; a tarball saved to it is handed back as it came from the
+     * upstream.</p>
+     *
+     * @return A view of this storage that writes nothing; release it when
+     *  the request has been answered
+     */
+    Unstored unstored();
+
+    /**
+     * A proxy storage of one request that writes nothing.
+     *
+     * @since 2.2.15
+     */
+    interface Unstored extends NpmProxyStorage {
+        /**
+         * Free what the view kept for its request (the temp files of a
+         * fetched packument). Idempotent; a packument saved afterwards is
+         * freed at once.
+         */
+        void release();
+    }
 }

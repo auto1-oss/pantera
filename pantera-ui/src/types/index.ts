@@ -170,6 +170,27 @@ export interface User {
   created_at?: string
 }
 
+/**
+ * Failed logins counted for one user name: an item of `GET /locked-users`
+ * and the answer of `GET /users/:name/failed-logins`. The name is in lower
+ * case and need not belong to a Pantera user. The origin fields describe
+ * the last failed login; a name without failures carries only `name`,
+ * `failures: 0` and `locked: false`.
+ */
+export interface FailedLogins {
+  name: string
+  locked: boolean
+  failures: number
+  locked_at?: string | null
+  last_failure_at?: string | null
+  client_ip?: string | null
+  user_agent?: string | null
+  /** Where the login came in: the sign-in form, the API, a repository client. */
+  path?: string | null
+  /** What was presented: a password or an API key. */
+  credential?: string | null
+}
+
 // Role
 export interface Role {
   name: string
@@ -307,6 +328,17 @@ export interface Settings {
     grafana_url?: string
     registry_url?: string
   }
+}
+
+/**
+ * GET/PUT /admin/docker-settings. `tag_refresh_seconds` is how long a
+ * docker-proxy serves a cached image tag before it asks the upstream with a
+ * HEAD whether the tag moved: an integer from 0 (every request) to 31536000
+ * (a year), default 3600. A number, not a string like the other settings
+ * endpoints. A repository overrides it with its own `tag_refresh_seconds`.
+ */
+export interface DockerSettings {
+  tag_refresh_seconds: number
 }
 
 // Health

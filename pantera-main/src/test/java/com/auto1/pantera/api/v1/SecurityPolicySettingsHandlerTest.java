@@ -50,13 +50,136 @@ final class SecurityPolicySettingsHandlerTest {
     }
 
     @Test
-    void loginThrottleWhitelistCoversBothKeys() {
-        final Set<String> keys = SecurityPolicySettingsHandlerTest.keys("LOGIN_THROTTLE_KEYS");
+    void failedLoginsWhitelistCoversTheTenKeys() {
         MatcherAssert.assertThat(
-            "exact key set",
-            keys,
-            new IsEqual<>(Set.of("login_throttle_max_failures", "login_throttle_window_seconds"))
+            SecurityPolicySettingsHandlerTest.keys("FAILED_LOGINS_KEYS"),
+            new IsEqual<>(
+                Set.of(
+                    "failed_logins_delay_from_failure", "failed_logins_first_delay_seconds",
+                    "failed_logins_max_delay_seconds", "failed_logins_lock_after",
+                    "failed_logins_unlock_after_minutes", "failed_logins_forget_after_minutes",
+                    "failed_logins_count_rejected_keys", "failed_logins_lock_all_credentials",
+                    "failed_logins_second_factor_limit",
+                    "failed_logins_second_factor_pause_minutes"
+                )
+            )
         );
+    }
+
+    @Test
+    void failedLoginsUpdatesAreValidatedAgainstTheMergedPolicy() {
+        final SecurityPolicySettingsHandler.Section section =
+            SecurityPolicySettingsHandler.failedLogins();
+        section.validate(
+            new JsonObject().put("failed_logins_lock_after", "10")
+                .put("failed_logins_unlock_after_minutes", 30)
+                .put("failed_logins_count_rejected_keys", true)
+                .put("failed_logins_lock_all_credentials", "false")
+        );
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("failed_logins_lock_after", "101")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("failed_logins_lock_after", "three")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("failed_logins_unlock_after_minutes", "-1")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("failed_logins_count_rejected_keys", "maybe")));
+        Assertions.assertThrows(
+            IllegalArgumentException.class,
+            (Executable) () -> section.validate(
+                new JsonObject().put("failed_logins_first_delay_seconds", "30")
+                    .put("failed_logins_max_delay_seconds", "10")
+            ),
+            "a longest delay below the first delay is refused as a pair"
+        );
+    }
+
+    @Test
+    void failedLoginsCurrentValuesAreStringsForEveryKey() {
+        final JsonObject current = SecurityPolicySettingsHandler.failedLogins().current();
+        MatcherAssert.assertThat(
+            "every key is reported",
+            current.fieldNames(),
+            new IsEqual<>(SecurityPolicySettingsHandlerTest.keys("FAILED_LOGINS_KEYS"))
+        );
+        MatcherAssert.assertThat(
+            "as a string, like the other sections",
+            current.getValue("failed_logins_lock_after"), new IsEqual<>("3")
+        );
+    }
+
+    @Test
+    void passwordSignInHasAModeForEveryProviderThatTakesPasswords() {
+        final JsonObject current = SecurityPolicySettingsHandler.passwordSignIn().current();
+        MatcherAssert.assertThat(
+            "one key per provider type",
+            current.fieldNames(),
+            new IsEqual<>(
+                Set.of(
+                    "password_sign_in_okta", "password_sign_in_keycloak",
+                    "password_sign_in_github"
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "the whitelist is the same set",
+            SecurityPolicySettingsHandlerTest.keys("PASSWORD_SIGN_IN_KEYS"),
+            new IsEqual<>(current.fieldNames())
+        );
+        MatcherAssert.assertThat(
+            "passwords are taken everywhere unless an administrator says otherwise",
+            current.getValue("password_sign_in_okta"), new IsEqual<>("all")
+        );
+    }
+
+    @Test
+    void passwordSignInAcceptsItsThreeModesOnly() {
+        final SecurityPolicySettingsHandler.Section section =
+            SecurityPolicySettingsHandler.passwordSignIn();
+        section.validate(
+            new JsonObject().put("password_sign_in_okta", "form")
+                .put("password_sign_in_keycloak", "off")
+                .put("password_sign_in_github", "all")
+        );
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("password_sign_in_okta", "ui")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("password_sign_in_okta", "")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("password_sign_in_okta", true)));
+    }
+
+    @Test
+    void signInReportIsOnAndKeepsNinetyDaysUnlessSetOtherwise() {
+        final JsonObject current = SecurityPolicySettingsHandler.signInReport().current();
+        MatcherAssert.assertThat(
+            current,
+            new IsEqual<>(
+                new JsonObject().put("sign_in_report_enabled", "true")
+                    .put("sign_in_report_retention_days", "90")
+            )
+        );
+        MatcherAssert.assertThat(
+            "the whitelist is the same set",
+            SecurityPolicySettingsHandlerTest.keys("SIGN_IN_REPORT_KEYS"),
+            new IsEqual<>(current.fieldNames())
+        );
+    }
+
+    @Test
+    void signInReportRefusesARetentionOutsideItsRange() {
+        final SecurityPolicySettingsHandler.Section section =
+            SecurityPolicySettingsHandler.signInReport();
+        section.validate(
+            new JsonObject().put("sign_in_report_enabled", false)
+                .put("sign_in_report_retention_days", "365")
+        );
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("sign_in_report_retention_days", "0")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("sign_in_report_retention_days", "3651")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            section.validate(new JsonObject().put("sign_in_report_enabled", "yes")));
     }
 
     @Test
@@ -77,11 +200,14 @@ final class SecurityPolicySettingsHandlerTest {
             egress.validate(new JsonObject().put("egress_block_private", "maybe")));
         Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
             egress.validate(new JsonObject().put("upstream_credential_allow_hosts", "bad host")));
-        final SecurityPolicySettingsHandler.Section throttle =
-            SecurityPolicySettingsHandler.loginThrottle();
-        throttle.validate(new JsonObject().put("login_throttle_max_failures", "3"));
+        final SecurityPolicySettingsHandler.Section failed =
+            SecurityPolicySettingsHandler.failedLogins();
+        failed.validate(new JsonObject().put("failed_logins_second_factor_limit", "0"));
+        failed.validate(new JsonObject().put("failed_logins_second_factor_pause_minutes", "1440"));
         Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
-            throttle.validate(new JsonObject().put("login_throttle_window_seconds", "0")));
+            failed.validate(new JsonObject().put("failed_logins_second_factor_limit", "101")));
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            failed.validate(new JsonObject().put("failed_logins_second_factor_pause_minutes", "0")));
     }
 
     @Test

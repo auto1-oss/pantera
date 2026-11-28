@@ -20,6 +20,7 @@ import com.auto1.pantera.api.RepositoryEvents;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.group.RoutingRulesCheck;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -58,6 +59,11 @@ public final class RepositoryHandler {
      * JSON key for repo section.
      */
     private static final String REPO = "repo";
+
+    /**
+     * Key of a docker-proxy repository's own tag refresh age, in seconds.
+     */
+    private static final String TAG_REFRESH = "tag_refresh_seconds";
 
     /**
      * Local-path extraction only (no roots): which storage blocks address
@@ -238,6 +244,159 @@ public final class RepositoryHandler {
             .handler(new AuthzHandler(this.policy, read))
             .handler(repoRead)
             .handler(this::getMembers);
+        // POST /api/v1/repositories/:name/routing/test — which members a
+        // group would ask for a path, with saved or unsaved rules. Changes
+        // nothing, so reading the repositories is enough.
+        router.post("/api/v1/repositories/:name/routing/test")
+            .handler(new AuthzHandler(this.policy, read))
+            .handler(this::testRouting);
+    }
+
+    /**
+     * POST /api/v1/repositories/:name/routing/test — check the routing
+     * rules of a group and try a path against them. The body may name a
+     * {@code path} and may carry {@code members} and {@code routing} that
+     * are not saved yet; what it leaves out is taken from the saved
+     * configuration.
+     * @param ctx Routing context
+     */
+    private void testRouting(final RoutingContext ctx) {
+        final String name = ctx.pathParam("name");
+        final javax.json.JsonObject body;
+        try {
+            body = Json.createReader(
+                new StringReader(String.valueOf(ctx.body().asString()))
+            ).readObject();
+        } catch (final Exception ex) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
+            return;
+        }
+        if (body.containsKey("path") && !(body.get("path") instanceof javax.json.JsonString)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "`path` is a string");
+            return;
+        }
+        final String path = body.getString("path", "").trim();
+        CompletableFuture.supplyAsync(
+            () -> {
+                final javax.json.JsonObject saved = this.repoConfig(name).orElse(null);
+                final javax.json.JsonObjectBuilder repo = Json.createObjectBuilder();
+                if (saved != null) {
+                    saved.forEach(repo::add);
+                }
+                if (body.containsKey("members")) {
+                    repo.add("members", body.get("members"));
+                }
+                if (body.containsKey("routing")) {
+                    repo.add("routing", body.get("routing"));
+                }
+                if (saved == null) {
+                    repo.add("type", "maven-group");
+                }
+                final javax.json.JsonObject tested = repo.build();
+                if (!(tested.get("members") instanceof javax.json.JsonArray)) {
+                    throw new ConfigRejected(
+                        "Repository '" + name + "' is not saved: send its `members`"
+                    );
+                }
+                final RoutingRulesCheck check = new RoutingRulesCheck(tested, this::repoConfig);
+                final java.util.List<String> broken = check.problems();
+                if (!broken.isEmpty()) {
+                    throw new ConfigRejected(
+                        "Invalid routing rules: " + String.join("; ", broken)
+                    );
+                }
+                return RepositoryHandler.routingAnswer(check, path);
+            },
+            HandlerExecutor.get()
+        ).whenComplete(
+            (answer, err) -> {
+                if (err == null) {
+                    ctx.response().setStatusCode(200)
+                        .putHeader("Content-Type", "application/json")
+                        .end(answer.encode());
+                } else if (RepositoryHandler.rootCause(err) instanceof ConfigRejected) {
+                    ApiResponse.sendError(
+                        ctx, 400, "BAD_REQUEST", RepositoryHandler.rootCause(err).getMessage()
+                    );
+                } else {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err);
+                }
+            }
+        );
+    }
+
+    /**
+     * Answer of the routing test: the repositories the group asks, in
+     * their order, and the rules of its nested groups.
+     * @param check Checked rules
+     * @param path Path to decide for, empty to only list
+     * @return Answer body
+     */
+    private static JsonObject routingAnswer(final RoutingRulesCheck check, final String path) {
+        final JsonArray members = new JsonArray();
+        for (final RoutingRulesCheck.Asked one : check.walk(path)) {
+            final JsonObject member = new JsonObject()
+                .put("member", one.member())
+                .put("through", one.through());
+            if (!path.isEmpty()) {
+                member.put("asked", one.asked()).put("rule", one.rule()).put("why", one.why());
+            }
+            members.add(member);
+        }
+        final JsonArray inherited = new JsonArray();
+        for (final RoutingRulesCheck.Inherited rule : check.inherited()) {
+            final JsonObject one = new JsonObject()
+                .put("group", rule.group())
+                .put("member", rule.member());
+            if (rule.prefix().isEmpty()) {
+                one.put("pattern", rule.pattern());
+            } else {
+                one.put("prefix", rule.prefix());
+            }
+            inherited.add(one);
+        }
+        final JsonObject answer = new JsonObject();
+        if (!path.isEmpty()) {
+            answer.put("path", path);
+        }
+        return answer.put("members", members).put("inherited", inherited);
+    }
+
+    /**
+     * Saved configuration of a repository (its {@code repo} object).
+     * Blocking.
+     * @param name Repository name
+     * @return The configuration, empty when there is no such repository
+     */
+    private Optional<javax.json.JsonObject> repoConfig(final String name) {
+        Optional<javax.json.JsonObject> res = Optional.empty();
+        if (RepositoryHandler.validRepoName(name)) {
+            final RepositoryName rname = new RepositoryName.Simple(name);
+            if (this.crs.exists(rname)) {
+                final javax.json.JsonObject stored =
+                    RepositoryHandler.asObject(this.crs.value(rname));
+                if (stored != null
+                    && stored.get(RepositoryHandler.REPO) instanceof javax.json.JsonObject) {
+                    res = Optional.of(stored.getJsonObject(RepositoryHandler.REPO));
+                }
+            }
+        }
+        return res;
+    }
+
+    /**
+     * Number of routing rules in a stored configuration.
+     * @param stored Stored document, null for a new repository
+     * @return Count
+     */
+    private static int ruleCount(final javax.json.JsonObject stored) {
+        int count = 0;
+        if (stored != null && stored.get(RepositoryHandler.REPO) instanceof javax.json.JsonObject) {
+            count = new RoutingRulesCheck(
+                stored.getJsonObject(RepositoryHandler.REPO), ignored -> Optional.empty()
+            ).count();
+        }
+        return count;
     }
 
     /**
@@ -451,6 +610,17 @@ public final class RepositoryHandler {
                 return;
             }
         }
+        if (repo.containsKey(RepositoryHandler.TAG_REFRESH)
+            && !RepositoryHandler.validTagRefresh(repo.get(RepositoryHandler.TAG_REFRESH))) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                String.format(
+                    "%s must be an integer from 0 to %d",
+                    RepositoryHandler.TAG_REFRESH,
+                    com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.MAX_SECONDS
+                )
+            );
+            return;
+        }
         final Optional<String> urlError = RepositoryHandler.urlError(repo);
         if (urlError.isPresent()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", urlError.get());
@@ -486,6 +656,8 @@ public final class RepositoryHandler {
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
         final String clientIp = RepositoryHandler.clientIp(ctx);
         final String auditAction = exists ? "REPO_UPDATE" : "REPO_CREATE";
+        // Routing rules before and after the save, for its record.
+        final int[] rules = new int[2];
         CompletableFuture.runAsync(
             () -> {
                 // Resolving egress check — blocks on DNS, hence on the worker.
@@ -498,6 +670,18 @@ public final class RepositoryHandler {
                 // overwrite the real stored secret with the sentinel.
                 final javax.json.JsonObject stored = exists
                     ? RepositoryHandler.asObject(this.crs.value(rname)) : null;
+                // A routing rule that cannot be read breaks the whole group
+                // when its members are resolved, and one that names no member
+                // has no effect: refused here, with the rule named.
+                final RoutingRulesCheck routing = new RoutingRulesCheck(repo, this::repoConfig);
+                final java.util.List<String> broken = routing.problems();
+                if (!broken.isEmpty()) {
+                    throw new ConfigRejected(
+                        "Invalid routing rules: " + String.join("; ", broken)
+                    );
+                }
+                rules[0] = RepositoryHandler.ruleCount(stored);
+                rules[1] = routing.count();
                 // SECURITY (2.2.9): a raw fs path must sit under an approved
                 // root — otherwise repository CREATE/UPDATE mounted the host
                 // filesystem. An update that keeps the saved path is not
@@ -571,6 +755,22 @@ public final class RepositoryHandler {
                 this.eventBus.publish(RepositoryEvents.upsert(name));
                 RepositoryHandler.audit(actor, clientIp, auditAction, name,
                     java.util.Map.of("repository.type", repoType), true);
+                if (rules[0] > 0 || rules[1] > 0) {
+                    EcsLogger.info("com.auto1.pantera.api.v1")
+                        .message(
+                            String.format(
+                                "Routing rules of group '%s' saved by %s: %d before, %d now",
+                                name, actor, rules[0], rules[1]
+                            )
+                        )
+                        .eventCategory("configuration")
+                        .eventAction("repository_routing_update")
+                        .eventOutcome("success")
+                        .field("repository.name", name)
+                        .field("repository.type", repoType)
+                        .field("log.source", "application")
+                        .log();
+                }
                 ctx.response().setStatusCode(200).end();
             }
         });
@@ -641,6 +841,26 @@ public final class RepositoryHandler {
         return name != null && !name.isBlank() && name.length() <= 200
             && name.matches("[A-Za-z0-9][A-Za-z0-9._/-]*")
             && !name.contains("..") && !name.endsWith("/");
+    }
+
+    /**
+     * Whether a {@code tag_refresh_seconds} value can be saved: a JSON
+     * integer from 0 to 31536000 (a year). Anything else would be ignored
+     * by the proxy at runtime, so it is refused here, where it was typed.
+     * @param value JSON value of the key
+     * @return True for an integer in range
+     */
+    private static boolean validTagRefresh(final JsonValue value) {
+        boolean valid = false;
+        if (value instanceof javax.json.JsonNumber number && number.isIntegral()) {
+            final java.math.BigDecimal seconds = number.bigDecimalValue();
+            valid = seconds.signum() >= 0 && seconds.compareTo(
+                java.math.BigDecimal.valueOf(
+                    com.auto1.pantera.adapters.docker.DockerTagRefreshSettingsLoader.MAX_SECONDS
+                )
+            ) <= 0;
+        }
+        return valid;
     }
 
     /**

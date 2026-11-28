@@ -224,6 +224,52 @@ public class UserTokenDao {
     }
 
     /**
+     * Label and dates of tokens by their ids, revoked ones included: for
+     * a report that names a key that is no longer usable.
+     *
+     * @param ids Token ids (jti); a text that is no UUID is skipped
+     * @return Token info by id, for the ids that are stored
+     */
+    public java.util.Map<String, TokenInfo> byIds(final java.util.Collection<String> ids) {
+        final List<UUID> uuids = new ArrayList<>(ids.size());
+        for (final String id : ids) {
+            try {
+                uuids.add(UUID.fromString(id));
+            } catch (final IllegalArgumentException malformed) {
+                // A key id that is no UUID was never stored here.
+                continue;
+            }
+        }
+        final java.util.Map<String, TokenInfo> found = new java.util.HashMap<>();
+        if (uuids.isEmpty()) {
+            return found;
+        }
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT id, label, expires_at, created_at FROM user_tokens WHERE id = ANY(?)"
+             )) {
+            ps.setArray(1, conn.createArrayOf("uuid", uuids.toArray()));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    final UUID id = rs.getObject("id", UUID.class);
+                    final Timestamp exp = rs.getTimestamp("expires_at");
+                    found.put(
+                        id.toString(),
+                        new TokenInfo(
+                            id, rs.getString("label"),
+                            exp != null ? exp.toInstant() : null,
+                            rs.getTimestamp("created_at").toInstant()
+                        )
+                    );
+                }
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to read tokens by id", ex);
+        }
+        return found;
+    }
+
+    /**
      * Check if a token ID is valid (exists and not revoked).
      * @param id Token UUID (jti)
      * @return True if valid

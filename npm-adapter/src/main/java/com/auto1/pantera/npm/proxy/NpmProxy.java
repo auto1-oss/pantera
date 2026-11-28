@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import com.auto1.pantera.http.resilience.InFlightGuard;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
@@ -70,6 +71,12 @@ public class NpmProxy {
      * trace.
      */
     private static final Duration REFRESH_STUCK_AGE = Duration.ofMinutes(10);
+
+    /**
+     * Metadata TTL of a {@link Replay}: nothing it reads is stale, so it
+     * starts no background refresh. A refresh writes to the storage.
+     */
+    private static final Duration NEVER_STALE = ChronoUnit.FOREVER.getDuration();
 
     /**
      * Packages currently being refreshed in background (stale-while-revalidate).
@@ -366,6 +373,24 @@ public class NpmProxy {
         this.cacheWriteHook = cacheWriteHook == null ? path -> { } : cacheWriteHook;
         this.packumentWriteHook = packumentWriteHook == null ? name -> { } : packumentWriteHook;
         this.phaseRecorder = phaseRecorder == null ? (phase, ns) -> { } : phaseRecorder;
+    }
+
+    /**
+     * This proxy for one request that must leave the repository as it found
+     * it: a Troubleshoot replay
+     * ({@link com.auto1.pantera.http.log.RequestTrace}).
+     *
+     * <p>The replay reads the cache and asks the upstream as this proxy
+     * does, so the request gets the answer a client would get. It writes
+     * nothing to the storage ({@link NpmProxyStorage#unstored()}), fires
+     * neither write hook - nothing was stored, so nothing is announced -
+     * and starts no background refresh.</p>
+     *
+     * @return The proxy to serve the request with; release it when the
+     *  answer has been read
+     */
+    public Replay replay() {
+        return new Replay(this.storage.unstored(), this.remote, this.phaseRecorder);
     }
 
     /**
@@ -891,6 +916,44 @@ public class NpmProxy {
                 .error(thrown)
                 .field("log.source", "application")
                 .log();
+        }
+    }
+
+    /**
+     * A proxy for one Troubleshoot replay, see {@link NpmProxy#replay()}.
+     *
+     * @since 2.2.15
+     */
+    public static final class Replay extends NpmProxy {
+
+        /**
+         * Storage view of the request.
+         */
+        private final NpmProxyStorage.Unstored view;
+
+        /**
+         * Ctor.
+         *
+         * @param view Storage view of the request
+         * @param remote Remote repository client
+         * @param phaseRecorder (phase, durationNs) recorder
+         */
+        Replay(
+            final NpmProxyStorage.Unstored view,
+            final NpmRemote remote,
+            final BiConsumer<String, Long> phaseRecorder
+        ) {
+            super(view, remote, NpmProxy.NEVER_STALE, null, null, phaseRecorder);
+            this.view = view;
+        }
+
+        /**
+         * Free what the request fetched and did not store. Call it when
+         * the answer has been read: a packument is served out of temp
+         * files this deletes.
+         */
+        public void release() {
+            this.view.release();
         }
     }
 }

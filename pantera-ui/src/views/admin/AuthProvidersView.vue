@@ -18,6 +18,17 @@ import {
   deleteAuthProvider,
 } from '@/api/settings'
 import { listRoles } from '@/api/roles'
+import {
+  getPasswordSignInSettings,
+  updatePasswordSignInSettings,
+  PASSWORD_SIGN_IN_TYPES,
+} from '@/api/passwordSignIn'
+import type {
+  PasswordSignInMode,
+  PasswordSignInSettings,
+  PasswordSignInType,
+} from '@/api/passwordSignIn'
+import { apiErrorMessage } from '@/utils/apiError'
 import { useNotificationStore } from '@/stores/notifications'
 import { useConfirmDelete } from '@/composables/useConfirmDelete'
 import {
@@ -175,6 +186,133 @@ async function load() {
     notify.error('Failed to load auth providers', e instanceof Error ? e.message : '')
   } finally {
     loading.value = false
+  }
+  // Loaded on its own: a failure there must not hide the providers.
+  await loadPasswordSignIn()
+}
+
+/* ---------- Password sign-in ---------- */
+
+// Where a provider that checks passwords outside Pantera (okta, keycloak,
+// github) takes them. One setting per provider TYPE, saved at once and on
+// its own: it is not the provider's enable switch, not part of its config
+// and not a setting of its sign-in button.
+const PASSWORD_SIGN_IN_MODES: Array<{ label: string; value: PasswordSignInMode }> = [
+  { label: 'Sign-in form and repositories', value: 'all' },
+  { label: 'Sign-in form only', value: 'form' },
+  { label: 'Off', value: 'off' },
+]
+
+const PASSWORD_SIGN_IN_MEANING: Record<PasswordSignInMode, string> = {
+  all: 'The provider checks a password on the sign-in form, on POST /api/v1/auth/token, '
+    + 'and with repository requests (mvn, npm, docker login, curl -u).',
+  form: 'The provider checks a password on the sign-in form and on POST /api/v1/auth/token only. '
+    + 'A repository request with a directory password is answered 401 and the provider is not asked; '
+    + 'clients use an API key.',
+  off: 'The provider checks no password, anywhere.',
+}
+
+type ModesByType = Partial<Record<PasswordSignInType, PasswordSignInMode>>
+
+/** `forbidden`: the account may not read the setting, so no control is shown. */
+const passwordSignInState = ref<'idle' | 'loading' | 'ready' | 'forbidden' | 'failed'>('idle')
+/** The mode of each type as the server has it. */
+const storedModes = ref<ModesByType>({})
+/** The mode each control shows: the stored one, or a pick that waits for its confirmation or its save. */
+const shownModes = ref<ModesByType>({})
+const passwordSignInErrors = ref<Partial<Record<PasswordSignInType, string>>>({})
+const passwordSignInSaving = ref<PasswordSignInType | null>(null)
+/** The change the confirmation asks about; kept after it closes so its text does not blank out. */
+const pendingMode = ref<{ type: PasswordSignInType; mode: PasswordSignInMode; provider: string }>(
+  { type: 'okta', mode: 'all', provider: '' },
+)
+const confirmModeVisible = ref(false)
+
+function hasPasswordSignIn(type: string): type is PasswordSignInType {
+  return (PASSWORD_SIGN_IN_TYPES as readonly string[]).includes(type)
+}
+
+function passwordSignInLabel(mode: PasswordSignInMode): string {
+  return PASSWORD_SIGN_IN_MODES.find(m => m.value === mode)?.label ?? mode
+}
+
+function shownMode(p: Provider): PasswordSignInMode | undefined {
+  return hasPasswordSignIn(p.type) ? shownModes.value[p.type] : undefined
+}
+
+function passwordSignInMeaning(p: Provider): string {
+  const mode = shownMode(p)
+  return mode ? PASSWORD_SIGN_IN_MEANING[mode] ?? '' : ''
+}
+
+function passwordSignInError(p: Provider): string {
+  return hasPasswordSignIn(p.type) ? passwordSignInErrors.value[p.type] ?? '' : ''
+}
+
+async function loadPasswordSignIn() {
+  if (!providers.value.some(p => hasPasswordSignIn(p.type))) return
+  passwordSignInState.value = 'loading'
+  try {
+    const settings = await getPasswordSignInSettings()
+    const modes: ModesByType = {}
+    for (const type of PASSWORD_SIGN_IN_TYPES) {
+      modes[type] = settings[`password_sign_in_${type}`]
+    }
+    storedModes.value = modes
+    shownModes.value = { ...modes }
+    passwordSignInState.value = 'ready'
+  } catch (e: unknown) {
+    const status = (e as { response?: { status?: number } }).response?.status
+    passwordSignInState.value = status === 403 ? 'forbidden' : 'failed'
+  }
+}
+
+function onPasswordSignInPicked(p: Provider, picked: PasswordSignInMode) {
+  if (!hasPasswordSignIn(p.type)) return
+  const type = p.type
+  shownModes.value[type] = picked
+  if (picked === storedModes.value[type]) return
+  const provider = schemaFor(type).label
+  if (picked === 'all') {
+    // Back to the default takes nothing away from anybody: no question.
+    void savePasswordSignIn(type, picked, provider)
+    return
+  }
+  pendingMode.value = { type, mode: picked, provider }
+  confirmModeVisible.value = true
+}
+
+function cancelPasswordSignIn() {
+  if (!confirmModeVisible.value) return
+  confirmModeVisible.value = false
+  const { type } = pendingMode.value
+  shownModes.value[type] = storedModes.value[type]
+}
+
+async function confirmPasswordSignIn() {
+  const { type, mode, provider } = pendingMode.value
+  await savePasswordSignIn(type, mode, provider)
+  confirmModeVisible.value = false
+}
+
+async function savePasswordSignIn(type: PasswordSignInType, mode: PasswordSignInMode, provider: string) {
+  passwordSignInSaving.value = type
+  passwordSignInErrors.value[type] = ''
+  try {
+    // Only the key that changed: the other types keep what they have.
+    const change: Partial<PasswordSignInSettings> = {}
+    change[`password_sign_in_${type}`] = mode
+    await updatePasswordSignInSettings(change)
+    storedModes.value[type] = mode
+    shownModes.value[type] = mode
+    notify.success('Password sign-in changed', `${provider}: ${passwordSignInLabel(mode)}`)
+  } catch (e: unknown) {
+    const message = apiErrorMessage(e, 'Unknown error')
+    shownModes.value[type] = storedModes.value[type]
+    passwordSignInErrors.value[type] = message
+    notify.error('Failed to change password sign-in', message)
+  } finally {
+    passwordSignInSaving.value = null
   }
 }
 
@@ -441,6 +579,82 @@ onMounted(load)
             />
           </div>
 
+          <!-- Password sign-in: where the provider takes passwords (okta, keycloak, github) -->
+          <div
+            v-if="hasPasswordSignIn(p.type) && passwordSignInState !== 'idle' && passwordSignInState !== 'forbidden'"
+            class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800"
+            data-testid="password-sign-in"
+            :data-provider-type="p.type"
+          >
+            <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+              <div class="min-w-0">
+                <label
+                  :for="`passwordSignIn-${p.id}`"
+                  class="block text-sm font-medium text-gray-900 dark:text-white"
+                  data-testid="password-sign-in-label"
+                >Password sign-in</label>
+                <div class="text-xs text-gray-500">
+                  Where this provider checks a user name and password.
+                </div>
+              </div>
+              <Select
+                :model-value="shownMode(p)"
+                :label-id="`passwordSignIn-${p.id}`"
+                :options="PASSWORD_SIGN_IN_MODES"
+                option-label="label"
+                option-value="value"
+                class="w-72 text-sm"
+                :disabled="passwordSignInState !== 'ready' || passwordSignInSaving !== null"
+                :loading="passwordSignInState === 'loading' || passwordSignInSaving === p.type"
+                :placeholder="passwordSignInState === 'loading' ? 'Loading…' : 'Not loaded'"
+                data-testid="password-sign-in-mode"
+                @update:model-value="(mode: PasswordSignInMode) => onPasswordSignInPicked(p, mode)"
+              />
+            </div>
+            <div class="mt-2 space-y-1 text-xs text-gray-500">
+              <p
+                v-if="passwordSignInState === 'failed'"
+                class="flex flex-wrap items-center gap-2 text-red-600 dark:text-red-400"
+                data-testid="password-sign-in-load-error"
+              >
+                <span>The setting could not be loaded.</span>
+                <Button
+                  label="Retry"
+                  icon="pi pi-refresh"
+                  size="small"
+                  severity="secondary"
+                  text
+                  data-testid="password-sign-in-retry"
+                  @click="loadPasswordSignIn"
+                />
+              </p>
+              <p
+                v-if="passwordSignInError(p)"
+                class="text-red-600 dark:text-red-400"
+                data-testid="password-sign-in-save-error"
+              >
+                Not changed: {{ passwordSignInError(p) }}
+              </p>
+              <p
+                v-if="passwordSignInState === 'ready' && passwordSignInMeaning(p)"
+                class="text-gray-700 dark:text-gray-300"
+                data-testid="password-sign-in-description"
+              >
+                {{ passwordSignInMeaning(p) }}
+              </p>
+              <p data-testid="password-sign-in-notes">
+                This does not affect the provider's sign-in button or API keys. A change applies
+                to the next login, without a restart.
+              </p>
+              <p v-if="p.type === 'github'" data-testid="password-sign-in-github-note">
+                GitHub takes a personal access token as the password.
+              </p>
+              <p v-if="!p.enabled" data-testid="password-sign-in-provider-disabled">
+                This provider is disabled. The setting is kept and applies once the provider is enabled.
+              </p>
+            </div>
+          </div>
+
           <!-- Edit section -->
           <div v-if="drafts[p.id]?.expanded && fieldsFor(p).length > 0" class="mt-5 pt-5 border-t border-gray-200 dark:border-gray-800 space-y-4">
             <div v-for="f in fieldsFor(p)" :key="f.key">
@@ -650,6 +864,63 @@ onMounted(load)
         <template #footer>
           <Button label="Cancel" severity="secondary" outlined @click="addVisible = false" />
           <Button label="Create" icon="pi pi-check" :loading="addSaving" @click="submitAdd" />
+        </template>
+      </Dialog>
+
+      <!-- Password sign-in: confirmation of a change that takes password sign-in away -->
+      <Dialog
+        :visible="confirmModeVisible"
+        :header="`Password sign-in: ${pendingMode.provider}`"
+        modal
+        class="w-[520px]"
+        :closable="passwordSignInSaving === null"
+        :close-on-escape="passwordSignInSaving === null"
+        @update:visible="(open: boolean) => { if (!open) cancelPasswordSignIn() }"
+      >
+        <div class="space-y-3 text-sm" data-testid="password-sign-in-confirm-dialog">
+          <p>
+            Change password sign-in of <strong>{{ pendingMode.provider }}</strong> to
+            <strong>{{ passwordSignInLabel(pendingMode.mode) }}</strong>?
+          </p>
+          <ul class="list-disc pl-5 space-y-1 text-gray-600 dark:text-gray-300">
+            <li v-if="pendingMode.mode === 'off'">
+              Directory passwords stop working in build tools and other repository clients, and on
+              the sign-in form.
+            </li>
+            <li v-else>
+              Directory passwords stop working in build tools and other repository clients.
+            </li>
+            <li>
+              Such a login then counts as a failed login towards the login delay and the account lock.
+            </li>
+            <li>
+              Users need API keys for their build tools and repository clients. Hand them out first.
+            </li>
+          </ul>
+          <p v-if="pendingMode.type === 'github'" class="text-gray-600 dark:text-gray-300">
+            With GitHub the password is a personal access token.
+          </p>
+          <p class="text-xs text-gray-500">
+            The provider's sign-in button and API keys keep working.
+          </p>
+        </div>
+        <template #footer>
+          <Button
+            label="Cancel"
+            severity="secondary"
+            outlined
+            :disabled="passwordSignInSaving !== null"
+            data-testid="password-sign-in-cancel"
+            @click="cancelPasswordSignIn"
+          />
+          <Button
+            :label="`Change to ${passwordSignInLabel(pendingMode.mode)}`"
+            severity="warn"
+            icon="pi pi-check"
+            :loading="passwordSignInSaving !== null"
+            data-testid="password-sign-in-confirm"
+            @click="confirmPasswordSignIn"
+          />
         </template>
       </Dialog>
 

@@ -56,6 +56,16 @@ public final class CacheDocker implements Docker {
     private final String upstreamUrl;
 
     /**
+     * Whether a blob of the origin is stored in the cache while it is read.
+     */
+    private final boolean store;
+
+    /**
+     * When a manifest of the origin is copied into the cache.
+     */
+    private final ManifestCopies copies;
+
+    /**
      * Manifest cache copies in flight for this proxy repository: concurrent
      * first pulls of one tag store and publish it once.
      */
@@ -88,12 +98,41 @@ public final class CacheDocker implements Docker {
                        Optional<DockerProxyCooldownInspector> inspector,
                        String upstreamUrl
     ) {
+        this(
+            origin, cache, events, inspector, upstreamUrl, new ConcurrentHashMap<>(), true,
+            ManifestCopies.AT_ONCE
+        );
+    }
+
+    /**
+     * @param origin Origin repository.
+     * @param cache Cache repository.
+     * @param events Artifact metadata events queue
+     * @param inspector Cooldown inspector
+     * @param upstreamUrl Upstream URL for metrics
+     * @param inflight Manifest cache copies in flight for this proxy repository
+     * @param store Whether a blob of the origin is stored in the cache while
+     *  it is read
+     * @param copies When a manifest of the origin is copied into the cache
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CacheDocker(Docker origin,
+                        Docker cache,
+                        Optional<Queue<ArtifactEvent>> events,
+                        Optional<DockerProxyCooldownInspector> inspector,
+                        String upstreamUrl,
+                        ConcurrentMap<String, CompletableFuture<Void>> inflight,
+                        boolean store,
+                        ManifestCopies copies
+    ) {
         this.origin = origin;
         this.cache = cache;
         this.events = events;
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
-        this.inflight = new ConcurrentHashMap<>();
+        this.inflight = inflight;
+        this.store = store;
+        this.copies = copies;
     }
 
     @Override
@@ -102,7 +141,7 @@ public final class CacheDocker implements Docker {
     }
 
     @Override
-    public Repo repo(final String name) {
+    public CacheRepo repo(final String name) {
         return new CacheRepo(
             name,
             this.origin.repo(name),
@@ -111,12 +150,53 @@ public final class CacheDocker implements Docker {
             registryName(),
             this.inspector,
             this.upstreamUrl,
-            this.inflight
+            this.inflight,
+            this.store,
+            this.copies
         );
     }
 
     @Override
     public CompletableFuture<Catalog> catalog(Pagination pagination) {
         return new JoinedCatalogSource(pagination, this.origin, this.cache).catalog();
+    }
+
+    /**
+     * The same repository for a request that must leave it as it found it:
+     * a Troubleshoot replay ({@code RequestTrace}) asks what a client would
+     * get. This view reads the cache and the origin in the same order and
+     * returns the same manifest or blob, but stores nothing in the cache,
+     * queues no artifact event and records no release date. The body of a
+     * blob the cache does not hold is the origin's own.
+     *
+     * @return Read-only view of this repository
+     */
+    public CacheDocker readOnly() {
+        return new CacheDocker(
+            this.origin, this.cache, Optional.empty(), Optional.empty(),
+            this.upstreamUrl, this.inflight, false, ManifestCopies.NEVER
+        );
+    }
+
+    /**
+     * The same repository for a client's request on which cooldown decides
+     * after the manifest was read: a manifest the origin returns is copied
+     * into the cache (stored, its artifact event queued) as {@code decided}
+     * says. For a GET, only when the answer serves it,
+     * {@link ManifestCopies#commit()}, never when cooldown refuses it,
+     * {@link ManifestCopies#discard()}; for a HEAD, whose answer is never
+     * refused, only when the {@link ManifestCopies.Verdict} allows it.
+     * Everything else is as in this view: blobs are stored while they are
+     * read, release dates are recorded, and concurrent copies of one
+     * reference are made once.
+     *
+     * @param decided Copies of the manifests the request reads
+     * @return View of this repository for one request
+     */
+    public CacheDocker deciding(final ManifestCopies decided) {
+        return new CacheDocker(
+            this.origin, this.cache, this.events, this.inspector,
+            this.upstreamUrl, this.inflight, true, decided
+        );
     }
 }

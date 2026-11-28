@@ -266,6 +266,93 @@ public final class MicrometerMetrics {
             .record(java.time.Duration.ofMillis(durationMs));
     }
 
+    // ========== Sign-in Metrics ==========
+
+    /**
+     * A password check sent to an external identity provider.
+     * @param provider Provider type: {@code okta}, {@code keycloak},
+     *  {@code github}
+     * @param outcome {@code accepted}, {@code rejected}, {@code refused} or
+     *  {@code unavailable}
+     */
+    public void recordProviderCheck(final String provider, final String outcome) {
+        Counter.builder("pantera.auth.provider.checks")
+            .description("Password checks sent to an external identity provider")
+            .tags("provider", provider, "outcome", outcome)
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
+     * A login that was refused without being checked.
+     * @param reason Why: {@code login_delayed}, {@code sign_in_paused},
+     *  {@code account_locked} or {@code sign_in_busy}
+     */
+    public void recordLoginRefused(final String reason) {
+        Counter.builder("pantera.auth.login.refused")
+            .description("Logins refused by the login delay, the sign-in pause or the account lock")
+            .tags("reason", reason)
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
+     * An API key that was rejected.
+     * @param reason Why: {@code api_key_expired}, {@code api_key_revoked},
+     *  {@code api_key_refused} or {@code api_key_unknown}
+     */
+    public void recordApiKeyRejected(final String reason) {
+        Counter.builder("pantera.auth.api_key.rejected")
+            .description("API keys rejected, by reason")
+            .tags("reason", reason)
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
+     * A sign-in whose password was accepted but whose second factor was not
+     * confirmed.
+     */
+    public void recordSecondFactorFailure() {
+        Counter.builder("pantera.auth.second_factor.failures")
+            .description("Sign-ins whose second factor was not confirmed")
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
+     * Password sign-in of a user was paused after unconfirmed second factors.
+     */
+    public void recordSignInPause() {
+        Counter.builder("pantera.auth.sign_in.pauses")
+            .description("Password sign-ins paused after unconfirmed second factors")
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
+     * A user was locked after failed logins.
+     */
+    public void recordAccountLock() {
+        Counter.builder("pantera.auth.account.locks")
+            .description("Users locked after failed logins")
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
+     * Locks that ended.
+     * @param cause How: {@code admin}, {@code automatic} or {@code lock_off}
+     * @param count Number of locks
+     */
+    public void recordAccountUnlock(final String cause, final int count) {
+        Counter.builder("pantera.auth.account.unlocks")
+            .description("Account locks that ended")
+            .tags("cause", cause)
+            .register(this.registry)
+            .increment(count);
+    }
+
     // ========== Cache Metrics ==========
 
     public void recordCacheHit(String cacheType, String cacheTier) {

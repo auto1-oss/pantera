@@ -208,10 +208,21 @@ Every access record (logger `http.access`, `event.action: http_request`) with a 
 |----------------|---------------------------------------------|
 | `negative_cache` | A proxy or a group answered 404 from its negative cache; the upstream was not asked. For a group it also means a member did. |
 | `upstream_status_<code>` | The upstream answered `<code>`: `upstream_status_404` is the upstream's own "not found", `upstream_status_403` its refusal, `upstream_status_503` its failure. On a 404 with `upstream_status_401`, `_403`, `_400` and the like, see below. |
+| `upstream_no_files` | A PyPI proxy answered 404 for a project page that its upstream served (200) without a single file. The 404 is remembered in the negative cache like the upstream's own 404 (v2.2.15+). |
 | `connection_closed`, `connection_refused`, `connect_timeout`, `read_timeout`, `idle_timeout`, `request_timeout`, `unknown_host`, `tls_error`, `egress_denied`, `request_rejected` | The call to the upstream failed that way. The answer is a 5xx. |
 | `bulkhead_full` | The repository had no free permit within its wait bound (503). |
 | `circuit_open` | The circuit breaker of the upstream, or of every remaining group member, is open. |
 | `cooldown_active` | Cooldown blocks the artifact. |
+| `skipped_by_routing_rule` | A group answered 404 and asked no member: every member is limited by [routing rules](../configuration-reference.md#routing-rules) to other paths (v2.2.15+). When at least one member was asked, the record carries that member's reason instead. |
+| `login_delayed` | Logins of that user are delayed after failed logins (403 with `Retry-After`). No provider was asked. See [Failed Logins](failed-logins.md) (v2.2.15+). |
+| `second_factor_failed` | The identity provider accepted the password, but the second factor was not confirmed: the push was denied or not answered, or the code was wrong (401, the generic "Sign-in failed"). Not a failed login; it counts toward the pause (v2.2.15+). |
+| `sign_in_paused` | Password sign-in of that user is paused after sign-ins whose second factor was not confirmed (403 with `Retry-After`). No provider was asked and no push was sent (v2.2.15+). |
+| `account_locked` | The user is locked after failed logins (403). No provider was asked. |
+| `identity_provider_unavailable` | The login could not be checked: the identity provider cannot be reached, limits the rate or fails (503). It is not a failed login of the user. |
+| `directory_account_locked`, `password_expired`, `sign_in_not_completed` | The identity provider did not reject the password as wrong, but the sign-in did not complete: the directory account is locked, its password expired, or a later step after the second factor failed (401). Not counted. |
+| `sign_in_busy` | Another login of the same user was being checked for more than 30 seconds (503). |
+| `mfa_required` | The identity provider asked for a second factor for a repository login. Nobody can answer one there, so the login is refused with 401 and no factor is verified (v2.2.15+). The client needs an API key. |
+| `api_key_expired`, `api_key_revoked`, `api_key_refused`, `api_key_unknown` | An API key was rejected (401): it is past its expiry date, was revoked or removed, is valid but was not accepted (its owner is disabled, or it came with another user name), or was not signed by this installation. The [Sign-in Failures Report](sign-in-failures.md) names the owner and the client (v2.2.15+). |
 | `cache_write_failed`, `storage_unavailable`, `index_unavailable`, `deadline_exceeded`, `internal_error`, ... | A failure inside Pantera (the tokens of the 5xx cause records below). |
 | `not_found`, `authentication_required`, `forbidden`, `method_not_allowed`, `bad_request`, `conflict`, `rate_limited`, `client_error`, `bad_gateway`, `service_unavailable`, `gateway_timeout`, `server_error` | Nothing more specific is known: the token only names the status. `not_found` on a hosted repository is a path that is not in storage. On a 5xx it means the code that produced the answer did not say why; the cause record below may still have it. |
 

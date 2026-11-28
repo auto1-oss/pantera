@@ -156,9 +156,7 @@ public final class CombinedAuthzSlice implements Slice {
                 ResponseBuilder.forbidden().build()
             );
         }
-        return ResponseBuilder.unauthorized()
-            .header(new WwwAuthenticate(result.challenge()))
-            .completedFuture();
+        return new FailedLogin(result, headers).response();
     }
 
     /**
@@ -206,9 +204,9 @@ public final class CombinedAuthzSlice implements Slice {
                         );
                     }
                     if (BasicAuthScheme.NAME.equals(scheme)) {
-                        return this.authenticateBasic(auth);
+                        return this.authenticateBasic(auth, headers);
                     } else if (BearerAuthScheme.NAME.equals(scheme)) {
-                        return this.authenticateBearer(auth);
+                        return this.authenticateBearer(auth, headers);
                     } else {
                         return CompletableFuture.completedFuture(
                             AuthScheme.result(
@@ -238,7 +236,9 @@ public final class CombinedAuthzSlice implements Slice {
      * @param auth Authorization header.
      * @return Authentication result.
      */
-    private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
+    private CompletionStage<AuthScheme.Result> authenticateBasic(
+        final Authorization auth, final Headers request
+    ) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
         try {
             basic.username();
@@ -254,7 +254,7 @@ public final class CombinedAuthzSlice implements Slice {
                 )
             );
         }
-        final CompletionStage<Optional<AuthUser>> resolved;
+        final CompletionStage<PasswordCheck.Outcome> resolved;
         if (AuthWorkerPool.jwtShaped(basic.password())) {
             // Package-manager clients (mvn, npm, pip, …) submit API tokens
             // as the Basic password. Validate token-shaped passwords as
@@ -312,26 +312,24 @@ public final class CombinedAuthzSlice implements Slice {
                             usr -> usr.name().equals(basic.username())
                         );
                         if (bound.isPresent()) {
-                            return CompletableFuture.completedFuture(bound);
+                            return CompletableFuture.completedFuture(
+                                new PasswordCheck.Outcome(bound, Optional.empty())
+                            );
                         }
-                        return CompletableFuture.supplyAsync(
-                            () -> this.basicAuth.user(basic.username(), basic.password()),
-                            AuthWorkerPool.AUTH_EXECUTOR
-                        );
+                        return new PasswordCheck(this.basicAuth, request)
+                            .run(basic.username(), basic.password());
                     }
                 );
         } else {
             // Offload to worker thread to prevent blocking event loop
             // This is critical for auth providers that make external calls
             // (Okta, Keycloak, etc.)
-            resolved = CompletableFuture.supplyAsync(
-                () -> this.basicAuth.user(basic.username(), basic.password()),
-                AuthWorkerPool.AUTH_EXECUTOR
-            );
+            resolved = new PasswordCheck(this.basicAuth, request)
+                .run(basic.username(), basic.password());
         }
         return resolved.thenApply(
-            user -> AuthScheme.result(
-                user,
+            outcome -> AuthScheme.result(
+                outcome,
                 String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                     BasicAuthScheme.NAME, BearerAuthScheme.NAME)
             )
@@ -342,13 +340,17 @@ public final class CombinedAuthzSlice implements Slice {
      * Authenticate using Bearer token authentication.
      *
      * @param auth Authorization header.
+     * @param request Headers of the request
      * @return Authentication result.
      */
-    private CompletionStage<AuthScheme.Result> authenticateBearer(final Authorization auth) {
-        return this.tokenAuth.user(new Authorization.Bearer(auth.credentials()).token())
+    private CompletionStage<AuthScheme.Result> authenticateBearer(
+        final Authorization auth, final Headers request
+    ) {
+        return this.tokenAuth
+            .check(new Authorization.Bearer(auth.credentials()).token(), request)
             .thenApply(
-                user -> AuthScheme.result(
-                    user,
+                outcome -> AuthScheme.result(
+                    outcome,
                     String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                         BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                 )

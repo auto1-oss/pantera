@@ -29,6 +29,7 @@ import com.auto1.pantera.http.cache.UpstreamMiss;
 import com.auto1.pantera.http.log.FailureCause;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.cooldown.GoLatestHandler;
 import com.auto1.pantera.http.cooldown.GoListHandler;
@@ -111,6 +112,13 @@ final class CachedProxySlice implements Slice {
     private static final Pattern ARTIFACT = Pattern.compile(
         "^(?<module>.+)/@v/v(?<version>[^/]+)\\.(?<ext>info|mod|zip)$"
     );
+
+    /**
+     * The latest signed tree head of a checksum database proxied under
+     * {@code /sumdb/<name>/}. It changes with every module the database
+     * records, unlike its lookups and tiles, so it is never kept.
+     */
+    private static final Pattern TREE_HEAD = Pattern.compile("^/sumdb/[^/]+/latest$");
 
     /**
      * Origin slice.
@@ -259,7 +267,10 @@ final class CachedProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .field("log.source", "application")
                 .log();
-            return this.handleRootPath(line, headers);
+            return this.passThrough(line, headers);
+        }
+        if (CachedProxySlice.TREE_HEAD.matcher(path).matches()) {
+            return this.passThrough(line, headers);
         }
         // Cooldown-aware @latest rewrite: intercepts before generic
         // fetchThroughCache so "go get <module>" (no pseudo-version) is
@@ -504,7 +515,7 @@ final class CachedProxySlice implements Slice {
                     .log();
                 // Record event for .zip files
                 if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
-                    this.enqueueEvent(owner, artifactPath, releaseDate);
+                    this.enqueueEvent(request, owner, artifactPath, releaseDate);
                 }
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.ok()
@@ -559,7 +570,17 @@ final class CachedProxySlice implements Slice {
         if (this.cacheWriter != null
             && this.storage.isPresent()
             && key.string().endsWith(".zip")) {
-            return this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr, ctx);
+            return this.verifyAndServePrimary(
+                line, key, owner, artifactPath, releaseDate, rshdr, ctx, request
+            );
+        }
+        // A Troubleshoot replay leaves the proxy as it found it: it is
+        // answered with what the upstream sends, and nothing is stored.
+        final Cache target;
+        if (RequestTrace.instance().traced(request)) {
+            target = Cache.NOP;
+        } else {
+            target = this.cache;
         }
         // What the upstream said when it gave no content: the answer for the
         // client. An upstream that could not be asked is not a missing file.
@@ -588,7 +609,7 @@ final class CachedProxySlice implements Slice {
                     .log();
                 return Optional.empty();
             })
-            .thenCompose(head -> this.cache.load(
+            .thenCompose(head -> target.load(
                 key,
                 new Remote.WithErrorHandling(
                     () -> {
@@ -596,6 +617,10 @@ final class CachedProxySlice implements Slice {
                             new CompletableFuture<>();
                         this.client.response(line, Headers.EMPTY, Content.EMPTY)
                             .thenApply(resp -> {
+                                // Kept before the content is handed on: the
+                                // answer to the client is built as soon as the
+                                // content arrives, on this thread.
+                                rshdr.set(resp.headers());
                                 final CompletableFuture<Void> term = new CompletableFuture<>();
                                 if (resp.status().success()) {
                                     final Flowable<ByteBuffer> res =
@@ -613,7 +638,6 @@ final class CachedProxySlice implements Slice {
                                         term.complete(null);
                                     });
                                 }
-                                rshdr.set(resp.headers());
                                 return term;
                             })
                             .exceptionally(err -> {
@@ -645,6 +669,7 @@ final class CachedProxySlice implements Slice {
                                 .log();
                             this.bindContext(ctx);
                             this.enqueueEvent(
+                                request,
                                 owner,
                                 artifactPath,
                                 releaseDate.or(() -> this.parseLastModified(rshdr.get()))
@@ -787,19 +812,23 @@ final class CachedProxySlice implements Slice {
 
     /**
      * Enqueue artifact event for metadata processing.
-     * Only enqueues for actual artifacts (not list endpoints).
+     * Only enqueues for actual artifacts (not list endpoints), and never
+     * for a Troubleshoot replay ({@link RequestTrace}): the event becomes
+     * a row of the search index, and a diagnosis must not add one.
      *
+     * @param request Headers of the client request
      * @param owner Owner username
      * @param artifactPath Optional artifact path (module/@v/version)
      * @param releaseDate Optional release date
      */
     private void enqueueEvent(
+        final Headers request,
         final String owner,
         final Optional<String> artifactPath,
         final Optional<Instant> releaseDate
     ) {
         // Only enqueue if this is an actual artifact (has artifactPath)
-        if (artifactPath.isEmpty()) {
+        if (artifactPath.isEmpty() || RequestTrace.instance().traced(request)) {
             return;
         }
         this.addEventToQueue(
@@ -915,7 +944,15 @@ final class CachedProxySlice implements Slice {
         return res;
     }
 
-    private CompletableFuture<Response> handleRootPath(
+    /**
+     * Ask the upstream for what is never kept (the root, the latest tree
+     * head of a checksum database) and answer with what it sent.
+     *
+     * @param line Request line
+     * @param request Headers of the client request
+     * @return The upstream's answer, or the answer for a miss or a failure
+     */
+    private CompletableFuture<Response> passThrough(
         final RequestLine line, final Headers request
     ) {
         final UpstreamMiss miss = new UpstreamMiss(
@@ -935,7 +972,7 @@ final class CachedProxySlice implements Slice {
                     ignored -> miss.answered(resp.status().code(), resp.headers())
                 );
             })
-            .exceptionally(err -> miss.failed(err, "Go upstream root request failed"));
+            .exceptionally(err -> miss.failed(err, "Go upstream request failed"));
     }
 
     // ===== T-P08: stream-through primary path =====
@@ -961,7 +998,8 @@ final class CachedProxySlice implements Slice {
         final Optional<String> artifactPath,
         final Optional<Instant> releaseDate,
         final AtomicReference<Headers> rshdr,
-        final AuditContext auditCtx
+        final AuditContext auditCtx,
+        final Headers request
     ) {
         final Storage raw = this.storage.orElseThrow();
         return raw.exists(key).thenCompose(present -> {
@@ -992,11 +1030,14 @@ final class CachedProxySlice implements Slice {
             );
             if (isLeader[0]) {
                 return this.streamPrimary(
-                    line, key, owner, artifactPath, releaseDate, rshdr, leaderGate, auditCtx
+                    line, key, owner, artifactPath, releaseDate, rshdr, leaderGate, auditCtx,
+                    request
                 );
             }
             return gate.exceptionally(err -> null).thenCompose(ignored ->
-                this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr, auditCtx)
+                this.verifyAndServePrimary(
+                    line, key, owner, artifactPath, releaseDate, rshdr, auditCtx, request
+                )
             );
         }).exceptionally(err -> {
             return new UpstreamMiss(
@@ -1021,7 +1062,8 @@ final class CachedProxySlice implements Slice {
         final Optional<Instant> releaseDate,
         final AtomicReference<Headers> rshdr,
         final CompletableFuture<Void> leaderGate,
-        final AuditContext auditCtx
+        final AuditContext auditCtx,
+        final Headers request
     ) {
         final RequestContext ctx = new RequestContext(
             auditCtx.traceId(),
@@ -1057,6 +1099,26 @@ final class CachedProxySlice implements Slice {
                     return CompletableFuture.completedFuture(answer);
                 }
                 rshdr.set(resp.headers());
+                if (RequestTrace.instance().traced(request)) {
+                    // A Troubleshoot replay asks what a client would get.
+                    // The upstream has the archive: its bytes are handed
+                    // on and the proxy is left as it was. Storing the
+                    // archive would add it to the search index and change
+                    // which member a group asks from then on. Requests
+                    // waiting behind this one ask for themselves.
+                    if (!leaderGate.isDone()) {
+                        leaderGate.complete(null);
+                    }
+                    if (artifactPath.isPresent()) {
+                        this.auditZipAccess(
+                            auditCtx, key, owner, resp.body().size().orElse(0L),
+                            AuditLogger.OUTCOME_SUCCESS, null
+                        );
+                    }
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok().body(resp.body()).build()
+                    );
+                }
                 return this.cacheWriter.streamThroughAndCommit(
                     key,
                     key.string(),
@@ -1118,7 +1180,7 @@ final class CachedProxySlice implements Slice {
                                 // never lands at all.
                                 this.bindContext(auditCtx);
                                 this.enqueueEvent(
-                                    owner, artifactPath,
+                                    request, owner, artifactPath,
                                     releaseDate.or(() -> this.parseLastModified(rshdr.get()))
                                 );
                             }

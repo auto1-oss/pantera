@@ -16,16 +16,27 @@ import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.auto1.pantera.api.AuthTokenRest;
+import com.auto1.pantera.auth.failedlogins.FailedLogins;
 import com.auto1.pantera.db.dao.UserTokenDao;
+import com.auto1.pantera.auth.signin.RejectedKey;
+import com.auto1.pantera.auth.signin.SignInFailures;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.auth.LoginSource;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.PasswordCheck;
 import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 import java.security.interfaces.RSAPublicKey;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ForkJoinPool;
+import org.slf4j.MDC;
 
 /**
  * Unified JWT authentication handler for both HTTP ports.
@@ -58,6 +69,18 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
     private final UserEnabledCheck enabledCheck;
 
     /**
+     * Sign-in failures report for rejected API keys, null when none is
+     * kept.
+     */
+    private final SignInFailures report;
+
+    /**
+     * Failed logins, which count a rejected API key of its owner when the
+     * policy says so; null when none are counted.
+     */
+    private final FailedLogins logins;
+
+    /**
      * Ctor.
      * @param publicKey RSA public key used for RS256 verification
      * @param tokenDao DAO for JTI validation; {@code null} disables JTI enforcement
@@ -86,6 +109,47 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
         final RevocationBlocklist blocklist,
         final UserEnabledCheck enabledCheck
     ) {
+        this(publicKey, tokenDao, blocklist, enabledCheck, null);
+    }
+
+    /**
+     * Ctor.
+     * @param publicKey RSA public key used for RS256 verification
+     * @param tokenDao DAO for token JTI validation (nullable for tests)
+     * @param blocklist Revocation blocklist (nullable)
+     * @param enabledCheck Per-request enabled-state gate
+     * @param report Sign-in failures report for rejected API keys (nullable)
+     */
+    public UnifiedJwtAuthHandler(
+        final RSAPublicKey publicKey,
+        final UserTokenDao tokenDao,
+        final RevocationBlocklist blocklist,
+        final UserEnabledCheck enabledCheck,
+        final SignInFailures report
+    ) {
+        this(publicKey, tokenDao, blocklist, enabledCheck, report, null);
+    }
+
+    /**
+     * Ctor.
+     * @param publicKey RSA public key used for RS256 verification
+     * @param tokenDao DAO for token JTI validation (nullable for tests)
+     * @param blocklist Revocation blocklist (nullable)
+     * @param enabledCheck Per-request enabled-state gate
+     * @param report Sign-in failures report for rejected API keys (nullable)
+     * @param logins Failed logins, which count a rejected API key of its
+     *  owner when the policy says so (nullable)
+     */
+    public UnifiedJwtAuthHandler(
+        final RSAPublicKey publicKey,
+        final UserTokenDao tokenDao,
+        final RevocationBlocklist blocklist,
+        final UserEnabledCheck enabledCheck,
+        final SignInFailures report,
+        final FailedLogins logins
+    ) {
+        this.report = report;
+        this.logins = logins;
         this.verifier = JWT.require(Algorithm.RSA256(publicKey))
             .withClaimPresence(AuthTokenRest.JTI)
             .withClaimPresence(AuthTokenRest.TYPE)
@@ -123,6 +187,110 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                 .map(ValidatedToken::user));
     }
 
+    @Override
+    public CompletionStage<PasswordCheck.Outcome> check(final String token) {
+        return this.checked(token, new LoginSource("", "", LoginSource.REPOSITORY));
+    }
+
+    @Override
+    public CompletionStage<PasswordCheck.Outcome> check(
+        final String token, final Headers request
+    ) {
+        return this.checked(token, new LoginSource(request));
+    }
+
+    /**
+     * Why a token that was rejected is refused, when it is an API key: it
+     * is noted in the sign-in failures report, and it is a failed login of
+     * its owner by the rule of {@link FailedLogins#keyRejected}, as a key
+     * sent as a password is. The client is told the key's reason, or that
+     * its owner is locked. For a caller that validated the token itself
+     * and got nothing.
+     *
+     * <p>Only a key this installation signed names its owner: a token that
+     * proves no owner is a failed login of nobody.</p>
+     *
+     * @param token The rejected token
+     * @param source Where the request came from
+     * @return The refusal; empty for a token that is no API key, or when no
+     *  report is kept
+     */
+    public Optional<AuthRefusal> rejected(final String token, final LoginSource source) {
+        final Optional<RejectedKey> key;
+        if (this.report == null) {
+            key = Optional.empty();
+        } else {
+            key = this.report.rejected(token, "", source);
+        }
+        final Optional<AuthRefusal> res;
+        if (this.logins != null && key.filter(RejectedKey::verified)
+            .map(known -> this.logins.keyRejected(known.owner(), source))
+            .orElse(false)) {
+            // The lock is the answer; it was noted on this thread.
+            res = AuthRefusal.take();
+        } else {
+            res = key.map(
+                known -> new AuthRefusal(
+                    known.reason(), RsStatus.UNAUTHORIZED, 0L, known.message()
+                )
+            );
+        }
+        return res;
+    }
+
+    private CompletionStage<PasswordCheck.Outcome> checked(
+        final String token, final LoginSource source
+    ) {
+        // The refusal is noted on the thread that validates: it is read
+        // there, and nothing of it stays on a shared thread.
+        return CompletableFuture.supplyAsync(
+            TraceContextExecutor.wrapSupplier(
+                () -> {
+                    AuthRefusal.take();
+                    final Optional<AuthUser> user = this.validate(token)
+                        .filter(valid -> valid.type() != TokenType.REFRESH)
+                        .map(ValidatedToken::user);
+                    final Optional<AuthRefusal> refusal = AuthRefusal.take();
+                    final PasswordCheck.Outcome outcome;
+                    if (user.isPresent()) {
+                        outcome = new PasswordCheck.Outcome(user, Optional.empty());
+                    } else if (refusal.isPresent()) {
+                        outcome = new PasswordCheck.Outcome(user, refusal);
+                    } else {
+                        // A rejected API key: the report learns whose it
+                        // was, the client why it was rejected.
+                        outcome = new PasswordCheck.Outcome(
+                            user, this.rejected(token, source)
+                        );
+                    }
+                    return outcome;
+                }
+            ),
+            ForkJoinPool.commonPool()
+        );
+    }
+
+    /**
+     * Whether a token is one of a locked user: it carries a valid
+     * signature of this installation, is not expired, and its subject is
+     * locked. For a caller that has to tell "locked" from "invalid" after
+     * a failed validation.
+     *
+     * @param token JWT string
+     * @return True for a token whose owner is locked
+     */
+    public boolean ownerLocked(final String token) {
+        boolean locked;
+        try {
+            final String sub = this.verifier.verify(token).getSubject();
+            locked = sub != null && this.enabledCheck.isLocked(sub);
+        } catch (final JWTVerificationException ex) {
+            // Not a token of ours, or expired: it says nothing about a lock.
+            locked = false;
+        }
+        return locked;
+    }
+
     /**
      * Full validation returning the verified type and JTI alongside the
      * principal. Same signature / expiry / JTI-ownership / blocklist /
@@ -132,7 +300,10 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
      * @return Validated token, or empty when the token is not acceptable
      */
     public Optional<ValidatedToken> validated(final String token) {
-        return this.validate(token);
+        final Optional<ValidatedToken> res = this.validate(token);
+        // This caller reads no refusal: none may stay on its thread.
+        AuthRefusal.take();
+        return res;
     }
 
     /**
@@ -143,8 +314,11 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
      * @return Future with the validated token, or empty
      */
     public CompletionStage<Optional<ValidatedToken>> validatedAsync(final String token) {
+        // The shared pool's threads keep whatever context earlier work left
+        // on them: the check runs under the caller's, so its records carry
+        // the trace and the client address of this request.
         return CompletableFuture.supplyAsync(
-            () -> this.validate(token),
+            TraceContextExecutor.wrapSupplier(() -> this.validated(token)),
             ForkJoinPool.commonPool()
         );
     }
@@ -189,6 +363,28 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
      * @return Validated token if acceptable, empty otherwise
      */
     private Optional<ValidatedToken> validate(final String token) {
+        // The owner of a token is known only once it is verified. A user
+        // name the thread's context still holds belongs to another request,
+        // and the logger prefers the context to the name a record states:
+        // without this a rejected token is recorded under that other user.
+        final String prior = MDC.get(EcsMdc.USER_NAME);
+        MDC.remove(EcsMdc.USER_NAME);
+        try {
+            return this.verified(token);
+        } finally {
+            if (prior != null) {
+                MDC.put(EcsMdc.USER_NAME, prior);
+            }
+        }
+    }
+
+    /**
+     * Verify a token: signature, expiry, required claims, and the
+     * type-specific revocation and database checks.
+     * @param token JWT string
+     * @return Validated token if acceptable, empty otherwise
+     */
+    private Optional<ValidatedToken> verified(final String token) {
         final DecodedJWT decoded;
         try {
             decoded = this.verifier.verify(token);
@@ -247,6 +443,27 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                 break;
             default:
                 return Optional.empty();
+        }
+        // A locked user can use no credential. The refusal says so: the
+        // client is answered 403 "Account locked", not 401.
+        if (this.enabledCheck.isLocked(sub)) {
+            new AuthRefusal(
+                "account_locked", RsStatus.FORBIDDEN, 0L, "Account locked"
+            ).note();
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                    .recordLoginRefused("account_locked");
+            }
+            EcsLogger.warn("com.auto1.pantera.auth")
+                .message("Token rejected: user is locked after failed logins")
+                .eventCategory("authentication")
+                .eventAction("token_validate")
+                .eventOutcome("failure")
+                .field("event.reason", "account_locked")
+                .field("user.name", sub)
+                .field("log.source", "application")
+                .log();
+            return Optional.empty();
         }
         // Per-request enabled-state gate. If the subject has been
         // disabled in Pantera since the token was issued, reject here.

@@ -68,33 +68,41 @@ public final class BasicAuthScheme implements AuthScheme {
         // Offload auth to worker thread to prevent blocking event loop
         // This is critical for auth providers that make external calls (Okta, Keycloak, etc.)
         return CompletableFuture.supplyAsync(
-            () -> AuthScheme.result(this.user(authHeader.get()), BasicAuthScheme.CHALLENGE),
+            () -> AuthScheme.result(
+                this.outcome(authHeader.get(), headers), BasicAuthScheme.CHALLENGE
+            ),
             AuthWorkerPool.AUTH_EXECUTOR
         );
     }
 
     /**
-     * Obtains user from authorization header.
+     * Checks the credentials of an authorization header.
      *
      * @param header Authorization header's value
-     * @return User if authorised
+     * @param request Headers of the request
+     * @return Outcome of the check, with the refusal the chain noted
      */
-    private Optional<AuthUser> user(final String header) {
+    private PasswordCheck.Outcome outcome(final String header, final Headers request) {
         final Authorization atz = new Authorization(header);
+        PasswordCheck.Outcome res =
+            new PasswordCheck.Outcome(Optional.empty(), Optional.empty());
         if (BasicAuthScheme.NAME.equals(atz.scheme())) {
             final Authorization.Basic basic = new Authorization.Basic(atz.credentials());
-            final String name;
-            final String pass;
+            boolean readable;
             try {
-                name = basic.username();
-                pass = basic.password();
+                basic.username();
+                basic.password();
+                readable = true;
             } catch (final IllegalArgumentException ex) {
                 // Undecodable Base64 or no ':' separator: a failed login
                 // (401), not a server error.
-                return Optional.empty();
+                readable = false;
             }
-            return this.auth.user(name, pass);
+            if (readable) {
+                res = new PasswordCheck(this.auth, request)
+                    .now(basic.username(), basic.password());
+            }
         }
-        return Optional.empty();
+        return res;
     }
 }

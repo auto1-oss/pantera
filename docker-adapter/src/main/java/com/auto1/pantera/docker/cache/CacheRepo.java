@@ -68,6 +68,16 @@ public final class CacheRepo implements Repo {
     private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
 
     /**
+     * Whether a blob of the origin is stored in the cache while it is read.
+     */
+    private final boolean store;
+
+    /**
+     * When a manifest of the origin is copied into the cache.
+     */
+    private final ManifestCopies copies;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -113,6 +123,32 @@ public final class CacheRepo implements Repo {
                      Optional<Queue<ArtifactEvent>> events, String registryName,
                      Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
                      ConcurrentMap<String, CompletableFuture<Void>> inflight) {
+        this(
+            name, origin, cache, events, registryName, inspector, upstreamUrl, inflight, true,
+            ManifestCopies.AT_ONCE
+        );
+    }
+
+    /**
+     * @param name Repository name
+     * @param origin Origin repository
+     * @param cache Cache repository
+     * @param events Artifact events
+     * @param registryName Pantera repository name
+     * @param inspector Cooldown inspector
+     * @param upstreamUrl Upstream URL for metrics
+     * @param inflight Manifest cache copies in flight, shared per proxy repository
+     * @param store Whether a blob of the origin is stored in the cache while
+     *  it is read; false for a request that must leave the repository as it
+     *  found it
+     * @param copies When a manifest of the origin is copied into the cache
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    CacheRepo(String name, Repo origin, Repo cache,
+              Optional<Queue<ArtifactEvent>> events, String registryName,
+              Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl,
+              ConcurrentMap<String, CompletableFuture<Void>> inflight, boolean store,
+              ManifestCopies copies) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
@@ -121,15 +157,20 @@ public final class CacheRepo implements Repo {
         this.inspector = inspector;
         this.upstreamUrl = upstreamUrl;
         this.inflight = inflight;
+        this.store = store;
+        this.copies = copies;
     }
 
     @Override
     public Layers layers() {
-        return new CacheLayers(this.origin.layers(), this.cache.layers(), this.repoName, this.upstreamUrl);
+        return new CacheLayers(
+            this.origin.layers(), this.cache.layers(), this.repoName, this.upstreamUrl,
+            this.store
+        );
     }
 
     @Override
-    public Manifests manifests() {
+    public CacheManifests manifests() {
         return new CacheManifests(
             this.name,
             this.origin,
@@ -138,7 +179,8 @@ public final class CacheRepo implements Repo {
             this.repoName,
             this.inspector,
             this.upstreamUrl,
-            this.inflight
+            this.inflight,
+            this.copies
         );
     }
 

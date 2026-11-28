@@ -12,6 +12,9 @@ package com.auto1.pantera.group;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.log.RequestReasons;
+import com.auto1.pantera.http.log.RequestTrace;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -35,6 +38,12 @@ import java.util.stream.Collectors;
  * @since 2.2.14
  */
 public final class RoutedMembers implements SliceResolver {
+
+    /**
+     * Reason of the "not found" a member answers for a path its routing
+     * rules do not match: the member was not asked.
+     */
+    public static final String SKIPPED = "skipped_by_routing_rule";
 
     /**
      * Resolver of the members.
@@ -77,6 +86,11 @@ public final class RoutedMembers implements SliceResolver {
         /**
          * The member.
          */
+        /**
+         * Member name.
+         */
+        private final String name;
+
         private final Slice member;
 
         /**
@@ -90,6 +104,7 @@ public final class RoutedMembers implements SliceResolver {
         private final List<RoutingRule> rules;
 
         Routed(final Slice member, final String name, final List<RoutingRule> rules) {
+            this.name = name;
             this.member = member;
             this.prefix = '/' + name + '/';
             this.rules = rules;
@@ -110,6 +125,17 @@ public final class RoutedMembers implements SliceResolver {
             if (this.rules.stream().anyMatch(rule -> rule.matches(path))) {
                 result = this.member.response(line, headers, body);
             } else {
+                // Not asked: the answer is a "not found" that says why, for
+                // the access record and the Troubleshoot trace.
+                RequestReasons.instance().note(headers, RoutedMembers.SKIPPED);
+                if (RequestTrace.instance().traced(headers)) {
+                    RequestTrace.instance().step(
+                        headers,
+                        new RequestTrace.Step(
+                            this.name, "", RsStatus.NOT_FOUND.code(), RoutedMembers.SKIPPED, 0L
+                        )
+                    );
+                }
                 result = body.asBytesFuture().thenApply(
                     ignored -> ResponseBuilder.notFound().build()
                 );
