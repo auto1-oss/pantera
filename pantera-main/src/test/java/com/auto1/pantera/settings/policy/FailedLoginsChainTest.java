@@ -16,7 +16,6 @@ import com.auto1.pantera.auth.failedlogins.FailedLogins;
 import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.PasswordCheck;
-import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.settings.YamlSettings;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -232,7 +231,7 @@ final class FailedLoginsChainTest {
             Yaml.createYamlInput(
                 String.join("\n", "meta:", "  credentials:", "    - type: recording")
             ).readYamlMapping(),
-            this.temp, new QuartzService()
+            this.temp
         );
     }
 }

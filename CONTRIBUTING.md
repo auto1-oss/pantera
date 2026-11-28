@@ -360,8 +360,6 @@ PRs are merged only after all required CI checks pass and a maintainer approves.
 If you discover a security vulnerability, **do not** open a public issue. Instead, report
 it through [GitHub Security Advisories](https://github.com/auto1-oss/pantera/security/advisories/new).
 
-We will acknowledge the report within 3 business days and work with you on a fix.
-
 ---
 
 ## License

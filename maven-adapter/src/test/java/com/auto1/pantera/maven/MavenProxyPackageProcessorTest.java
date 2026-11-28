@@ -29,15 +29,15 @@ import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
-import org.quartz.JobBuilder;
-import org.quartz.JobDataMap;
-import org.quartz.Scheduler;
-import org.quartz.SchedulerException;
-import org.quartz.TriggerBuilder;
-import org.quartz.impl.StdSchedulerFactory;
 
 /**
  * Test for {@link MavenProxyPackageProcessorTest}.
+ * <p>
+ * As of the WS2.2b fix, this processor no longer implements {@code org.quartz.Job}
+ * — it runs as a plain {@link Runnable} tick on a per-node scheduler (see
+ * {@code MetadataEventQueues}/{@code LocalEventDrainScheduler}), so these tests
+ * wire and invoke it directly instead of scheduling it through a real Quartz
+ * {@code Scheduler}.
  */
 class MavenProxyPackageProcessorTest {
 
@@ -62,43 +62,30 @@ class MavenProxyPackageProcessorTest {
     private Queue<ProxyArtifactEvent> packages;
 
     /**
-     * Scheduler.
+     * Processor under test.
      */
-    private Scheduler scheduler;
-
-    /**
-     * Job data map.
-     */
-    private JobDataMap data;
+    private MavenProxyPackageProcessor processor;
 
     @BeforeEach
-    void init() throws SchedulerException {
+    void init() {
         this.asto = new InMemoryStorage();
         this.events = new ConcurrentLinkedQueue<>();
         this.packages = new ConcurrentLinkedQueue<>();
-        this.scheduler = new StdSchedulerFactory().getScheduler();
-        this.data = new JobDataMap();
-        this.data.put("events", this.events);
-        this.data.put("packages", this.packages);
-        this.data.put("storage", this.asto);
+        this.processor = new MavenProxyPackageProcessor();
+        this.processor.setEvents(this.events);
+        this.processor.setPackages(this.packages);
+        this.processor.setStorage(this.asto);
     }
 
     @Test
-    void processesPackage() throws SchedulerException {
+    void processesPackage() {
         final String pkg = "com/pantera/asto/0.15";
         final Key key = new Key.From(pkg);
         new TestResource(pkg).addFilesTo(this.asto, key);
         this.packages.add(new ProxyArtifactEvent(key, MavenProxyPackageProcessorTest.RNAME));
         this.packages.add(new ProxyArtifactEvent(key, MavenProxyPackageProcessorTest.RNAME));
         this.packages.add(new ProxyArtifactEvent(key, MavenProxyPackageProcessorTest.RNAME));
-        this.scheduler.scheduleJob(
-            JobBuilder.newJob(MavenProxyPackageProcessor.class).setJobData(this.data).withIdentity(
-                "job1", MavenProxyPackageProcessor.class.getSimpleName()
-            ).build(),
-            TriggerBuilder.newTrigger().startNow()
-                .withIdentity("trigger1", MavenProxyPackageProcessor.class.getSimpleName()).build()
-        );
-        this.scheduler.start();
+        this.processor.run();
         Awaitility.await().atMost(60, TimeUnit.SECONDS).until(() -> this.events.size() == 1);
         MatcherAssert.assertThat(
             "Same items were removed from packages queue", this.packages.isEmpty()
@@ -110,7 +97,7 @@ class MavenProxyPackageProcessorTest {
 
     @Test
     @Disabled("https://github.com/pantera/pantera/issues/1349")
-    void processesSeveralPackagesAndPacakgeWithError() throws SchedulerException {
+    void processesSeveralPackagesAndPacakgeWithError() {
         final String first = "com/pantera/asto/0.20.1";
         final Key firstk = new Key.From(first);
         new TestResource(first).addFilesTo(this.asto, firstk);
@@ -120,14 +107,7 @@ class MavenProxyPackageProcessorTest {
         final String snapshot = "com/pantera/asto/1.0-SNAPSHOT";
         final Key snapshotk = new Key.From(snapshot);
         new TestResource(snapshot).addFilesTo(this.asto, snapshotk);
-        this.scheduler.scheduleJob(
-            JobBuilder.newJob(MavenProxyPackageProcessor.class).setJobData(this.data).withIdentity(
-                "job1", MavenProxyPackageProcessor.class.getSimpleName()
-            ).build(),
-            TriggerBuilder.newTrigger().startNow()
-                .withIdentity("trigger1", MavenProxyPackageProcessor.class.getSimpleName()).build()
-        );
-        this.scheduler.start();
+        this.processor.run();
         this.packages.add(new ProxyArtifactEvent(firstk, MavenProxyPackageProcessorTest.RNAME));
         this.packages.add(new ProxyArtifactEvent(snapshotk, MavenProxyPackageProcessorTest.RNAME));
         this.packages.add(new ProxyArtifactEvent(secondk, MavenProxyPackageProcessorTest.RNAME));
@@ -157,7 +137,7 @@ class MavenProxyPackageProcessorTest {
         processor.setEvents(this.events);
         processor.setPackages(this.packages);
         processor.setStorage(new ListedButGone(key));
-        processor.execute(null);
+        processor.run();
         MatcherAssert.assertThat(
             "an exhausted event is dropped, not put back",
             this.packages.isEmpty(), new IsEqual<>(true)
@@ -173,7 +153,7 @@ class MavenProxyPackageProcessorTest {
             processor.setEvents(this.events);
             processor.setPackages(this.packages);
             processor.setStorage(new ListedButGone(key));
-            processor.execute(null);
+            processor.run();
         }
         MatcherAssert.assertThat(
             "the event stays queued", this.packages.size(), new IsEqual<>(1)

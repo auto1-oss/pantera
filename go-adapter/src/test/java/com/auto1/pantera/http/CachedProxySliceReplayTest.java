@@ -67,7 +67,8 @@ final class CachedProxySliceReplayTest {
         CachedProxySliceReplayTest.ZIP,
         "/example.com/mod/@v/v1.0.0.mod",
         "/example.com/mod/@v/v1.0.0.info",
-        "/sumdb/sum.golang.org/supported"
+        "/sumdb/sum.golang.org/lookup/example.com/mod@v1.0.0",
+        "/sumdb/sum.golang.org/tile/8/0/000"
     })
     @Timeout(120)
     void replayAnswersWhatTheUpstreamHasAndStoresNothing(final String path) throws Exception {

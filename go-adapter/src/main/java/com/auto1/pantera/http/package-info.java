@@ -9,7 +9,10 @@
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
 /**
- * Goproxy http layer files.
+ * Go module proxy HTTP layer: {@code GoSlice} (hosted), {@code
+ * GoProxySlice} / {@code CachedProxySlice} (proxy), and the {@code
+ * cooldown} sub-package's {@code @v/list} / {@code @latest} handlers.
+ * Not related to the deleted {@code goproxy.Goproxy} class (WS4-go.7).
  * @since 0.3
  */
 package com.auto1.pantera.http;

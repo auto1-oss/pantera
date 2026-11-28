@@ -31,20 +31,19 @@ import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
 import org.awaitility.Awaitility;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.quartz.JobBuilder;
-import org.quartz.JobDataMap;
-import org.quartz.Scheduler;
-import org.quartz.SchedulerException;
-import org.quartz.TriggerBuilder;
-import org.quartz.impl.StdSchedulerFactory;
 
 /**
  * Test for {@link PyProxyPackageProcessor}.
+ * <p>
+ * As of the WS2.2b fix, this processor no longer implements {@code org.quartz.Job}
+ * — it runs as a plain {@link Runnable} tick on a per-node scheduler (see
+ * {@code MetadataEventQueues}/{@code LocalEventDrainScheduler}), so these tests
+ * wire and invoke it directly instead of scheduling it through a real Quartz
+ * {@code Scheduler}.
  */
 class PyProxyPackageProcessorTest {
 
@@ -69,29 +68,23 @@ class PyProxyPackageProcessorTest {
     private Queue<ProxyArtifactEvent> packages;
 
     /**
-     * Scheduler.
+     * Processor under test.
      */
-    private Scheduler scheduler;
-
-    /**
-     * Job data map.
-     */
-    private JobDataMap data;
+    private PyProxyPackageProcessor processor;
 
     @BeforeEach
-    void init() throws SchedulerException {
+    void init() {
         this.asto = new InMemoryStorage();
         this.events = new ConcurrentLinkedQueue<>();
         this.packages = new ConcurrentLinkedQueue<>();
-        this.scheduler = new StdSchedulerFactory().getScheduler();
-        this.data = new JobDataMap();
-        this.data.put("events", this.events);
-        this.data.put("packages", this.packages);
-        this.data.put("storage", this.asto);
+        this.processor = new PyProxyPackageProcessor();
+        this.processor.setEvents(this.events);
+        this.processor.setPackages(this.packages);
+        this.processor.setStorage(this.asto);
     }
 
     @Test
-    void checkPackagesAndAddsToQueue() throws SchedulerException {
+    void checkPackagesAndAddsToQueue() {
         final Key zip = new Key.From("pantera-sample-0.2.zip");
         final Key tar = new Key.From("pantera-sample-0.2.tar");
         final Key whl = new Key.From("pantera_sample-0.2-py3-none-any.whl");
@@ -101,14 +94,7 @@ class PyProxyPackageProcessorTest {
         this.packages.add(new ProxyArtifactEvent(zip, PyProxyPackageProcessorTest.REPO_NAME));
         this.packages.add(new ProxyArtifactEvent(tar, PyProxyPackageProcessorTest.REPO_NAME));
         this.packages.add(new ProxyArtifactEvent(whl, PyProxyPackageProcessorTest.REPO_NAME));
-        this.scheduler.scheduleJob(
-            JobBuilder.newJob(PyProxyPackageProcessor.class).setJobData(this.data).withIdentity(
-                "job1", PyProxyPackageProcessor.class.getSimpleName()
-            ).build(),
-            TriggerBuilder.newTrigger().startNow()
-                .withIdentity("trigger1", PyProxyPackageProcessor.class.getSimpleName()).build()
-        );
-        this.scheduler.start();
+        this.processor.run();
         Awaitility.await().atMost(30, TimeUnit.SECONDS).until(() -> this.events.size() == 3);
         MatcherAssert.assertThat(
             this.events.stream()
@@ -119,34 +105,23 @@ class PyProxyPackageProcessorTest {
     }
 
     @Test
-    void doNotAddNotValidPackage() throws SchedulerException {
+    void doNotAddNotValidPackage() {
         final Key tar = new Key.From("pantera-sample-0.2.tar");
         final Key invalid = new Key.From("invalid.zip");
         this.asto.save(invalid, Content.EMPTY).join();
         new TestResource("pypi_repo/pantera-sample-0.2.tar").saveTo(this.asto, tar);
         this.packages.add(new ProxyArtifactEvent(invalid, PyProxyPackageProcessorTest.REPO_NAME));
         this.packages.add(new ProxyArtifactEvent(tar, PyProxyPackageProcessorTest.REPO_NAME));
-        this.scheduler.scheduleJob(
-            JobBuilder.newJob(PyProxyPackageProcessor.class).setJobData(this.data).withIdentity(
-                "job1", PyProxyPackageProcessor.class.getSimpleName()
-            ).build(),
-            TriggerBuilder.newTrigger().startNow()
-                .withIdentity("trigger1", PyProxyPackageProcessor.class.getSimpleName()).build()
-        );
-        this.scheduler.start();
+        this.processor.run();
         Awaitility.await().atMost(30, TimeUnit.SECONDS).until(() -> this.events.size() == 1);
     }
 
     @Test
     void requeuesWhenArtifactIsMissing() {
-        final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
-        processor.setEvents(this.events);
-        processor.setPackages(this.packages);
-        processor.setStorage(this.asto);
         final ProxyArtifactEvent event =
             new ProxyArtifactEvent(new Key.From("absent-1.0.0.tar.gz"), PyProxyPackageProcessorTest.REPO_NAME);
         this.packages.add(event);
-        processor.execute(null);
+        this.processor.run();
         MatcherAssert.assertThat("No artifact events should be produced", this.events.isEmpty());
         MatcherAssert.assertThat("Original package must be re-queued", this.packages.contains(event));
         MatcherAssert.assertThat(
@@ -158,10 +133,6 @@ class PyProxyPackageProcessorTest {
 
     @Test
     void addsReleaseInformationWhenPresent() {
-        final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
-        processor.setEvents(this.events);
-        processor.setPackages(this.packages);
-        processor.setStorage(this.asto);
         final Key wheel = new Key.From("pantera_sample-0.2-py3-none-any.whl");
         new TestResource("pypi_repo/pantera_sample-0.2-py3-none-any.whl").saveTo(this.asto, wheel);
         final long release = Instant.now().minusSeconds(90L).toEpochMilli();
@@ -173,7 +144,7 @@ class PyProxyPackageProcessorTest {
                 Optional.of(release)
             )
         );
-        processor.execute(null);
+        this.processor.run();
         MatcherAssert.assertThat(this.events.size(), Matchers.equalTo(1));
         final ArtifactEvent artifact = this.events.peek();
         MatcherAssert.assertThat(
@@ -185,14 +156,10 @@ class PyProxyPackageProcessorTest {
 
     @Test
     void normalizesArtifactName() {
-        final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
-        processor.setEvents(this.events);
-        processor.setPackages(this.packages);
-        processor.setStorage(this.asto);
         final Key tarball = new Key.From("AlarmTime-0.1.5.tar.gz");
         new TestResource("pypi_repo/alarmtime-0.1.5.tar.gz").saveTo(this.asto, tarball);
         this.packages.add(new ProxyArtifactEvent(tarball, PyProxyPackageProcessorTest.REPO_NAME));
-        processor.execute(null);
+        this.processor.run();
         MatcherAssert.assertThat(this.events.size(), Matchers.equalTo(1));
         final ArtifactEvent artifact = this.events.peek();
         MatcherAssert.assertThat(
@@ -229,12 +196,8 @@ class PyProxyPackageProcessorTest {
         } else {
             new TestResource(resource).saveTo(this.asto, key);
         }
-        final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
-        processor.setEvents(this.events);
-        processor.setPackages(this.packages);
-        processor.setStorage(this.asto);
         this.packages.add(new ProxyArtifactEvent(key, PyProxyPackageProcessorTest.REPO_NAME));
-        processor.execute(null);
+        this.processor.run();
         MatcherAssert.assertThat(
             this.events.stream()
                 .map(event -> event.artifactName() + " " + event.artifactVersion())
@@ -252,12 +215,11 @@ class PyProxyPackageProcessorTest {
             event = event.retried(0L);
         }
         this.packages.add(event);
-        // Quartz builds a new job instance for every run.
         final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
         processor.setEvents(this.events);
         processor.setPackages(this.packages);
         processor.setStorage(this.asto);
-        processor.execute(null);
+        processor.run();
         MatcherAssert.assertThat(
             "an exhausted event is dropped, not put back",
             this.packages.isEmpty(), new IsEqual<>(true)
@@ -279,7 +241,7 @@ class PyProxyPackageProcessorTest {
             processor.setEvents(this.events);
             processor.setPackages(this.packages);
             processor.setStorage(this.asto);
-            processor.execute(null);
+            processor.run();
         }
         MatcherAssert.assertThat(
             "the event stays queued", this.packages.size(), new IsEqual<>(1)
@@ -288,10 +250,5 @@ class PyProxyPackageProcessorTest {
             "runs inside the wait do not look at the event again",
             this.packages.peek().attempts(), new IsEqual<>(1)
         );
-    }
-
-    @AfterEach
-    void stop() throws SchedulerException {
-        this.scheduler.shutdown();
     }
 }

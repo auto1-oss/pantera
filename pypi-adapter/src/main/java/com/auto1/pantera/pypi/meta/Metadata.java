@@ -42,6 +42,46 @@ public interface Metadata {
     PackageInfo read();
 
     /**
+     * Parsed {@link PackageInfo} paired with the raw {@code METADATA}/
+     * {@code PKG-INFO} entry bytes exactly as stored in the archive —
+     * needed to persist a byte-faithful PEP 658 {@code .metadata}
+     * sidecar file (re-encoding the parsed {@link PackageInfo} string
+     * would not round-trip non-ASCII long-description bytes).
+     *
+     * @param info Parsed package info
+     * @param rawMetadata Raw entry bytes as read from the archive
+     */
+    record Extracted(PackageInfo info, byte[] rawMetadata) {
+        /**
+         * Canonical constructor; defensively copies the byte array so the
+         * caller cannot mutate this record's state after construction.
+         *
+         * @param info Parsed package info
+         * @param rawMetadata Raw entry bytes as read from the archive
+         */
+        public Extracted {
+            rawMetadata = Extracted.copyOf(rawMetadata);
+        }
+
+        /**
+         * @return Defensive copy of the raw metadata bytes
+         */
+        @Override
+        public byte[] rawMetadata() {
+            return Extracted.copyOf(this.rawMetadata);
+        }
+
+        /**
+         * Null-safe defensive array copy.
+         * @param value Source array, may be null
+         * @return A clone, or an empty array when {@code value} is null
+         */
+        private static byte[] copyOf(final byte[] value) {
+            return value == null ? new byte[0] : value.clone();
+        }
+    }
+
+    /**
      * Metadata from archive implementation.
      * @since 0.6
      */
@@ -69,7 +109,19 @@ public interface Metadata {
 
         @Override
         public PackageInfo read() {
-            final PackageInfo res;
+            return this.readWithMetadata().info();
+        }
+
+        /**
+         * Read the parsed {@link PackageInfo} together with the raw
+         * {@code METADATA}/{@code PKG-INFO} entry bytes, in a single
+         * pass over the archive (PEP 658 support needs the exact bytes
+         * to persist a byte-faithful {@code .metadata} sidecar file).
+         *
+         * @return Parsed info paired with the raw metadata entry bytes
+         */
+        public Extracted readWithMetadata() {
+            final Extracted res;
             if (Stream.of("zip", "whl", "egg").anyMatch(this.filename::endsWith)) {
                 res = this.readZipEggOrWhl();
             } else if (this.filename.endsWith("tar")) {
@@ -88,9 +140,9 @@ public interface Metadata {
 
         /**
          * Reads tar.Z files.
-         * @return PackageInfo
+         * @return Extracted package info + raw metadata bytes
          */
-        private PackageInfo readTarZ() {
+        private Extracted readTarZ() {
             try (
                 ZCompressorInputStream origin = new ZCompressorInputStream(
                     new BufferedInputStream(this.input)
@@ -104,9 +156,9 @@ public interface Metadata {
 
         /**
          * Reads tar.Z files.
-         * @return PackageInfo
+         * @return Extracted package info + raw metadata bytes
          */
-        private PackageInfo readBz() {
+        private Extracted readBz() {
             try (
                 BZip2CompressorInputStream origin = new BZip2CompressorInputStream(
                     new BufferedInputStream(this.input)
@@ -120,9 +172,9 @@ public interface Metadata {
 
         /**
          * Reads metadata from zip, egg or wheel archive.
-         * @return PackageInfo
+         * @return Extracted package info + raw metadata bytes
          */
-        private PackageInfo readZipEggOrWhl() {
+        private Extracted readZipEggOrWhl() {
             try (ZipArchiveInputStream archive =
                 new ZipArchiveInputStream(new BufferedInputStream(this.input))
             ) {
@@ -144,9 +196,9 @@ public interface Metadata {
 
         /**
          * Reads metadata from zip, egg or wheel archive.
-         * @return PackageInfo
+         * @return Extracted package info + raw metadata bytes
          */
-        private PackageInfo readTar() {
+        private Extracted readTar() {
             try (ArchiveInputStream archive =
                 new TarArchiveInputStream(new BufferedInputStream(this.input))
             ) {
@@ -158,9 +210,9 @@ public interface Metadata {
 
         /**
          * Reads metadata from zip or tar archive.
-         * @return PackageInfo
+         * @return Extracted package info + raw metadata bytes
          */
-        private PackageInfo readTarGz() {
+        private Extracted readTarGz() {
             try (GzipCompressorInputStream archive = new GzipCompressorInputStream(this.input);
                 TarArchiveInputStream tar = new TarArchiveInputStream(archive)) {
                 return FromArchive.readArchive(tar);
@@ -173,11 +225,11 @@ public interface Metadata {
          * Reads archive from compressor input stream, creates ArchiveInputStream and
          * calls {@link FromArchive#readArchive} to extract metadata info.
          * @param origin Origin input stream
-         * @return Package info
+         * @return Extracted package info + raw metadata bytes
          * @throws IOException On IO error
          * @throws ArchiveException In case on problems to unpack
          */
-        private static PackageInfo unpack(final InputStream origin)
+        private static Extracted unpack(final InputStream origin)
             throws IOException, ArchiveException {
             try (
                 ArchiveInputStream archive = new ArchiveStreamFactory().createArchiveInputStream(
@@ -198,22 +250,27 @@ public interface Metadata {
         }
 
         /**
-         * Reads archive.
+         * Reads archive, capturing both the parsed {@link PackageInfo} and
+         * the raw {@code METADATA}/{@code PKG-INFO} entry bytes in one pass.
          * @param input Archive to read
-         * @return PackageInfo if package info file found
+         * @return Extracted package info + raw metadata bytes
          * @throws IOException On error
          */
-        private static PackageInfo readArchive(final ArchiveInputStream input) throws IOException {
+        private static Extracted readArchive(final ArchiveInputStream input) throws IOException {
             ArchiveEntry entry;
-            Optional<PackageInfo> res = Optional.empty();
+            Optional<Extracted> res = Optional.empty();
             while ((entry = input.getNextEntry()) != null) {
                 if (!input.canReadEntryData(entry) || entry.isDirectory()) {
                     continue;
                 }
                 if (entry.getName().contains("PKG-INFO") || entry.getName().contains("METADATA")) {
+                    final byte[] raw = IOUtils.toByteArray(input);
                     res = Optional.of(
-                        new PackageInfo.FromMetadata(
-                            IOUtils.toString(input, StandardCharsets.US_ASCII)
+                        new Extracted(
+                            new PackageInfo.FromMetadata(
+                                new String(raw, StandardCharsets.US_ASCII)
+                            ),
+                            raw
                         )
                     );
                 }

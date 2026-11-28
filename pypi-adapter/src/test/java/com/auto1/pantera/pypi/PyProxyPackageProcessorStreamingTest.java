@@ -189,7 +189,7 @@ final class PyProxyPackageProcessorStreamingTest {
         processor.setPackages(this.packages);
         processor.setStorage(storage);
         this.packages.add(new ProxyArtifactEvent(key, PyProxyPackageProcessorStreamingTest.REPO));
-        processor.execute(null);
+        processor.run();
     }
 
     /**

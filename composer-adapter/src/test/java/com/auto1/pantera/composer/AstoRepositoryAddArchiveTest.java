@@ -17,15 +17,18 @@ import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.composer.http.Archive;
+import com.auto1.pantera.http.cache.DigestComputer;
 import org.cactoos.set.SetOf;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsNot;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.json.JsonObject;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Tests for {@link AstoRepository#addArchive(Archive, Content)}.

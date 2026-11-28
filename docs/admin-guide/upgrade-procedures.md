@@ -8,6 +8,27 @@ This page covers the process for upgrading Pantera to a new version, including p
 
 ## Version-Specific Notes
 
+### Upgrading to 2.3.0
+
+2.3.0 contains everything shipped up to 2.2.14. The upgrade path depends on the release you run:
+
+- **Coming from 2.2.14:** no database action. The notes below (migration `V148`, repository delete answering `202`) are already in effect.
+- **Coming from 2.2.10 to 2.2.13:** read [Upgrading to 2.2.14](#upgrading-to-2214) first: migrations `V147` and `V148` run at start, and its notes on repository rename and delete apply.
+- **Coming from 2.2.9 or earlier:** read [Upgrading to 2.2.10](#upgrading-to-2210) first — every note there applies to an upgrade straight to 2.3.0, including the `V116` checksum fix for a database that first ran `V116` under 2.2.9 (run the `UPDATE` before starting 2.3.0) and the `immutable` default for YAML-only deployments. Coming from 2.2.8 or earlier, skip 2.2.9.
+
+**No database migration of its own.** 2.3.0 adds no Flyway migration beyond 2.2.14's `V148` (the highest version is `V148`), and an existing `pantera.yml`, repository YAMLs and environment load unchanged. The storage and download features are opt-in per storage/repository:
+
+- **Index-accelerated S3 cache** (`cache.mode: index`) — serves cache hits from an in-memory index with async durable write-back and byte-bounded LRU/LFU eviction. Default is unchanged (`mode: disk`, the prior disk cache). See [Index Cache Mode](storage-backends.md#index-cache-mode-cachemode-index).
+- **S3-API-compatible backends** — the S3 backend also targets MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS Gateway, or GCS's S3-interop endpoint via `endpoint`/`region`/`path-style`/`credentials`; `storage-class` selects the object storage class. See [S3-API-Compatible Object Stores](storage-backends.md#s3-api-compatible-object-stores).
+- **Presigned direct-download** — a per-repository `download-mode` (`stream` default / `redirect` / `auto`) can `302` binary artifact GETs on hosted repositories to a time-limited object-store URL (`presign-ttl-seconds`, default `600`), removing Pantera from the byte path; metadata is never redirected, `conan` and all proxy/group repositories keep streaming, and a redirect falls back to streaming when the object is not durably stored or the storage has no presigner. Clients must be able to reach the object store directly before you enable it. See [Presigned Direct-Download](storage-backends.md#presigned-direct-download-ws17).
+
+Leave these keys unset to upgrade with no functional change. Behavior that changes without any configuration:
+
+- **Maven/Gradle release immutability follows the repository's `immutable` setting** (default on, as in 2.2.10). `releaseImmutable`, the Maven-only key of 2.3.0 pre-releases, is still read as a deprecated alias, but only when `immutable` is absent; replace `releaseImmutable: false` with `immutable: false` (the UI does this when the repository is saved). `verifyPgp` (PGP-verified quarantine against the `/api/v1/admin/pgp-keys` keyring) stays off unless enabled.
+- **Docker manifest `GET`/`HEAD` honour the client's `Accept` header** and answer `406` when the stored manifest's media type is not acceptable; an absent `Accept` or `*/*` is unaffected. Registry API deletes (shipped in 2.2.10) also maintain the OCI 1.1 referrers index: deleting a referrer manifest by digest removes it from `GET .../referrers/<digest>`.
+- **`go-proxy` proxies the Go checksum database** (`/sumdb/...`) to its upstream, so clients can keep `GOSUMDB` at its default; `go` and `go-group` repositories answer `404` for `/sumdb/`.
+- **Per-node event draining.** Each node drains its own artifact-events queue and proxy package processors on a local scheduler instead of the cluster-shared Quartz job store; a Quartz firing that lands on a node without the job's dependencies is skipped and logged (`event.action=job_skip_unresolved`) rather than deleting the job. No operator action is required.
+
 ### Upgrading to 2.2.14
 
 - **Migration `V148`** adds `repositories.repo_key`, `repository_tombstones`, `repository_aliases` and `repo_jobs`. Every existing repository gets `repo_key = name`; no data moves and no index row changes. The migration touches only the `repositories` table (one row per repository) and is quick whatever the size of the artifact index.

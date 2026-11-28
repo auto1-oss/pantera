@@ -347,6 +347,103 @@ final class DockerGroupSliceTest {
         );
     }
 
+    /**
+     * WS4-docker.3 (2.3.0): the group's tags list is the sorted union of
+     * every member's tags for the image, named as the client addressed it.
+     */
+    @Test
+    void mergesTagsOfAllMembersForTheImage() {
+        final AtomicInteger delegated = new AtomicInteger();
+        final List<String> asked = new CopyOnWriteArrayList<>();
+        final DockerGroupSlice slice = new DockerGroupSlice(
+            counting(delegated),
+            "docker_group",
+            List.of(
+                new MemberSlice("docker_local", tags(asked, "1.0", "1.1"), false),
+                new MemberSlice("docker_proxy", tags(asked, "1.1", "1.2"), true)
+            )
+        );
+        final Response resp = slice.response(
+            new RequestLine("GET", "/ayd/test/tags/list"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the tags are the de-duplicated, sorted union",
+            body(resp),
+            new IsEqual<>("{\"name\":\"ayd/test\",\"tags\":[\"1.0\",\"1.1\",\"1.2\"]}")
+        );
+        MatcherAssert.assertThat(
+            "every member is asked for the image's tags",
+            asked.stream().sorted().toList(),
+            new IsEqual<>(List.of("/docker_local/ayd/test/tags/list", "/docker_proxy/ayd/test/tags/list"))
+        );
+        MatcherAssert.assertThat(
+            "the tags list does not go through the first-wins walk",
+            delegated.get(),
+            new IsEqual<>(0)
+        );
+    }
+
+    /**
+     * A full merged tags page links to the next group page; members get the
+     * cursor unchanged (tags carry no member prefix).
+     */
+    @Test
+    void pagesTheMergedTags() {
+        final List<String> asked = new CopyOnWriteArrayList<>();
+        final DockerGroupSlice slice = new DockerGroupSlice(
+            counting(new AtomicInteger()),
+            "docker_group",
+            List.of(
+                new MemberSlice("docker_local", tags(asked, "b", "d"), false),
+                new MemberSlice("docker_proxy", tags(asked, "c"), true)
+            )
+        );
+        final Response resp = slice.response(
+            new RequestLine("GET", "/ayd/test/tags/list?n=2&last=a"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "the page holds the first n tags after the cursor",
+            body(resp),
+            new IsEqual<>("{\"name\":\"ayd/test\",\"tags\":[\"b\",\"c\"]}")
+        );
+        MatcherAssert.assertThat(
+            "a full page links to the next group page",
+            resp.headers().values("Link"),
+            new IsEqual<>(List.of("</v2/docker_group/ayd/test/tags/list?n=2&last=c>; rel=\"next\""))
+        );
+        MatcherAssert.assertThat(
+            "members get the cursor unchanged",
+            asked.stream().sorted().toList(),
+            new IsEqual<>(
+                List.of(
+                    "/docker_local/ayd/test/tags/list?n=2&last=a",
+                    "/docker_proxy/ayd/test/tags/list?n=2&last=a"
+                )
+            )
+        );
+    }
+
+    /**
+     * An image no member holds is answered by the walk (a member's 404),
+     * never by an empty 200 tags list.
+     */
+    @Test
+    void tagsOfAnUnknownImageGoToTheWalk() {
+        final AtomicInteger delegated = new AtomicInteger();
+        final Response resp = new DockerGroupSlice(
+            counting(delegated),
+            "docker_group",
+            List.of(new MemberSlice("docker_local", status(RsStatus.NOT_FOUND), false))
+        ).response(
+            new RequestLine("GET", "/ayd/test/tags/list"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        body(resp);
+        MatcherAssert.assertThat("the walk answered", delegated.get(), new IsEqual<>(1));
+        MatcherAssert.assertThat(
+            "its answer is relayed", resp.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+    }
+
     @Test
     void otherPathsGoToTheWalk() {
         final AtomicInteger delegated = new AtomicInteger();
@@ -371,6 +468,23 @@ final class DockerGroupSliceTest {
                     json.append(',');
                 }
                 json.append('"').append(names[idx]).append('"');
+            }
+            json.append("]}");
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok().jsonBody(json.toString()).build()
+            );
+        };
+    }
+
+    private static Slice tags(final List<String> asked, final String... tags) {
+        return (line, headers, body) -> {
+            asked.add(line.uri().toString());
+            final StringBuilder json = new StringBuilder("{\"name\":\"member/image\",\"tags\":[");
+            for (int idx = 0; idx < tags.length; idx += 1) {
+                if (idx > 0) {
+                    json.append(',');
+                }
+                json.append('"').append(tags[idx]).append('"');
             }
             json.append("]}");
             return CompletableFuture.completedFuture(

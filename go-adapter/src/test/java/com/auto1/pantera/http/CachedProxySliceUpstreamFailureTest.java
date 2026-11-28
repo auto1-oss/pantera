@@ -160,7 +160,7 @@ final class CachedProxySliceUpstreamFailureTest {
     @Test
     void nonArtifactPathKeepsTheUpstreamFailure() {
         final Answer answer = this.get(
-            "/sumdb/sum.golang.org/supported",
+            "/github.com/acme/tool/README",
             () -> CompletableFuture.completedFuture(ResponseBuilder.internalError().build())
         );
         MatcherAssert.assertThat(

@@ -13,6 +13,7 @@ package com.auto1.pantera.gem.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.gem.GemApiKeyAuth;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -40,6 +41,7 @@ import java.io.UncheckedIOException;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Predicate;
 import java.util.zip.GZIPOutputStream;
 
 /**
@@ -47,6 +49,17 @@ import java.util.zip.GZIPOutputStream;
  * Ruby HTTP layer.
  */
 public final class GemSlice extends Slice.Wrap {
+
+    /**
+     * WS1.7 redirect gate for the shared catch-all GET route: only {@code
+     * .gem} package files (stored under {@code gems/}) are redirect-eligible.
+     * All RubyGems metadata streams -- {@code specs.4.8*} indexes, {@code
+     * /quick/**.gemspec.rz} marshalled specs, {@code /info/*} and {@code
+     * /versions} compact-index views -- none of which end in {@code .gem},
+     * so this predicate never leaks metadata into a 302.
+     */
+    private static final Predicate<Key> REDIRECTABLE =
+        key -> key.string().endsWith(".gem");
 
     /**
      * Specs file names required by the RubyGems protocol.
@@ -133,9 +146,7 @@ public final class GemSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer. Re-pushing a stored gem
-     * version overwrites it (the behaviour before the {@code immutable}
-     * setting).
+     * Ctor with synchronous artifact-index writer -- stream-only downloads.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public GemSlice(
@@ -147,18 +158,33 @@ public final class GemSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
-        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex, false);
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly());
     }
 
     /**
-     * Ctor with synchronous artifact-index writer and the immutability switch.
-     * @param storage The storage.
-     * @param policy The policy.
-     * @param basicAuth Basic authentication.
-     * @param tokenAuth Token authentication.
-     * @param name Repository name
-     * @param events Artifact events queue
-     * @param syncIndex Synchronous artifact-index writer
+     * Ctor with an explicit WS1.7 download policy: {@code .gem} package GETs
+     * become redirect-eligible under a non-{@link DownloadPolicy#streamOnly()}
+     * policy, while every RubyGems metadata route keeps streaming (see {@link
+     * #REDIRECTABLE}).
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GemSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex, downloadPolicy, false);
+    }
+
+    /**
+     * Ctor with the repository's {@code immutable} setting (stream-only
+     * downloads).
      * @param immutable When {@code true} a push of an already stored gem
      *  version answers 409 Conflict; when {@code false} it overwrites the gem
      *  and rebuilds the specs index
@@ -172,6 +198,29 @@ public final class GemSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final boolean immutable
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly(), immutable);
+    }
+
+    /**
+     * Full ctor: WS1.7 download policy and the repository's
+     * {@code immutable} setting.
+     * @param immutable When {@code true} a push of an already stored gem
+     *  version answers 409 Conflict; when {@code false} it overwrites the gem
+     *  and rebuilds the specs index
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GemSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy,
         final boolean immutable
     ) {
         super(
@@ -231,11 +280,24 @@ public final class GemSlice extends Slice.Wrap {
                         )
                     )
                 ),
-                // HEAD is answered like the matching GET, without the body:
-                // bound to GET alone this route answered 404 to `curl -I`
-                // for a file that exists.
                 new RtRulePath(
-                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
+                    MethodRule.GET,
+                    GemSlice.createAuthSlice(
+                        new StorageArtifactSlice(storage, downloadPolicy, GemSlice.REDIRECTABLE),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                // HEAD is answered like the matching GET, without the body:
+                // routed for GET alone, `curl -I` got 404 for a file that
+                // exists. The repository answers it itself, whatever the
+                // download policy: a presigned URL is signed for GET, so a
+                // client that followed a redirect with HEAD would be refused.
+                new RtRulePath(
+                    MethodRule.HEAD,
                     new HeadAsGetSlice(
                         GemSlice.createAuthSlice(
                             new StorageArtifactSlice(storage),

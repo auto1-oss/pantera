@@ -15,7 +15,6 @@ import com.auto1.pantera.http.auth.AuthRefusal;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.LoginSource;
 import com.auto1.pantera.http.auth.PasswordCheck;
-import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.settings.YamlSettings;
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -155,7 +154,7 @@ final class PasswordSignInChainTest {
                     "      client-password: x"
                 )
             ).readYamlMapping(),
-            this.temp, new QuartzService()
+            this.temp
         ).authz().authentication();
     }
 }

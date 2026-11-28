@@ -12,7 +12,6 @@ package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.scheduling.QuartzService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -46,19 +45,14 @@ class YamlSettingsPrefixesTest {
             )
             .build();
 
-        final QuartzService quartz = new QuartzService();
-        try {
-            final Settings settings = new YamlSettings(yaml, temp, quartz);
-            final PrefixesConfig prefixes = settings.prefixes();
+        final Settings settings = new YamlSettings(yaml, temp);
+        final PrefixesConfig prefixes = settings.prefixes();
 
-            final List<String> list = prefixes.prefixes();
-            assertEquals(3, list.size());
-            assertTrue(list.contains("p1"));
-            assertTrue(list.contains("p2"));
-            assertTrue(list.contains("migration"));
-        } finally {
-            quartz.stop();
-        }
+        final List<String> list = prefixes.prefixes();
+        assertEquals(3, list.size());
+        assertTrue(list.contains("p1"));
+        assertTrue(list.contains("p2"));
+        assertTrue(list.contains("migration"));
     }
 
     @Test
@@ -75,15 +69,10 @@ class YamlSettingsPrefixesTest {
             )
             .build();
 
-        final QuartzService quartz = new QuartzService();
-        try {
-            final Settings settings = new YamlSettings(yaml, temp, quartz);
-            final PrefixesConfig prefixes = settings.prefixes();
+        final Settings settings = new YamlSettings(yaml, temp);
+        final PrefixesConfig prefixes = settings.prefixes();
 
-            assertTrue(prefixes.prefixes().isEmpty());
-        } finally {
-            quartz.stop();
-        }
+        assertTrue(prefixes.prefixes().isEmpty());
     }
 
     @Test
@@ -99,15 +88,10 @@ class YamlSettingsPrefixesTest {
             )
             .build();
 
-        final QuartzService quartz = new QuartzService();
-        try {
-            final Settings settings = new YamlSettings(yaml, temp, quartz);
-            final PrefixesConfig prefixes = settings.prefixes();
+        final Settings settings = new YamlSettings(yaml, temp);
+        final PrefixesConfig prefixes = settings.prefixes();
 
-            assertTrue(prefixes.prefixes().isEmpty());
-        } finally {
-            quartz.stop();
-        }
+        assertTrue(prefixes.prefixes().isEmpty());
     }
 
     @Test
@@ -130,17 +114,12 @@ class YamlSettingsPrefixesTest {
             )
             .build();
 
-        final QuartzService quartz = new QuartzService();
-        try {
-            final Settings settings = new YamlSettings(yaml, temp, quartz);
-            final PrefixesConfig prefixes = settings.prefixes();
+        final Settings settings = new YamlSettings(yaml, temp);
+        final PrefixesConfig prefixes = settings.prefixes();
 
-            final List<String> list = prefixes.prefixes();
-            assertEquals(2, list.size());
-            assertTrue(list.contains("p1"));
-            assertTrue(list.contains("p2"));
-        } finally {
-            quartz.stop();
-        }
+        final List<String> list = prefixes.prefixes();
+        assertEquals(2, list.size());
+        assertTrue(list.contains("p1"));
+        assertTrue(list.contains("p2"));
     }
 }

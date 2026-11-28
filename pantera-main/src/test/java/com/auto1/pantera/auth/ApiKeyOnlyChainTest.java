@@ -14,7 +14,6 @@ import com.amihaiemil.eoyaml.Yaml;
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
-import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.settings.YamlSettings;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
@@ -297,7 +296,7 @@ final class ApiKeyOnlyChainTest {
         }
         return new YamlSettings(
             Yaml.createYamlInput(yaml.toString()).readYamlMapping(),
-            this.temp, new QuartzService()
+            this.temp
         ).authz().authentication();
     }
 

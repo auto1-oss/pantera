@@ -13,6 +13,9 @@ package com.auto1.pantera.conda.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadMode;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
+import com.auto1.pantera.asto.blob.Presigner;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.http.Headers;
@@ -26,6 +29,7 @@ import com.auto1.pantera.http.headers.ContentType;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
@@ -36,8 +40,10 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.PermissionCollection;
 import java.security.Permissions;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.json.Json;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -176,6 +182,47 @@ final class CondaSliceClientFlowTest {
                     Content.EMPTY
                 ).join().status(),
             new IsEqual<>(RsStatus.UNAUTHORIZED)
+        );
+    }
+
+    @Test
+    void headOfPackageIsAnsweredByTheRepositoryNeverRedirected() {
+        // A presigned URL is signed for GET: the object store refuses a
+        // client that follows the redirect with HEAD.
+        final PresigningStorage storage = new PresigningStorage(
+            CondaSliceClientFlowTest.stored()
+        );
+        final CondaSlice slice = new CondaSlice(
+            storage, Policy.FREE,
+            (name, pass) -> Optional.of(new AuthUser("alice", "test")),
+            new FakeTokens(),
+            "http://localhost/my-conda",
+            CondaSliceClientFlowTest.REPO,
+            Optional.empty(),
+            SyncArtifactIndexer.NOOP,
+            new UploadTickets(),
+            new DownloadPolicy(DownloadMode.REDIRECT, 600L)
+        );
+        final Headers auth = Headers.from(new Authorization.Basic("alice", "pw"));
+        final Response get = slice.response(
+            new RequestLine(RqMethod.GET, "/linux-64/pkg-1.0-0.tar.bz2"), auth, Content.EMPTY
+        ).join();
+        final Response head = slice.response(
+            new RequestLine(RqMethod.HEAD, "/linux-64/pkg-1.0-0.tar.bz2"), auth, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "GET is redirected to the object store", get.status().code(), new IsEqual<>(302)
+        );
+        MatcherAssert.assertThat(
+            "HEAD is answered by the repository", head.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "HEAD announces the length of the package",
+            head.headers().values("Content-Length").stream().distinct().toList(),
+            new IsEqual<>(List.of(String.valueOf("package bytes".length())))
+        );
+        MatcherAssert.assertThat(
+            "only the GET had a URL signed", storage.presigned(), new IsEqual<>(1)
         );
     }
 
@@ -464,6 +511,33 @@ final class CondaSliceClientFlowTest {
         @Override
         public String generate(final AuthUser user) {
             throw new UnsupportedOperationException("not used");
+        }
+    }
+
+    /**
+     * Storage whose objects can be downloaded directly with a presigned URL.
+     * @since 2.3.0
+     */
+    private static final class PresigningStorage extends Storage.Wrap implements Presigner {
+
+        /**
+         * URLs signed.
+         */
+        private final AtomicInteger signed;
+
+        PresigningStorage(final Storage delegate) {
+            super(delegate);
+            this.signed = new AtomicInteger();
+        }
+
+        @Override
+        public URI presignGet(final Key key, final long ttl) {
+            this.signed.incrementAndGet();
+            return URI.create("https://blobs.example.test/" + key.string() + "?sig=abc");
+        }
+
+        int presigned() {
+            return this.signed.get();
         }
     }
 }

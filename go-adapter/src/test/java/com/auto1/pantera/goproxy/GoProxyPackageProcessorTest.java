@@ -19,14 +19,12 @@ import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyEventRetry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.quartz.JobExecutionContext;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.Mockito.mock;
 
 /**
  * Test for {@link GoProxyPackageProcessor}.
@@ -75,8 +73,7 @@ class GoProxyPackageProcessorTest {
         );
 
         // Act: Process the queue
-        final JobExecutionContext context = mock(JobExecutionContext.class);
-        this.processor.execute(context);
+        this.processor.run();
 
         // Assert: Verify artifact event was created
         assertEquals(1, this.events.size(), "Should have one artifact event");
@@ -102,8 +99,43 @@ class GoProxyPackageProcessorTest {
                 new Key.From(escaped + "/@v/1.3.2"), "go_proxy", "u", Optional.empty()
             )
         );
-        this.processor.execute(mock(JobExecutionContext.class));
+        this.processor.run();
         assertEquals("github.com/BurntSushi/toml", this.events.poll().artifactName());
+    }
+
+    @Test
+    void decodesEscapedModuleNameForArtifactEventButNotStorageKey() {
+        // WS4-go.6: Go escapes uppercase as `!` + lowercase on the wire
+        // (github.com/BurntSushi/toml -> github.com/!burnt!sushi/toml);
+        // the recorded ArtifactEvent (DB/index/audit) must show the
+        // decoded form while the storage/event key stays escaped.
+        final String escapedModule = "github.com/!burnt!sushi/toml";
+        final String version = "1.0.0";
+        final Key eventKey = new Key.From(escapedModule + "/@v/" + version);
+        final Key zipKey = new Key.From(escapedModule, "@v", "v" + version + ".zip");
+
+        this.storage.save(
+            zipKey,
+            new Content.From("module content".getBytes(StandardCharsets.UTF_8))
+        ).join();
+
+        this.packages.add(
+            new ProxyArtifactEvent(eventKey, "go_proxy", "testuser", Optional.empty())
+        );
+
+        this.processor.run();
+
+        assertEquals(1, this.events.size(), "Should have one artifact event");
+        final ArtifactEvent event = this.events.poll();
+        assertEquals(
+            "github.com/BurntSushi/toml", event.artifactName(),
+            "package.name must be decoded for DB/index/audit"
+        );
+        assertEquals(version, event.artifactVersion(), "version is recorded unchanged");
+        assertEquals(
+            eventKey.string(), event.pathPrefix(),
+            "recorded path prefix (storage key) must stay escaped"
+        );
     }
 
     @Test
@@ -133,8 +165,7 @@ class GoProxyPackageProcessorTest {
         );
 
         // Act
-        final JobExecutionContext context = mock(JobExecutionContext.class);
-        this.processor.execute(context);
+        this.processor.run();
 
         // Assert: No events should be created yet (no .zip file), and event remains queued
         assertEquals(0, this.events.size(), "Should have no events without .zip file");
@@ -168,8 +199,7 @@ class GoProxyPackageProcessorTest {
         }
 
         // Act
-        final JobExecutionContext context = mock(JobExecutionContext.class);
-        this.processor.execute(context);
+        this.processor.run();
 
         // Assert
         assertEquals(3, this.events.size(), "Should have three artifact events");
@@ -184,12 +214,11 @@ class GoProxyPackageProcessorTest {
             event = event.retried(0L);
         }
         this.packages.add(event);
-        // Quartz builds a new job instance for every run.
         final GoProxyPackageProcessor fresh = new GoProxyPackageProcessor();
         fresh.setStorage(this.storage);
         fresh.setEvents(this.events);
         fresh.setPackages(this.packages);
-        fresh.execute(mock(JobExecutionContext.class));
+        fresh.run();
         assertEquals(0, this.packages.size(), "an exhausted event is dropped, not put back");
         assertEquals(0, this.events.size(), "nothing is recorded for it");
     }
@@ -201,9 +230,9 @@ class GoProxyPackageProcessorTest {
                 new Key.From("github.com/example/slow/@v/1.0.0"), "go_proxy", "u", Optional.empty()
             )
         );
-        this.processor.execute(mock(JobExecutionContext.class));
-        this.processor.execute(mock(JobExecutionContext.class));
-        this.processor.execute(mock(JobExecutionContext.class));
+        this.processor.run();
+        this.processor.run();
+        this.processor.run();
         assertEquals(1, this.packages.size(), "the event stays queued");
         assertEquals(
             1, this.packages.peek().attempts(),

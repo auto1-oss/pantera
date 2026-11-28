@@ -39,7 +39,7 @@ public final class PublishingCleanable implements Cleanable<String> {
     /**
      * Pub/sub channel to publish invalidation messages.
      */
-    private final CacheInvalidationPubSub pubsub;
+    private final CacheBroadcast pubsub;
 
     /**
      * Cache type name (e.g. "auth", "filters", "policy").
@@ -53,7 +53,7 @@ public final class PublishingCleanable implements Cleanable<String> {
      * @param cacheType Cache type identifier
      */
     public PublishingCleanable(final Cleanable<String> inner,
-        final CacheInvalidationPubSub pubsub, final String cacheType) {
+        final CacheBroadcast pubsub, final String cacheType) {
         this.inner = inner;
         this.pubsub = pubsub;
         this.cacheType = cacheType;

@@ -191,7 +191,7 @@ public final class CacheLayers implements Layers {
     private Blob served(final Blob blob) {
         final Blob res;
         if (this.store) {
-            res = new CachingBlob(blob, this.cache);
+            res = new CachingBlob(blob, this.cache, this.repoName);
         } else {
             res = blob;
         }

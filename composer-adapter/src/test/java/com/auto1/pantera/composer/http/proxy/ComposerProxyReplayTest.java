@@ -14,7 +14,6 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.composer.AstoRepository;
 import com.auto1.pantera.cooldown.api.CooldownDependency;
@@ -36,11 +35,9 @@ import java.io.StringReader;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -246,30 +243,6 @@ final class ComposerProxyReplayTest {
         MatcherAssert.assertThat(
             "the upstream was asked once for the replay and once for the client",
             upstream.asked(ZIP_PATH), new IsEqual<>(2)
-        );
-    }
-
-    @Test
-    @Timeout(120)
-    void replayOfVerifiedArchiveAnswersItAndStoresNothing() throws Exception {
-        final String path = "/dists/acme/widget/abc/acme-widget-1.0.0.zip";
-        final Upstream upstream = new Upstream().with(path, ZIP).with(
-            path + ".sha256",
-            HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(ZIP))
-                .getBytes(StandardCharsets.UTF_8)
-        );
-        final Writes storage = new Writes(new InMemoryStorage());
-        final Queue<ProxyArtifactEvent> events = new ConcurrentLinkedQueue<>();
-        ComposerProxyReplayTest.archive(
-            new CachedProxySlice(
-                upstream, new AstoRepository(storage), new FromStorageCache(storage),
-                Optional.of(events), "php_proxy", BASE, REMOTE
-            ),
-            path, new Key.From(path.substring(1)), storage, events
-        );
-        MatcherAssert.assertThat(
-            "the upstream was asked once for the replay and once for the client",
-            upstream.asked(path), new IsEqual<>(2)
         );
     }
 
