@@ -6,20 +6,15 @@ import Aura from '@primeuix/themes/aura'
 import SettingsView from '../SettingsView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationStore } from '@/stores/notifications'
-import type { FailedLogins } from '@/types'
 
 const getFailedLoginsSettingsMock = vi.fn()
 const updateFailedLoginsSettingsMock = vi.fn()
 const listLockedUsersMock = vi.fn()
-const unlockUserMock = vi.fn()
-const unlockAllUsersMock = vi.fn()
 
 vi.mock('@/api/failedLogins', () => ({
   getFailedLoginsSettings: (...a: unknown[]) => getFailedLoginsSettingsMock(...a),
   updateFailedLoginsSettings: (...a: unknown[]) => updateFailedLoginsSettingsMock(...a),
   listLockedUsers: (...a: unknown[]) => listLockedUsersMock(...a),
-  unlockUser: (...a: unknown[]) => unlockUserMock(...a),
-  unlockAllUsers: (...a: unknown[]) => unlockAllUsersMock(...a),
 }))
 
 vi.mock('@/api/settings', () => ({
@@ -105,18 +100,6 @@ const SERVER_SETTINGS = {
   failed_logins_second_factor_pause_minutes: '30',
 }
 
-const ALICE: FailedLogins = {
-  name: 'alice@example.com', locked: true, failures: 3,
-  locked_at: '2026-01-01T10:00:04.099Z', last_failure_at: '2026-01-01T10:00:04.099Z',
-  client_ip: '192.0.2.7', user_agent: 'Apache-Maven/3.9.9', path: 'repository', credential: 'password',
-}
-/** A locked name that belongs to no Pantera user, with no origin recorded. */
-const STRANGER: FailedLogins = {
-  name: 'no-such-user', locked: true, failures: 7,
-  locked_at: '2026-01-02T08:00:00Z', last_failure_at: null,
-  client_ip: '', user_agent: '', path: '', credential: '',
-}
-
 interface FailedLoginsVm {
   failedLoginsDelayFromFailure: number | null
   failedLoginsFirstDelaySeconds: number | null
@@ -162,10 +145,6 @@ function card(w: VueWrapper) {
   return w.find('[data-testid="failed-logins-card"]')
 }
 
-function inBody<T extends HTMLElement = HTMLElement>(testid: string): T | null {
-  return document.querySelector(`[data-testid="${testid}"]`) as T | null
-}
-
 function toasts() {
   return useNotificationStore().toasts
 }
@@ -176,8 +155,6 @@ beforeEach(() => {
   getFailedLoginsSettingsMock.mockReset().mockResolvedValue({ ...SERVER_SETTINGS })
   updateFailedLoginsSettingsMock.mockReset().mockResolvedValue(undefined)
   listLockedUsersMock.mockReset().mockResolvedValue([])
-  unlockUserMock.mockReset().mockResolvedValue(true)
-  unlockAllUsersMock.mockReset().mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -300,10 +277,10 @@ describe('SettingsView: Failed logins card, the policy', () => {
         `${i}: in order`,
       ).toBeTruthy()
     }
-    const lockedUsers = c.find('[data-testid="locked-users-refresh"]').element
+    const lockedUsers = c.find('[data-testid="failed-logins-locked-users"]').element
     expect(
       section('lock-scope').element.compareDocumentPosition(lockedUsers) & Node.DOCUMENT_POSITION_FOLLOWING,
-      'the locked users stay at the end of the card',
+      'the way to the locked users is at the end of the card',
     ).toBeTruthy()
   })
 
@@ -590,218 +567,26 @@ describe('SettingsView: Failed logins card, the policy', () => {
 })
 
 describe('SettingsView: Failed logins card, the locked users', () => {
-  it('says that no user is locked', async () => {
+  it('leaves the locked users to the Sign-in failures page and links to it', async () => {
     const w = await mountView()
 
-    expect(listLockedUsersMock, 'the list is requested').toHaveBeenCalledTimes(1)
-    expect(card(w).find('[data-testid="locked-users-empty"]').text(), 'the empty state')
-      .toBe('No user is locked')
-    expect(card(w).find('[data-testid="locked-users-unlock-all"]').exists(), 'nothing to unlock').toBe(false)
-  })
-
-  it('lists each locked name with the origin of its last failed login', async () => {
-    listLockedUsersMock.mockResolvedValue([ALICE, STRANGER])
-
-    const w = await mountView()
-    const rows = card(w).findAll('tbody tr')
-
-    expect(rows.length, 'one row per locked name').toBe(2)
-    const alice = rows[0].text()
-    for (const part of ['alice@example.com', '3', '192.0.2.7', 'Apache-Maven/3.9.9', 'repository', 'password']) {
-      expect(alice, `the row of alice shows "${part}"`).toContain(part)
-    }
+    expect(card(w).find('[data-testid="locked-users"]').exists(), 'no list in the card').toBe(false)
+    expect(listLockedUsersMock, 'no request for it').not.toHaveBeenCalled()
     expect(
-      rows[0].find('[title="2026-01-01T10:00:04.099Z"]').exists(),
-      'locked since carries the exact time',
-    ).toBe(true)
-    for (const header of [
-      'Name', 'Locked since', 'Failed logins', 'Client address', 'Client program', 'Sign-in path', 'Credential',
-    ]) {
-      expect(card(w).find('thead').text(), `column "${header}"`).toContain(header)
-    }
-    expect(card(w).find('[data-testid="locked-users-count"]').text(), 'the number of locked names').toBe('(2)')
+      card(w).find('[data-testid="failed-logins-locked-users-link"]').attributes('to'),
+      'a link to the page',
+    ).toBe('/admin/sign-in-failures')
   })
 
-  it('lists a locked name that is no Pantera user, with dashes for what is unknown', async () => {
-    listLockedUsersMock.mockResolvedValue([STRANGER])
-
-    const w = await mountView()
-    const row = card(w).find('tbody tr')
-
-    expect(row.find('[data-testid="locked-user-name"]').text(), 'the name').toBe('no-such-user')
-    expect(row.text(), 'the count').toContain('7')
-    expect(row.text().match(/—/g)?.length, 'address, program, path and credential are unknown').toBe(4)
-    expect(row.find('[data-testid="locked-user-unlock"]').exists(), 'it can be unlocked').toBe(true)
-  })
-
-  it('pages a long list', async () => {
-    listLockedUsersMock.mockResolvedValue(
-      Array.from({ length: 25 }, (_, i) => ({ ...STRANGER, name: `name-${String(i).padStart(2, '0')}` })),
-    )
-
-    const w = await mountView()
-
-    expect(card(w).find('[data-testid="locked-users-count"]').text(), 'every name is counted').toBe('(25)')
-    expect(card(w).findAll('tbody tr').length, 'the first page').toBe(20)
-    expect(card(w).find('.p-paginator').exists(), 'the rest is a page away').toBe(true)
-  })
-
-  it('shows no pager for a short list', async () => {
-    listLockedUsersMock.mockResolvedValue([ALICE, STRANGER])
-
-    const w = await mountView()
-
-    expect(card(w).find('.p-paginator').exists()).toBe(false)
-  })
-
-  it('unlocks one name and loads the list again', async () => {
-    listLockedUsersMock.mockResolvedValueOnce([ALICE, STRANGER]).mockResolvedValue([STRANGER])
-    const w = await mountView()
-
-    await card(w).findAll('[data-testid="locked-user-unlock"]')[0].trigger('click')
-    await flushPromises()
-
-    expect(unlockUserMock, 'the name of the row, as the server gave it').toHaveBeenCalledWith('alice@example.com')
-    expect(listLockedUsersMock, 'the list is loaded again').toHaveBeenCalledTimes(2)
-    expect(card(w).findAll('tbody tr').length, 'the unlocked name is gone').toBe(1)
-    expect(card(w).text(), 'the other name stays').toContain('no-such-user')
-    expect(
-      toasts().some(t => t.severity === 'success' && t.summary === 'User unlocked' && t.detail === 'alice@example.com'),
-      'the unlock is confirmed',
-    ).toBe(true)
-  })
-
-  it('shows the error of a failed unlock and keeps the row', async () => {
-    listLockedUsersMock.mockResolvedValue([ALICE])
-    unlockUserMock.mockRejectedValue({
-      response: { status: 403, data: { error: 'FORBIDDEN', message: 'Access denied' } },
-    })
-    const w = await mountView()
-
-    await card(w).find('[data-testid="locked-user-unlock"]').trigger('click')
-    await flushPromises()
-
-    expect(
-      toasts().some(t => t.severity === 'error' && t.summary === 'Failed to unlock user' && t.detail === 'Access denied'),
-      'the server message is shown',
-    ).toBe(true)
-    expect(card(w).findAll('tbody tr').length, 'the row stays').toBe(1)
-  })
-
-  it('unlocks all after a confirmation', async () => {
-    listLockedUsersMock.mockResolvedValueOnce([ALICE, STRANGER]).mockResolvedValue([])
-    unlockAllUsersMock.mockResolvedValue(['alice@example.com', 'no-such-user'])
-    const w = await mountView()
-
-    await card(w).find('[data-testid="locked-users-unlock-all"]').trigger('click')
-    await flushPromises()
-
-    expect(unlockAllUsersMock, 'nothing happens before the confirmation').not.toHaveBeenCalled()
-    expect(inBody('unlock-all-dialog')?.textContent, 'the dialog names the number').toContain('Unlock 2 locked names?')
-
-    inBody<HTMLButtonElement>('unlock-all-confirm')!.click()
-    await flushPromises()
-
-    expect(unlockAllUsersMock, 'one request').toHaveBeenCalledTimes(1)
-    expect(listLockedUsersMock, 'the list is loaded again').toHaveBeenCalledTimes(2)
-    expect(card(w).find('[data-testid="locked-users-empty"]').exists(), 'nobody is locked any more').toBe(true)
-    expect(inBody('unlock-all-dialog'), 'the dialog is closed').toBeNull()
-    expect(
-      toasts().some(t => t.severity === 'success' && t.summary === 'Unlocked 2 users'),
-      'the unlock is confirmed',
-    ).toBe(true)
-  })
-
-  it('unlocks nobody when the confirmation is cancelled', async () => {
-    listLockedUsersMock.mockResolvedValue([ALICE])
-    const w = await mountView()
-
-    await card(w).find('[data-testid="locked-users-unlock-all"]').trigger('click')
-    await flushPromises()
-    inBody<HTMLButtonElement>('unlock-all-cancel')!.click()
-    await flushPromises()
-
-    expect(unlockAllUsersMock, 'no request').not.toHaveBeenCalled()
-    expect(card(w).findAll('tbody tr').length, 'the row stays').toBe(1)
-    expect(inBody('unlock-all-dialog'), 'the dialog is closed').toBeNull()
-  })
-
-  it('keeps the dialog open when unlocking all fails', async () => {
-    listLockedUsersMock.mockResolvedValue([ALICE])
-    unlockAllUsersMock.mockRejectedValue({
-      response: { status: 500, data: { error: 'INTERNAL_ERROR', message: 'Internal server error' } },
-    })
-    const w = await mountView()
-
-    await card(w).find('[data-testid="locked-users-unlock-all"]').trigger('click')
-    await flushPromises()
-    inBody<HTMLButtonElement>('unlock-all-confirm')!.click()
-    await flushPromises()
-
-    expect(
-      toasts().some(t => t.severity === 'error' && t.summary === 'Failed to unlock all users'),
-      'the failure is shown',
-    ).toBe(true)
-    expect(inBody('unlock-all-dialog'), 'the dialog stays open').not.toBeNull()
-    expect(card(w).findAll('tbody tr').length, 'the row stays').toBe(1)
-  })
-
-  it('offers no unlock without the permission to enable users', async () => {
-    signInAs(['read', 'update'])
-    listLockedUsersMock.mockResolvedValue([ALICE])
-
-    const w = await mountView()
-
-    expect(card(w).findAll('tbody tr').length, 'the list is still shown').toBe(1)
-    expect(card(w).find('[data-testid="locked-user-unlock"]').exists(), 'no unlock per row').toBe(false)
-    expect(card(w).find('[data-testid="locked-users-unlock-all"]').exists(), 'no unlock all').toBe(false)
-  })
-
-  it('does not ask for the list without the permission to read users', async () => {
+  it('names the page without a link for an account that may not read users', async () => {
     signInAs([])
 
     const w = await mountView()
 
-    expect(listLockedUsersMock, 'no request that would be refused').not.toHaveBeenCalled()
-    expect(card(w).find('[data-testid="locked-users-no-permission"]').exists(), 'the card says why').toBe(true)
-  })
-
-  it('says so when the list cannot be loaded and still shows the policy', async () => {
-    listLockedUsersMock.mockRejectedValue({
-      response: { status: 500, data: { error: 'INTERNAL_ERROR', message: 'Internal server error' } },
-    })
-
-    const w = await mountView()
-
-    expect(card(w).find('[data-testid="locked-users-error"]').text(), 'the reason')
-      .toContain('Internal server error')
-    expect(card(w).find('[data-testid="locked-users-empty"]').exists(), 'not reported as "nobody locked"')
+    expect(card(w).find('[data-testid="failed-logins-locked-users-link"]').exists(), 'no link that leads nowhere')
       .toBe(false)
-    expect(vmOf(w).failedLoginsLockAfter, 'the policy is loaded').toBe(5)
-  })
-
-  it('loads the list again on Refresh', async () => {
-    listLockedUsersMock.mockResolvedValueOnce([]).mockResolvedValue([ALICE])
-    const w = await mountView()
-
-    await card(w).find('[data-testid="locked-users-refresh"]').trigger('click')
-    await flushPromises()
-
-    expect(listLockedUsersMock, 'a second request').toHaveBeenCalledTimes(2)
-    expect(card(w).findAll('tbody tr').length, 'the new lock is listed').toBe(1)
-  })
-
-  it('loads the list again after the policy was saved', async () => {
-    listLockedUsersMock.mockResolvedValueOnce([ALICE]).mockResolvedValue([])
-    const w = await mountView()
-    const vm = vmOf(w)
-    vm.failedLoginsLockAfter = 0
-    await flushPromises()
-
-    await vm.saveAll()
-    await flushPromises()
-
-    expect(listLockedUsersMock, 'a second request after the save').toHaveBeenCalledTimes(2)
-    expect(card(w).find('[data-testid="locked-users-empty"]').exists(), 'the released locks are gone').toBe(true)
+    expect(card(w).find('[data-testid="failed-logins-locked-users"]').text(), 'where they are').toBe(
+      'Locked users are listed and unlocked on the Sign-in failures page, for accounts that may read users.',
+    )
   })
 })

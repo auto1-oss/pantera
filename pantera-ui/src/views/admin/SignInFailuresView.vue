@@ -8,11 +8,13 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import SignInRejectedKeys from '@/components/admin/SignInRejectedKeys.vue'
 import SignInFailedPasswords from '@/components/admin/SignInFailedPasswords.vue'
 import SignInSecondFactor from '@/components/admin/SignInSecondFactor.vue'
+import LockedUsersList from '@/components/admin/LockedUsersList.vue'
 
 // The sign-in failures report (2.2.15): who fails to sign in, with what,
-// and from where. Three lists, each behind the permission to read users.
-// The open tab is kept in the address (?tab=passwords) so a list can be
-// linked to.
+// and from where. The names locked now come first, with their unlock;
+// below them three lists of what happened, each behind the permission to
+// read users. The open tab is kept in the address (?tab=passwords) so a
+// list can be linked to.
 type TabId = 'api-keys' | 'passwords' | 'second-factor'
 
 const TABS: ReadonlyArray<{ id: TabId; label: string; icon: string }> = [
@@ -47,6 +49,20 @@ function selectTab(tab: TabId) {
   show(tab)
   const { tab: _previous, ...rest } = route.query
   router.replace({ query: tab === FIRST_TAB ? rest : { ...rest, tab } })
+}
+
+// An unlock changes both the locked users and the state of the user on
+// every line of the failed password logins: the other list is read again.
+// A tab that was never opened is left unloaded.
+const lockedUsers = ref<{ reload: () => Promise<void> } | null>(null)
+const passwords = ref<{ reload: () => Promise<void> } | null>(null)
+
+function lockedUserUnlocked() {
+  void passwords.value?.reload()
+}
+
+function passwordUserUnlocked() {
+  void lockedUsers.value?.reload()
 }
 
 // A link to another tab followed while this page is open. The route also
@@ -99,6 +115,13 @@ onMounted(async () => {
         Lines already stored stay until their retention ends.
       </Message>
 
+      <section
+        class="rounded-lg border border-gray-200 dark:border-gray-800 p-4"
+        data-testid="sign-in-locked-users"
+      >
+        <LockedUsersList ref="lockedUsers" @unlocked="lockedUserUnlocked" />
+      </section>
+
       <div
         role="tablist"
         class="flex flex-wrap gap-1 border-b border-gray-200 dark:border-gray-800"
@@ -142,7 +165,7 @@ onMounted(async () => {
         aria-labelledby="sign-in-tab-passwords"
         data-testid="sign-in-panel-passwords"
       >
-        <SignInFailedPasswords />
+        <SignInFailedPasswords ref="passwords" @unlocked="passwordUserUnlocked" />
       </div>
       <div
         v-if="opened['second-factor']"
